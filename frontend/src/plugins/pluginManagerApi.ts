@@ -128,6 +128,47 @@ export async function setPluginInstallEnabled(enabled: boolean): Promise<boolean
   throw new Error(r.reason ?? "plugin-opt-in-failed");
 }
 
+/** 索引の導入済み状態（台帳の値）。 */
+export interface CatalogInstalled {
+  version: string;
+  /** github | file | bundled */
+  sourceType: string | null;
+  enabled: boolean;
+  trust: string;
+}
+
+/** 索引の 1 行。backend: PluginManagerService.CatalogItem。 */
+export interface CatalogItem {
+  id: string;
+  name: string;
+  repo: string;
+  description: string | null;
+  category: string | null;
+  signerKeyId: string | null;
+  minGraphy: string | null;
+  /**
+   * 索引の signerKeyId が本体の信頼する鍵と一致するか。索引の記載を鍵と突き合わせただけで、
+   * 署名の検証ではない（検証は導入前検査の `signature === "trusted"`）。
+   */
+  officialSigner: boolean;
+  /** null なら未導入。 */
+  installed: CatalogInstalled | null;
+}
+
+/** 索引の取得結果。backend: PluginManagerService.CatalogView。 */
+export interface CatalogView {
+  /** 索引 URL が設定されているか（false なら一覧は空）。 */
+  configured: boolean;
+  /** 取得に失敗して前回のキャッシュ（無ければ空）を返しているか。 */
+  stale: boolean;
+  error: string | null;
+  plugins: CatalogItem[];
+  /** 形式不正で除外した行の理由。 */
+  rejected: string[];
+}
+
+export const fetchPluginCatalog = () => httpGet<CatalogView>("/api/plugin-manager/catalog");
+
 export const fetchInstalledPlugins = () => httpGet<InstalledPlugin[]>("/api/plugin-manager/installed");
 
 export const fetchPluginVersions = (repo: string) =>

@@ -16,12 +16,15 @@ import {
   reinstallPlugin,
   setPluginInstallEnabled,
   uninstallPlugin,
+  type CatalogItem,
   type InstalledPlugin,
   type ManagerStatus,
   type PluginPreview,
 } from "../plugins/pluginManagerApi";
 import { normalizeRepoSpec } from "../plugins/repoSpec";
 import { PluginConsentDialog } from "./PluginConsentDialog";
+import { PluginCatalogTab } from "./PluginCatalogTab";
+import { checkAgainstEntry } from "./pluginCatalogView";
 import { markRestartRequired } from "../restartRequiredEvents";
 
 /**
@@ -46,9 +49,13 @@ export function PluginManagerPanel() {
   const [repo, setRepo] = useState("");
   const [version, setVersion] = useState("");
   /** 検査済みで、ユーザーの同意待ちになっている配布物（同意画面の入力）。 */
-  const [pending, setPending] = useState<{ preview: PluginPreview; file?: File } | null>(null);
+  const [pending, setPending] = useState<{ preview: PluginPreview; file?: File; repo?: string; version?: string } | null>(null);
+  const [tab, setTab] = useState<"installed" | "catalog" | "manual">("installed");
+  /** 一覧（見つける）の導入済み状態を取り直す合図。導入・削除などで一覧が変わるたびに進める。 */
+  const [catalogKey, setCatalogKey] = useState(0);
+  const [inspectingId, setInspectingId] = useState<string | null>(null);
 
-  const reloadList = () => fetchInstalledPlugins().then(setRows);
+  const reloadList = () => fetchInstalledPlugins().then((l) => { setRows(l); setCatalogKey((k) => k + 1); });
 
   useEffect(() => {
     let cancelled = false;
@@ -117,17 +124,28 @@ export function PluginManagerPanel() {
      完全性を提示する。ユーザーが承諾したら、検査時の sha256 を添えて導入する
      （同意した成果物と実際に入るものが一致することを backend が保証する）。
    */
-  const inspect = async (key: string, action: () => Promise<PluginPreview>, file?: File) => {
+  const inspect = async (
+    key: string,
+    action: () => Promise<PluginPreview>,
+    file?: File,
+    from?: { repo: string; version?: string; entry?: CatalogItem },
+  ) => {
     setBusy(key);
     setMsg(null);
     try {
       const preview = await action();
+      // 一覧から導入するときは、索引の記載（id・署名の鍵）と中身が合うことを同意画面の前に確かめる。
+      const mismatch = from?.entry ? checkAgainstEntry(from.entry, preview) : null;
+      if (mismatch) {
+        setMsg({ text: t(`pluginmgr.catalog.mismatch.${mismatch}`, { name: from?.entry?.name ?? "" }), ok: false });
+        return;
+      }
       // 既知の鍵で署名が検証できたものは、中身を見せるまでもなくそのまま導入する
       // （公式配布と 2 回目以降の更新は「押すだけ」）。それ以外は同意画面へ。
       if (preview.autoInstallable) {
-        await installConfirmed(preview, file, false);
+        await installConfirmed(preview, file, false, from?.repo, from?.version);
       } else {
-        setPending({ preview, file });
+        setPending({ preview, file, repo: from?.repo, version: from?.version });
       }
     } catch (e) {
       setMsg({ text: t("common.fetchError", { error: String(e) }), ok: false });
@@ -145,13 +163,24 @@ export function PluginManagerPanel() {
     if (jars && jars.length > 0) markRestartRequired("plugin");
   };
 
-  const installConfirmed = async (preview: PluginPreview, file: File | undefined, acknowledgeUnverified: boolean) => {
+  const installConfirmed = async (
+    preview: PluginPreview,
+    file: File | undefined,
+    acknowledgeUnverified: boolean,
+    repoArg?: string,
+    versionArg?: string,
+  ) => {
     const ok = await run(
       "confirm",
       () =>
         file
           ? installPluginFromFile(file, preview.sha256)
-          : installPluginFromGitHub(repoSpec ?? "", version.trim() || undefined, preview.sha256, acknowledgeUnverified),
+          : installPluginFromGitHub(
+              repoArg ?? repoSpec ?? "",
+              repoArg ? versionArg : version.trim() || undefined,
+              preview.sha256,
+              acknowledgeUnverified,
+            ),
       "pluginmgr.installed_result",
     );
     if (ok) markRestartIfJar(preview.jars);
@@ -160,7 +189,15 @@ export function PluginManagerPanel() {
 
   const installGithub = () => {
     if (repoSpec === null) return;
-    void inspect("github", () => inspectPluginFromGitHub(repoSpec, version.trim() || undefined));
+    const v = version.trim() || undefined;
+    void inspect("github", () => inspectPluginFromGitHub(repoSpec, v), undefined, { repo: repoSpec, version: v });
+  };
+
+  /** 一覧からの導入。索引が指す repo の最新版を、手入力と同じ検査・同意の経路に載せる。 */
+  const installFromCatalog = (entry: CatalogItem) => {
+    setInspectingId(entry.id);
+    void inspect("catalog", () => inspectPluginFromGitHub(entry.repo), undefined, { repo: entry.repo, entry })
+      .finally(() => setInspectingId(null));
   };
 
   const installFile = (file: File | undefined) => {
@@ -171,7 +208,7 @@ export function PluginManagerPanel() {
   /** 同意画面で「導入する」を押したときだけ、実際に展開・保存する。失敗時は画面を閉じない。 */
   const confirmInstall = async (acknowledgeUnverified: boolean) => {
     if (!pending) return;
-    if (await installConfirmed(pending.preview, pending.file, acknowledgeUnverified)) setPending(null);
+    if (await installConfirmed(pending.preview, pending.file, acknowledgeUnverified, pending.repo, pending.version)) setPending(null);
   };
 
   const toggleEnabled = (p: InstalledPlugin) =>
@@ -216,8 +253,42 @@ export function PluginManagerPanel() {
         </div>
       )}
 
+      {msg && (
+        <div style={{ fontSize: 12, color: msg.ok ? "#2e5d27" : "#b00020", marginBottom: 10 }}>{msg.text}</div>
+      )}
+
+      {/* 導入済み / 見つける / URL・ZIP。 */}
+      <div role="tablist" style={{ display: "flex", gap: 4, marginBottom: 12, borderBottom: "1px solid #e2e7ee" }}>
+        {(["installed", "catalog", "manual"] as const).map((k) => (
+          <button
+            key={k}
+            role="tab"
+            aria-selected={tab === k}
+            data-testid={`pluginmgr-tab-${k}`}
+            onClick={() => setTab(k)}
+            style={{
+              padding: "6px 14px", border: "none", background: "none", cursor: "pointer", fontSize: 13,
+              fontWeight: tab === k ? 600 : 400, color: tab === k ? "#0b5cad" : "#33404d",
+              borderBottom: tab === k ? "2px solid #0b5cad" : "2px solid transparent", marginBottom: -1,
+            }}
+          >
+            {t(`pluginmgr.tab.${k}`)}
+          </button>
+        ))}
+      </div>
+
+      {tab === "catalog" && (
+        <PluginCatalogTab
+          canManage={canManage}
+          busy={busy !== null}
+          inspectingId={inspectingId}
+          refreshKey={catalogKey}
+          onInstall={installFromCatalog}
+        />
+      )}
+
       {/* 導入セクション（操作可能時のみ）。 */}
-      {canManage && (
+      {tab === "manual" && canManage && (
         <section style={{ marginBottom: 20 }}>
           <h3 style={sectionTitle}>{t("pluginmgr.install")}</h3>
 
@@ -271,10 +342,12 @@ export function PluginManagerPanel() {
         </section>
       )}
 
-      {msg && (
-        <div style={{ fontSize: 12, color: msg.ok ? "#2e5d27" : "#b00020", marginBottom: 10 }}>{msg.text}</div>
+      {tab === "manual" && !canManage && (
+        <div style={{ fontSize: 12, color: "#6b7785" }}>{t("pluginmgr.optIn.viewOnly")}</div>
       )}
 
+      {tab === "installed" && (
+        <>
       {/* 導入済み一覧。 */}
       <h3 style={sectionTitle}>{t("pluginmgr.installed")}</h3>
       {canOptIn && !optedIn && (
@@ -331,6 +404,9 @@ export function PluginManagerPanel() {
               )}
             </div>
           ))}
+        </>
+      )}
+
         </>
       )}
 

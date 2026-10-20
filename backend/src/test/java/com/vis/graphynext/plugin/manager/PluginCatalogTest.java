@@ -88,7 +88,13 @@ class PluginCatalogTest {
 
     private PluginManagerService service(Path dir, String indexUrl, AtomicReference<byte[]> body,
                                          AtomicReference<String> seenToken) {
+        return service(dir, indexUrl, body, seenToken, List.of());
+    }
+
+    private PluginManagerService service(Path dir, String indexUrl, AtomicReference<byte[]> body,
+                                         AtomicReference<String> seenToken, List<String> trustedKeys) {
         PluginProperties props = new PluginProperties();
+        props.setTrustedKeys(trustedKeys);
         props.setDir(dir.toString());
         props.setIndexUrl(indexUrl);
         props.setGithubToken("secret-token");
@@ -204,5 +210,28 @@ class PluginCatalogTest {
                         .getBeanProvider(com.vis.graphynext.plugin.PluginRegistry.class),
                 "0.4.0");
         assertThrows(PluginManagerForbiddenException.class, svc::catalog);
+    }
+
+    @Test
+    void officialSignerIsDerivedFromTrustedKeysNotFromTheIndex(@TempDir Path dir) {
+        // application.yml の公式鍵そのもの。索引（graphy-next-plugin-index）の signerKeyId と同じ表記になることも兼ねて見る。
+        String officialKey = "RWQYAdWia3zqmCJxZSCcze0JrUzO5Qvs2oNuIt5a0QbWsoZTbjJqhjNT";
+        String json = """
+                {"plugins":[
+                  {"id":"match","name":"M","repo":"a/b","signerKeyId":"98ea7c6ba2d50118"},
+                  {"id":"other","name":"O","repo":"a/b","signerKeyId":"1111111111111111"},
+                  {"id":"nokey","name":"N","repo":"a/b"}
+                ]}""";
+        var view = service(dir, URL, new AtomicReference<>(b(json)), new AtomicReference<>(),
+                List.of(officialKey)).catalog();
+        assertTrue(view.plugins().get(0).officialSigner());
+        assertFalse(view.plugins().get(1).officialSigner());
+        assertFalse(view.plugins().get(2).officialSigner());
+    }
+
+    @Test
+    void noTrustedKeysMeansNothingIsOfficial(@TempDir Path dir) {
+        var view = service(dir, URL, new AtomicReference<>(b(GOOD)), new AtomicReference<>()).catalog();
+        assertTrue(view.plugins().stream().noneMatch(PluginManagerService.CatalogItem::officialSigner));
     }
 }

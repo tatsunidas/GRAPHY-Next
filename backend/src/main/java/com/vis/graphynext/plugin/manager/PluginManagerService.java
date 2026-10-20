@@ -110,14 +110,29 @@ public class PluginManagerService {
         }
         java.util.Map<String, InstalledPlugin> have = new java.util.HashMap<>();
         for (InstalledPlugin p : installer.installed()) have.put(p.id(), p);
+        java.util.Set<String> officialKeyIds = trustedKeyIds();
         List<CatalogItem> items = parsed.entries().stream().map(e -> {
             InstalledPlugin p = have.get(e.id());
             return new CatalogItem(e.id(), e.name(), e.repo(), e.description(), e.category(),
                     e.signerKeyId(), e.minGraphy(),
+                    e.signerKeyId() != null && officialKeyIds.contains(e.signerKeyId().toUpperCase(java.util.Locale.ROOT)),
                     p == null ? null : new CatalogInstalled(p.version(), p.source() == null ? null : p.source().type(),
                             p.enabled(), p.trust()));
         }).toList();
         return new CatalogView(true, stale, error, items, parsed.rejected());
+    }
+
+    /** 本体が信頼する鍵（{@code trusted-keys}）の鍵 ID（大文字 16 桁）。読めない鍵は除く。 */
+    private java.util.Set<String> trustedKeyIds() {
+        java.util.Set<String> ids = new java.util.HashSet<>();
+        for (String k : props.getTrustedKeys()) {
+            try {
+                ids.add(Minisign.parseKey(k).keyId().toUpperCase(java.util.Locale.ROOT));
+            } catch (PluginInstallException e) {
+                log.warn("[plugin-manager] ignoring unreadable trusted key: {}", e.getMessage());
+            }
+        }
+        return ids;
     }
 
     private PluginCatalog.Parsed readCatalogCache(Path cache) {
@@ -132,9 +147,15 @@ public class PluginManagerService {
     /** 索引エントリの導入済み状態。{@code sourceType} は github / file / bundled。 */
     public record CatalogInstalled(String version, String sourceType, boolean enabled, String trust) {}
 
-    /** 一覧の 1 行。{@code installed} が null なら未導入。 */
+    /**
+     * 一覧の 1 行。{@code installed} が null なら未導入。
+     *
+     * @param officialSigner 索引の {@code signerKeyId} が本体の信頼する鍵と一致するか。索引の記載を本体の鍵と
+     *                       突き合わせただけで、<b>署名の検証ではない</b>（検証は導入前検査で行う）
+     */
     public record CatalogItem(String id, String name, String repo, String description, String category,
-                              String signerKeyId, String minGraphy, CatalogInstalled installed) {}
+                              String signerKeyId, String minGraphy, boolean officialSigner,
+                              CatalogInstalled installed) {}
 
     /**
      * 一覧の結果。

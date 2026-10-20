@@ -35,7 +35,7 @@ export function PluginConsentDialog({
   const canConfirm = preview.installable && (!needsAck || ackUnverified) && !busy;
 
   return (
-    <div style={backdrop} role="dialog" aria-modal="true">
+    <div style={backdrop} role="dialog" aria-modal="true" data-testid="plugin-consent-dialog">
       <div style={sheet}>
         <h3 style={title}>{t("pluginmgr.consent.title")}</h3>
 
@@ -135,7 +135,7 @@ export function PluginConsentDialog({
         </div>
 
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 14 }}>
-          <button style={secondaryBtn} onClick={onCancel} disabled={busy}>
+          <button style={secondaryBtn} onClick={onCancel} disabled={busy} data-testid="plugin-consent-cancel">
             {t("common.cancel")}
           </button>
           <button
