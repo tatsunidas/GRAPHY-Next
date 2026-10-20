@@ -1,11 +1,10 @@
 # GRAPHY-Next プラグイン テンプレート
 
-GRAPHY-Next のプラグインを作るための最小の雛形。これをコピー（または「Use this template」で fork）して、
-自分のプラグインを作り、GitHub の **Release タグ**で配布する。GRAPHY-Next のユーザーはプラグイン
-マネージャ（Settings ＞ プラグイン）から **GitHub の `owner/repo`** を指定して導入できる。
+GRAPHY-Next のプラグインを作るための最小の雛形です。GitHub の「**Use this template**」で自分のリポジトリを作り、
+プラグインを書いて、**Release タグ**で配布します。GRAPHY-Next の利用者は、プラグインマネージャ
+（環境設定 ＞ プラグイン）から導入できます。索引に載せると「見つける」の一覧にも出ます（下の「索引に載せる」）。
 
-> このフォルダは GRAPHY-Next 本体リポジトリ内の雛形。実運用では独立した GitHub リポジトリ
-> （例 `graphy-next-plugin-template`）として「Use this template」可能にすることを想定している。
+ライセンスは MIT です（`LICENSE`）。この雛形から作ったプラグインは、公開・非公開、オープンソース・商用を問わず、自由に配布できます。
 
 ## 中身
 
@@ -13,18 +12,23 @@ GRAPHY-Next のプラグインを作るための最小の雛形。これをコ�
 plugin.json                     ← 必須。マニフェスト（id/name/version/engines/contributes/ui …）
 ui.js                           ← フロント面（ES モジュール・ビルド不要）。activate(host) を export
 graphy-plugin.d.ts              ← エディタ型補完用（ビルド不要。ui.js から参照）
-.github/workflows/release.yml   ← タグ push で <id>-<version>.zip + .sha256 を作り Release に添付
+LICENSE                         ← MIT。自分のプラグイン用に年と名前を書き換える
+.github/workflows/release.yml   ← タグ push で <id>-<version>.zip + .sha256（+ 署名）を作り Release に添付
 backend-optional/               ← 任意。Java のバックエンド面（重い計算・standalone のみ）
 ```
 
-## 1 分クイックスタート
+## クイックスタート（署名つきで Release を出すまで）
 
-1. このテンプレを fork / コピーする。
-2. `plugin.json` を編集（`id` を一意に、`name` / `version` / `author` / `homepage` を自分用に）。
+1. 「**Use this template**」で自分のリポジトリを作る（**公開**リポジトリにする。索引に載せるのに必要）。
+2. `plugin.json` を編集する（`id` を一意に、`name` / `version` / `author` / `homepage` / `license` を自分用に）。`LICENSE` の年と名前も直す。
 3. `ui.js` の `activate(host)` を実装する。
-4. `plugin.json` の `version` を上げ、同じ版で **タグ `v<version>`** を push する（例 `v0.1.0`）。
-   → GitHub Actions が `<id>-<version>.zip`（直下に `plugin.json`）と `.sha256` を Release に添付する。
-5. GRAPHY-Next の Settings ＞ プラグイン ＞「GitHub から導入」に `owner/repo` を入れて導入。
+4. **署名鍵を作る**（1 回だけ。下の「署名」）。公開鍵 `minisign.pub` をリポジトリ直下にコミットし、秘密鍵をリポジトリの secrets に登録する。
+5. `plugin.json` の `version` を上げ、同じ版で**タグ `v<version>`** を push する（例 `v0.1.0`）。
+   GitHub Actions が `<id>-<version>.zip`（直下に `plugin.json`）・`.sha256`・`.minisig`・`minisign.pub` を Release に添付する。
+   タグと `plugin.json` の版が違うと CI が止まる。
+6. Release の資産が 4 つ（zip・sha256・minisig・minisign.pub）揃っていることを確認する。
+7. GRAPHY-Next の環境設定 ＞ プラグイン ＞「URL / ZIP」に `owner/repo` を入れて導入してみる（導入には「プラグインの導入を許可する」の ON が要る）。
+8. 他の人に見つけてもらうには、索引に載せる（下の「索引に載せる」）。
 
 > ローカルで試すだけなら、`plugin.json` と `ui.js` を GRAPHY-Next のプラグインフォルダ
 > （`<appData>/GRAPHY-Next/plugins/<id>/`）へ直接置いてアプリを再起動してもよい。
@@ -44,25 +48,39 @@ backend-optional/               ← 任意。Java のバックエンド面（重
 | `permissions` | 任意 | 要求権限（例 `"read-pixels"`）。導入時の同意画面に表示される（**強制はまだ無い**） |
 | `description`/`author`/`homepage`/`license` | 任意 | マネージャ一覧の表示・法務用 |
 
-## 署名（推奨）
+## 署名
 
-リリースに `<zip>.minisig` と `minisign.pub` を添えると、GRAPHY-Next 側で署名を自動検証します。
-
-```bash
-minisign -G -p minisign.pub -s minisign.key   # 鍵を作る（1 回だけ）
-git add minisign.pub && git commit -m "add signing public key"   # 公開鍵はコミットしてよい
-```
-
-`minisign.key` の中身を GitHub の secrets `MINISIGN_SECRET_KEY`、パスワードを `MINISIGN_PASSWORD`
-に登録すると、同梱の `release.yml` が署名まで行います（未設定なら署名ステップは自動でスキップ）。
-
-利用者側の挙動:
+署名は任意ですが、**索引に載せるには必須**です。署名があると、利用者の導入で次のようになります。
 
 - **初回導入**: 署名が検証され、その鍵が記録される（確認画面が出る）
 - **2 回目以降の更新**: 同じ鍵で署名されていれば**確認画面なしで導入**される
-- **鍵が変わった / 署名が壊れている**: 導入を**拒否**する（作者すり替え・改竄の検知）
+- **鍵が変わった / 署名が壊れている / 署名が無い**: 導入を**拒否**する（作者のすり替え・改竄の検知。実際の GitHub で確認済み）
 
-⚠ **秘密鍵を失う・変える＝利用者は更新できなくなります**（拒否されます）。鍵は必ず保管してください。
+### 鍵を作って登録する
+
+```bash
+minisign -G -p minisign.pub -s minisign.key   # 鍵を作る（1 回だけ。パスフレーズを聞かれる）
+git add minisign.pub && git commit -m "add signing public key"   # 公開鍵はコミットしてよい
+```
+
+- `minisign.key`（秘密鍵）は**リポジトリに入れない**。中身を GitHub の secrets `MINISIGN_SECRET_KEY` に、パスフレーズを `MINISIGN_PASSWORD` に登録する（Settings ＞ Secrets and variables ＞ Actions）。
+- 同梱の `release.yml` が、secrets があれば署名まで行う（未設定なら署名ステップは自動でスキップされ、署名なしの Release になる）。
+- パスフレーズ無しの鍵（`minisign -G -W`）でも署名できる（`MINISIGN_PASSWORD` は未設定でよい。実際の Release で確認済み）。パスフレーズ付きの鍵での CI 署名は、この雛形では未検証。
+- minisign は公式サイト（<https://jedisct1.github.io/minisign/>）から入れる。
+
+### 守ること
+
+- ⚠ **秘密鍵を失う・変える＝利用者は更新できなくなります**（拒否されます）。復旧は利用者がアンインストールして入れ直す以外にありません。鍵は必ず別の場所にも保管してください。
+- 利用者側は**初回導入で見た鍵を固定する**方式です。**最初に導入される前にリポジトリが乗っ取られた場合は、この仕組みでは防げません**（初回の鍵が攻撃者のものになる）。リポジトリのアクセス権（2 段階認証など）を守ってください。
+- 署名は「同じ作者の物であること」までの保証で、**プラグインの中身の安全は保証しません**。
+
+## 索引に載せる
+
+GRAPHY-Next の「見つける」一覧に出すには、公式の索引リポジトリ
+[`tatsunidas/graphy-next-plugin-index`](https://github.com/tatsunidas/graphy-next-plugin-index) の `index.json` に 1 行足す Pull Request を出します
+（申請の手順と検査の内容は、そのリポジトリの README を参照）。載っていなくても、`owner/repo` を直接入力すれば導入できます。
+
+**索引に載っていることは、安全の保証ではありません。** 導入のたびに署名と中身が検査され、同意画面が出ます。
 
 ## サーフェス（`contributes`）と `host`
 
@@ -123,12 +141,11 @@ ROI の**書き込みはできない**（読影医の計測をプラグインが
 ## 配布と信頼
 
 - 配布は **GitHub Release のビルド済み zip 資産**（直下に `plugin.json`）。ソース tarball ではない。
-- `.sha256` を添付すると、マネージャが取得時に完全性を検証する（推奨）。
-- 署名（minisign 等）・信頼ティア表示・GitHub OAuth（private の列挙）は GRAPHY-Next 側で今後対応予定。
-- private プラグインは当面、マネージャ側の GitHub トークン設定（PAT）で列挙・取得する。
+- `.sha256` を添付すると、マネージャが取得時に完全性を検証する（推奨。無いと利用者は「承知のうえで導入」の確認が必要になる）。
+- 署名（minisign）は上の「署名」。信頼の表示は、当社の公式鍵で署名されたものが「公式」、それ以外は初回に確認画面が出る。
+- private リポジトリのプラグインは、マネージャ側の GitHub トークン設定（`graphy.plugins.github-token`）で取得できる。
 
 ## 参考
 
-- 作成ガイド: GRAPHY-Next `fw/plugin-authoring-guide.md`
-- マネージャ設計: GRAPHY-Next `fw/plugin-manager-design.md`
-- 実行レイヤ設計: GRAPHY-Next `fw/plugin-architecture.md`
+- GRAPHY-Next 本体: <https://github.com/tatsunidas/GRAPHY-Next>
+- 型定義: `graphy-plugin.d.ts`（`host` の全 API。エディタで補完が効く）

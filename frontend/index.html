@@ -6,6 +6,10 @@
     <!-- アプリアイコン（web=タブの favicon / Electron renderer でも同一パスで解決）。
          base:"./" のため相対パスで書く。単一マスター= public/icons/app/app_icon.png。 -->
     <link rel="icon" type="image/png" href="./icons/app/app_icon.png" />
+    <!-- モバイル web のホーム画面追加・オフライン起動（manifest と sw.js は public/）。 -->
+    <link rel="manifest" href="./manifest.webmanifest" />
+    <link rel="apple-touch-icon" href="./icons/app/GRAPHY-512.png" />
+    <meta name="theme-color" content="#101318" />
     <title>GRAPHY-Next</title>
   </head>
   <body>

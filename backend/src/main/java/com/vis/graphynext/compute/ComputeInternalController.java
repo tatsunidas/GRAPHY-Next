@@ -36,12 +36,14 @@ public class ComputeInternalController {
     private final ComputeEndpointRegistry registry;
     private final ComputeConnectionTester tester;
     private final ComputeEgressService egress;
+    private final ComputeJobRecovery recovery;
 
     public ComputeInternalController(ComputeEndpointRegistry registry, ComputeConnectionTester tester,
-                                     ComputeEgressService egress) {
+                                     ComputeEgressService egress, ComputeJobRecovery recovery) {
         this.registry = registry;
         this.tester = tester;
         this.egress = egress;
+        this.recovery = recovery;
     }
 
     public record EndpointsBody(List<ComputeEndpointRegistry.Incoming> endpoints) {
@@ -58,6 +60,8 @@ public class ComputeInternalController {
         // 🔴 トークンはログに出さない（id と host だけ）
         log.info("[compute] endpoints registered: {}", registry.all().stream()
                 .map(e -> e.id() + "=" + e.endpoint().base().getHost()).toList());
+        // 前回の実行で計算機に残った作業フォルダを、登録された接続先で消す（ブロックしない）
+        recovery.cleanupRemoteAsync();
         return ResponseEntity.ok(Map.of("ok", true, "count", registry.all().size()));
     }
 

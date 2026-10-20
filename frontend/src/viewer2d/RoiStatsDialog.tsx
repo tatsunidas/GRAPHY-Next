@@ -432,8 +432,8 @@ function Histogram({
   );
 }
 
-/** 線プロファイル（距離 - 値）。 */
-function LineChart({
+/** 線プロファイル（距離 - 値）。値の点検ダイアログの時間曲線も、これを使う。 */
+export function LineChart({
   xs,
   ys,
   xLabel,

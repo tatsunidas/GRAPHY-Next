@@ -10,6 +10,7 @@
  *        公式鍵（98EA7C6BA2D50118）・本体の trusted-keys とは無関係。鍵 ID は minisign.pub のコメントと同じ表記（大文字）。
  *
  * 何を確かめるか:
+ *   E2E_POSITIVE_ONLY=1 のときは負例を省く（雛形から作った使い捨てのリポジトリには負例用のリリースが無い。段 2a の確認用）
  *   正例 1  v0.1.0: 署名あり・鍵は初めて（first-use）→ 同意画面が要る。導入すると台帳に鍵 A が固定される
  *   正例 2  v0.1.1: 固定した鍵 A と同じ → pinned・押すだけ（autoInstallable）。導入できる
  *   負例（固定済みの A に対して。いずれも「届いている」ことを確かめたうえで、拒否・台帳不変を見る）
@@ -26,9 +27,10 @@ import { createChecker } from "./computeSpikeShared.js";
 const REPO = process.env.E2E_REPO ?? "";
 const KEY_A = (process.env.E2E_KEY_A ?? "").toUpperCase();
 const KEY_B = (process.env.E2E_KEY_B ?? "").toUpperCase();
-if (!REPO || !KEY_A || !KEY_B) throw new Error("E2E_REPO / E2E_KEY_A / E2E_KEY_B を環境変数で渡してください");
+const positiveOnly = process.env.E2E_POSITIVE_ONLY === "1";
+if (!REPO || !KEY_A || (!positiveOnly && !KEY_B)) throw new Error("E2E_REPO / E2E_KEY_A（負例も見るなら E2E_KEY_B）を環境変数で渡してください");
 const OFFICIAL = "98EA7C6BA2D50118";
-if (KEY_A === OFFICIAL || KEY_B === OFFICIAL) throw new Error("検査鍵に公式鍵が指定されている");
+if (KEY_A === OFFICIAL || (KEY_B && KEY_B === OFFICIAL)) throw new Error("検査鍵に公式鍵が指定されている");
 
 const PORTS = { http: 19490, scp: 19491, vite: 19493 };
 const PLUGINS_DIR = path.join(DESKTOP_RUN_DATA_DIR, "plugins");
@@ -154,12 +156,16 @@ async function main(): Promise<void> {
     check(i2.status === 200, "更新の導入が通る", `HTTP ${i2.status}`);
     check((await ledger()).find((p) => p.id === "e2e-check")?.version === "0.1.1", "台帳が 0.1.1 になった");
 
-    console.log("\n[負例] 固定済みの鍵 A に対する乗っ取り");
-    await negative("(a) zip を改ざん", "0.2.0", /sha256|checksum|digest|signature/i);
-    await negative("(b) 鍵 B で署名・公開鍵は A のまま", "0.2.1", /signature|key/i);
-    await negative("(c) 署名を剥がす", "0.2.2", /signature|unsigned|key/i);
-    await negative("(d) 鍵 B で署名し公開鍵も B に差し替え", "0.2.3", /signature|key/i);
-    check(KEY_B !== KEY_A, "（前提）乗っ取り役の鍵 B は作者の鍵 A と別");
+    if (positiveOnly) {
+      pend("負例（zip 改ざん・別の鍵・署名の剥がし・鍵ごとの差し替え）", "E2E_POSITIVE_ONLY=1 のため省略（段 1 の完全な検査で確認済み）");
+    } else {
+      console.log("\n[負例] 固定済みの鍵 A に対する乗っ取り");
+      await negative("(a) zip を改ざん", "0.2.0", /sha256|checksum|digest|signature/i);
+      await negative("(b) 鍵 B で署名・公開鍵は A のまま", "0.2.1", /signature|key/i);
+      await negative("(c) 署名を剥がす", "0.2.2", /signature|unsigned|key/i);
+      await negative("(d) 鍵 B で署名し公開鍵も B に差し替え", "0.2.3", /signature|key/i);
+      check(KEY_B !== KEY_A, "（前提）乗っ取り役の鍵 B は作者の鍵 A と別");
+    }
   } finally {
     await driver.stop().catch(() => {});
     cleanPlugins();

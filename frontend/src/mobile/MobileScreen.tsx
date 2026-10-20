@@ -29,11 +29,17 @@ import { MobileReportEditor, type PendingKeyImage } from "./MobileReportEditor";
 import { useVisualViewportHeight } from "./useVisualViewport";
 import { mobileHash, parentView, type MobileView } from "./mobileRoute";
 import { useDeviceClass } from "./useDeviceClass";
+import { registerServiceWorker } from "./registerServiceWorker";
+import { useOnline } from "./useOnline";
 
 export function MobileScreen({ status, view }: { status: AppStatus | null; view: MobileView }) {
   const { t } = useI18n();
   const { deviceClass, setOverride } = useDeviceClass();
   const viewportHeight = useVisualViewportHeight();
+  const online = useOnline();
+  // 新しい版のアプリ本体が有効になったときの案内（作業中の画面を勝手に作り直さない）。
+  const [updateReady, setUpdateReady] = useState(false);
+  useEffect(() => registerServiceWorker(() => setUpdateReady(true)), []);
 
   // 初期値はリロード前の続き（`readMobileCtx`）。無ければ未検索・未選択。
   const [filters, setFilters] = useState<StudyFilters | null>(() => readMobileCtx().filters ?? null);
@@ -99,14 +105,30 @@ export function MobileScreen({ status, view }: { status: AppStatus | null; view:
             ? series.seriesDescription || `#${series.seriesNumber ?? "—"}`
             : t(VIEW_TITLE_KEY[view])}
         </h1>
+        {!online && (
+          <span style={offlineBadge} data-testid="mobile-offline-badge">
+            {t("mobile.offline")}
+          </span>
+        )}
         <button style={escapeBtn} onClick={switchToDesktop} data-testid="mobile-to-desktop">
           {t("mobile.toDesktop")}
         </button>
       </header>
 
+      {updateReady && (
+        <button style={updateBar} onClick={() => window.location.reload()} data-testid="mobile-update-ready">
+          {t("mobile.updateReady")}
+        </button>
+      )}
+
       {/* ビューアは全面表示（余白なし・自前スクロール）。一覧系は読み物なので余白を付ける。 */}
       <main style={view === "viewer" ? contentFlush : content}>
-        {view === "studies" ? (
+        {!online && (view === "studies" || view === "series") ? (
+          // 古い一覧を見せない（サーバーのデータは端末に残していない）。
+          <section style={panel} data-testid="mobile-offline-panel">
+            <p style={{ margin: 0 }}>{t("mobile.offlineNoServer")}</p>
+          </section>
+        ) : view === "studies" ? (
           <MobileStudyList
             filters={filters}
             onSearch={setFilters}
@@ -265,6 +287,23 @@ const panel: React.CSSProperties = {
   background: "#171b22",
   fontSize: 14,
   lineHeight: 1.7,
+};
+
+const offlineBadge: React.CSSProperties = {
+  fontSize: 12,
+  padding: "2px 8px",
+  borderRadius: 10,
+  background: "#c9a227",
+  color: "#101318",
+  whiteSpace: "nowrap",
+};
+
+const updateBar: React.CSSProperties = {
+  padding: "8px 10px",
+  border: "none",
+  background: "#2b5fa8",
+  color: "#fff",
+  fontSize: 14,
 };
 
 const noteText: React.CSSProperties = { margin: 0, color: "#c9a227" };

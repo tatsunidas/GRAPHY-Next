@@ -7,6 +7,8 @@ package com.vis.graphynext.compute;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.vis.graphynext.compute.ComputeJobStateMachine.Reason;
+import com.vis.graphynext.compute.ComputeJobStateMachine.State;
 import com.vis.graphynext.plugin.PluginArtifacts;
 import com.vis.graphynext.plugin.PluginJobService;
 import org.slf4j.Logger;
@@ -43,6 +45,11 @@ import java.util.zip.ZipOutputStream;
  * {@code graphy/<run>/inputs/0.npz …} にデータを置き、カーネルを {@code graphy/<run>} で起動する。
  * コードは相対パスで {@code inputs/} を読み、{@code outputs/} に書く。終わったら（失敗・取り消しでも）
  * フォルダごと消してカーネルを止める——<b>匿名化済みとはいえ患者由来のデータを計算機に残さない</b>。
+ *
+ * <h3>台帳と待ち行列</h3>
+ * ジョブは {@link ComputeJobLedger}（H2）に 1 行残り、状態は待ち → 実行中 → 完了／失敗／中止と移る。
+ * <b>同じ計算機のジョブは 1 本ずつ順に</b>走る（同じ GPU に同時 2 カーネルを立てない。別の計算機は待たない）。
+ * プラグインから見た H59（{@code /api/plugin-jobs/{jobId}}・成果物の取り方）は変わらない。
  */
 @Service
 public class ComputeJobRunner {
@@ -64,16 +71,20 @@ public class ComputeJobRunner {
     private final ComputeAuditLog audit;
     private final PluginJobService jobs;
     private final ObjectMapper mapper;
+    private final ComputeJobLedger ledger;
 
     public ComputeJobRunner(ComputeEgressService egress, ComputeEndpointRegistry endpoints,
                             ComputeDatasetService datasets, ComputeAuditLog audit, PluginJobService jobs,
-                            ObjectMapper mapper) {
+                            ObjectMapper mapper, ComputeJobLedger ledger) {
         this.egress = egress;
         this.endpoints = endpoints;
         this.datasets = datasets;
         this.audit = audit;
         this.jobs = jobs;
         this.mapper = mapper;
+        this.ledger = ledger;
+        // 結果の zip は台帳のジョブのフォルダに置き、H53 はそこを指す（移さない）
+        jobs.artifacts().trustRoot(ledger.jobsRoot());
     }
 
     /**
@@ -85,11 +96,111 @@ public class ComputeJobRunner {
         ComputeEgressService.EgressRequest r = egress.consumeFor(pluginId, requestId)
                 .orElseThrow(() -> new ComputeEgressService.EgressRefused("not-approved"));
         int timeout = timeoutSec == null ? DEFAULT_TIMEOUT_SEC : Math.max(10, Math.min(MAX_TIMEOUT_SEC, timeoutSec));
-        return jobs.submitTask(pluginId, ctx -> run(r, Duration.ofSeconds(timeout), ctx));
+        List<ComputeJobLedger.InputRef> inputs = r.datasets().stream()
+                .map(d -> datasets.get(d.handle())
+                        .map(ds -> new ComputeJobLedger.InputRef(ds.sourceStudyUid(), ds.sourceSeriesUid(), d.format()))
+                        .orElse(new ComputeJobLedger.InputRef("", "", d.format())))
+                .toList();
+        String cj = ledger.create(r, inputs, timeout);
+        PluginJobService.Status st = jobs.submitSerialTask(r.endpointId(), pluginId, new PluginJobService.Task() {
+            @Override
+            public Object run(PluginJobService.TaskContext ctx) throws Exception {
+                return ComputeJobRunner.this.run(r, cj, Duration.ofSeconds(timeout), ctx);
+            }
+
+            @Override
+            public void onCancelRequested() {
+                cancelQueued(cj, r);
+            }
+        });
+        ledger.attachPluginJob(cj, st.jobId());
+        return st;
     }
 
-    Map<String, Object> run(ComputeEgressService.EgressRequest r, Duration timeout,
+    /**
+     * 利用者の取り消し（台帳の行から）。順番待ちなら計算機へ何も送らずに中止、実行中なら中断して止める。
+     *
+     * @return 取り消しを受け付けたか（行が無い・もう終わっていれば false）
+     */
+    public boolean cancel(String jobId) {
+        ComputeJobRecord j = ledger.find(jobId).orElse(null);
+        if (j == null || State.valueOf(j.state).ended() || j.pluginJobId == null) {
+            return false;
+        }
+        return jobs.cancel(j.pluginJobId).isPresent();
+    }
+
+    /** 待ちのままなら中止にして、送らずに終える（データは捨てる）。実行が始まっていれば何もしない。 */
+    private void cancelQueued(String cj, ComputeEgressService.EgressRequest r) {
+        if (ledger.cancelIfQueued(cj)) {
+            r.datasets().forEach(d -> datasets.discard(d.handle()));
+            audit.append(event("compute-job-cancelled", r).put("stage", "queued"));
+        }
+    }
+
+    /** 1 件の実行。台帳へ「実行中」を書き、終わったら完了・失敗・中止を書く。 */
+    Map<String, Object> run(ComputeEgressService.EgressRequest r, String cj, Duration timeout,
                             PluginJobService.TaskContext ctx) throws Exception {
+        if (!ledger.start(cj, null)) {
+            // 待ちの間に中止された（cancelQueued がデータを捨てている）
+            throw new CancelledByUser();
+        }
+        PluginJobService.TaskContext lctx = new PluginJobService.TaskContext((p, m) -> {
+            ctx.progress().accept(p, m);
+            if (p != null) {
+                ledger.progress(cj, phaseOf(m), Math.max(0, Math.min(1, p)), m);
+            }
+        }, ctx.cancelled());
+        try {
+            Map<String, Object> result = runOnRemote(r, cj, timeout, lctx);
+            recordEnd(cj, result);
+            return result;
+        } catch (CancelledByUser e) {
+            ledger.finish(cj, State.CANCELLED, null, null, null, 0);
+            audit.append(event("compute-job-cancelled", r).put("stage", "running"));
+            throw e;
+        } catch (Exception e) {
+            Reason reason = ComputeJobStateMachine.classify(e);
+            ledger.finish(cj, State.FAILED, reason, e.getClass().getSimpleName(), e.getMessage(), 0);
+            throw e;
+        }
+    }
+
+    /** コードの結果（正常終了・Python の例外）を台帳へ。例外でも H59 の戻り値は今のまま（status:"error"）。 */
+    private void recordEnd(String cj, Map<String, Object> result) {
+        ledger.writeLogs(cj, str(result.get("stdout")), str(result.get("stderr")), str(result.get("traceback")));
+        long bytes = 0;
+        if (result.get(PluginArtifacts.ARTIFACT_KEY) instanceof String zip) {
+            try {
+                bytes = Files.size(Path.of(zip));
+            } catch (IOException ignored) {
+                // 大きさが分からないだけ（0 のまま）
+            }
+        }
+        if ("ok".equals(result.get("status"))) {
+            ledger.finish(cj, State.DONE, null, null, null, bytes);
+        } else {
+            ledger.finish(cj, State.FAILED, Reason.CODE_ERROR, str(result.get("errorName")),
+                    str(result.get("errorValue")), bytes);
+        }
+    }
+
+    private static String str(Object o) {
+        return o == null ? null : String.valueOf(o);
+    }
+
+    private static String phaseOf(String message) {
+        return switch (message == null ? "" : message) {
+            case "upload" -> "upload";
+            case "start" -> "start";
+            case "download" -> "download";
+            case "done" -> "cleanup";
+            default -> "exec";
+        };
+    }
+
+    private Map<String, Object> runOnRemote(ComputeEgressService.EgressRequest r, String cj, Duration timeout,
+                                            PluginJobService.TaskContext ctx) throws Exception {
         long t0 = System.nanoTime();
         JupyterServerClient c = endpoints.client(r.endpointId(), mapper)
                 .orElseThrow(() -> new IllegalStateException("endpoint no longer registered: " + r.endpointId()));
@@ -101,6 +212,7 @@ public class ComputeJobRunner {
             throw new IllegalStateException("destination-changed");
         }
         String runDir = c.endpoint().workRoot() + "/" + UUID.randomUUID().toString().substring(0, 12);
+        ledger.remoteRunDir(cj, runDir);
         String kernelId = null;
         String outcome = "failed";
         Map<String, Object> result = new LinkedHashMap<>();
@@ -128,6 +240,7 @@ public class ComputeJobRunner {
             checkCancel(ctx);
             ctx.progress().accept(0.2, "start");
             kernelId = c.startKernel(null, runDir);
+            ledger.kernelId(cj, kernelId);
             ExecutionResult er;
             try (KernelChannel ch = c.connect(kernelId, Duration.ofSeconds(120))) {
                 checkKernelPython(ch, r.endpointId());
@@ -139,6 +252,7 @@ public class ComputeJobRunner {
                         throw new IllegalStateException("cannot enter the job folder: " + cd.errorValue());
                     }
                 }
+                recordEnvironment(ch, cj);
                 CompletableFuture<ExecutionResult> f = ch.execute(r.code(), (name, text) -> progressFrom(text, ctx));
                 er = await(f, c, kernelId, timeout, ctx);
             }
@@ -154,11 +268,12 @@ public class ComputeJobRunner {
             // 3. 結果を取り出す（エラーでも途中までの outputs は返す）
             ctx.progress().accept(0.95, "download");
             List<Map<String, Object>> files = new ArrayList<>();
-            Path zip = collectOutputs(c, runDir + "/outputs", files);
+            Path zip = collectOutputs(c, runDir + "/outputs", files, ledger.jobDir(cj).resolve("outputs.zip"));
             result.put("files", files);
             if (zip != null) {
                 result.put(PluginArtifacts.ARTIFACT_KEY, zip.toString());
                 result.put(PluginArtifacts.ARTIFACT_NAME_KEY, "outputs.zip");
+                result.put(PluginArtifacts.TRUST_KEY, jobs.artifacts().trustNonce());
             }
             outcome = er.ok() ? "ok" : "error";
             ctx.progress().accept(1.0, "done");
@@ -176,9 +291,11 @@ public class ComputeJobRunner {
             }
             try {
                 c.delete(runDir); // 計算機に患者由来のデータを残さない
+                ledger.remoteCleanup(cj, "ok");
             } catch (RuntimeException e) {
                 log.warn("[compute] cannot delete remote folder {}: {}", runDir, e.getMessage());
                 outcome = outcome + "+remote-cleanup-failed";
+                ledger.remoteCleanup(cj, "failed");
             }
             r.datasets().forEach(d -> datasets.discard(d.handle()));
             @SuppressWarnings("unchecked")
@@ -241,9 +358,10 @@ public class ComputeJobRunner {
      * {@code outputs/} を（下の階層も含めて）取り出し、無圧縮の zip にする。
      * 無圧縮にするのは、プラグイン側（ブラウザ）で依存なしに 1 ファイルずつ取り出せるようにするため。
      *
-     * @return zip のパス（一時フォルダの下。H53 が預かる）。outputs が空なら null
+     * @param zip 書き出す先（台帳のジョブのフォルダ。H53 はここを指す）
+     * @return zip のパス。outputs が空なら null
      */
-    private Path collectOutputs(JupyterServerClient c, String dir, List<Map<String, Object>> files)
+    private Path collectOutputs(JupyterServerClient c, String dir, List<Map<String, Object>> files, Path zip)
             throws IOException {
         List<String> names = new ArrayList<>();
         listFiles(c, dir, "", names);
@@ -253,7 +371,7 @@ public class ComputeJobRunner {
         if (names.size() > MAX_OUTPUT_FILES) {
             throw new IllegalStateException("too many output files: " + names.size());
         }
-        Path zip = Files.createTempFile("graphy-compute-outputs-", ".zip");
+        Files.createDirectories(zip.getParent());
         long total = 0;
         try (OutputStream fo = Files.newOutputStream(zip); ZipOutputStream z = new ZipOutputStream(fo)) {
             z.setMethod(ZipOutputStream.STORED);
@@ -280,6 +398,41 @@ public class ComputeJobRunner {
             }
         }
         return zip;
+    }
+
+    /**
+     * 計算機の環境（Python・PyTorch・CUDA・GPU 名）を台帳へ。{@link ComputeConnectionTester#PROBE} と同じ固定コードで、
+     * データには触れない・同意画面のコードには含めない（作業フォルダへ移るコードと同じ扱い）。取れなくてもジョブは続ける。
+     */
+    private void recordEnvironment(KernelChannel ch, String cj) {
+        try {
+            ExecutionResult pr = ch.execute(ComputeConnectionTester.PROBE, null).get(60, TimeUnit.SECONDS);
+            if (!pr.ok()) {
+                return;
+            }
+            for (String line : pr.stdout().split("\n")) {
+                int i = line.indexOf(ComputeConnectionTester.MARK);
+                if (i < 0) {
+                    continue;
+                }
+                JsonNode p = mapper.readTree(line.substring(i + ComputeConnectionTester.MARK.length()));
+                ObjectNode env = mapper.createObjectNode();
+                env.put("python", p.path("python").asText(null));
+                JsonNode torch = p.path("torch");
+                env.put("torch", torch.path("version").asText(null));
+                env.put("cuda", torch.path("cudaVersion").asText(null));
+                var gpus = env.putArray("gpu");
+                for (JsonNode g : p.path("gpus")) {
+                    gpus.add(g.path("name").asText(""));
+                }
+                ledger.env(cj, mapper.writeValueAsString(env));
+                return;
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        } catch (Exception e) {
+            log.debug("[compute] cannot record the environment: {}", e.toString());
+        }
     }
 
     private static void listFiles(JupyterServerClient c, String base, String rel, List<String> out) {

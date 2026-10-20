@@ -241,6 +241,8 @@ export interface ViewerActions {
   launchCurvedMpr(): void;
   /** 対象タイルのシリーズで Histogram 解析ダイアログを開く。 */
   openHistogram(): void;
+  /** 対象タイルのシリーズで値の点検（Probe の点の時間曲線）ダイアログを開く。 */
+  openValueInspector(): void;
   /** 対象タイルのシリーズでリサンプル・切り抜きダイアログを開く。 */
   openResample(): void;
   /** 開いている患者のタイルを候補に、つなぎ合わせダイアログを開く。 */

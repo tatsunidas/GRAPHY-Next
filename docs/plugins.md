@@ -20,4 +20,6 @@
 - 雛形からの作成とビルド
 - 署名
 
+雛形は公開のテンプレートリポジトリ [`graphy-next-plugin-template`](https://github.com/tatsunidas/graphy-next-plugin-template) の「Use this template」から作れます（手順・署名・索引への掲載申請は、その README を参照）。
+
 関連: [環境設定](settings.md)

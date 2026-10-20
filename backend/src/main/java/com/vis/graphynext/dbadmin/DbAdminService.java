@@ -46,6 +46,13 @@ public class DbAdminService {
     private final DicomStorageService storage;
     private final StorageLayout layout;
     private final PatientRecordMover records;
+    /** 計算ジョブの台帳（無い構成では null）。消えたシリーズの UID を台帳から空にする。 */
+    private com.vis.graphynext.compute.ComputeJobLedger computeLedger;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    void setComputeLedger(com.vis.graphynext.compute.ComputeJobLedger computeLedger) {
+        this.computeLedger = computeLedger;
+    }
 
     public DbAdminService(DicomInstanceRepository repo, SettingsService settings, DicomStorageService storage,
                           StorageLayout layout, PatientRecordMover records) {
@@ -129,11 +136,34 @@ public class DbAdminService {
             }
         }
         repo.deleteAll(rows);
+        forgetComputeInputs(rows);
         PatientRecordMover.Cleanup related = deleteFiles ? records.afterDelete(rows) : null;
         if (related != null) {
             log.info("削除に伴い付随データを片付けた: {}", related);
         }
         return new DeleteResult(rows.size(), related);
+    }
+
+    /**
+     * 保管庫からシリーズが無くなったら、計算ジョブの台帳の入力の UID を空にする（行は「削除済み・再実行不可」になる）。
+     * ファイルを残す設定でも、索引から消えたものは保管庫から見えないので同じ扱い。台帳の不具合で削除を失敗させない。
+     */
+    private void forgetComputeInputs(List<DicomInstance> rows) {
+        if (computeLedger == null) {
+            return;
+        }
+        try {
+            java.util.Set<String> gone = new java.util.LinkedHashSet<>();
+            for (DicomInstance r : rows) {
+                if (r.getSeriesInstanceUid() != null
+                        && repo.findBySeries(r.getStudyInstanceUid(), r.getSeriesInstanceUid()).isEmpty()) {
+                    gone.add(r.getSeriesInstanceUid());
+                }
+            }
+            computeLedger.clearSeries(gone);
+        } catch (RuntimeException e) {
+            log.warn("計算ジョブの台帳から削除したシリーズの UID を外せなかった: {}", e.toString());
+        }
     }
 
     /**
