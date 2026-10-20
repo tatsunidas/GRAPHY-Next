@@ -55,8 +55,8 @@ graphy:
     manager-enabled: true
     # private リポジトリの列挙・資産取得に使う GitHub トークン（任意・PAT）。未設定なら公開のみ。
     # github-token: ghp_xxx
-    # 公式キュレーション索引 URL（raw JSON・将来の discovery 用・任意）。
-    # index-url: https://raw.githubusercontent.com/vis-ionary/graphy-plugins-index/main/index.json
+    # 公式キュレーション索引 URL（raw JSON・https のみ・任意）。未設定なら「見つける」の一覧は空。
+    # index-url: https://raw.githubusercontent.com/tatsunidas/graphy-next-plugin-index/main/index.json
     # 信頼する minisign 公開鍵（base64 行）。ここに載る鍵で署名検証できたプラグインは
     # verified 扱いになり、確認画面なしでそのまま導入できる。設計: fw/plugin-manager-design.md §5.2。
     # 公開鍵は秘密ではないのでコミットしてよい（秘密鍵とパスフレーズは配布側で厳重に保管する）。
