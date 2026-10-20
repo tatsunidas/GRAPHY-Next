@@ -10,6 +10,9 @@ import { isDesktop } from "../desktopBridge";
 import { useI18n, type TFn } from "../i18n/i18n";
 import { STILL_MS_STORAGE_KEY, type RenderEnvSummary } from "../viewer/renderEnv";
 import { loadRenderEnvSummary } from "../viewer/renderEnvReport";
+import type { SelfTestRun } from "../viewer/render3dSelfTest";
+import { fetchStatus } from "../api";
+import { SelfTestSection } from "./SelfTestSection";
 
 const GB = 1024 * 1024 * 1024;
 
@@ -17,6 +20,7 @@ export function RenderEnvPanel() {
   const { t } = useI18n();
   const [s, setS] = useState<RenderEnvSummary | null>(null);
   const [copied, setCopied] = useState<"ok" | "ng" | null>(null);
+  const [selfTest, setSelfTest] = useState<SelfTestRun | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -30,8 +34,26 @@ export function RenderEnvPanel() {
 
   const copy = async () => {
     if (!s) return;
+    let json: object = s;
+    if (selfTest) {
+      let version = "unknown";
+      try {
+        version = (await fetchStatus()).version;
+      } catch {
+        /* 版が取れなくてもコピーはできる */
+      }
+      json = {
+        ...s,
+        selfTest: {
+          version,
+          userAgent: navigator.userAgent,
+          gpu: selfTest.gpu,
+          rows: selfTest.rows.map((r) => ({ id: r.id, status: r.status, reason: r.reason, values: r.values ?? {} })),
+        },
+      };
+    }
     try {
-      await navigator.clipboard.writeText(JSON.stringify(s, null, 2));
+      await navigator.clipboard.writeText(JSON.stringify(json, null, 2));
       setCopied("ok");
     } catch {
       setCopied("ng");
@@ -117,6 +139,9 @@ export function RenderEnvPanel() {
           </span>
         )}
       </div>
+      <h4 style={sectionHead}>{t("selftest.title")}</h4>
+      <p style={note}>{t("selftest.intro")}</p>
+      <SelfTestSection kind={s.kind} onResult={setSelfTest} />
     </div>
   );
 }
@@ -182,3 +207,4 @@ const muted: React.CSSProperties = { color: "#889", fontSize: 12 };
 const table: React.CSSProperties = { borderCollapse: "collapse", width: "100%", fontSize: 12.5 };
 const td: React.CSSProperties = { borderBottom: "1px solid #eef1f4", padding: "5px 8px", verticalAlign: "top" };
 const primaryBtn: React.CSSProperties = { background: "#0b5cad", color: "#fff", border: "none", borderRadius: 6, padding: "4px 10px", cursor: "pointer", fontSize: 12, whiteSpace: "nowrap" };
+const sectionHead: React.CSSProperties = { margin: "22px 0 4px", fontSize: 14 };

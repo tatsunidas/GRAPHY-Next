@@ -183,6 +183,11 @@ export interface VtkVolumeView {
   /** 向きギズモ（患者 LPS ラベル付き AnnotatedCube）ON/OFF。既定 ON。 */
   setAxesEnabled(on: boolean): void;
   /**
+   * 平行投影 ON/OFF（既定 OFF＝透視）。描画環境の自己診断が、透視の拡大を除いて mm の扱いだけを測るために使う。
+   * 視野は今の対象全体に合わせ直す。
+   */
+  setParallelProjection(on: boolean): void;
+  /**
    * 現在の色 TF＋不透明度 TF を data レンジ全体で 256×4 RGBA に焼き込む（W/L・LUT・不透明度カーブを反映）。
    * Cinematic v2 パストレーサ（`viewer/cinematicPathTracer.ts`）の LUT テクスチャ用。
    */
@@ -1308,6 +1313,17 @@ export function createVtkVolumeView(
     },
     getRotateMode() {
       return rotateMode;
+    },
+    setParallelProjection(on) {
+      try {
+        const cam: Any = renderer.getActiveCamera();
+        cam.setParallelProjection(on);
+        renderer.resetCamera();
+        renderer.resetCameraClippingRange();
+        render();
+      } catch {
+        /* ignore */
+      }
     },
     setAxesEnabled(on) {
       try {
