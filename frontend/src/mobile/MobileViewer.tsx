@@ -46,6 +46,7 @@ export function MobileViewer({
   mode,
   onChangeSeries,
   onAttachToReport,
+  readOnly = false,
 }: {
   study: Study;
   series: Series;
@@ -53,6 +54,11 @@ export function MobileViewer({
   onChangeSeries: (s: Series) => void;
   /** 表示中スライスをキー画像として渡す（M8・§5.4）。解決できなければ呼ばれない。 */
   onAttachToReport: (k: { sopInstanceUid: string; seriesInstanceUid: string }) => void;
+  /**
+   * 参照専用（検査共有の受け手）。3D・MPR・レポート添付・Fusion の導線を出さない。
+   * 受け手が呼べる API は許可リストの数経路だけで、これらはそれ以外を呼ぶため。
+   */
+  readOnly?: boolean;
 }) {
   const { t } = useI18n();
   const { instances, error, loading } = useInstances(study.studyInstanceUid, series.seriesInstanceUid);
@@ -191,8 +197,8 @@ export function MobileViewer({
         activeTool={activeTool}
         onChangeTool={setActiveTool}
         onOpenSeriesDrawer={() => setDrawerOpen(true)}
-        onLaunchVolumeViewer={(kind) => launchMobileVolumeViewer(kind, study, series, Date.now())}
-        onAttachToReport={attachCurrentSlice}
+        onLaunchVolumeViewer={readOnly ? undefined : (kind) => launchMobileVolumeViewer(kind, study, series, Date.now())}
+        onAttachToReport={readOnly ? undefined : attachCurrentSlice}
       />
 
       {drawerOpen && (
@@ -204,7 +210,7 @@ export function MobileViewer({
             onChangeSeries(s);
             closeDrawer();
           }}
-          onFuse={(s) => void applyFusion(s)}
+          onFuse={readOnly ? undefined : (s) => void applyFusion(s)}
           onClose={closeDrawer}
         />
       )}
@@ -232,7 +238,7 @@ function SeriesDrawer({
   /** いま重ねているシリーズ（あれば）。 */
   fusionUid: string | null;
   onSelect: (s: Series) => void;
-  onFuse: (s: Series) => void;
+  onFuse?: (s: Series) => void;
   onClose: () => void;
 }) {
   const { t } = useI18n();
@@ -271,7 +277,7 @@ function SeriesDrawer({
                     </span>
                   </button>
                   {/* 表示中のシリーズを自分自身に重ねても意味が無いので出さない。 */}
-                  {!on && (
+                  {!on && onFuse && (
                     <button
                       style={fused ? fuseBtnOn : fuseBtn}
                       onClick={() => onFuse(s)}

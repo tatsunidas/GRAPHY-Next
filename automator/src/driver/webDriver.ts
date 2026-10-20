@@ -57,6 +57,7 @@ export class WebDriver implements Driver {
         "-jar", BACKEND_JAR,
         `--spring.profiles.active=${this.shooting ? "standalone" : "web"}`,
         `--server.port=${this.ports.http}`,
+        `--graphy.dicom.scp.port=${this.ports.scp}`,
       ],
       {
         cwd: dataDir,

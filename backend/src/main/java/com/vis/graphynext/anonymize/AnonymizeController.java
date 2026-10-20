@@ -85,11 +85,33 @@ public class AnonymizeController {
 
         AnonymizeConfig cfg = toConfig(req);
         AnonymizeService.BurnPreflight burn = requireBurnableIfCleanPixelData(cfg, req.burnIn(), req.studyUids());
+        // 🔴 ストリームに直接書くと、途中で読めなかった画像は errors に入るだけで ZIP から黙って抜ける
+        // （受け取り側は欠けた ZIP を全件と信じる）。先に一時ファイルへ作り、全件成功のときだけ渡す。
+        java.nio.file.Path tmp;
+        try {
+            tmp = java.nio.file.Files.createTempFile("anon-zip-", ".zip");
+        } catch (java.io.IOException e) {
+            throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "一時ファイルを作れません: " + e.getMessage());
+        }
+        tmp.toFile().deleteOnExit();
+        AnonymizeService.Result built;
+        try (java.io.OutputStream fo = java.nio.file.Files.newOutputStream(tmp)) {
+            built = service.anonymizeToZip(req.studyUids(), cfg, req.burnIn(), fo);
+        } catch (Exception e) {
+            deleteQuietly(tmp);
+            throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "匿名化に失敗しました: " + e.getMessage());
+        }
+        if (!built.errors().isEmpty()) {
+            deleteQuietly(tmp);
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "匿名化できなかった画像が " + built.errors().size() + " 枚あるため、ZIP は作りませんでした: "
+                            + String.join(" / ", built.errors().subList(0, Math.min(5, built.errors().size()))));
+        }
         StreamingResponseBody body = out -> {
-            try {
-                service.anonymizeToZip(req.studyUids(), cfg, req.burnIn(), out);
-            } catch (Exception e) {
-                throw new java.io.IOException(e);
+            try (java.io.InputStream in = java.nio.file.Files.newInputStream(tmp)) {
+                in.transferTo(out);
+            } finally {
+                deleteQuietly(tmp);
             }
         };
         return ResponseEntity.ok()
@@ -124,6 +146,7 @@ public class AnonymizeController {
     // ── 焼き込みマスク（2D viewer から登録、Anonymizer が参照） ──
     @PostMapping("/masks")
     public void registerMask(@RequestBody AnonymizeMaskStore.SeriesMask mask) {
+        requireNotWeb();
         if (mask == null || mask.seriesUid() == null) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "seriesUid が必要です");
         }
@@ -175,6 +198,9 @@ public class AnonymizeController {
 
     @GetMapping("/masks")
     public List<AnonymizeMaskStore.SeriesMask> masks(@RequestParam String seriesUids) {
+        if (service.isWeb()) {
+            return List.of(); // web のマスクはジョブの要求ごとに持つ（共有の表は使わない）
+        }
         List<String> ids = new ArrayList<>();
         for (String s : seriesUids.split(",")) {
             if (!s.isBlank()) {
@@ -186,6 +212,7 @@ public class AnonymizeController {
 
     @DeleteMapping("/masks")
     public void clearMask(@RequestParam(required = false) String seriesUid) {
+        requireNotWeb();
         if (seriesUid == null || seriesUid.isBlank()) {
             maskStore.clear();
         } else {
@@ -252,6 +279,25 @@ public class AnonymizeController {
                     "登録されている焼き込みマスクは、今回の対象シリーズのものではありません"
                             + "（対象 " + burn.unmasked() + " 件はいずれもマスク未登録）。"
                             + "このまま出力しても 1 画素も塗られないため中止しました。");
+        }
+    }
+
+    /**
+     * web ではマスクの共有表（サーバー全体で1つ）を使わない。複数の利用者がいると登録も全消去も全員に効いて
+     * 混ざるため、マスクは匿名化ジョブの要求に載せて渡す。
+     */
+    private void requireNotWeb() {
+        if (service.isWeb()) {
+            throw new ResponseStatusException(HttpStatus.NOT_IMPLEMENTED,
+                    "web ではマスクをサーバーに登録しません。匿名化ジョブの要求に載せて渡してください。");
+        }
+    }
+
+    private static void deleteQuietly(java.nio.file.Path p) {
+        try {
+            java.nio.file.Files.deleteIfExists(p);
+        } catch (java.io.IOException ignored) {
+            // deleteOnExit に任せる
         }
     }
 

@@ -13,7 +13,8 @@ import {
 import { overlayPlacement, type ImageRect } from "./overlayPlacement";
 import { imageIdForInstance, type ViewerMode } from "./imageId";
 import { getModalityCalibration } from "./pixelCalibration";
-import { calibratedUnit, readImageInfo } from "./imageInfo";
+import { probeMetaOf } from "./fusionProbeMeta";
+import { extractIsolines, isolinesToPath } from "./isoline";
 import { registerFusionProbe, setFusionProbeData, unregisterFusionProbe } from "./fusionProbe";
 import { fetchSeriesLayout, type Instance, type SeriesLayoutDto } from "../api";
 import {
@@ -75,16 +76,6 @@ function buildFgSkeleton(dto: SeriesLayoutDto): {
     rows: dto.imageHeight || 512,
     zSpatialByZ,
   };
-}
-
-/**
- * 前景のカーソル値表示に添えるメタ（単位・SUV 乗数）を、実際に読んだ前景スライスから解決する。
- * 校正の解釈は `readImageInfo`／`calibratedUnit` に任せ、ここで slope/intercept を触らない。
- */
-function probeMetaOf(fgImageId: string): { unit: string; scale: number; suv: boolean } {
-  const info = readImageInfo(fgImageId);
-  if (info.suvScale !== undefined) return { unit: info.suvUnit ?? "SUV", scale: info.suvScale, suv: true };
-  return { unit: calibratedUnit(info), scale: 1, suv: false };
 }
 
 /** imageId → loaded FusionSlice のモジュールレベルキャッシュ。 */
@@ -151,6 +142,7 @@ export function FusionImageViewer({
   blend,
   windowCenter,
   windowWidth,
+  isolineLevel,
   adjust,
   registration,
   onAutoWL,
@@ -184,6 +176,11 @@ export function FusionImageViewer({
   /** オーバーレイ W/L の上書き（未指定/null なら DICOM 既定 or 自動 W/L）。 */
   windowCenter?: number | null;
   windowWidth?: number | null;
+  /**
+   * 等値線の値（前景の表示単位。状態バーの前景値と同じ単位）。null／未指定なら描かない。
+   * 背景スライスの格子に載せた前景値から引くので、空間 Fusion のときだけ出る。
+   */
+  isolineLevel?: number | null;
   /**
    * 手動位置合わせ（`fw/registration-design.md` R1）。moving（＝この前景）をどう動かすかの 6 パラメータ。
    * **回転中心は前景ボリュームの中心**で、ここで幾何から算出する（UI に座標を組ませない）。
@@ -263,6 +260,8 @@ export function FusionImageViewer({
 
   // ── Canvas（base 矩形に重ねる単一キャンバス） ──────────────────
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  // 等値線の元になる、背景の画素格子に載った前景値（状態バーと同じ配列）。空間 Fusion で描けたときだけ持つ。
+  const [isoGrid, setIsoGrid] = useState<{ values: Float32Array; cols: number; rows: number } | null>(null);
   const computingRef = useRef(false);
   const pendingRef = useRef(false);
 
@@ -422,6 +421,7 @@ export function FusionImageViewer({
         const margin = sliceSpacing / 2 + dev; // 末端スライスの厚み分 ＋ 回転による振れ幅
         if (w_center < minW - margin || w_center > maxW + margin) {
           clearCanvas();
+          setIsoGrid(null);
           setFusionProbeData(viewportId, null); // この断面に前景は無い＝カーソル値も「—」
           return;
         }
@@ -477,6 +477,7 @@ export function FusionImageViewer({
         drawValues(fusionPixels, bgCols, bgRows, center, width, activeLut);
         // 背景の画素格子に載った前景値。位置合わせを掛けているなら**ワープ後・補間後**の値。
         setFusionProbeData(viewportId, { values: fusionPixels, cols: bgCols, rows: bgRows, ...probeMetaOf(fgSampleId) });
+        setIsoGrid({ values: fusionPixels, cols: bgCols, rows: bgRows });
       } else {
         // ── 非空間フォールバック: 比例 Z で前景スライスを base 矩形にストレッチ ──
         const frac = baseCount > 1 ? baseIndex / (baseCount - 1) : 0;
@@ -500,6 +501,7 @@ export function FusionImageViewer({
         // 非空間フォールバックは前景自身の格子。読み出し側（sampleFusionValue）が base 格子との
         // 比例で対応づける（引き伸ばして重ねているのと同じ対応）。
         setFusionProbeData(viewportId, { values, cols, rows, ...probeMetaOf(fgId) });
+        setIsoGrid(null); // 幾何なし: 背景の格子に載らないので等値線は出さない
       }
     } finally {
       computingRef.current = false;
@@ -517,17 +519,42 @@ export function FusionImageViewer({
     void runFusion();
   }, [runFusion]);
 
+  const isoPath = useMemo(() => {
+    if (isolineLevel == null || !isoGrid) return "";
+    return isolinesToPath(extractIsolines(isoGrid.values, isoGrid.cols, isoGrid.rows, isolineLevel));
+  }, [isolineLevel, isoGrid]);
+
   // base 画像の表示矩形にぴったり重ねる。canvas 内部解像度（再構成 px）は CSS で矩形に伸縮。
   return (
-    <canvas
-      ref={canvasRef}
-      style={{
-        ...overlayPlacement(rect),
-        opacity,
-        mixBlendMode: fusionBlendCss(blend),
-        pointerEvents: "none",
-        imageRendering: "pixelated",
-      }}
-    />
+    <>
+      <canvas
+        ref={canvasRef}
+        style={{
+          ...overlayPlacement(rect),
+          opacity,
+          mixBlendMode: fusionBlendCss(blend),
+          pointerEvents: "none",
+          imageRendering: "pixelated",
+        }}
+      />
+      {isolineLevel != null && isoGrid && (
+        // viewBox は画素格子（左上隅 = index (−0.5,−0.5)）。canvas と同じ配置なので zoom・pan・回転・反転に追従する。
+        // 線は不透明度を掛けず、拡大しても太らない。
+        <svg
+          data-testid="fusion-isoline-svg"
+          viewBox={`-0.5 -0.5 ${isoGrid.cols} ${isoGrid.rows}`}
+          preserveAspectRatio="none"
+          style={{ ...overlayPlacement(rect), pointerEvents: "none", overflow: "visible" }}
+        >
+          {isoPath && (
+            // 暗いふち取りの上に白線: 白く飽和した前景の上でも、暗い背景の上でも読める。
+            <>
+              <path d={isoPath} fill="none" stroke="#000000" strokeOpacity={0.6} strokeWidth={3} vectorEffect="non-scaling-stroke" />
+              <path d={isoPath} fill="none" stroke="#ffffff" strokeWidth={1} vectorEffect="non-scaling-stroke" />
+            </>
+          )}
+        </svg>
+      )}
+    </>
   );
 }

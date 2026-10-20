@@ -99,6 +99,9 @@ export default defineConfig(({ mode }) => {
       // dev では /api を backend にプロキシし、ブラウザから同一オリジンで叩けるようにする。
       proxy: {
         "/api": backendUrl,
+        // 検査共有リンクの入口（302 ＋ 閲覧 Cookie）。本番は backend が同じ origin で受ける。
+        // ⚠️ "/s" と書くと前方一致で `/src/main.tsx` まで奪って 404 にする。正規表現で `/s/` に限る。
+        "^/s/": backendUrl,
       },
     },
     build: {

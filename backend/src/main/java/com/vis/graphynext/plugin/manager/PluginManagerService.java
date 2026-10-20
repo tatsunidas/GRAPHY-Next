@@ -19,6 +19,7 @@ import org.springframework.stereotype.Service;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.Comparator;
@@ -49,6 +50,7 @@ public class PluginManagerService {
     private final InstallOptIn optIn;
     private final ObjectMapper mapper;
     private final PluginInstaller installer;
+    private final Path pluginsDir;
 
     public PluginManagerService(PluginProperties props,
                                 ObjectMapper mapper,
@@ -67,9 +69,104 @@ public class PluginManagerService {
         // 🔴 削除・更新の前に実行レイヤのクラスローダを閉じさせる。Windows では開いたままの JAR を
         // 削除できないため、これが無いと「backend 面を一度でも呼んだプラグインだけ消せない」。
         // ObjectProvider にしているのは、プロファイルによっては PluginRegistry の bean が無いため。
+        this.pluginsDir = dir;
         this.installer = new PluginInstaller(dir, mapper, coreVersion,
                 id -> registry.ifAvailable(r -> r.release(id)));
     }
+
+    /**
+     * 公式索引（{@code graphy.plugins.index-url}）の一覧に、導入済みの状態を重ねて返す。
+     *
+     * <p>取得に失敗したら前回のキャッシュを {@code stale=true} で返す（キャッシュも無ければ空）。
+     * 索引 URL は GitHub トークンを送らない（別ホストへ漏らさないため）。
+     * 索引が無くても URL / ZIP からの導入は従来どおり使える。
+     */
+    public CatalogView catalog() {
+        requireMutable();
+        String url = props.getIndexUrl();
+        if (url == null || url.isBlank()) {
+            return new CatalogView(false, false, null, List.of(), List.of());
+        }
+        Path cache = pluginsDir.resolve("catalog-cache.json");
+        PluginCatalog.Parsed parsed;
+        boolean stale = false;
+        String error = null;
+        try {
+            if (!url.trim().toLowerCase(java.util.Locale.ROOT).startsWith("https://")) {
+                throw new PluginInstallException("graphy.plugins.index-url must be an https URL");
+            }
+            byte[] body = github.download(url.trim(), null);
+            parsed = PluginCatalog.parse(body, mapper);
+            try {
+                Files.createDirectories(pluginsDir);
+                Files.write(cache, body);
+            } catch (IOException e) {
+                log.warn("[plugin-manager] could not write catalog cache: {}", e.getMessage());
+            }
+        } catch (PluginInstallException e) {
+            error = e.getMessage();
+            parsed = readCatalogCache(cache);
+            stale = true;
+        }
+        java.util.Map<String, InstalledPlugin> have = new java.util.HashMap<>();
+        for (InstalledPlugin p : installer.installed()) have.put(p.id(), p);
+        java.util.Set<String> officialKeyIds = trustedKeyIds();
+        List<CatalogItem> items = parsed.entries().stream().map(e -> {
+            InstalledPlugin p = have.get(e.id());
+            return new CatalogItem(e.id(), e.name(), e.repo(), e.description(), e.category(),
+                    e.signerKeyId(), e.minGraphy(),
+                    e.signerKeyId() != null && officialKeyIds.contains(e.signerKeyId().toUpperCase(java.util.Locale.ROOT)),
+                    p == null ? null : new CatalogInstalled(p.version(), p.source() == null ? null : p.source().type(),
+                            p.enabled(), p.trust()));
+        }).toList();
+        return new CatalogView(true, stale, error, items, parsed.rejected());
+    }
+
+    /** 本体が信頼する鍵（{@code trusted-keys}）の鍵 ID（大文字 16 桁）。読めない鍵は除く。 */
+    private java.util.Set<String> trustedKeyIds() {
+        java.util.Set<String> ids = new java.util.HashSet<>();
+        for (String k : props.getTrustedKeys()) {
+            try {
+                ids.add(Minisign.parseKey(k).keyId().toUpperCase(java.util.Locale.ROOT));
+            } catch (PluginInstallException e) {
+                log.warn("[plugin-manager] ignoring unreadable trusted key: {}", e.getMessage());
+            }
+        }
+        return ids;
+    }
+
+    private PluginCatalog.Parsed readCatalogCache(Path cache) {
+        try {
+            if (Files.isRegularFile(cache)) return PluginCatalog.parse(Files.readAllBytes(cache), mapper);
+        } catch (IOException | PluginInstallException e) {
+            log.warn("[plugin-manager] ignoring unreadable catalog cache: {}", e.getMessage());
+        }
+        return new PluginCatalog.Parsed(List.of(), List.of());
+    }
+
+    /** 索引エントリの導入済み状態。{@code sourceType} は github / file / bundled。 */
+    public record CatalogInstalled(String version, String sourceType, boolean enabled, String trust) {}
+
+    /**
+     * 一覧の 1 行。{@code installed} が null なら未導入。
+     *
+     * @param officialSigner 索引の {@code signerKeyId} が本体の信頼する鍵と一致するか。索引の記載を本体の鍵と
+     *                       突き合わせただけで、<b>署名の検証ではない</b>（検証は導入前検査で行う）
+     */
+    public record CatalogItem(String id, String name, String repo, String description, String category,
+                              String signerKeyId, String minGraphy, boolean officialSigner,
+                              CatalogInstalled installed) {}
+
+    /**
+     * 一覧の結果。
+     *
+     * @param configured 索引 URL が設定されているか（false なら一覧は空で、理由は設定の未了）
+     * @param stale      取得に失敗してキャッシュ（無ければ空）を返しているか
+     * @param error      取得失敗の理由（成功時は null）
+     * @param rejected   形式不正で除外した行の理由
+     */
+    public record CatalogView(boolean configured, boolean stale, String error,
+                              List<CatalogItem> plugins, List<String> rejected) {}
 
     /** 導入済み一覧（台帳）。読み取りは常に可能。 */
     public List<InstalledPlugin> installed() {
