@@ -18,6 +18,7 @@ import { addSphere3D } from "./sphere3dStore";
 import { worldToImageCoords } from "./imageCoords";
 import type { Geometry3DPixelStats } from "./vtkGeometryView";
 import type { VtkRenderStats } from "./vtkVolumeView";
+import type { CinematicStats } from "./cinematicScale";
 
 /**
  * automator（自律検証ツール）専用のデバッグAPI。`window.__graphyDebug` として公開し、
@@ -771,6 +772,47 @@ function getRender3dStats(): VtkRenderStats | null {
   return render3dProbe ? render3dProbe() : null;
 }
 
+/** シネマティック（パストレース）の描画の実測。オーバーレイが動いていないときは null。 */
+let cinematicProbe: (() => CinematicStats | null) | null = null;
+
+export function publishCinematicStats(fn: (() => CinematicStats | null) | null): void {
+  if (!import.meta.env.DEV) return;
+  cinematicProbe = fn;
+}
+
+function getCinematicStats(): CinematicStats | null {
+  return cinematicProbe ? cinematicProbe() : null;
+}
+
+/**
+ * 縮小率ごとの 1 フレームの実時間を測る（費用が画素数に比例するという前提の検証用）。
+ * 各 k で描いて GPU の完了まで待つ。終わったら縮小率 1・蓄積 0 に戻す。動いていなければ null。
+ */
+let cinematicBench: ((ks: number[]) => { k: number; ms: number }[]) | null = null;
+
+export function publishCinematicBench(fn: ((ks: number[]) => { k: number; ms: number }[]) | null): void {
+  if (!import.meta.env.DEV) return;
+  cinematicBench = fn;
+}
+
+/** 操作中の縮小率を k に固定する／null で解除（検証用。オーバーレイが動いていなければ何もしない）。 */
+let cinematicForce: ((k: number | null) => void) | null = null;
+
+export function publishCinematicForce(fn: ((k: number | null) => void) | null): void {
+  if (!import.meta.env.DEV) return;
+  cinematicForce = fn;
+}
+
+function forceCinematicScale(k: number | null): boolean {
+  if (!cinematicForce) return false;
+  cinematicForce(k);
+  return true;
+}
+
+function benchCinematicFrames(ks: number[]): { k: number; ms: number }[] | null {
+  return cinematicBench ? cinematicBench(ks) : null;
+}
+
 function getGeometry3dStats(): Geometry3DPixelStats | null {
   return geometry3dProbe ? geometry3dProbe() : null;
 }
@@ -1131,6 +1173,9 @@ declare global {
       getImagePixelRange: typeof getImagePixelRange;
       getPixelStats: typeof getPixelStats;
       getRender3dStats: typeof getRender3dStats;
+      getCinematicStats: typeof getCinematicStats;
+      benchCinematicFrames: typeof benchCinematicFrames;
+      forceCinematicScale: typeof forceCinematicScale;
       getViewportGeometry: typeof getViewportGeometry;
       getSegCounts: typeof getSegCounts;
       getImageCanvasRect: typeof getImageCanvasRect;
@@ -1301,6 +1346,9 @@ export function installDebugApi(): void {
     getImagePixelRange,
     getPixelStats,
     getRender3dStats,
+    getCinematicStats,
+    benchCinematicFrames,
+    forceCinematicScale,
     getViewportGeometry,
     getSegCounts,
     getImageCanvasRect,

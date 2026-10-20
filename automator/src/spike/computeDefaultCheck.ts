@@ -200,7 +200,7 @@ async function main(): Promise<void> {
       const c = await get(page);
       check(c.defaultError === "local-unavailable", "get: defaultError", c);
       await openPanel(page);
-      check((await page.getByTestId("compute-default-current").textContent())?.includes("使えません") || (await page.getByTestId("compute-default-current").textContent())?.includes("not usable"), "画面: 選んだ先が使えない旨が出る");
+      check(/使えません|not usable/.test((await page.getByTestId("compute-default-current").textContent()) ?? ""), "画面: 選んだ先が使えない旨が出る");
       await shot(driver, "F3-local-unavailable");
     });
   } finally {
