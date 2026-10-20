@@ -131,7 +131,7 @@ class ComputeEgressServiceTest {
                 field(svc, "requests");
         ComputeEgressService.EgressRequest cur = reqs.get(r.id());
         reqs.put(r.id(), new ComputeEgressService.EgressRequest(cur.id(), cur.pluginId(), cur.pluginName(),
-                cur.endpointId(), cur.endpointLabel(), cur.endpointUrl(), cur.plaintext(), cur.datasets(), cur.code(),
+                cur.endpointId(), cur.endpointLabel(), cur.endpointUrl(), cur.plaintext(), cur.endpointKind(), cur.datasets(), cur.code(),
                 cur.codeSha256(), cur.anonymization(), cur.contentHash(),
                 Instant.now().minus(ComputeEgressService.TTL).minusSeconds(1), cur.status()));
         assertTrue(svc.consume(r.id()).isEmpty(), "🔴 5 分を過ぎた承認では送らない");

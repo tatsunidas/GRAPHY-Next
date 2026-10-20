@@ -32,6 +32,7 @@ const aiGateway = require("./aiGateway");
 const aiProviders = require("./aiProviders");
 const computeEndpoints = require("./computeEndpoints");
 const localPython = require("./localPython");
+const localJupyter = require("./localJupyter");
 const dbFolders = require("./dbFolders");
 const { resolveDevDataDir } = require("./devDataDir");
 const tlsPasswords = require("./tlsPasswords");
@@ -1326,7 +1327,9 @@ async function pushComputeEndpoints() {
   // Colab は確保したランタイムだけ（URL とトークンはランタイムごとに Colab が決める）
   const colabIds = new Set(all.filter((e) => e.kind === "colab").map((e) => e.id));
   const colab = colabRuntimes ? colabRuntimes.endpoints().filter((e) => colabIds.has(e.id)) : [];
-  return computeBridge.pushEndpoints([...jupyter, ...colab]);
+  // 「この PC」は main が起動しているあいだだけ（URL とトークンは起動のたびに変わる。保存しない）
+  const local = localJupyter.endpoint();
+  return computeBridge.pushEndpoints([...jupyter, ...colab, ...(local ? [local] : [])]);
 }
 
 // ── Google Drive バックアップ（計画: ~/.claude/plans/graphy-next-db-googledrive-agile-cupcake.md、実測: fw/gdrive-p0.md）──
@@ -1724,7 +1727,26 @@ ipcMain.handle("graphy:compute-endpoints-set", async (e, cfg) => {
 // 🔴 Python のパスを文字列で受ける口は作らない。指定は main のファイル選択 → 確認を通ったものだけ保存する。
 //    実行するのは固定の確認コードだけ（localPython.PROBE）。renderer から来た文字列は子プロセスの引数に入らない。
 ipcMain.handle("graphy:compute-local-detect", (_e, opts) => localPython.detect({ force: !!(opts && opts.force === true) }));
-ipcMain.handle("graphy:compute-local-cancel", () => localPython.cancel());
+ipcMain.handle("graphy:compute-local-cancel", () => {
+  localJupyter.cancelStart();
+  return localPython.cancel();
+});
+
+/**
+ * 「この PC」で計算する用意をする: 検出した Python で Jupyter Server を起動し、backend の登録簿へ入れる。
+ * 確認ダイアログは出さない——送り先は 127.0.0.1 に固定で、起動しただけでは何も送らない
+ * （毎回の実行で同意画面に「この PC」とコードの全文が出る）。使う Python は利用者が設定したか、検出して選ばれたもの。
+ */
+async function ensureLocalCompute() {
+  const d = await localPython.detect({});
+  if (!d.selected || !d.usable) return { ok: false, error: "local-unavailable", reasons: d.reasons || [] };
+  const r = await localJupyter.ensure(d.selected.path);
+  if (!r.ok) return { ok: false, error: r.error, log: r.log };
+  const pushed = await pushComputeEndpoints();
+  if (pushed && pushed.ok === false) return { ok: false, error: pushed.error || "push-failed" };
+  return { ok: true, endpointId: localJupyter.ENDPOINT_ID };
+}
+ipcMain.handle("graphy:compute-local-ensure", () => ensureLocalCompute());
 
 ipcMain.handle("graphy:compute-local-pick-python", async (e) => {
   const win = BrowserWindow.fromWebContents(e.sender) || BrowserWindow.getFocusedWindow();
@@ -1780,7 +1802,12 @@ ipcMain.handle("graphy:compute-local-use-auto", async (e) => {
  * （ComputeConnectionTester.PROBE）で、患者のデータもプラグインのコードも送らない。
  */
 ipcMain.handle("graphy:compute-test-connection", async (_e, id) => {
-  if (!computeEndpoints.byId(String(id || ""))) return { ok: false, stage: "bridge", error: "unknown-endpoint" };
+  if (String(id || "") === localJupyter.ENDPOINT_ID) {
+    const r = await ensureLocalCompute();
+    if (!r.ok) return { ok: false, stage: "local", error: r.error };
+  } else if (!computeEndpoints.byId(String(id || ""))) {
+    return { ok: false, stage: "bridge", error: "unknown-endpoint" };
+  }
   await pushComputeEndpoints(); // backend が再起動していても最新を入れてから試す
   return computeBridge.testEndpoint(String(id));
 });
@@ -1928,6 +1955,13 @@ app.whenReady().then(async () => {
   aiProviders.init(resolveDataDir());
   computeEndpoints.init(resolveDataDir());
   localPython.init({ dataDir: resolveDataDir(), getSetting: () => computeEndpoints.get().local.python });
+  localJupyter.init({ dataDir: resolveDataDir() });
+  try {
+    const swept = localJupyter.sweepStale(); // 前回 Electron が落ちて残ったものがあれば止める（目印が一致したものだけ）
+    if (swept.swept) console.log(`[compute] stopped a leftover local jupyter (pid ${swept.pid})`);
+  } catch (e) {
+    console.error("[compute] local jupyter sweep failed:", e && e.message);
+  }
   initColab();
   initGdrive();
   if (MAIN_SECRET) computeBridge.init({ secret: MAIN_SECRET, apiBase: API_BASE });
@@ -1977,14 +2011,20 @@ app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
 });
 
-// 確保した Colab のランタイムは閉じる前に解放する（利用者の Colab の利用枠を使い続けない）。
-// 解放は非同期なので一度だけ終了を止めて待つ（最大 10 秒）。
-let colabReleasedOnQuit = false;
+// 確保した Colab のランタイムと、この PC で起動した Jupyter は閉じる前に止める
+// （Colab は利用者の利用枠を使い続けない・Jupyter はカーネルが GPU メモリを握ったまま残らない）。
+// どちらも非同期なので一度だけ終了を止め、並べて待つ（最大 10 秒。直列にすると終了が延びる）。
+let releasedOnQuit = false;
 app.on("before-quit", (event) => {
-  if (colabReleasedOnQuit || !colabRuntimes || colabRuntimes.endpoints().length === 0) return;
+  const hasColab = !!colabRuntimes && colabRuntimes.endpoints().length > 0;
+  const hasLocal = localJupyter.endpoint() !== null;
+  if (releasedOnQuit || (!hasColab && !hasLocal)) return;
   event.preventDefault();
-  colabReleasedOnQuit = true;
-  Promise.race([colabRuntimes.releaseAll(), new Promise((r) => setTimeout(r, 10000))]).finally(() => app.quit());
+  releasedOnQuit = true;
+  const jobs = [];
+  if (hasColab) jobs.push(colabRuntimes.releaseAll());
+  if (hasLocal) jobs.push(localJupyter.stop());
+  Promise.race([Promise.allSettled(jobs), new Promise((r) => setTimeout(r, 10000))]).finally(() => app.quit());
 });
 app.on("before-quit", () => localPython.cancel());
 app.on("before-quit", stopBackend);

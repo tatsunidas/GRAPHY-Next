@@ -70,4 +70,31 @@ class ComputeEndpointRegistryTest {
         assertFalse(r.replaceAll(List.of(new ComputeEndpointRegistry.Incoming("x", "X", "https://a.org", "t", "ssh")))
                 .isEmpty());
     }
+
+    private static ComputeEndpointRegistry.Incoming local(String url) {
+        return new ComputeEndpointRegistry.Incoming("local", "this-pc", url, "tok", "local", "/usr/bin/python3");
+    }
+
+    @Test
+    void localAcceptsOnlyHttpOn127001() {
+        ComputeEndpointRegistry r = new ComputeEndpointRegistry();
+        assertTrue(r.replaceAll(List.of(local("http://127.0.0.1:18931/"))).isEmpty(), "正例");
+        ComputeEndpointRegistry.Entry e = r.get("local").orElseThrow();
+        assertEquals("local", e.kind());
+        assertEquals("/usr/bin/python3", e.expectedExecutable());
+        assertEquals(JupyterEndpoint.Auth.JUPYTER, e.endpoint().auth());
+        // 負例: 名前解決が要る localhost・LAN の IP・公開側・別のスキーム・IPv6 は「この PC」にしない
+        for (String bad : List.of("http://localhost:18931/", "http://192.168.1.5:18931/", "http://0.0.0.0:1/",
+                "https://127.0.0.1:18931/", "http://[::1]:18931/", "http://gpuserver:8888/")) {
+            assertFalse(new ComputeEndpointRegistry().replaceAll(List.of(local(bad))).isEmpty(), bad);
+        }
+    }
+
+    @Test
+    void otherKindsDoNotKeepAnExpectedExecutable() {
+        ComputeEndpointRegistry r = new ComputeEndpointRegistry();
+        r.replaceAll(List.of(new ComputeEndpointRegistry.Incoming("lab", "Lab", "https://a.org", "t", "jupyter", "/x")));
+        assertEquals("jupyter", r.get("lab").orElseThrow().kind());
+        assertEquals(null, r.get("lab").orElseThrow().expectedExecutable());
+    }
 }

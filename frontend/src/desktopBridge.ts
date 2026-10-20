@@ -400,6 +400,11 @@ export interface GraphyDesktop {
   computeColabSpecs?: () => Promise<ColabSpecsResult>;
   /** Colab: その接続先のランタイムを確保する（済んでいれば何もしない）。データは送らない。 */
   computeColabEnsure?: (id: string) => Promise<{ ok: boolean; error?: string; allocated?: boolean; expireTime?: string }>;
+  /**
+   * この PC: 検出した Python で Jupyter Server を起動し、接続先 id `local` として使える状態にする。データは送らない。
+   * error: local-unavailable（`reasons` に理由）/ server-exited / canceled / push-failed ほか
+   */
+  computeLocalEnsure?: () => Promise<{ ok: boolean; endpointId?: string; error?: string; reasons?: string[] }>;
   /** Colab: ランタイムを解放する。 */
   computeColabRelease?: (id: string) => Promise<{ ok: boolean; released?: boolean; error?: string }>;
   /**
