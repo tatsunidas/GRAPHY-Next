@@ -22,12 +22,13 @@ import type { Page } from "@playwright/test";
 import { resetDb } from "../backend/dbReset.js";
 import { DesktopDriver } from "../driver/desktopDriver.js";
 import { importFixtureCategory } from "../fixtures/importFixtures.js";
-import { AUTOMATOR_ROOT } from "../fixtures/manifest.js";
+import { AUTOMATOR_ROOT, categoryDir, getCategory } from "../fixtures/manifest.js";
 import { installOfficialPlugin, openViewer, state } from "./computeMonaiShared.js";
 import { consentWindow, createChecker } from "./computeSpikeShared.js";
 
 const DATA_ROOT = path.join(os.homedir(), "monai-verify-data");
 const PY = path.join(DATA_ROOT, ".venv", "bin", "python");
+const ORIENT_PY = path.join(AUTOMATOR_ROOT, "tools", "monai_orient.py");
 const SCORE_PY = path.join(AUTOMATOR_ROOT, "tools", "monai_score.py");
 const { check, summary } = createChecker();
 
@@ -38,6 +39,8 @@ interface BundleSpec {
   cases(files: string[]): string[];
   /** SEG のセグメント名 → 基準ラベルの値。 */
   labelMap: Record<string, number>;
+  /** 向き・位置（c）: 体の重心に対するラベルの期待の側（LPS、+1 = 大きい側）。 */
+  orient?: { label: number; expect: string };
   /** 報告された指標（出典は fw/monai-verification/<bundle>.md）。比較は人が見る。 */
   reported: { metric: string; value: number; note: string };
 }
@@ -48,6 +51,7 @@ const BUNDLES: Record<string, BundleSpec> = {
     // train.json の検証 = sorted(glob(imagesTr/*.nii.gz))[-9:]。辞書順（spleen_6 は spleen_60 の前）
     cases: (files) => [...files].sort().slice(-9),
     labelMap: { spleen: 1 },
+    orient: { label: 1, expect: "x=+1,y=+1" }, // 脾臓: 患者の左（x 大）・体の重心より後ろ（y 大）
     reported: { metric: "mean Dice", value: 0.961, note: "検証 9 例の平均（学習中の検証に使用。独立性は限定的）" },
   },
 };
@@ -81,7 +85,7 @@ async function main(): Promise<void> {
   if (!spec) throw new Error(`使い方: computeMonaiVerify.ts <bundle>（対応: ${Object.keys(BUNDLES).join(", ")}）`);
   const casesArg = numArg("--cases") ?? "1";
   const withDicom = process.argv.includes("--dicom");
-  for (const p of [PY, SCORE_PY]) if (!fs.existsSync(p)) throw new Error(`見つかりません: ${p}`);
+  for (const p of [PY, SCORE_PY, ORIENT_PY]) if (!fs.existsSync(p)) throw new Error(`見つかりません: ${p}`);
 
   const imagesDir = path.join(spec.dataset, "imagesTr");
   const files = fs.readdirSync(imagesDir).filter((f) => f.endsWith(".nii.gz") && !f.startsWith("._"));
@@ -122,13 +126,14 @@ async function main(): Promise<void> {
       series[id] = { studyUid: j.studyInstanceUid, seriesUid: j.seriesInstanceUid };
     }
     if (withDicom) {
+      // ct-basic は 1 シリーズ（SeriesDescription なし）。取り込まれたものの中から、フィクスチャの SeriesInstanceUID で特定する
+      const ctUid = spawnSync(PY, ["-I", "-c", "import sys,glob,pydicom;print(pydicom.dcmread(sorted(glob.glob(sys.argv[1]+'/*.dcm'))[0],stop_before_pixels=True).SeriesInstanceUID)", categoryDir(getCategory("ct-basic"))], { encoding: "utf8" }).stdout.trim();
       const studies = (await (await fetch(`${base}/api/studies`)).json()) as { studyInstanceUid: string }[];
       for (const st of studies) {
-        const ss = (await (await fetch(`${base}/api/studies/${st.studyInstanceUid}/series`)).json()) as { seriesInstanceUid: string; seriesDescription?: string }[];
-        const liver = ss.find((s) => /LIVER/i.test(s.seriesDescription ?? ""));
-        if (liver) series["DICOM-ct-basic"] = { studyUid: st.studyInstanceUid, seriesUid: liver.seriesInstanceUid };
+        const ss = (await (await fetch(`${base}/api/studies/${st.studyInstanceUid}/series`)).json()) as { seriesInstanceUid: string }[];
+        if (ss.some((x) => x.seriesInstanceUid === ctUid)) series["DICOM-ct-basic"] = { studyUid: st.studyInstanceUid, seriesUid: ctUid };
       }
-      check(!!series["DICOM-ct-basic"], "DICOM シリーズ（ct-basic の PRE LIVER）が見つかる");
+      check(!!series["DICOM-ct-basic"], "DICOM シリーズ（ct-basic）が見つかる");
     }
     await page.reload({ waitUntil: "domcontentloaded" });
     await page.getByTestId("search-patientid-input").waitFor({ state: "visible", timeout: 60_000 });
@@ -186,6 +191,8 @@ async function main(): Promise<void> {
 
       // 保存（SEG）→ 実ファイルを取り出す
       await v.getByTestId("monai-save").click();
+      await v.getByTestId("plugin-save-confirm").waitFor({ state: "visible", timeout: 60_000 });
+      await v.getByTestId("plugin-save-confirm-button").click();
       await v.waitForFunction(() => !!(window as unknown as { __monaiState?: { saved?: unknown } }).__monaiState?.saved, null, { timeout: 600_000 });
       const saved = (await state(v)).saved;
       check(saved?.ok === true, `${id}: SEG が保存される`, saved);
@@ -199,6 +206,16 @@ async function main(): Promise<void> {
         const segPath = path.join(RES_DIR, `${id}.dcm`);
         fs.writeFileSync(segPath, bytes);
         row.seg = segPath;
+        if (id === "DICOM-ct-basic" && spec.orient) {
+          const outPath = path.join(RES_DIR, `${id}.orient.json`);
+          const r = spawnSync(PY, ["-I", ORIENT_PY, "--seg", segPath, "--dicom-dir", categoryDir(getCategory("ct-basic")), "--label-value", String(spec.orient.label), "--expect", spec.orient.expect, "--out", outPath], { encoding: "utf8" });
+          if (!fs.existsSync(outPath)) throw new Error(`向きの検査に失敗: ${r.stderr || r.stdout}`);
+          const o = JSON.parse(fs.readFileSync(outPath, "utf8"));
+          row.orient = o;
+          for (const ax of Object.keys(spec.orient.expect.split(",").reduce((a, kv) => ({ ...a, [kv.split("=")[0]]: 1 }), {}))) {
+            check(o[ax].ok, `${id}: c 向き ${ax} 軸が期待の側（${o[ax].expected_side}）にある（体の重心から ${o[ax].offset_mm} mm）`, o[ax]);
+          }
+        }
         if (id !== "DICOM-ct-basic") {
           const refPath = path.join(spec.dataset, "labelsTr", `${id}.nii.gz`);
           const sc = score(segPath, refPath, spec.labelMap, path.join(RES_DIR, `${id}.score.json`));

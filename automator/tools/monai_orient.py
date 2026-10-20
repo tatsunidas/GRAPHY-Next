@@ -63,3 +63,29 @@ def check_side(label_c: np.ndarray, body_c: np.ndarray, expect: dict) -> dict:
         out[ax] = {"offset_mm": round(d, 2), "expected_side": SIDE[ax][sign > 0], "ok": bool(d * sign > 0)}
     out["all_ok"] = all(v["ok"] for v in out.values())
     return out
+
+
+def main(argv=None) -> int:
+    import argparse
+    import json
+    import sys
+
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # python -I はスクリプトのフォルダを探さない
+    import monai_score as m
+
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--seg", required=True)
+    ap.add_argument("--dicom-dir", required=True, help="Bundle に渡した CT の DICOM シリーズのフォルダ")
+    ap.add_argument("--label-value", type=int, required=True)
+    ap.add_argument("--expect", required=True, help='例: "x=+1,y=+1"（LPS の大きい側が +1）')
+    ap.add_argument("--out", required=True)
+    a = ap.parse_args(argv)
+    expect = {kv.split("=")[0]: int(kv.split("=")[1]) for kv in a.expect.split(",")}
+    res = check_side(label_centroid_lps(m.read_seg(a.seg), a.label_value), body_centroid_lps(a.dicom_dir), expect)
+    with open(a.out, "w") as f:
+        json.dump(res, f, ensure_ascii=False, indent=1)
+    return 0 if res["all_ok"] else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
