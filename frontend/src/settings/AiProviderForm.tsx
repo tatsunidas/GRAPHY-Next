@@ -69,6 +69,26 @@ export function emptyDraft(capabilities: string[]): ProviderDraft {
   return { id: "", label: "", kind: "openai", endpoint: "", pathStyle: "", apiVersion: "", authHeader: "", authPrefix: "", models, paths };
 }
 
+/** 追加時に選べる提供元。`endpoint` が空のものは利用者ごとに違う（Azure）か自由入力（その他）。 */
+export const PRESETS = [
+  { key: "openai", label: "OpenAI", id: "openai", kind: "openai", endpoint: "https://api.openai.com" },
+  { key: "gemini", label: "Google Gemini", id: "gemini", kind: "gemini", endpoint: "https://generativelanguage.googleapis.com" },
+  { key: "azure", label: "Azure OpenAI", id: "azure-openai", kind: "azure-openai", endpoint: "" },
+  { key: "other", label: "", id: "", kind: "openai", endpoint: "" },
+] as const;
+export type PresetKey = (typeof PRESETS)[number]["key"];
+
+/**
+ * プリセットから新規の下書きを作る。id が既存と重なれば `-2`, `-3` … を付ける。
+ * 🔑 **モデル名は入れない**——使うモデルは利用者が決める（仮の値を置かない）。
+ */
+export function presetDraft(key: PresetKey, existingIds: string[], capabilities: string[]): ProviderDraft {
+  const p = PRESETS.find((x) => x.key === key) ?? PRESETS[PRESETS.length - 1];
+  let id: string = p.id;
+  for (let n = 2; id && existingIds.includes(id); n++) id = `${p.id}-${n}`;
+  return { ...emptyDraft(capabilities), id, label: p.label, kind: p.kind, endpoint: p.endpoint };
+}
+
 export function toDraft(p: AiProviderEntry, capabilities: string[]): ProviderDraft {
   const d = emptyDraft(capabilities);
   const auth = typeof p.auth === "object" && p.auth ? p.auth : {};
@@ -117,7 +137,8 @@ interface Props {
   defaults: Record<string, string>;
   busy: boolean;
   onCancel: () => void;
-  onSave: (entry: AiProviderEntry) => void;
+  /** `apiKey` は追加フォームで入れたときだけ（空なら渡さない）。 */
+  onSave: (entry: AiProviderEntry, apiKey?: string) => void;
 }
 
 export function AiProviderForm({ draft: initial, isNew, capabilities, others, defaults, busy, onCancel, onSave }: Props) {
@@ -125,6 +146,10 @@ export function AiProviderForm({ draft: initial, isNew, capabilities, others, de
   const d = desktop();
   const [draft, setDraft] = useState<ProviderDraft>(initial);
   const [problems, setProblems] = useState<string[]>([]);
+  /** 新規のときの選択（"" ＝ まだ選んでいない）。編集では使わない。 */
+  const [preset, setPreset] = useState<PresetKey | "">("");
+  const [endpointCustom, setEndpointCustom] = useState(false);
+  const [apiKey, setApiKey] = useState("");
 
   const entry = useMemo(() => fromDraft(draft), [draft]);
   const hint = DEFAULTS[draft.kind] ?? DEFAULTS.openai;
@@ -152,12 +177,33 @@ export function AiProviderForm({ draft: initial, isNew, capabilities, others, de
   const set = (patch: Partial<ProviderDraft>) => setDraft((s) => ({ ...s, ...patch }));
   const idOk = /^[a-z0-9-]{1,32}$/.test(draft.id.trim());
   const usable = Object.values(draft.models).some((m) => m.trim());
-  const canSave = idOk && usable && draft.endpoint.trim().length > 0 && problems.length === 0;
+  const chosen = !isNew || preset !== "";
+  const fixed = isNew && preset !== "" && preset !== "other" ? PRESETS.find((x) => x.key === preset) : undefined;
+  const canSave = chosen && idOk && usable && draft.endpoint.trim().length > 0 && problems.length === 0;
+
+  const choose = (key: PresetKey | "") => {
+    setPreset(key);
+    setEndpointCustom(false);
+    if (key) setDraft(presetDraft(key, others.map((x) => x.id), capabilities));
+  };
 
   return (
     <div style={form} data-testid="ai-provider-form">
+      {isNew ? (
+        <Field label={t("settings.ai.provider.preset")}>
+          <select style={{ ...input, maxWidth: 360 }} value={preset}
+                  onChange={(e) => choose(e.target.value as PresetKey | "")} data-testid="ai-provider-preset">
+            <option value="">{t("settings.ai.provider.preset.choose")}</option>
+            {PRESETS.map((x) => (
+              <option key={x.key} value={x.key}>{x.key === "other" ? t("settings.ai.provider.preset.other") : x.label}</option>
+            ))}
+          </select>
+        </Field>
+      ) : null}
+      {!chosen ? <p style={helpBlock}>{t("settings.ai.provider.preset.help")}</p> : null}
+      {chosen ? (<>
       <Field label={t("settings.ai.provider.id")}>
-        {isNew ? (
+        {isNew && !fixed ? (
           <input
             style={input}
             value={draft.id}
@@ -169,9 +215,11 @@ export function AiProviderForm({ draft: initial, isNew, capabilities, others, de
         ) : (
           <>
             <span style={mono} data-testid="ai-provider-field-id">{draft.id}</span>
+            {fixed ? null : (<>
             {/* 🔴 id を変えられるようにしない。鍵の名前に入っているので、変えると鍵が
                 消えたように見える（削除して作り直す＝鍵も入れ直す、が正しい）。 */}
             <span style={helpInline}>{t("settings.ai.provider.id.immutable")}</span>
+            </>)}
           </>
         )}
       </Field>
@@ -182,18 +230,27 @@ export function AiProviderForm({ draft: initial, isNew, capabilities, others, de
                placeholder={draft.id || "xAI Grok"} data-testid="ai-provider-field-label" />
       </Field>
 
-      <Field label={t("settings.ai.provider.kind")}>
+      {fixed ? null : <Field label={t("settings.ai.provider.kind")}>
         <select style={{ ...input, maxWidth: 200 }} value={draft.kind}
                 onChange={(e) => set({ kind: e.target.value })} data-testid="ai-provider-field-kind">
           <option value="openai">{t("settings.ai.provider.kind.openai")}</option>
           <option value="gemini">{t("settings.ai.provider.kind.gemini")}</option>
           <option value="azure-openai">{t("settings.ai.provider.kind.azure")}</option>
         </select>
-      </Field>
+      </Field>}
 
       <Field label={t("settings.ai.provider.endpoint")}>
-        <input style={input} value={draft.endpoint} onChange={(e) => set({ endpoint: e.target.value })}
-               placeholder="https://api.x.ai" spellCheck={false} data-testid="ai-provider-field-endpoint" />
+        {fixed && fixed.endpoint && !endpointCustom ? (
+          <select style={{ ...input, maxWidth: 360 }} value={fixed.endpoint} data-testid="ai-provider-field-endpoint-select"
+                  onChange={(e) => { if (e.target.value === "__custom__") setEndpointCustom(true); }}>
+            <option value={fixed.endpoint}>{fixed.endpoint}</option>
+            <option value="__custom__">{t("settings.ai.provider.endpoint.custom")}</option>
+          </select>
+        ) : (
+          <input style={input} value={draft.endpoint} onChange={(e) => set({ endpoint: e.target.value })}
+                 placeholder={preset === "azure" ? "https://<resource>.openai.azure.com" : "https://api.x.ai"}
+                 spellCheck={false} data-testid="ai-provider-field-endpoint" />
+        )}
       </Field>
       <p style={helpBlock}>{t("settings.ai.provider.endpoint.help")}</p>
 
@@ -254,6 +311,16 @@ export function AiProviderForm({ draft: initial, isNew, capabilities, others, de
         </div>
       </details>
 
+      {isNew ? (
+        <>
+          <Field label={t("settings.ai.key")}>
+            <input type="password" style={input} value={apiKey} onChange={(e) => setApiKey(e.target.value)}
+                   spellCheck={false} autoComplete="off" data-testid="ai-provider-field-apikey" />
+          </Field>
+          <p style={helpBlock}>{t("settings.ai.provider.key.help")}</p>
+        </>
+      ) : null}
+
       {problems.length > 0 ? (
         <ul style={errList} data-testid="ai-provider-form-error">
           {problems.map((p) => (
@@ -263,13 +330,20 @@ export function AiProviderForm({ draft: initial, isNew, capabilities, others, de
       ) : null}
 
       <div style={{ display: "flex", gap: 8, marginTop: 6 }}>
-        <button style={primary} disabled={busy || !canSave} onClick={() => onSave(entry)} data-testid="ai-provider-form-save">
+        <button style={primary} disabled={busy || !canSave} onClick={() => onSave(entry, apiKey.trim() || undefined)} data-testid="ai-provider-form-save">
           {t("common.save")}
         </button>
         <button style={btn} disabled={busy} onClick={onCancel} data-testid="ai-provider-form-cancel">
           {t("common.cancel")}
         </button>
       </div>
+      </>) : (
+        <div style={{ display: "flex", gap: 8, marginTop: 6 }}>
+          <button style={btn} disabled={busy} onClick={onCancel} data-testid="ai-provider-form-cancel">
+            {t("common.cancel")}
+          </button>
+        </div>
+      )}
     </div>
   );
 }

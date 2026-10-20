@@ -132,7 +132,7 @@ export function AiPanel() {
   };
 
   /** 提供元を 1 件保存する（追加も編集も同じ経路）。 */
-  const saveProvider = async (entry: AiProviderEntry) => {
+  const saveProvider = async (entry: AiProviderEntry, apiKey?: string) => {
     if (!config || !d.aiProvidersSet) return;
     setBusy(true);
     setError(null);
@@ -147,6 +147,13 @@ export function AiPanel() {
         return; // フォームを開いたままにして直させる
       } else {
         setMessage(t("settings.ai.provider.saved", { label: entry.label }));
+        // 追加フォームで鍵も入れたとき。🔑 提供元の保存が通ってから、main が決めた鍵の名前で預ける。
+        if (apiKey && d.secretSet && d.aiProvidersGet) {
+          const saved = (await d.aiProvidersGet()).providers.find((x) => x.id === entry.id);
+          const k = saved?.secretKey ? await d.secretSet(saved.secretKey, apiKey) : null;
+          if (!k?.ok) setError(t("settings.ai.provider.keyNotSaved", { reason: t(`settings.ai.err.${k?.reason ?? "unknown"}`) }));
+          else if (!k.persisted) setMessage(t("settings.ai.savedSessionOnly"));
+        }
       }
       setEditing(null);
       await refresh();
@@ -298,7 +305,7 @@ export function AiPanel() {
                 defaults={config?.defaults ?? {}}
                 busy={busy}
                 onCancel={() => setEditing(null)}
-                onSave={(entry) => void saveProvider(entry)}
+                onSave={(entry, key) => void saveProvider(entry, key)}
               />
             ) : null}
 
@@ -390,7 +397,7 @@ export function AiPanel() {
             defaults={config?.defaults ?? {}}
             busy={busy}
             onCancel={() => setEditing(null)}
-            onSave={(entry) => void saveProvider(entry)}
+            onSave={(entry, key) => void saveProvider(entry, key)}
           />
         ) : (
           <button
