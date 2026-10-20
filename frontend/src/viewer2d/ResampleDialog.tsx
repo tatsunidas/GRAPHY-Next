@@ -137,7 +137,8 @@ export function ResampleDialog({
         derivationDescription: `Resampled (linear) to ${grid.dims[0]}x${grid.dims[1]}x${grid.dims[2]}, spacing ${a.toFixed(3)}x${b.toFixed(3)}x${k.toFixed(3)} mm (col x row x slice)`,
         sourceSliceThickness: Number.isFinite(th) && th > 0 ? th : null,
         suvScale: suv ? suv.scale : null,
-        background: finiteMin(src.data) / (suv ? suv.scale : 1),
+        // data と同じ単位（SUV 校正中は SUV）で渡す。割り戻しは buildDerivedVolumeRequest が 1 回だけ行う。
+        background: finiteMin(src.data),
       });
       if (alive.current) setMsg(t("resample.saved", { n: res.count }));
     } catch (e) {

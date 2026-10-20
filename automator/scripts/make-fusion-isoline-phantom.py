@@ -103,5 +103,6 @@ with open(os.path.join(out, "truth.json"), "w", encoding="utf-8") as fh:
         "fg": {"cols": PT_N, "rows": PT_N, "spacing": PT_MM, "origin_xy": pt_origin, "z": PT_Z,
                "slope": PT_SLOPE, "intercept": PT_INTERCEPT},
         "center_lps": [0.0, 0.0, 0.0],
+        "pt_series_uid": str(pt_series),
     }, fh, indent=2)
 print(f"r_L = {R_L:.4f} mm")
