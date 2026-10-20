@@ -4,6 +4,7 @@
  */
 import { createRoot } from "react-dom/client";
 import { App } from "./App";
+import { ShareScreen } from "./share/ShareScreen";
 import { I18nProvider } from "./i18n/i18n";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { verifyToolIcons } from "./icons/toolIcons";
@@ -28,7 +29,8 @@ installLevelSetDebug();
 createRoot(document.getElementById("root")!).render(
   <ErrorBoundary>
     <I18nProvider>
-      <App />
+      {/* 検査共有リンクの受け手（/s/<token> が /#share へ送る）。App を通さない＝起動時の /api/status 等を呼ばない。 */}
+      {window.location.hash === "#share" ? <ShareScreen /> : <App />}
     </I18nProvider>
   </ErrorBoundary>,
 );
