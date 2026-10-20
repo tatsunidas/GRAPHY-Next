@@ -417,6 +417,8 @@ export interface GraphyDesktop {
   /** main のファイル選択と確認を通ったときだけ保存する。Python のパスを文字列で渡す口は無い。 */
   computeLocalPickPython?: () => Promise<{ ok: true; path: string } | { ok: false; canceled?: boolean; error?: string }>;
   computeLocalUseAuto?: () => Promise<{ ok: true } | { ok: false; canceled?: boolean; error?: string }>;
+  /** 既定の計算機を選ぶ（null＝自動）。登録に在る id か "local" だけ。新しい送り先は増えないので確認は出ない。 */
+  computeDefaultSet?: (id: string | null) => Promise<{ ok: boolean; problems?: string[] }>;
   computeEnsureDefault?: () => Promise<{ ok: true; endpointId: string; added: boolean } | { ok: false; error: string }>;
   /** 名前を付けて保存（OS ダイアログ）。**上書き確認は OS が出す。** */
   saveFile?: (payload: {
@@ -545,6 +547,15 @@ export interface ComputeEndpointsConfig {
   endpoints: ComputeEndpointEntry[];
   problems: string[];
   local?: { python: LocalPythonSetting };
+  /**
+   * 既定の計算機（main が決めた結果。規則は desktop/computeDefault.js だけにあり、画面は読むだけ）。
+   * "local"＝この PC／登録の id／null＝まだ決まらない。defaultMode: 利用者が選んだか自動か。
+   * defaultError: 選んだ先が使えない（local-unavailable）。defaultPending: この PC の検出がまだで確定していない。
+   */
+  defaultId?: string | null;
+  defaultMode?: "auto" | "chosen";
+  defaultError?: string | null;
+  defaultPending?: boolean;
   /** main と backend の内部経路が使えるか（backend を別に起動した開発では false）。 */
   available: boolean;
 }

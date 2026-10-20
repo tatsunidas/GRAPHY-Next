@@ -6,9 +6,11 @@
  *          npx tsx src/spike/computeLocalGpuCheck.ts
  *   起動前に frontend/node_modules/.vite を消すこと。Linux 専用（/proc を読む）。前提: backend jar・fixture ct-basic・nvidia-smi。
  *
- * endpointId:"local" で、計算機側のコードが torch で CUDA を使う。確かめること:
+ * endpointId:"local" で、計算機側のコードが torch で CUDA を使う（SPIKE_OMIT_ENDPOINT=1 なら endpointId を省略＝既定の計算機が
+ * 自機になる経路。このときは 4. も確かめる）。確かめること:
  *   1. カーネルの Python が選んだ venv のもので、CUDA が使え、GPU の名前が nvidia-smi と一致する
  *   2. GPU で作ったマスクが CPU（numpy）の結果と一致する（GPU が正しく計算した）
+ *   4. （省略時）既定が local と解決され、監査の送り先が 127.0.0.1・endpointKind が local
  *   3. 🔴 実行中に nvidia-smi の計算プロセスにそのカーネルの PID が出る・実行前と終了後には出ない（本当に GPU を使った）
  */
 import fs from "node:fs";
@@ -79,7 +81,7 @@ async function main(): Promise<void> {
 
     const before = gpuPids();
     console.log(`  実行前の GPU 計算プロセス: [${before.join(",")}]`);
-    await launchRunJobPlugin(page, { studyUid: studies[0].studyInstanceUid, seriesUid: ct.seriesInstanceUid, endpointId: "local", script: SCRIPT });
+    await launchRunJobPlugin(page, { studyUid: studies[0].studyInstanceUid, seriesUid: ct.seriesInstanceUid, ...(process.env.SPIKE_OMIT_ENDPOINT === "1" ? {} : { endpointId: "local" }), script: SCRIPT });
     const win = await consentWindow(driver, 180_000);
     await win.getByTestId("consent-ack").check();
     await win.getByTestId("consent-send").click();
@@ -105,6 +107,13 @@ async function main(): Promise<void> {
     check(s.same === true && s.voxels === s.voxelsCpu && s.voxels > 0, "🔴 GPU のマスクが CPU（numpy）の結果と一致する（0 ボクセルでない）", { gpu: s.voxels, cpu: s.voxelsCpu });
     check(typeof s.peakBytes === "number" && s.peakBytes > 4096 * 4096 * 4, "GPU のメモリを実際に使った", s.peakBytes);
     check(seen.has(s.pid), "🔴 実行中に nvidia-smi の計算プロセスにカーネルの PID が出る", { pid: s.pid, seen: [...seen] });
+    if (process.env.SPIKE_OMIT_ENDPOINT === "1") {
+      const cfg = await page.evaluate(() => (window as unknown as { graphyDesktop: { computeEndpointsGet(): Promise<{ defaultId: string | null }> } }).graphyDesktop.computeEndpointsGet());
+      check(cfg.defaultId === "local", "既定は local と解決されている（endpointId を省略した）", cfg.defaultId);
+      const audit = fs.readFileSync(path.join(DESKTOP_RUN_DATA_DIR, "compute-audit.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l));
+      const req = audit.filter((e: { event: string }) => e.event === "egress-requested").pop();
+      check(req?.endpointKind === "local" && /^127\.0\.0\.1/.test(req?.host ?? ""), "監査: endpointKind=local・host=127.0.0.1", req);
+    }
     await new Promise((r) => setTimeout(r, 1500));
     check(!gpuPids().includes(s.pid), "終了後はそのプロセスが GPU に居ない（負例）", gpuPids());
   } finally {

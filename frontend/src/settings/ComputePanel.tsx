@@ -17,7 +17,6 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { useI18n, type TFn } from "../i18n/i18n";
 import { LocalComputeSection } from "./LocalComputeSection";
-import { defaultEndpoint } from "../plugins/pluginComputeApi";
 import {
   desktop,
   type ColabSpecsResult,
@@ -71,6 +70,17 @@ export function ComputePanel() {
   }
 
   const endpoints = config?.endpoints ?? [];
+
+  /** 既定の計算機を選ぶ（null＝自動に戻す）。規則は main にあり、ここは選んだ結果を渡すだけ。 */
+  const setDefault = async (id: string | null) => {
+    if (!d?.computeDefaultSet) return;
+    setError(null);
+    const r = await d.computeDefaultSet(id);
+    if (!r.ok) setError(t("settings.compute.default.setError", { error: (r.problems ?? []).join(", ") }));
+    await refresh();
+  };
+  const defaultName = (id: string | null | undefined) =>
+    id === "local" ? t("settings.compute.local.title") : (endpoints.find((e) => e.id === id)?.label ?? "");
   const asInput = (e: ComputeEndpointEntry): ComputeEndpointInput =>
     e.kind === "colab"
       ? { id: e.id, label: e.label, kind: "colab", spec: e.spec }
@@ -233,7 +243,27 @@ export function ComputePanel() {
         </ul>
       ) : null}
 
-      <LocalComputeSection config={config} />
+      {config && !config.defaultPending ? (
+        <div style={{ ...row, marginBottom: 10 }} data-testid="compute-default-current">
+          <span style={{ fontSize: 12 }}>
+            {config.defaultError
+              ? t("settings.compute.default.localUnavailable")
+              : config.defaultId
+                ? t("settings.compute.default.current", {
+                    name: defaultName(config.defaultId),
+                    mode: t(config.defaultMode === "chosen" ? "settings.compute.default.mode.chosen" : "settings.compute.default.mode.auto"),
+                  })
+                : t("settings.compute.default.none")}
+          </span>
+          {config.defaultMode === "chosen" ? (
+            <button style={smallBtn} disabled={busy} onClick={() => void setDefault(null)} data-testid="compute-default-auto">
+              {t("settings.compute.default.auto")}
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+
+      <LocalComputeSection config={config} onChanged={() => void refresh()} onMakeDefault={() => void setDefault("local")} />
 
       {colab ? (
         <section style={{ marginBottom: 22 }} data-testid="compute-colab">
@@ -294,7 +324,7 @@ export function ComputePanel() {
         {endpoints.length === 0 ? <p style={notice}>{t("settings.compute.none")}</p> : null}
         {endpoints.map((e) => {
           const test = tests[e.id];
-          const isDefault = defaultEndpoint(endpoints)?.id === e.id;
+          const isDefault = config?.defaultId === e.id;
           return (
             <div key={e.id} style={box} data-testid={`compute-endpoint-${e.id}`}>
               <div style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
@@ -311,6 +341,11 @@ export function ComputePanel() {
                   </span>
                 ) : null}
                 <span style={{ flex: 1 }} />
+                {!isDefault ? (
+                  <button style={smallBtn} disabled={busy} onClick={() => void setDefault(e.id)} data-testid={`compute-make-default-${e.id}`}>
+                    {t("settings.compute.default.make")}
+                  </button>
+                ) : null}
                 {e.kind !== "colab" ? (
                   <button
                     style={smallBtn}

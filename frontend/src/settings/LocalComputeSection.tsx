@@ -3,7 +3,7 @@
  * Author: Tatsuaki Kobayashi
  */
 /**
- * 環境設定 ＞ 計算機 ＞ 「この PC」。この PC の Python と GPU を**見て出すだけ**（計算はまだ自機に向かない）。
+ * 環境設定 ＞ 計算機 ＞ 「この PC」。この PC の Python と GPU を**見て出すだけ**（計算の行き先は、既定の計算機の規則 desktop/computeDefault.js が決める）。
  *
  * - 判定は main の `localPython.js` にあり、表示の組み立ては `localComputeView.ts`。ここは描画だけ。
  * - 本体は pip・conda を実行しない。足りないものは名前とコピー用のコマンドで案内する。
@@ -18,7 +18,16 @@ const tr = (t: TFn, m: Msg) => t(m.key, m.params);
 
 const TONE: Record<Tone, string> = { ok: "#1b7a3a", warn: "#8a4b00", error: "#b00020", off: "#6b7785" };
 
-export function LocalComputeSection({ config }: { config: ComputeEndpointsConfig | null }) {
+export function LocalComputeSection({
+  config,
+  onChanged,
+  onMakeDefault,
+}: {
+  config: ComputeEndpointsConfig | null;
+  /** 検出が終わった・Python を替えたとき（既定の計算機の表示を取り直す）。 */
+  onChanged?: () => void;
+  onMakeDefault?: () => void;
+}) {
   const { t } = useI18n();
   const d = desktop();
   const [result, setResult] = useState<LocalDetectResult | null>(null);
@@ -27,6 +36,9 @@ export function LocalComputeSection({ config }: { config: ComputeEndpointsConfig
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
   const startedAt = useRef(0);
+  // 🔴 onChanged を detect の依存に入れない（親が毎回新しい関数を渡すと、検出が描画のたびに走り直す）
+  const onChangedRef = useRef(onChanged);
+  onChangedRef.current = onChanged;
   const [setting, setSetting] = useState<ComputeEndpointsConfig["local"]>(undefined);
 
   // 設定（自動／指定）は endpoints-get が返す。検出の結果（python.mode）が来ればそちらを優先
@@ -47,6 +59,7 @@ export function LocalComputeSection({ config }: { config: ComputeEndpointsConfig
         setError(String(e));
       } finally {
         setRunning(false);
+        onChangedRef.current?.();
       }
     },
     [d],
@@ -99,7 +112,19 @@ export function LocalComputeSection({ config }: { config: ComputeEndpointsConfig
   return (
     <section style={{ marginBottom: 22 }} data-testid="compute-local">
       <h3 style={sectionTitle}>{t("settings.compute.local.title")}</h3>
-      <p style={notice} data-testid="compute-local-preparing">{t("settings.compute.local.preparing")}</p>
+      {config?.defaultId === "local" ? (
+        <p style={{ ...notice, display: "flex", gap: 8, alignItems: "center" }} data-testid="compute-local-default">
+          <span style={defaultBadge}>{t("settings.compute.default")}</span>
+          {t("settings.compute.local.isDefault")}
+        </p>
+      ) : (
+        <p style={{ ...notice, display: "flex", gap: 8, alignItems: "center" }}>
+          <span>{t("settings.compute.local.notDefault")}</span>
+          <button style={smallBtn} disabled={running || !result?.usable} onClick={onMakeDefault} data-testid="compute-local-make-default">
+            {t("settings.compute.default.make")}
+          </button>
+        </p>
+      )}
 
       <div style={row}>
         <span style={label}>Python</span>
@@ -245,5 +270,6 @@ const row: React.CSSProperties = { display: "flex", alignItems: "center", gap: 8
 const label: React.CSSProperties = { display: "inline-block", width: 110, fontSize: 12, color: "#42505f" };
 const mono: React.CSSProperties = { fontFamily: "monospace", fontSize: 11, color: "#42505f", wordBreak: "break-all" };
 const box: React.CSSProperties = { border: "1px solid #dfe6ee", borderRadius: 4, padding: "8px 10px", marginBottom: 10 };
+const defaultBadge: React.CSSProperties = { fontSize: 10, padding: "1px 6px", borderRadius: 8, background: "#e3effc", color: "#0b5cad", border: "1px solid #a9c8ec" };
 const smallBtn: React.CSSProperties = { padding: "1px 8px", border: "1px solid #cdd5de", borderRadius: 3, background: "#fff", fontSize: 11, cursor: "pointer" };
 const linkBtn: React.CSSProperties = { border: "none", background: "none", color: "#0b5cad", fontSize: 12, cursor: "pointer", padding: 0, textDecoration: "underline" };

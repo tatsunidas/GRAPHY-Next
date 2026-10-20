@@ -714,7 +714,12 @@ function createDetector(deps) {
     cache = null;
   }
 
-  return { detect, cancel, invalidate };
+  /** 覚えている結果だけを返す（走らせない）。無ければ null。 */
+  function peek() {
+    return cache;
+  }
+
+  return { detect, cancel, invalidate, peek };
 }
 
 let instance = null;
@@ -748,6 +753,7 @@ module.exports = {
   createDetector,
   init,
   detect: (o) => need().detect(o),
+  peek: () => (instance ? instance.peek() : null),
   cancel: () => (instance ? instance.cancel() : { ok: true, running: false }),
   invalidate: () => instance && instance.invalidate(),
 };

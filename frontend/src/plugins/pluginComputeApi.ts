@@ -18,7 +18,7 @@
  * 例外は投げない（`ai.generate` と同じ流儀）。`cancelled: true` は利用者の取り消しで、エラーとして出さないこと。
  */
 import { apiBase } from "../apiBase";
-import { desktop, type ComputeEndpointEntry } from "../desktopBridge";
+import { desktop } from "../desktopBridge";
 import { HttpError, httpSend } from "../http";
 import { tOutsideReact as t } from "../i18n/i18n";
 import { pollPluginJob, type PluginJobOptions, type PluginJobStatus } from "./pluginCommonApi";
@@ -87,23 +87,26 @@ export async function runComputeJob(
   if (!d?.computeConfirm || !d.computeEndpointsGet) return { ok: false, error: "desktop-only" };
   if (!(m.permissions ?? []).includes(REMOTE_COMPUTE_PERMISSION)) return { ok: false, error: "permission-denied" };
 
-  // 「この PC」は名指ししたときだけ使う（既定の計算機はまだ替えない）。main が Jupyter を起動して登録簿へ入れる。
-  // 登録された接続先の一覧には載らない（起動のたびに URL とトークンが変わる）。
+  // 行き先: 名指し（登録の id か "local"）、無ければ main が決めた既定の計算機（規則は desktop/computeDefault.js だけにある）。
+  // "local"（この PC）は main が Jupyter を起動して登録簿へ入れる。登録された接続先の一覧には載らない
+  // （起動のたびに URL とトークンが変わる）。
+  let target = opts.endpointId;
+  if (!target) {
+    // 登録が 0 件なら Colab の T4 を足し、自機が使えるならそれを返す。自機を既定に選んでいて使えなければ理由つきで断る
+    if (!d.computeEnsureDefault) return { ok: false, error: "desktop-only" };
+    const ensured = await d.computeEnsureDefault();
+    if (!ensured.ok) return { ok: false, error: ensured.error };
+    target = ensured.endpointId;
+  }
   let endpointId: string;
-  if (opts.endpointId === LOCAL_ENDPOINT_ID) {
+  if (target === LOCAL_ENDPOINT_ID) {
     if (!d.computeLocalEnsure) return { ok: false, error: "desktop-only" };
     const local = await d.computeLocalEnsure();
     if (!local.ok) return { ok: false, error: local.error ?? "local-failed" };
     endpointId = LOCAL_ENDPOINT_ID;
   } else {
-    let cfg = await d.computeEndpointsGet();
-    // 1 つも登録が無ければ、main に既定の計算機（Colab の GPU T4）を用意してもらう（ログイン済みのときだけ足せる）
-    if (!opts.endpointId && cfg.endpoints.length === 0 && d.computeEnsureDefault) {
-      const ensured = await d.computeEnsureDefault();
-      if (!ensured.ok) return { ok: false, error: ensured.error };
-      cfg = await d.computeEndpointsGet();
-    }
-    const endpoint = opts.endpointId ? cfg.endpoints.find((e) => e.id === opts.endpointId) : defaultEndpoint(cfg.endpoints);
+    const cfg = await d.computeEndpointsGet();
+    const endpoint = cfg.endpoints.find((e) => e.id === target);
     if (!endpoint) return { ok: false, error: opts.endpointId ? "unknown-endpoint" : "no-endpoint" };
     endpointId = endpoint.id;
     // Colab はランタイムを確保してから要求を作る（同意画面に実際の送り先が出るように）。
@@ -166,23 +169,6 @@ export async function runComputeJob(
       return bytes ? readStoredZipEntry(bytes, name) : null;
     },
   };
-}
-
-/** 既定にする Colab のランタイムの種類（desktop/computeDefault.js と同じ）。 */
-const DEFAULT_SPEC = { variant: "VARIANT_GPU", accelerator: "T4", shape: "SHAPE_STANDARD" } as const;
-
-/** Colab の GPU T4 か（既定の計算機）。 */
-export function isDefaultSpec(e: Pick<ComputeEndpointEntry, "kind" | "spec">): boolean {
-  return e.kind === "colab" && e.spec?.variant === DEFAULT_SPEC.variant && e.spec?.accelerator === DEFAULT_SPEC.accelerator
-    && e.spec?.shape === DEFAULT_SPEC.shape;
-}
-
-/**
- * 既定の計算機: Colab の T4 → トークンの入った最初 → 最初（desktop/computeDefault.js の pickDefault と同じ規則）。
- * Colab は Google にログインしていれば hasToken。
- */
-export function defaultEndpoint<T extends Pick<ComputeEndpointEntry, "kind" | "spec" | "hasToken">>(endpoints: T[]): T | undefined {
-  return endpoints.find((e) => isDefaultSpec(e) && e.hasToken) ?? endpoints.find((e) => e.hasToken) ?? endpoints[0];
 }
 
 function errorCode(e: unknown): string {
