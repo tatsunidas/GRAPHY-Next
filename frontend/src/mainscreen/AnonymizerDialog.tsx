@@ -6,14 +6,20 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   anonymizeCopy,
   anonymizeZip,
+  cancelAnonJob,
   clearAnonMask,
+  downloadAnonJobZip,
+  fetchAnonJobConfig,
   fetchAnonMasks,
   fetchAnonProfiles,
   fetchSeries,
   fetchStudies,
   fetchTagDictionary,
+  getAnonJob,
   registerAnonMask,
-  type AnonMaskPolygon,
+  submitAnonJob,
+  type AnonJobOutput,
+  type AnonJobStatus,
   type AnonOption,
   type AnonProfile,
   type AnonRequest,
@@ -29,7 +35,8 @@ import { useI18n } from "../i18n/i18n";
 import { dictMap, ggggeeee, normHex } from "./tagPathUtil";
 import { CLEAN_OPTS, DEFAULT_ANON_OPTIONS, RETAIN_OPTS, sanitizeAnonOptions, toggleAnonOption } from "./anonDefaults";
 import { loadAnonRoiCandidates, type AnonRoiCandidate, type AnonRoiSkip } from "./anonRoiCandidates";
-import { withFrameScope } from "../viewer/anonMaskExport";
+import { exportPercent, isExportFinished, runExportJob } from "./exportJob";
+import { buildJobRequest, groupRoiPolygons, jobNotes, jobOutcome, roiMasksForJob, stowBlockedByOptions } from "./anonWebJob";
 
 /**
  * その ROI の多角形が**いま登録されているか**。チェックの初期状態をここから起こす。
@@ -111,6 +118,13 @@ export function AnonymizerDialog({
   const [roiChecked, setRoiChecked] = useState<Set<string>>(new Set());
   const [roiLoading, setRoiLoading] = useState(false);
 
+  // web のジョブ（段 2・3 の API）。サーバー設定で許可されたときだけ「PACS に保存」を出す。
+  const [importEnabled, setImportEnabled] = useState(false);
+  const [job, setJob] = useState<AnonJobStatus | null>(null);
+  const [cancelling, setCancelling] = useState(false);
+  const [confirmStow, setConfirmStow] = useState(false);
+  const cancelRequested = useRef(false);
+
   const [tagInput, setTagInput] = useState("");
   const [valInput, setValInput] = useState("");
   const [busy, setBusy] = useState(false);
@@ -122,7 +136,9 @@ export function AnonymizerDialog({
     if (!open) return;
     if (dict.length === 0) fetchTagDictionary().then(setDict).catch(() => undefined);
     fetchAnonProfiles().then(setProfiles).catch(() => undefined);
-  }, [open, dict.length]);
+    // 取れなければ「許可なし」として扱う（保存の入口を出さない側に倒す）。
+    if (isWeb) fetchAnonJobConfig().then((c) => setImportEnabled(c.importEnabled)).catch(() => setImportEnabled(false));
+  }, [open, dict.length, isWeb]);
 
   // 選択中スタディのシリーズを引き、そのシリーズに付いているマスクを読む。
   // 🔴 マスクはシリーズ単位なので、スタディの外に登録されたマスクはここには出ない
@@ -134,7 +150,8 @@ export function AnonymizerDialog({
       const ss = await fetchSeries(studyUid);
       setSeriesList(ss);
       const uids = ss.map((x) => x.seriesInstanceUid);
-      const found = uids.length ? await fetchAnonMasks(uids) : [];
+      // web のマスクはジョブごとに渡す（共有ストアには登録しない）ので、登録済みの一覧は無い。
+      const found = uids.length && !isWeb ? await fetchAnonMasks(uids) : [];
       setMasks(found);
       // 登録内容は ROI 一覧のチェック状態の出どころでもあるので、呼び出し側へ返す
       // （state を読み直すと 1 レンダ遅れて「登録したのにチェックが付かない」ように見える）。
@@ -144,7 +161,7 @@ export function AnonymizerDialog({
       setMasks([]);
       return [];
     }
-  }, [study?.studyInstanceUid]);
+  }, [study?.studyInstanceUid, isWeb]);
 
   useEffect(() => {
     if (!open) return;
@@ -159,7 +176,7 @@ export function AnonymizerDialog({
    * チェックも外れて見える＝**消えたことに気付ける**。
    */
   const reloadRoiCandidates = useCallback(async (registered: AnonSeriesMask[]) => {
-    if (!study || isWeb) { setRoiCands([]); setRoiSkips([]); setRoiChecked(new Set()); return; }
+    if (!study) { setRoiCands([]); setRoiSkips([]); setRoiChecked(new Set()); return; }
     setRoiLoading(true);
     try {
       const ss = seriesList.length ? seriesList : await fetchSeries(study.studyInstanceUid);
@@ -178,7 +195,7 @@ export function AnonymizerDialog({
     } finally {
       setRoiLoading(false);
     }
-  }, [study, isWeb, seriesList]);
+  }, [study, seriesList]);
 
   // 焼き込み節が出るときだけ ROI を読む（Clean Pixel Data を使わない人には要らない問い合わせ）。
   const cleanPixel = options.has("CleanPixelData");
@@ -278,15 +295,7 @@ export function AnonymizerDialog({
     setBusy(true);
     setError(null);
     try {
-      const bySeries = new Map<string, AnonMaskPolygon[]>();
-      for (const c of roiCands) {
-        if (!bySeries.has(c.seriesUid)) bySeries.set(c.seriesUid, []);
-        if (roiChecked.has(c.roiUid)) {
-          // 適用フレームの決め方は anonMaskExport が正本（ここで if を書き足さない）。
-          bySeries.get(c.seriesUid)!.push(
-            withFrameScope(c.polygon, c.frame, drawnFrameOnly ? "drawnFrameOnly" : "wholeInstance"));
-        }
-      }
+      const bySeries = groupRoiPolygons(roiCands, roiChecked, drawnFrameOnly);
       for (const [seriesUid, polygons] of bySeries) {
         await registerAnonMask({ seriesUid, frames: [], rects: [], polygons });
       }
@@ -352,6 +361,68 @@ export function AnonymizerDialog({
       showFailure(e);
     } finally { setBusy(false); }
   };
+
+  /**
+   * web: 匿名化ジョブを投入し、終わるまで進捗を見る。ZIP は終了後に受け取る（受け取れるのは 1 回だけ）。
+   * 🔴 焼き込みマスクは登録せず、チェックした ROI をジョブ要求に載せる（利用者どうしで混ざらない）。
+   */
+  const runWebJob = async (output: AnonJobOutput) => {
+    setConfirmStow(false);
+    setBusy(true); setError(null); setInfo(null);
+    cancelRequested.current = false;
+    setCancelling(false);
+    try {
+      const ids = await resolveStudyUids();
+      if (!ids) return;
+      const req = buildJobRequest(buildReq(ids), output, roiMasksForJob(roiCands, roiChecked, drawnFrameOnly));
+      const last = await runExportJob<AnonJobStatus>(
+        { submit: () => submitAnonJob(req), get: getAnonJob, cancel: cancelAnonJob },
+        setJob,
+        () => cancelRequested.current,
+      );
+      const outcome = jobOutcome(last);
+      if (outcome.kind === "failed") {
+        // 保存済みの分は PACS から取り消せないので、止まったときも枚数を必ず見せる。
+        setError(outcome.stored > 0
+          ? t("anon.stow.failedPartial", { stored: outcome.stored, error: outcome.error })
+          : t("anon.job.failed", { error: outcome.error }));
+        return;
+      }
+      if (outcome.kind === "cancelled") {
+        setInfo(outcome.stored > 0 ? t("anon.stow.cancelledPartial", { stored: outcome.stored }) : t("anon.job.cancelled"));
+        return;
+      }
+      let done: string;
+      if (outcome.kind === "stowed") {
+        done = t("anon.stow.done", { stored: outcome.stored });
+      } else {
+        const { blob, filename } = await downloadAnonJobZip(last.jobId);
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url; a.download = filename; document.body.appendChild(a); a.click(); a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 60_000);
+        done = t("anon.zipped.count", { instances: last.instances, bytes: blob.size });
+      }
+      if (burnIn && options.has("CleanPixelData")) done += " " + t("anon.burned.count", { burned: last.burnedInstances });
+      setInfo(done);
+      const notes = jobNotes(last).map((n) => t(n.key, n.params));
+      if (notes.length) setError(notes.join(" / "));
+    } catch (e) {
+      showFailure(e);
+    } finally {
+      setBusy(false);
+      setJob(null);
+      setCancelling(false);
+    }
+  };
+
+  const requestCancel = () => {
+    cancelRequested.current = true;
+    setCancelling(true);
+  };
+
+  const stowBlocked = stowBlockedByOptions(options);
+  const jobPct = job ? exportPercent(job) : null;
 
   const runCopy = async () => {
     if (!destination) { setError(t("anon.err.noDest")); return; }
@@ -494,7 +565,7 @@ export function AnonymizerDialog({
             {t("anon.burnIn")}
           </label>
           {options.has("CleanPixelData") && (
-            <div style={{ fontSize: 11, color: "#8a98a6" }}>{t("anon.burnIn.note")}</div>
+            <div style={{ fontSize: 11, color: "#8a98a6" }}>{t(isWeb ? "anon.burnIn.note.web" : "anon.burnIn.note")}</div>
           )}
           {options.has("CleanPixelData") && burnIn && (
             <>
@@ -506,7 +577,7 @@ export function AnonymizerDialog({
               <div style={{ fontSize: 11, color: "#8a98a6" }}>{t("anon.burnIn.drawnFrameOnly.note")}</div>
             </>
           )}
-          {options.has("CleanPixelData") && !isWeb && (
+          {options.has("CleanPixelData") && (
             <div style={maskBox} data-testid="anon-mask-roi-list">
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
                 <b style={{ fontSize: 12 }}>{t("anon.masks.fromRoi")}</b>
@@ -518,16 +589,19 @@ export function AnonymizerDialog({
                   >
                     {t("anon.masks.reload")}
                   </button>
-                  <button
-                    style={{ ...btn, padding: "2px 8px", marginLeft: 6 }}
-                    data-testid="anon-mask-apply"
-                    disabled={busy || roiLoading || roiCands.length === 0}
-                    onClick={() => void applyRoiMasks()}
-                  >
-                    {t("anon.masks.apply")}
-                  </button>
+                  {!isWeb && (
+                    <button
+                      style={{ ...btn, padding: "2px 8px", marginLeft: 6 }}
+                      data-testid="anon-mask-apply"
+                      disabled={busy || roiLoading || roiCands.length === 0}
+                      onClick={() => void applyRoiMasks()}
+                    >
+                      {t("anon.masks.apply")}
+                    </button>
+                  )}
                 </span>
               </div>
+              {isWeb && <div style={{ fontSize: 11, color: "#8a98a6", marginTop: 4 }}>{t("anon.masks.webNote")}</div>}
               {roiLoading && <div style={{ fontSize: 11, color: "#8a98a6", marginTop: 4 }}>{t("common.loading")}</div>}
               {!roiLoading && roiCands.length === 0 && (
                 <div style={{ fontSize: 11, color: "#8a98a6", marginTop: 4 }}>{t("anon.masks.roiEmpty")}</div>
@@ -557,7 +631,7 @@ export function AnonymizerDialog({
               )}
             </div>
           )}
-          {options.has("CleanPixelData") && (
+          {options.has("CleanPixelData") && !isWeb && (
             <div style={maskBox}>
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
                 <b style={{ fontSize: 12 }}>{t("anon.masks")} ({maskCount})</b>
@@ -613,7 +687,27 @@ export function AnonymizerDialog({
           <div style={{ flex: 1, minWidth: 0, fontSize: 12, overflowWrap: "anywhere" }}>
             {info && <span data-testid="anon-info-message" style={{ color: "#2e5d27" }}>{info}</span>}
             {error && <span data-testid="anon-error-message" style={{ color: "#b00020" }}>{error}</span>}
-            {isWeb && <span style={{ color: "#a85b00" }}>{t("anon.webNote")}</span>}
+            {isWeb && job && !isExportFinished(job) && (
+              <span data-testid="anon-job-progress" style={{ color: "#33404d" }}>
+                {t("anon.job.progress", { processed: Math.max(job.processed, 0), total: job.total })}
+                {job.output === "stow" && job.stored > 0 ? " " + t("anon.job.stored", { stored: job.stored }) : ""}
+                {jobPct !== null && <progress value={jobPct} max={100} style={{ marginLeft: 8, verticalAlign: "middle" }} />}
+              </span>
+            )}
+            {isWeb && importEnabled && stowBlocked && !busy && (
+              <span style={{ color: "#a85b00" }}>{t("anon.stow.blockedUids")}</span>
+            )}
+            {confirmStow && (
+              <div data-testid="anon-stow-confirm" style={confirmBox}>
+                <div>{t("anon.stow.confirm")}</div>
+                <div style={{ marginTop: 6, display: "flex", gap: 8 }}>
+                  <button data-testid="anon-stow-confirm-ok" style={{ ...btn, background: "#b00020", color: "#fff", border: "none" }}
+                    onClick={() => void runWebJob("stow")}>{t("anon.stow.confirmOk")}</button>
+                  <button data-testid="anon-stow-confirm-cancel" style={btn}
+                    onClick={() => setConfirmStow(false)}>{t("anon.stow.confirmCancel")}</button>
+                </div>
+              </div>
+            )}
           </div>
           {!isWeb && (
             <>
@@ -621,9 +715,20 @@ export function AnonymizerDialog({
               <button data-testid="anon-copy-btn" style={btn} onClick={() => void runCopy()} disabled={busy || !destination}>{t("anon.copy")}</button>
             </>
           )}
+          {isWeb && busy && (
+            <button data-testid="anon-job-cancel-btn" style={btn} onClick={requestCancel} disabled={cancelling}>
+              {cancelling ? t("anon.job.cancelling") : t("anon.job.cancel")}
+            </button>
+          )}
           <button style={btn} onClick={onClose}>{t("common.close")}</button>
+          {isWeb && importEnabled && (
+            <button data-testid="anon-stow-btn" style={btn} disabled={busy || stowBlocked || confirmStow}
+              title={stowBlocked ? t("anon.stow.blockedUids") : ""} onClick={() => setConfirmStow(true)}>
+              {t("anon.stow")}
+            </button>
+          )}
           <button data-testid="anon-zip-btn" style={{ ...btn, background: busy ? "#9fb6cf" : "#0b5cad", color: "#fff", border: "none" }}
-            onClick={() => void runZip()} disabled={busy}>
+            onClick={() => void (isWeb ? runWebJob("zip") : runZip())} disabled={busy}>
             {busy ? t("anon.running") : t("anon.zip")}
           </button>
         </div>
@@ -640,6 +745,9 @@ const body: React.CSSProperties = { padding: "12px 16px", display: "flex", flexD
 const grpTitle: React.CSSProperties = { fontSize: 12, fontWeight: 600, color: "#33404d", marginBottom: 4 };
 const maskBox: React.CSSProperties = {
   border: "1px solid #2c3a47", borderRadius: 4, padding: 6, marginTop: 4,
+};
+const confirmBox: React.CSSProperties = {
+  border: "1px solid #b00020", borderRadius: 6, padding: 8, marginTop: 6, background: "#fff5f5", color: "#1a1a1a",
 };
 const maskRow: React.CSSProperties = {
   display: "flex", alignItems: "center", gap: 8, fontSize: 11, padding: "2px 0",
