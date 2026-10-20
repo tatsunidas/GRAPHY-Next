@@ -2271,6 +2271,7 @@ export const en: Record<string, string> = {
   "pluginmgr.consent.noSignature": "This package is not signed, so its author and contents cannot be verified. Install only if you trust the source.",
   "pluginmgr.consent.overwrite": "A plugin with the same ID is already installed and will be overwritten.",
   "pluginmgr.consent.blocked": "This plugin cannot run in this environment, so it cannot be installed.",
+  "pluginmgr.consent.sigBlocked": "The signature could not be verified, so this cannot be installed. The package may have been tampered with, or the publisher's key may have changed. See the reason under \"Signature\" above.",
   "pluginmgr.consent.ackUnverified": "Install anyway, knowing that integrity cannot be verified.",
   "pluginmgr.consent.confirm": "Install",
   "pluginmgr.versionPlaceholder": "version (optional)",

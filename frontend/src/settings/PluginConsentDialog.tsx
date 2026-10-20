@@ -5,6 +5,7 @@
 import { useState } from "react";
 import { useI18n } from "../i18n/i18n";
 import type { PluginPreview } from "../plugins/pluginManagerApi";
+import { canConfirmInstall, needsUnverifiedAck, signatureBlocks } from "./pluginConsentView";
 
 /**
  * プラグイン導入前の同意画面。
@@ -31,8 +32,8 @@ export function PluginConsentDialog({
   const { t } = useI18n();
   const [ackUnverified, setAckUnverified] = useState(false);
 
-  const needsAck = !preview.integrityVerified;
-  const canConfirm = preview.installable && (!needsAck || ackUnverified) && !busy;
+  const needsAck = needsUnverifiedAck(preview);
+  const canConfirm = canConfirmInstall(preview, ackUnverified, busy);
 
   return (
     <div style={backdrop} role="dialog" aria-modal="true" data-testid="plugin-consent-dialog">
@@ -123,7 +124,11 @@ export function PluginConsentDialog({
           <div style={blocked}>{t("pluginmgr.consent.blocked")}</div>
         )}
 
-        {preview.installable && needsAck && (
+        {signatureBlocks(preview) && (
+          <div style={blocked} data-testid="plugin-consent-sig-blocked">{t("pluginmgr.consent.sigBlocked")}</div>
+        )}
+
+        {needsAck && (
           <label style={{ display: "flex", alignItems: "flex-start", gap: 8, marginTop: 10, fontSize: 12 }}>
             <input type="checkbox" checked={ackUnverified} onChange={(e) => setAckUnverified(e.target.checked)} />
             <span style={{ color: "#6b5a00" }}>{t("pluginmgr.consent.ackUnverified")}</span>
@@ -141,6 +146,7 @@ export function PluginConsentDialog({
           <button
             style={{ ...primaryBtn, background: canConfirm ? "#0b5cad" : "#9fb6cf" }}
             disabled={!canConfirm}
+            data-testid="plugin-consent-confirm"
             onClick={() => onConfirm(ackUnverified)}
           >
             {busy ? t("pluginmgr.installing") : t("pluginmgr.consent.confirm")}

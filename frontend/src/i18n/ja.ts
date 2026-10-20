@@ -2260,6 +2260,7 @@ export const ja: Record<string, string> = {
   "pluginmgr.consent.noSignature": "この配布物には署名がないため、作成者と内容の真正性を確認できません。配布元を信頼できる場合のみ導入してください。",
   "pluginmgr.consent.overwrite": "同じ ID のプラグインが既に導入されています。上書きされます。",
   "pluginmgr.consent.blocked": "このプラグインはこの環境では動作しないため導入できません。",
+  "pluginmgr.consent.sigBlocked": "署名を検証できないため導入できません。配布物が改ざんされたか、配布者の鍵が変わった可能性があります。上の「署名」に理由が出ています。",
   "pluginmgr.consent.ackUnverified": "完全性を確認できないことを承知のうえで導入します。",
   "pluginmgr.consent.confirm": "導入する",
   "pluginmgr.versionPlaceholder": "版（任意）",
