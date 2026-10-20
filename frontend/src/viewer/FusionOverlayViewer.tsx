@@ -14,6 +14,8 @@ import { overlayPlacement, type ImageRect } from "./overlayPlacement";
 import { imageIdForInstance, type ViewerMode } from "./imageId";
 import { getModalityCalibration } from "./pixelCalibration";
 import { probeMetaOf } from "./fusionProbeMeta";
+import { toFusionSlice, type RawFusionSlice } from "./fusionSlice";
+import { subscribeSuvStore } from "./suvStore";
 import { extractIsolines, isolinesToPath } from "./isoline";
 import { registerFusionProbe, setFusionProbeData, unregisterFusionProbe } from "./fusionProbe";
 import { fetchSeriesLayout, type Instance, type SeriesLayoutDto } from "../api";
@@ -79,11 +81,13 @@ function buildFgSkeleton(dto: SeriesLayoutDto): {
 }
 
 /** imageId → loaded FusionSlice のモジュールレベルキャッシュ。 */
-const _sliceCache = new Map<string, FusionSlice>();
+// 校正（SUV 乗数の合成を含む）は焼き込まない。SUV 校正を後から変えても追従できるよう、取り出すたびに掛ける。
+const _sliceCache = new Map<string, RawFusionSlice>();
 
 /** imageId のピクセルデータと IPP を読み込む（キャッシュあり）。 */
 async function loadFusionSlice(imageId: string): Promise<FusionSlice | null> {
-  if (_sliceCache.has(imageId)) return _sliceCache.get(imageId)!;
+  const cached = _sliceCache.get(imageId);
+  if (cached) return toFusionSlice(cached, imageId);
 
   // IPP がなければ先にメタだけロード
   const plane0: AnyObj = metaData.get("imagePlaneModule", imageId) ?? {};
@@ -102,18 +106,17 @@ async function loadFusionSlice(imageId: string): Promise<FusionSlice | null> {
   const ippArr = plane.imagePositionPatient;
   if (!Array.isArray(ippArr) || ippArr.length < 3) return null;
 
-  // 校正は pixelCalibration に一元化（preScale 二重適用を防ぐ）。fusionEngine は pixels*slope+intercept
-  // でモダリティ値を得るため、slope/intercept へ preScale 考慮済みの scale/offset を渡す
-  // （preScale 済みなら {1,0} = そのまま HU）。
-  const cal = getModalityCalibration(image, imageId);
-  const slice: FusionSlice = {
+  // 校正は pixelCalibration に一元化（preScale 二重適用を防ぐ）し、toFusionSlice が取り出すたびに求める。
+  // fusionEngine は pixels*slope+intercept でモダリティ値（SUV 校正中は SUV）を得る。
+  const raw: RawFusionSlice = {
     ipp: [Number(ippArr[0]), Number(ippArr[1]), Number(ippArr[2])],
     pixels: image.getPixelData(),
-    slope: cal.scale,
-    intercept: cal.offset,
+    preScale: image.preScale,
+    slope: image.slope,
+    intercept: image.intercept,
   };
-  _sliceCache.set(imageId, slice);
-  return slice;
+  _sliceCache.set(imageId, raw);
+  return toFusionSlice(raw, imageId);
 }
 
 /**
@@ -262,6 +265,9 @@ export function FusionImageViewer({
   const canvasRef = useRef<HTMLCanvasElement>(null);
   // 等値線の元になる、背景の画素格子に載った前景値（状態バーと同じ配列）。空間 Fusion で描けたときだけ持つ。
   const [isoGrid, setIsoGrid] = useState<{ values: Float32Array; cols: number; rows: number } | null>(null);
+  // SUV 校正の付与・解除で前景値が変わるので、変更のたびに再構成する（runFusion の依存に入れる）。
+  const [suvTick, setSuvTick] = useState(0);
+  useEffect(() => subscribeSuvStore(() => setSuvTick((n) => n + 1)), []);
   const computingRef = useRef(false);
   const pendingRef = useRef(false);
 
@@ -513,7 +519,7 @@ export function FusionImageViewer({
     // ⚠ 親のコールバック（onAutoWL / onSpatialChange）は**依存に入れない**。ref 経由で呼んでいる。
     // 入れると、レンダプロップ内で毎レンダ生成される関数によって再計算が毎レンダ走る。
   }, [baseImageId, baseIndex, baseCount, viewportId, fgDto, overlayC, overlayT, lut, windowCenter, windowWidth,
-      adjust, registration, notifySpatial, drawValues, clearCanvas]);
+      adjust, registration, notifySpatial, drawValues, clearCanvas, suvTick]);
 
   useEffect(() => {
     void runFusion();
