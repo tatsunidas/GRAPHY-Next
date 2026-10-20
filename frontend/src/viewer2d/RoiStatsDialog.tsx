@@ -32,6 +32,7 @@ import { buildMaskVoxelDumpAsync, computeMaskStatsAsync, type MaskStatsResult } 
 import { meanTimesVolumeLabelKey } from "../viewer/maskStatsCore";
 import type { HistogramData } from "../viewer/histogram";
 import { LoadingSpinner } from "../viewer/LoadingSpinner";
+import { VolumeEstimateBlock } from "./VolumeEstimateBlock";
 
 const CHART_W = 520;
 const CHART_H = 150;
@@ -253,7 +254,7 @@ export function RoiStatsDialog({
               {focusIsMask ? (
                 focusedMask ? <MaskDetail stats={focusedMask} /> : <span style={dim}>—</span>
               ) : focused ? (
-                <Detail stats={focused} />
+                <Detail stats={focused} uid={focus!} />
               ) : (
                 <span style={dim}>—</span>
               )}
@@ -266,7 +267,7 @@ export function RoiStatsDialog({
 }
 
 /** 選択した 1 件の詳細。 */
-function Detail({ stats }: { stats: RoiStatsResult }) {
+function Detail({ stats, uid }: { stats: RoiStatsResult; uid: string }) {
   const { t } = useI18n();
   const g = stats.geometry;
   const v = stats.values;
@@ -290,6 +291,7 @@ function Detail({ stats }: { stats: RoiStatsResult }) {
     <>
       <div style={detailLine}>{geomParts.join(" / ")}</div>
       <ValueLine v={v} />
+      <VolumeEstimateBlock uid={uid} geometry={g} />
 
       {stats.profile ? (
         <LineChart
