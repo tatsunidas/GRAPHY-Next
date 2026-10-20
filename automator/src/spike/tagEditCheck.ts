@@ -112,9 +112,20 @@ async function main(): Promise<void> {
     await page.getByTestId("toolbar-tag-viewer-btn").click();
     const dlg = page.getByTestId("tag-viewer-dialog");
     await dlg.getByTestId("tag-viewer-table").waitFor({ state: "visible", timeout: 30_000 });
+    // 編集の前にバックアップを促す確認が出る。「やめる」では編集に入らず、「バックアップ済み」で入る
     await dlg.getByTestId("tag-edit-start").click();
+    await dlg.getByTestId("tag-edit-warn").waitFor({ state: "visible", timeout: 10_000 });
+    await page.screenshot({ path: path.join(OUT_DIR, "0-warn.png") });
+    await dlg.getByTestId("tag-edit-warn-cancel").click();
+    check((await dlg.getByTestId("tag-edit-warn").count()) === 0, "やめる: 確認が閉じる");
+    check((await dlg.getByTestId("tag-edit-input").count()) === 0, "やめる: 編集に入らず入力欄が無い");
+    check((await dlg.getByTestId("tag-edit-start").count()) === 1, "やめる: 「編集」ボタンが残る");
+    await dlg.getByTestId("tag-edit-start").click();
+    await dlg.getByTestId("tag-edit-warn-ok").click();
+    check((await dlg.getByTestId("tag-edit-warn").count()) === 0, "バックアップ済み: 確認が閉じる");
+    check((await dlg.getByTestId("tag-edit-input").count()) > 0, "バックアップ済み: 編集に入り入力欄が出る");
 
-    const row = (tag: string) => dlg.locator(`[data-testid="tag-row-${tag}"]`).first(); // 同じタグが変更の記録（SQ）の中にも出る
+    const row =(tag: string) => dlg.locator(`[data-testid="tag-row-${tag}"]`).first(); // 同じタグが変更の記録（SQ）の中にも出る
     check((await row("(0020,000E)").getByTestId("tag-edit-input").count()) === 0, "SeriesInstanceUID の行に入力欄が無い");
     check((await row("(0020,000E)").getByTestId("tag-lock").count()) === 1, "SeriesInstanceUID の行に鍵の印");
     check((await row("(0010,0010)").getByTestId("tag-edit-input").count()) === 0, "PatientName の行に入力欄が無い（患者情報の編集へ）");

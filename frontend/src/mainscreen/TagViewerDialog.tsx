@@ -57,6 +57,7 @@ export function TagViewerDialog({
   const [query, setQuery] = useState("");
   const [reloadKey, setReloadKey] = useState(0);
   const [editing, setEditing] = useState(false);
+  const [editWarn, setEditWarn] = useState(false);
   const [drafts, setDrafts] = useState<Record<string, Draft>>({});
   const [added, setAdded] = useState<AddedRow[]>([]);
   const [scopeLevel, setScopeLevel] = useState<TagEditScope["level"]>("series");
@@ -204,6 +205,7 @@ export function TagViewerDialog({
     if ((Object.keys(drafts).length > 0 || added.length > 0) && !window.confirm(t("tagview.discardEdit"))) return;
     resetEdit();
     setEditing(false);
+    setEditWarn(false);
     setNotice(null);
     setPicked({ study: g.study, series: g.series, sop });
   };
@@ -241,7 +243,7 @@ export function TagViewerDialog({
             <span style={{ fontSize: 12, color: "#556" }}>{t("tagview.matches", { count: matchCount })}</span>
           )}
           {editable && rows && !editing && (
-            <button data-testid="tag-edit-start" style={btn} onClick={() => { resetEdit(); setNotice(null); setEditing(true); }}>
+            <button data-testid="tag-edit-start" style={btn} onClick={() => setEditWarn(true)} disabled={editWarn}>
               {t("tagedit.start")}
             </button>
           )}
@@ -391,6 +393,26 @@ export function TagViewerDialog({
           )}
         </div>
         </div>
+
+        {editWarn && !editing && (
+          <div data-testid="tag-edit-warn" style={warnBox}>
+            <div style={{ fontWeight: 600, marginBottom: 6 }}>{t("tagedit.warn.title")}</div>
+            <div>{t("tagedit.warn.body")}</div>
+            <div style={{ fontSize: 12, color: "#667", margin: "6px 0" }}>{t("tagedit.warn.hint")}</div>
+            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+              <button data-testid="tag-edit-warn-cancel" style={btn} autoFocus onClick={() => setEditWarn(false)}>
+                {t("tagedit.warn.cancel")}
+              </button>
+              <button
+                data-testid="tag-edit-warn-ok"
+                style={primaryBtn}
+                onClick={() => { setEditWarn(false); resetEdit(); setNotice(null); setEditing(true); }}
+              >
+                {t("tagedit.warn.ok")}
+              </button>
+            </div>
+          </div>
+        )}
 
         {confirm && (
           <div data-testid="tag-edit-confirm" style={confirmBox}>
@@ -703,6 +725,12 @@ const cellInput: React.CSSProperties = {
   fontFamily: "ui-monospace, monospace",
 };
 const problemText: React.CSSProperties = { color: "#c62828", fontSize: 11, fontFamily: "system-ui, sans-serif" };
+const warnBox: React.CSSProperties = {
+  borderTop: "2px solid #b26a00",
+  background: "#fff8e6",
+  padding: "10px 16px",
+  fontSize: 13,
+};
 const confirmBox: React.CSSProperties = {
   borderTop: "2px solid #1f5fa8",
   background: "#f5f9ff",
