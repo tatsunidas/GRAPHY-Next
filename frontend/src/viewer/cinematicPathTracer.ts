@@ -375,6 +375,21 @@ export interface CinematicEngine {
   /** 現在の蓄積フレーム数。 */
   getFrameCount(): number;
   resize(width: number, height: number): void;
+  /**
+   * 内部解像度の縮小率 k（蓄積を ⌈W/k⌉×⌈H/k⌉ で作り直し、蓄積を 0 からやり直す。k=1 は全解像度＝今まで通り）。
+   * レイは NDC から作るのでカメラ・幾何（LPS mm）は変わらない。present で canvas 全面に引き伸ばす。
+   */
+  setRenderScale(k: number): void;
+  getRenderScale(): number;
+  /** 蓄積の内部サイズ（縮小しているときは canvas より小さい）。 */
+  getInternalSize(): { width: number; height: number };
+  /** GPU の完了を待つ（1×1 の読み戻し）。1 フレームの実時間を測るために使う。 */
+  finish(): void;
+  /**
+   * 直前に出したフレームが GPU で終わっているか（待たない）。遅い機械で未完了のフレームを溜めないために、
+   * 呼び出し側は終わっていないあいだ次のフレームを出さない（GPU の命令は取り消せないので、溜めると操作への反応が遅れる）。
+   */
+  isIdle(): boolean;
   dispose(): void;
 }
 
@@ -451,6 +466,14 @@ export function createCinematicPathTracer(
   // ── ping-pong 蓄積 RGBA32F ──
   let W = Math.max(1, canvas.width);
   let H = Math.max(1, canvas.height);
+  // 内部解像度の縮小率（操作中だけ 1 より大きい）と、蓄積の大きさ。
+  let scale = 1;
+  let IW = W;
+  let IH = H;
+  const internalSize = () => {
+    IW = Math.max(1, Math.ceil(W / scale));
+    IH = Math.max(1, Math.ceil(H / scale));
+  };
   const accum: { tex: WebGLTexture; fbo: WebGLFramebuffer }[] = [];
   const makeAccum = (w: number, h: number) => {
     for (const a of accum) {
@@ -462,8 +485,10 @@ export function createCinematicPathTracer(
       const tex = gl.createTexture()!;
       gl.bindTexture(gl.TEXTURE_2D, tex);
       gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, w, h, 0, gl.RGBA, gl.FLOAT, null);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+      // 縮小して描いた蓄積を引き伸ばして見せるので、float の線形補間が使えるときだけ LINEAR（k=1 では 1 対 1 で結果は変わらない）。
+      const filter = floatLinear ? gl.LINEAR : gl.NEAREST;
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, filter);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, filter);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
       const fbo = gl.createFramebuffer()!;
@@ -500,6 +525,7 @@ export function createCinematicPathTracer(
   let clipMax: V3 = [1, 1, 1];
   let p = { ...params };
   let frameCount = 0;
+  let fence: WebGLSync | null = null; // 直前のフレームの完了を見る（isIdle）
   let src = 0; // 現在の「前フレーム蓄積」= accum[src]、書込先 = accum[1-src]
 
   const lightTex = (): V3 => {
@@ -546,7 +572,7 @@ export function createCinematicPathTracer(
       const dst = 1 - src;
       // ── 蓄積パス: accum[dst] = accum[src](前) + 今フレームの推定 ──
       gl.bindFramebuffer(gl.FRAMEBUFFER, accum[dst].fbo);
-      gl.viewport(0, 0, W, H);
+      gl.viewport(0, 0, IW, IH);
       gl.disable(gl.BLEND);
       gl.useProgram(traceProg);
       gl.activeTexture(gl.TEXTURE0);
@@ -598,18 +624,55 @@ export function createCinematicPathTracer(
       gl.uniform1f(ploc.uFrameCount, frameCount);
       gl.uniform1f(ploc.uExposure, p.exposure);
       drawFullscreen();
+      if (fence) gl.deleteSync(fence);
+      fence = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
+      gl.flush();
+    },
+    isIdle() {
+      if (!fence) return true;
+      // WebGL では getSyncParameter(SYNC_STATUS) で見る（clientWaitSync の待たない呼び出しは、実際は未完了でも終わったように返しうる）
+      if (gl.getSyncParameter(fence, gl.SYNC_STATUS) !== gl.SIGNALED) return false;
+      gl.deleteSync(fence);
+      fence = null;
+      return true;
     },
     resize(width, height) {
       W = Math.max(1, Math.floor(width));
       H = Math.max(1, Math.floor(height));
       canvas.width = W;
       canvas.height = H;
-      makeAccum(W, H);
+      internalSize();
+      makeAccum(IW, IH);
       src = 0;
       frameCount = 0;
     },
+    setRenderScale(k) {
+      const next = Number.isFinite(k) && k >= 1 ? Math.floor(k) : 1;
+      if (next === scale) return;
+      scale = next;
+      internalSize();
+      makeAccum(IW, IH);
+      src = 0;
+      frameCount = 0;
+    },
+    getRenderScale() {
+      return scale;
+    },
+    getInternalSize() {
+      return { width: IW, height: IH };
+    },
+    finish() {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, accum[src].fbo);
+      gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.FLOAT, new Float32Array(4));
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      if (fence) {
+        gl.deleteSync(fence);
+        fence = null;
+      }
+    },
     dispose() {
       try {
+        if (fence) gl.deleteSync(fence);
         for (const a of accum) {
           gl.deleteTexture(a.tex);
           gl.deleteFramebuffer(a.fbo);

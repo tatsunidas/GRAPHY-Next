@@ -39,7 +39,7 @@ import { buildMprVolume } from "../viewer/mpr";
 import { SliceDuplicatesError, sopGridIndexMap, volumeDepthNote, type VolumeDepthNote } from "../viewer/depthVolume";
 import { VolumeDepthChip } from "../viewer/VolumeDepthChip";
 import { loadRenderEnvSummary } from "../viewer/renderEnvReport";
-import { parseRenderQuality, type RenderKind } from "../viewer/renderEnv";
+import { parseRenderQuality, type RenderKind, type RenderQuality } from "../viewer/renderEnv";
 import { installDebugApi, publishRender3dStats } from "../viewer/debugApi";
 import { requestOpenSettings } from "../settings/settingsOpenEvents";
 import {
@@ -132,6 +132,8 @@ export function Viewer3DScreen({ status }: { status: AppStatus | null }) {
   const [depthNote, setDepthNote] = useState<VolumeDepthNote | null>(null);
   // 描画の種別（ソフトウェア描画のときだけヘッダに印を出す。fw/render-environment-design.md）。
   const [renderKind, setRenderKind] = useState<RenderKind | null>(null);
+  // 設定「3D の画質」（シネマティックの操作中の縮小にも効く。full は常に全解像度）。
+  const [renderQuality, setRenderQuality] = useState<RenderQuality>("auto");
   useEffect(() => {
     let alive = true;
     void loadRenderEnvSummary().then((v) => {
@@ -385,7 +387,9 @@ export function Viewer3DScreen({ status }: { status: AppStatus | null }) {
         .then((m) => {
           if (viewRef.current !== view) return;
           view.setBackground(hexToRgb01(m["viewer3d.background"]));
-          view.setRenderQuality(parseRenderQuality(m["viewer3d.renderQuality"]));
+          const quality = parseRenderQuality(m["viewer3d.renderQuality"]);
+          view.setRenderQuality(quality);
+          setRenderQuality(quality);
         })
         .catch(() => undefined);
       // mesh / 3D ROI アクターを同一 vtk シーンへ重畳するため renderer を接続。
@@ -693,7 +697,13 @@ export function Viewer3DScreen({ status }: { status: AppStatus | null }) {
             <ViewInfoOverlay view={viewRef.current} lutName={lutName} />
           )}
           {phase === "ready" && viewRef.current && (
-            <Viewer3DCinematicOverlay view={viewRef.current} active={pathTraceOn} />
+            <Viewer3DCinematicOverlay
+              view={viewRef.current}
+              active={pathTraceOn}
+              renderKind={renderKind}
+              quality={renderQuality}
+              onCancel={() => setPathTraceOn(false)}
+            />
           )}
           {phase === "ready" && viewRef.current && (
             <Viewer3DMeasureOverlay view={viewRef.current} active={measureMode} />
@@ -906,6 +916,7 @@ export function Viewer3DScreen({ status }: { status: AppStatus | null }) {
                 <button
                   style={pathTraceOn ? modeBtnActive : resetBtn}
                   title={t("cine2.hint")}
+                  data-testid="viewer3d-cinematic-toggle"
                   onClick={() => setPathTraceOn((v) => !v)}
                 >
                   {pathTraceOn ? t("cine2.stop") : t("cine2.start")}
