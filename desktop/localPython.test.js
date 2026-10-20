@@ -216,6 +216,32 @@ test("judge 〈実機の記録: CPU 版 torch〉+ GPU あり → torch-cpu-build
   assert.deepEqual(noGpu.reasons, []);
 });
 
+const smiRec = () => lp.parseNvidiaSmi(fs.readFileSync(path.join(__dirname, "testdata", "local-python", "nvidia-smi-gtx1050ti.csv"), "utf8"));
+
+test("judge 〈実機の記録: CUDA 12.6 版 torch＋GTX 1050 Ti〉: sm_61 は archList に無いが sm_60 で動く→CUDA 可。uuid で対応づく", () => {
+  const probe = rec("venv-cuda126-gtx1050ti").probe;
+  assert.ok(!probe.torch.archList.includes("sm_61"), "実物の archList に sm_61 は無い（これが前提）");
+  const g = smiRec();
+  assert.equal(g.gpus.length, 1);
+  const j = lp.judge(probe, { found: true, gpus: g.gpus });
+  assert.deepEqual(j.reasons, []);
+  assert.equal(j.cudaUsable, true);
+  assert.equal(j.capabilities.accelerator, "cuda");
+  assert.equal(j.capabilities.devices[0].name, "NVIDIA GeForce GTX 1050 Ti");
+  assert.equal(j.capabilities.devices[0].memoryMiB, 4096, "VRAM の表示値は nvidia-smi");
+  assert.equal(j.capabilities.devices[0].memoryBytes, 4227727360, "torch の値は記録に残す");
+  assert.equal(j.capabilities.devices[0].archSupported, true);
+  assert.equal(j.capabilities.driver, "580.178.04");
+});
+
+test("judge 〈実機の記録の負例〉同じ記録から sm_60 を除くと世代が含まれず CUDA 可にならない", () => {
+  const probe = rec("venv-cuda126-gtx1050ti").probe;
+  const cut = { ...probe, torch: { ...probe.torch, archList: probe.torch.archList.filter((a) => a !== "sm_50" && a !== "sm_60") } };
+  const j = lp.judge(cut, { found: true, gpus: smiRec().gpus });
+  assert.ok(j.reasons.includes("gpu-arch-unsupported"));
+  assert.equal(j.cudaUsable, false);
+});
+
 const cudaProbe = (over = {}) => ({
   executable: "/x/python", version: "3.11.9", jupyterServer: "2.14", ipykernel: "6.29", torchVersion: "2.8.0+cu126",
   torch: {
