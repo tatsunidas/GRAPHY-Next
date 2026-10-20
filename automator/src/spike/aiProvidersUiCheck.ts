@@ -268,6 +268,7 @@ async function main(): Promise<void> {
     // --- 6b. モデル一覧の取得（保存済みの提供元） ---
     console.log("\n[6b] モデル一覧");
     await page.getByTestId(`ai-provider-edit-${PROVIDER_ID}`).click();
+    check((await page.getByTestId("ai-provider-field-apikey").count()) === 0, "編集フォームには API キー欄が出ない（負例）");
     const fetchBtn = page.getByTestId("ai-provider-models-fetch");
     check(await fetchBtn.isEnabled(), "鍵のある保存済みの提供元では一覧を取得できる");
     const seen0 = fake.seen.length;
@@ -359,7 +360,17 @@ async function main(): Promise<void> {
     check(await pg.getByTestId("ai-provider-field-endpoint-select").inputValue() === "https://api.openai.com", "OpenAI を選ぶと接続先が入る（プルダウン）");
     check(await pg.getByTestId("ai-provider-field-kind").count() === 0, "選んだ提供元では種別の欄を出さない");
     check(await pg.getByTestId("ai-provider-form-save").isDisabled(), "🔴 モデル名が空のうちは保存できない（仮のモデル名を入れていない）");
-    await pg.screenshot({ path: path.join(OUT_DIR, "6-preset-openai.png") });
+    await pg.getByTestId("ai-provider-form").screenshot({ path: path.join(OUT_DIR, "6-preset-openai.png") });
+    // tsx が evaluate 内の関数に __name を差し込むので、文字列で渡す
+    const order = await pg.evaluate(`(function () {
+      var q = function (id) { return document.querySelector('[data-testid="' + id + '"]'); };
+      var ep = q("ai-provider-field-endpoint-select") || q("ai-provider-field-endpoint");
+      var key = q("ai-provider-field-apikey");
+      var model = q("ai-provider-field-model-image-to-text");
+      var before = function (a, b) { return !!a && !!b && !!(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING); };
+      return { epKey: before(ep, key), keyModel: before(key, model) };
+    })()`) as { epKey: boolean; keyModel: boolean };
+    check(order.epKey && order.keyModel, "🔴 追加フォームの順序は Endpoint → API キー → モデル", order);
     check(await pg.getByTestId("ai-provider-models-fetch").isDisabled(), "鍵が空のうちは一覧を取得できない（公式ホストへも送らない）");
     await pg.getByTestId("ai-provider-field-apikey").fill(FORM_KEY);
     check(await pg.getByTestId("ai-provider-models-fetch").isEnabled(), "OpenAI＋鍵ありで一覧を取得できる（ここでは押さない＝実ネットワークに出さない）");
