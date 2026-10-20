@@ -34,6 +34,9 @@ import java.util.List;
  * @param axes                   軸の提示（UI ラベル・種別）とスタック軸。null なら既定
  *                               （Z=slice / C / T、stackAxis="z"）＝ CT/MR の従来動作。
  *                               fw/angio-design.md §5.7。
+ * @param timeAxis               T 次元の**経過時間**（セル＝SOP ごとの、先頭の取得からの秒と出所）。
+ *                               T が順序でしかない（時刻を持たない）シリーズは null。
+ *                               {@link LayoutTimeAxis#compute} が両経路（standalone / web）で同じ規則で決める。
  */
 public record SeriesLayout(
         int nZ, int nC, int nT,
@@ -47,7 +50,36 @@ public record SeriesLayout(
         List<ZSpatial> zSpatial,
         String frameOfReferenceUID,
         PixelFormat pixelFormat,
-        Axes axes) {
+        Axes axes,
+        TimeAxis timeAxis) {
+
+    /** 時間軸を持たない従来の形（専用展開の各 *FrameExpander・テストが使う）。 */
+    public SeriesLayout(
+            int nZ, int nC, int nT, String cDimension, String tDimension, List<Cell> cells,
+            double[] imageOrientationPatient, double pixelSpacingRow, double pixelSpacingCol,
+            int imageWidth, int imageHeight, List<ZSpatial> zSpatial, String frameOfReferenceUID,
+            PixelFormat pixelFormat, Axes axes) {
+        this(nZ, nC, nT, cDimension, tDimension, cells, imageOrientationPatient, pixelSpacingRow,
+                pixelSpacingCol, imageWidth, imageHeight, zSpatial, frameOfReferenceUID, pixelFormat, axes, null);
+    }
+
+    /** 同じレイアウトに時間軸を付けたもの（null なら付けない）。 */
+    public SeriesLayout withTimeAxis(TimeAxis t) {
+        return new SeriesLayout(nZ, nC, nT, cDimension, tDimension, cells, imageOrientationPatient,
+                pixelSpacingRow, pixelSpacingCol, imageWidth, imageHeight, zSpatial, frameOfReferenceUID,
+                pixelFormat, axes, t);
+    }
+
+    /**
+     * T 次元の経過時間。
+     *
+     * @param source    出所（"AcquisitionTime" / "TriggerTime"）。画面・API の利用者が「この秒は何の時計か」を
+     *                  知るために必ず一緒に出す（TriggerTime は心臓 cine では R 波からの時間）。
+     * @param secBySop  SOPInstanceUID → 先頭の取得からの経過秒（出所の最小値を 0 とする）。
+     *                  スライスごとに取得時刻が違う（DCE の典型）ので、時相の代表値に潰さずセル単位で持つ。
+     */
+    public record TimeAxis(String source, java.util.Map<String, Double> secBySop) {
+    }
 
     /**
      * 各 (c,z,t) に対応するフレーム。

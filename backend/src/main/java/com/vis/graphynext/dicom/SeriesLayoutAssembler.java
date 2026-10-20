@@ -76,6 +76,7 @@ public final class SeriesLayoutAssembler {
         String seriesFor = null;
         SeriesLayout.PixelFormat seriesPixelFormat = null;
         Map<String, double[]> sopToIpp = new HashMap<>();
+        Map<String, LayoutTimeAxis.TimeTags> timeTags = new HashMap<>();
         // 複数オリエンテーション（3-plane localizer 等）は空間ボリュームでないため純スタックにする。
         Set<String> iopKeys = new LinkedHashSet<>();
 
@@ -98,6 +99,7 @@ public final class SeriesLayoutAssembler {
             putComplexComponent(dims, ds);
             putIfPresent(dims, "Acq", ds, Tag.AcquisitionNumber);
             frames.add(new SeriesLayoutBuilder.FrameMeta(sop, instNo, zpos, dims));
+            timeTags.put(sop, LayoutTimeAxis.read(ds));
 
             double[] ipp = ds.getDoubles(Tag.ImagePositionPatient);
             if (ipp != null && ipp.length >= 3) {
@@ -172,11 +174,12 @@ public final class SeriesLayoutAssembler {
             }
         }
 
-        return new SeriesLayout(
+        SeriesLayout layout = new SeriesLayout(
                 basic.nZ(), basic.nC(), basic.nT(),
                 basic.cDimension(), basic.tDimension(), basic.cells(),
                 seriesIop, seriesPxRow, seriesPxCol, seriesWidth, seriesHeight,
                 zSpatials, seriesFor, seriesPixelFormat, null);
+        return layout.withTimeAxis(LayoutTimeAxis.compute(layout, timeTags));
     }
 
     // ── standalone(DicomStorageService) の classic 経路と同一ロジックのヘルパ ─────────────

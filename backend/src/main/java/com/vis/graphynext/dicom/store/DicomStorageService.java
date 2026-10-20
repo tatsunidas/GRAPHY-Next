@@ -403,6 +403,8 @@ public class DicomStorageService {
         // ボリューム構築前のメモリ量予測用（fw/volume-memory-guard.md V2）。
         com.vis.graphynext.dicom.SeriesLayout.PixelFormat seriesPixelFormat = null;
         java.util.Map<String, double[]> sopToIpp = new java.util.HashMap<>();
+        // T 次元の経過時間（LayoutTimeAxis）。web の SeriesLayoutAssembler と同じ規則を 1 本で使う。
+        java.util.Map<String, com.vis.graphynext.dicom.LayoutTimeAxis.TimeTags> timeTags = new java.util.HashMap<>();
         // 複数オリエンテーション検出（3-plane localizer 等）。IOP が混在するシリーズは
         // 空間ボリュームではないため zpos（=IPP·各自の法線、軸が異なり無意味）でソートせず、
         // instance 順の純スタックにする（並び替えによる再 init・部分表示を防ぐ）。
@@ -430,6 +432,7 @@ public class DicomStorageService {
             // T(時間)=繰り返し/経時。AcquisitionNumber は「一定時間の連続データ収集」＝本質的に時間軸。
             putIfPresent(dims, "Acq", ds, Tag.AcquisitionNumber);
             frames.add(new SeriesLayoutBuilder.FrameMeta(inst.getSopInstanceUid(), instNo, zpos, dims));
+            timeTags.put(inst.getSopInstanceUid(), com.vis.graphynext.dicom.LayoutTimeAxis.read(ds));
 
             // 空間メタ（最初の有効インスタンスから取得）
             double[] ipp = ds.getDoubles(Tag.ImagePositionPatient);
@@ -491,11 +494,12 @@ public class DicomStorageService {
             }
         }
 
-        return new com.vis.graphynext.dicom.SeriesLayout(
+        com.vis.graphynext.dicom.SeriesLayout layout = new com.vis.graphynext.dicom.SeriesLayout(
                 basic.nZ(), basic.nC(), basic.nT(),
                 basic.cDimension(), basic.tDimension(), basic.cells(),
                 seriesIop, seriesPxRow, seriesPxCol, seriesWidth, seriesHeight,
                 zSpatials, seriesFor, seriesPixelFormat, null);
+        return layout.withTimeAxis(com.vis.graphynext.dicom.LayoutTimeAxis.compute(layout, timeTags));
     }
 
     /**

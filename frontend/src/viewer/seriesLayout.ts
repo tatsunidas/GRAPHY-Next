@@ -54,6 +54,13 @@ export interface SeriesLayout {
   ippAt?(z: number): [number, number, number] | null;
   /** スライス法線（IOP 外積・正規化）。座標同期で IPP をテーブル位置(mm)へ投影するのに使う。 */
   normal?: [number, number, number] | null;
+  /**
+   * T 次元の経過時間の出所（"AcquisitionTime" / "TriggerTime"）。時刻が無い（T が順序でしかない）なら null。
+   * 秒を使う解析（灌流の傾き・曲線下面積）は、null のときは秒を使わないこと（時刻を作り出さない）。
+   */
+  timeSource?: string | null;
+  /** セル (c,z,t) の、先頭の取得からの経過秒。時刻が無い・範囲外なら null。スライスごとに値が違いうる。 */
+  timeSecAt?(c: number, z: number, t: number): number | null;
 }
 
 /** 単一次元フォールバック（nC=nT=1, nZ=スライス数）。backend 未取得時に使用。 */
@@ -97,6 +104,10 @@ export function buildLayoutFromDto(
       grid[cell.c][cell.t][cell.z] = id;
     }
   }
+  // 経過時間: セル (c,z,t) → SOP → 秒。時刻の無いセル・範囲外は null（0 にしない）。
+  const sopAt = new Map<string, string>();
+  for (const cell of dto.cells) sopAt.set(`${cell.c}/${cell.z}/${cell.t}`, cell.sopInstanceUid);
+  const secBySop = dto.timeAxis?.secBySop;
   // 欠損(gap)位置の物理座標（IPP）を z→IPP で引けるようにする（ブランクに正しい位置を持たせる）。
   const ippByZ = new Map<number, [number, number, number]>();
   if (dto.zSpatial) {
@@ -144,6 +155,12 @@ export function buildLayoutFromDto(
     stackAxis: dto.axes?.stackAxis === "t" ? "t" : "z",
     ippAt: (z) => ippByZ.get(z) ?? null,
     normal,
+    timeSource: dto.timeAxis?.source ?? null,
+    timeSecAt: (c, z, t) => {
+      const sop = sopAt.get(`${c}/${z}/${t}`);
+      const v = sop !== undefined && secBySop ? secBySop[sop] : undefined;
+      return typeof v === "number" && Number.isFinite(v) ? v : null;
+    },
   };
 }
 

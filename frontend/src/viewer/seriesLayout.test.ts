@@ -123,3 +123,49 @@ describe("XA フレームの imageId", () => {
     expect(imageIdForXaFrame("standalone", "1.2.3", -3)).toMatch(/&frame=1$/);
   });
 });
+
+/**
+ * T 次元の経過時間。**無いものを 0 にしない**（時刻が無いのに 0 秒と答えると、秒を使う解析が
+ * 「全部同時刻」という誤った前提で動く）。
+ */
+describe("経過時間（timeAxis）", () => {
+  const cells = [
+    { c: 0, z: 0, t: 0, sopInstanceUid: "s00", frame: -1 },
+    { c: 0, z: 1, t: 0, sopInstanceUid: "s10", frame: -1 },
+    { c: 0, z: 0, t: 1, sopInstanceUid: "s01", frame: -1 },
+    { c: 0, z: 1, t: 1, sopInstanceUid: "s11", frame: -1 },
+  ];
+  const base = { nZ: 2, nT: 2, tDimension: "Temporal", cells };
+
+  it("時間軸があれば、セルごとの秒（スライスごとに違う値）と出所を返す", () => {
+    const l = buildLayoutFromDto(
+      dto({ ...base, timeAxis: { source: "AcquisitionTime", secBySop: { s00: 0, s10: 0.4, s01: 5, s11: 5.4 } } }),
+      "web", "1.2", "1.3",
+    )!;
+    expect(l.timeSource).toBe("AcquisitionTime");
+    expect(l.timeSecAt!(0, 0, 0)).toBe(0);
+    expect(l.timeSecAt!(0, 1, 0)).toBe(0.4); // 同じ時相でもスライスで違う（時相の代表値に潰さない）
+    expect(l.timeSecAt!(0, 1, 1)).toBe(5.4);
+  });
+
+  it("時間軸が無い（null・省略）なら、出所も秒も null（0 にしない）", () => {
+    for (const timeAxis of [null, undefined]) {
+      const l = buildLayoutFromDto(dto({ ...base, timeAxis }), "web", "1.2", "1.3")!;
+      expect(l.timeSource).toBeNull();
+      expect(l.timeSecAt!(0, 0, 0)).toBeNull();
+      expect(l.timeSecAt!(0, 1, 1)).toBeNull();
+    }
+  });
+
+  it("範囲外のセル・値の無い SOP・非有限の値は null", () => {
+    const l = buildLayoutFromDto(
+      dto({ ...base, timeAxis: { source: "TriggerTime", secBySop: { s00: 0, s01: Number.NaN } } }),
+      "web", "1.2", "1.3",
+    )!;
+    expect(l.timeSecAt!(0, 0, 0)).toBe(0);
+    expect(l.timeSecAt!(0, 0, 1)).toBeNull(); // NaN
+    expect(l.timeSecAt!(0, 1, 0)).toBeNull(); // その SOP の値が無い
+    expect(l.timeSecAt!(0, 9, 0)).toBeNull(); // 範囲外
+    expect(l.timeSecAt!(5, 0, 0)).toBeNull();
+  });
+});
