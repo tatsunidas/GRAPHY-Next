@@ -1522,7 +1522,12 @@ export interface ComputeRunJobOptions {
   script: string;
   /** 0〜8 件。0 件なら画像を送らずコードだけを実行する（同意画面と監査は同じ）。 */
   inputs: ComputeJobInput[];
-  /** 環境設定 ＞ 外部の計算機 の ID。省略するとトークンの入った最初の計算機。 */
+  /**
+   * 環境設定 ＞ 外部の計算機 の ID。省略するとトークンの入った最初の計算機。
+   * `"local"` を指すと、この PC の Python（環境設定 ＞ 計算機 ＞ この PC で見つかったもの）で実行する。
+   * データは PC の外へ出ないが、コードはこの PC 上で利用者の権限で動く（同意画面にその旨が出る）。
+   * 使えないときは `error: "local-unavailable"`（Python・jupyter_server・ipykernel が揃っていない）。
+   */
   endpointId?: string;
   /** 秒。既定 3600・上限 6 時間。 */
   timeoutSec?: number;

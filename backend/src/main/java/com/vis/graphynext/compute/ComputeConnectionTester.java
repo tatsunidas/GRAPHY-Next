@@ -35,7 +35,8 @@ public class ComputeConnectionTester {
      */
     static final String PROBE = """
             import json, platform, subprocess, sys
-            info = {"python": sys.version.split()[0], "platform": platform.platform(), "gpus": [], "torch": None}
+            info = {"python": sys.version.split()[0], "executable": sys.executable,
+                    "platform": platform.platform(), "gpus": [], "torch": None}
             try:
                 out = subprocess.run(["nvidia-smi", "--query-gpu=name,memory.total,driver_version",
                                       "--format=csv,noheader"], capture_output=True, text=True, timeout=15)
@@ -49,7 +50,11 @@ public class ComputeConnectionTester {
             try:
                 import torch
                 info["torch"] = {"version": torch.__version__, "cuda": torch.cuda.is_available(),
-                                 "devices": [torch.cuda.get_device_name(i) for i in range(torch.cuda.device_count())]}
+                                 "cudaVersion": torch.version.cuda,
+                                 "mps": bool(getattr(torch.backends, "mps", None) and torch.backends.mps.is_available()),
+                                 "devices": [torch.cuda.get_device_name(i) for i in range(torch.cuda.device_count())],
+                                 "totalMemory": [int(torch.cuda.get_device_properties(i).total_memory)
+                                                 for i in range(torch.cuda.device_count())]}
             except Exception:
                 pass
             print("__graphy_probe__" + json.dumps(info))

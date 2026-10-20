@@ -94,6 +94,8 @@ contextBridge.exposeInMainWorld("graphyDesktop", {
   computeColabSpecs: () => ipcRenderer.invoke("graphy:compute-colab-specs"),
   computeColabEnsure: (id) => ipcRenderer.invoke("graphy:compute-colab-ensure", id),
   computeColabRelease: (id) => ipcRenderer.invoke("graphy:compute-colab-release", id),
+  // この PC: 検出した Python で Jupyter Server を起動して計算機に入れる（データは送らない）
+  computeLocalEnsure: () => ipcRenderer.invoke("graphy:compute-local-ensure"),
   // Drive バックアップ（Google でログイン・保存先を Picker で選ぶ・解除）。トークンは返らない
   gdriveStatus: () => ipcRenderer.invoke("graphy:gdrive-status"),
   gdriveSignIn: () => ipcRenderer.invoke("graphy:gdrive-signin"),

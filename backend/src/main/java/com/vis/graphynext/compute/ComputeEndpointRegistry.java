@@ -30,16 +30,22 @@ public class ComputeEndpointRegistry {
     static final int MAX_ENDPOINTS = 16;
 
     /** 1 件の接続先。{@code toString} にトークンは出ない（{@link JupyterEndpoint#toString()}）。 */
-    public record Entry(String id, String label, JupyterEndpoint endpoint) {
+    public record Entry(String id, String label, JupyterEndpoint endpoint, String kind, String expectedExecutable) {
     }
 
     /**
      * main から届く形。{@code kind} は {@code jupyter}（既定）か {@code colab}（確保済みのランタイム。
-     * {@code url} と {@code token} は GetRuntime の connectionInfo）。
+     * {@code url} と {@code token} は GetRuntime の connectionInfo）か {@code local}（この PC で main が起動した
+     * Jupyter Server。{@code 127.0.0.1} の http だけ。{@code expectedExecutable} は選んだ Python で、カーネルの
+     * {@code sys.executable} がこれと同じかを実行の前に確かめる）。
      */
-    public record Incoming(String id, String label, String url, String token, String kind) {
+    public record Incoming(String id, String label, String url, String token, String kind, String expectedExecutable) {
+        public Incoming(String id, String label, String url, String token, String kind) {
+            this(id, label, url, token, kind, null);
+        }
+
         public Incoming(String id, String label, String url, String token) {
-            this(id, label, url, token, null);
+            this(id, label, url, token, null, null);
         }
     }
 
@@ -69,14 +75,21 @@ public class ComputeEndpointRegistry {
                 continue;
             }
             try {
-                JupyterEndpoint.Auth auth = "colab".equals(in.kind()) ? JupyterEndpoint.Auth.COLAB
-                        : JupyterEndpoint.Auth.JUPYTER;
-                if (in.kind() != null && !in.kind().equals("colab") && !in.kind().equals("jupyter")) {
+                String kind = in.kind() == null ? "jupyter" : in.kind();
+                if (!kind.equals("colab") && !kind.equals("jupyter") && !kind.equals("local")) {
                     throw new IllegalArgumentException("unknown kind " + in.kind());
                 }
+                JupyterEndpoint.Auth auth = kind.equals("colab") ? JupyterEndpoint.Auth.COLAB
+                        : JupyterEndpoint.Auth.JUPYTER;
                 JupyterEndpoint ep = JupyterEndpoint.of(in.url() == null ? "" : in.url(), in.token(), auth);
+                if (kind.equals("local") && !isLoopbackHttp(ep)) {
+                    // 「この PC」は 127.0.0.1 の http だけ。localhost（名前解決が要る）や LAN の IP は断る
+                    throw new IllegalArgumentException("local endpoint must be http://127.0.0.1");
+                }
                 String label = in.label() == null || in.label().isBlank() ? in.id() : in.label().strip();
-                next.put(in.id(), new Entry(in.id(), label.length() > 64 ? label.substring(0, 64) : label, ep));
+                next.put(in.id(), new Entry(in.id(), label.length() > 64 ? label.substring(0, 64) : label, ep, kind,
+                        kind.equals("local") && in.expectedExecutable() != null && !in.expectedExecutable().isBlank()
+                                ? in.expectedExecutable() : null));
             } catch (IllegalArgumentException e) {
                 problems.add("bad-url:" + in.id() + ":" + e.getMessage());
             }
@@ -85,6 +98,10 @@ public class ComputeEndpointRegistry {
             entries = Map.copyOf(next);
         }
         return problems;
+    }
+
+    private static boolean isLoopbackHttp(JupyterEndpoint ep) {
+        return "http".equals(ep.base().getScheme()) && "127.0.0.1".equals(ep.base().getHost());
     }
 
     public Optional<Entry> get(String id) {
