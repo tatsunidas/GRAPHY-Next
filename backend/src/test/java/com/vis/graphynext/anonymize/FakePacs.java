@@ -27,6 +27,10 @@ final class FakePacs implements AutoCloseable {
     volatile String failSop;
     /** 設定すると、WADO はこれが開くまで応答しない（実行中のジョブを作るため）。 */
     volatile CountDownLatch gate;
+    /** STOW の受け取り。POST の回数・受け取ったパート数、{@code rejectPost}（0 始まり）番目の POST は先頭の1枚を拒否する。 */
+    final AtomicInteger stowPosts = new AtomicInteger();
+    final AtomicInteger stowParts = new AtomicInteger();
+    volatile int rejectPost = -1;
 
     private final HttpServer server;
     final WebDicomDataService web;
@@ -43,7 +47,15 @@ final class FakePacs implements AutoCloseable {
     private void handle(HttpExchange ex, String study, String[] sops, String[] seriesOf, Path[] files)
             throws IOException {
         String path = ex.getRequestURI().getPath();
-        if (path.equals("/studies")) {
+        if (path.equals("/studies") && "POST".equals(ex.getRequestMethod())) {
+            String body = new String(ex.getRequestBody().readAllBytes(), StandardCharsets.ISO_8859_1);
+            int n = body.split("Content-Type: application/dicom", -1).length - 1;
+            stowParts.addAndGet(n);
+            int post = stowPosts.getAndIncrement();
+            json(ex, post == rejectPost
+                    ? "{\"00081198\":{\"vr\":\"SQ\",\"Value\":[{\"00081155\":{\"vr\":\"UI\",\"Value\":[\"9.9.9\"]},\"00081197\":{\"vr\":\"US\",\"Value\":[272]}}]}}"
+                    : "{\"00081199\":{\"vr\":\"SQ\",\"Value\":[{}]}}");
+        } else if (path.equals("/studies")) {
             json(ex, "[{\"0020000D\":{\"vr\":\"UI\",\"Value\":[\"" + study + "\"]},"
                     + "\"00100020\":{\"vr\":\"LO\",\"Value\":[\"P1\"]}}]");
         } else if (path.equals("/studies/" + study + "/instances")) {

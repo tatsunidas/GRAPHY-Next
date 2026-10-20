@@ -53,18 +53,22 @@ public class AnonymizeJobService {
 
     private static final Logger log = LoggerFactory.getLogger(AnonymizeJobService.class);
     private static final int MAX_REPORTED_ERRORS = 5;
+    /** 1 回の STOW に載せる枚数（テストで小さくする）。 */
+    int stowBatch = 20;
 
     public enum State { QUEUED, RUNNING, DONE, FAILED, CANCELLED }
 
     /** 状態の応答。{@code errors} は先頭の数件、{@code errorCount} は全件数。 */
     public record Status(String jobId, State state, int total, int processed, int instances, int burnedInstances,
             int notBurnedInstances, int partiallyBurnedInstances, Long usedSeed, int errorCount, List<String> errors,
-            String error, long expiresAt) {
+            String error, long expiresAt, String output, int stored) {
     }
 
     private static final class Job {
         final String id = UUID.randomUUID().toString();
         final Path dir;
+        final boolean stow;
+        final AtomicInteger stored = new AtomicInteger();
         volatile State state = State.QUEUED;
         volatile int total = -1;
         final AtomicInteger processed = new AtomicInteger();
@@ -73,8 +77,9 @@ public class AnonymizeJobService {
         volatile long finishedAt;
         volatile Future<?> future;
 
-        Job(Path dir) {
+        Job(Path dir, boolean stow) {
             this.dir = dir;
+            this.stow = stow;
         }
 
         Path zip() {
@@ -120,8 +125,14 @@ public class AnonymizeJobService {
     /** ジョブを登録する。{@code masks} はシリーズ UID → マスク（無ければ空）。 */
     public Status submit(List<String> studyUids, AnonymizeConfig cfg, boolean burnIn,
             Map<String, AnonymizeMaskStore.SeriesMask> masks) throws IOException {
+        return submit(studyUids, cfg, burnIn, masks, false);
+    }
+
+    /** {@code stow} なら ZIP ではなく、全件の匿名化が済んでから PACS へ新しいスタディとして保存する。 */
+    public Status submit(List<String> studyUids, AnonymizeConfig cfg, boolean burnIn,
+            Map<String, AnonymizeMaskStore.SeriesMask> masks, boolean stow) throws IOException {
         Files.createDirectories(root);
-        Job job = new Job(Files.createTempDirectory(root, "job-"));
+        Job job = new Job(Files.createTempDirectory(root, "job-"), stow);
         jobs.put(job.id, job);
         job.future = workers.submit(() -> run(job, studyUids, cfg, burnIn, masks));
         return statusOf(job);
@@ -141,16 +152,26 @@ public class AnonymizeJobService {
                 return;
             }
             AnonymizeService.Result r;
-            try (OutputStream fo = Files.newOutputStream(job.zip());
-                    ZipOutputStream zos = new ZipOutputStream(fo)) {
+            if (job.stow) {
+                Path out = Files.createDirectories(job.dir.resolve("out"));
                 r = service.anonymize(source, cfg, burnIn, masks::get, true, (ds, tsuid) -> {
-                    String name = ds.getString(Tag.StudyInstanceUID) + "/" + ds.getString(Tag.SeriesInstanceUID)
-                            + "/" + ds.getString(Tag.SOPInstanceUID) + ".dcm";
-                    zos.putNextEntry(new ZipEntry(name));
-                    AnonymizeService.writeDicom(ds, tsuid, zos);
-                    zos.closeEntry();
+                    try (OutputStream fo = Files.newOutputStream(out.resolve(job.processed.get() + ".dcm"))) {
+                        AnonymizeService.writeDicom(ds, tsuid, fo);
+                    }
                     job.processed.incrementAndGet();
                 });
+            } else {
+                try (OutputStream fo = Files.newOutputStream(job.zip());
+                        ZipOutputStream zos = new ZipOutputStream(fo)) {
+                    r = service.anonymize(source, cfg, burnIn, masks::get, true, (ds, tsuid) -> {
+                        String name = ds.getString(Tag.StudyInstanceUID) + "/" + ds.getString(Tag.SeriesInstanceUID)
+                                + "/" + ds.getString(Tag.SOPInstanceUID) + ".dcm";
+                        zos.putNextEntry(new ZipEntry(name));
+                        AnonymizeService.writeDicom(ds, tsuid, zos);
+                        zos.closeEntry();
+                        job.processed.incrementAndGet();
+                    });
+                }
             }
             job.result = r;
             if (!r.errors().isEmpty()) {
@@ -158,6 +179,9 @@ public class AnonymizeJobService {
                 return;
             }
             if (job.state == State.CANCELLED) {
+                return;
+            }
+            if (job.stow && !store(job)) {
                 return;
             }
             job.finishedAt = System.currentTimeMillis();
@@ -170,6 +194,43 @@ public class AnonymizeJobService {
         } finally {
             deleteTree(job.dir.resolve("src"));
         }
+    }
+
+    /**
+     * 匿名化済みの画像を PACS へ保存する。保存済みの分は PACS から取り消せないので、止まったときは
+     * 「保存済み N 枚」を状態に残す。失敗・中止なら false。
+     */
+    private boolean store(Job job) throws IOException {
+        List<Path> files;
+        try (Stream<Path> s = Files.list(job.dir.resolve("out"))) {
+            files = s.sorted().toList();
+        }
+        for (int i = 0; i < files.size(); i += stowBatch) {
+            if (Thread.currentThread().isInterrupted() || job.state == State.CANCELLED) {
+                cleanup(job, State.CANCELLED);
+                return false;
+            }
+            List<byte[]> batch = new ArrayList<>();
+            for (Path f : files.subList(i, Math.min(i + stowBatch, files.size()))) {
+                batch.add(Files.readAllBytes(f));
+            }
+            WebDicomDataService.StowResult sr;
+            try {
+                sr = web.storeInstancesChecked(batch);
+            } catch (RuntimeException e) {
+                fail(job, "PACS への保存に失敗しました（保存済み " + job.stored.get() + " 枚／全 " + files.size() + " 枚）: "
+                        + e.getMessage());
+                return false;
+            }
+            job.stored.addAndGet(sr.stored());
+            if (!sr.failures().isEmpty()) {
+                fail(job, "PACS が " + sr.failures().size() + " 枚の保存を拒否しました（保存済み " + job.stored.get()
+                        + " 枚／全 " + files.size() + " 枚）: "
+                        + String.join(" / ", sr.failures().subList(0, Math.min(MAX_REPORTED_ERRORS, sr.failures().size()))));
+                return false;
+            }
+        }
+        return true;
     }
 
     private void fail(Job job, String message) {
@@ -243,7 +304,7 @@ public class AnonymizeJobService {
                 r == null ? 0 : r.instances(), r == null ? 0 : r.burnedInstances(),
                 r == null ? 0 : r.notBurnedInstances(), r == null ? 0 : r.partiallyBurnedInstances(),
                 r == null ? null : r.usedSeed(), r == null ? 0 : r.errors().size(), errs, job.error,
-                job.finishedAt > 0 ? job.finishedAt + ttlMillis : 0);
+                job.finishedAt > 0 ? job.finishedAt + ttlMillis : 0, job.stow ? "stow" : "zip", job.stored.get());
     }
 
     @PreDestroy
