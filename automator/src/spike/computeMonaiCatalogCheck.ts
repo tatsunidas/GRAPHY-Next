@@ -25,12 +25,13 @@ import { AUTOMATOR_ROOT, FIXTURES_ROOT } from "../fixtures/manifest.js";
 import { installOfficialPlugin, openViewer, state } from "./computeMonaiShared.js";
 import { consentWindow, createChecker } from "./computeSpikeShared.js";
 
+const CT_BASIC_SERIES_UID = "1.2.840.113619.2.340.3.1728711424.842.1522364096.670.1";
 const OUT_DIR = path.join(AUTOMATOR_ROOT, ".results", "compute-monai-catalog");
 const MR_DIR = path.join(FIXTURES_ROOT, "mr-monai");
 const { check, summary } = createChecker();
 
 /** Bundle → 使うシリーズ（ct = ct-basic の PRE LIVER）。 */
-const PLAN: { bundle: string; series: "ct" | "prostate" | "brain" }[] = [
+const PLAN: { bundle: string; series: "ct" | "prostate" | "brain"; version?: string }[] = [
   { bundle: "spleen_ct_segmentation", series: "ct" },
   { bundle: "wholeBody_ct_segmentation", series: "ct" },
   { bundle: "swin_unetr_btcv_segmentation", series: "ct" },
@@ -39,11 +40,21 @@ const PLAN: { bundle: string; series: "ct" | "prostate" | "brain" }[] = [
   { bundle: "renalStructures_UNEST_segmentation", series: "ct" },
   { bundle: "prostate_mri_anatomy", series: "prostate" },
   { bundle: "wholeBrainSeg_Large_UNEST_segmentation", series: "brain" },
+  // 一覧の追加（Model Zoo 全体）。引数で名前を指定したときだけ走らせる
+  { bundle: "pediatric_abdominal_ct_segmentation", series: "ct" },
 ];
+const EXTRA = new Set(["pediatric_abdominal_ct_segmentation"]);
 
 async function main(): Promise<void> {
-  const only = process.argv.slice(2);
-  const plan = only.length ? PLAN.filter((p) => only.includes(p.bundle)) : PLAN;
+  // 引数は「名前」または「名前@版」（版を指定すると、画面の版の選択も使う）
+  const only = process.argv.slice(2).map((a) => a.split("@"));
+  const plan = only.length
+    ? only.map(([name, version]) => {
+        const p = PLAN.find((x) => x.bundle === name);
+        if (!p) throw new Error(`PLAN にない Bundle: ${name}`);
+        return { ...p, version };
+      })
+    : PLAN.filter((p) => !EXTRA.has(p.bundle));
   fs.mkdirSync(OUT_DIR, { recursive: true });
   installOfficialPlugin();
 
@@ -75,8 +86,9 @@ async function main(): Promise<void> {
     const studies = (await (await fetch(`${base}/api/studies`)).json()) as { studyInstanceUid: string; patientId: string }[];
     for (const st of studies) {
       const ss = (await (await fetch(`${base}/api/studies/${st.studyInstanceUid}/series`)).json()) as { seriesInstanceUid: string; seriesDescription?: string }[];
-      const liver = ss.find((s) => /LIVER/i.test(s.seriesDescription ?? ""));
-      if (liver) series.ct = { studyUid: st.studyInstanceUid, seriesUid: liver.seriesInstanceUid };
+      // ct-basic は 50 枚の単一シリーズで SeriesDescription が空（computeMonaiVerify.ts と同じく UID で特定する）
+      const ct = ss.find((s) => s.seriesInstanceUid === CT_BASIC_SERIES_UID);
+      if (ct) series.ct = { studyUid: st.studyInstanceUid, seriesUid: ct.seriesInstanceUid };
     }
     await page.reload({ waitUntil: "domcontentloaded" });
     await page.getByTestId("search-patientid-input").waitFor({ state: "visible", timeout: 60_000 });
@@ -101,6 +113,7 @@ async function main(): Promise<void> {
       }
       const v = viewer!;
       await v.getByTestId("monai-bundle").selectOption(p.bundle);
+      if (p.version) await v.getByTestId("monai-version").selectOption(p.version);
       const t0 = Date.now();
       await v.getByTestId("monai-run").click();
       const w = await consentWindow(driver, 300_000);
@@ -111,7 +124,7 @@ async function main(): Promise<void> {
       const sec = Math.round((Date.now() - t0) / 1000);
       const fg = Object.keys(s.summary?.labels ?? {}).filter((k) => k !== "0").length;
       const row = {
-        bundle: p.bundle, series: p.series, ok: !!s.summary && !s.error, seconds: sec,
+        bundle: p.bundle, series: p.series, requestedVersion: p.version ?? null, bundleVersion: s.summary?.version ?? null, ok: !!s.summary && !s.error, seconds: sec,
         stages: s.summary?.stages, gpu: s.summary?.gpu, labels: fg, shown: s.shown, resampled: s.summary?.resampled, error: s.error,
       };
       rows.push(row);
