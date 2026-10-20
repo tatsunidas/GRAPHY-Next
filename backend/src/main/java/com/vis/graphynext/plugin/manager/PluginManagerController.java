@@ -28,6 +28,7 @@ import java.util.concurrent.Callable;
  *
  * <ul>
  *   <li>{@code GET    /api/plugin-manager/status} — 導入操作の可否</li>
+ *   <li>{@code GET    /api/plugin-manager/catalog} — 公式索引の一覧（導入済みの状態つき）</li>
  *   <li>{@code GET    /api/plugin-manager/installed} — 導入済み一覧（台帳）</li>
  *   <li>{@code GET    /api/plugin-manager/versions?repo=} — {@code owner/repo} のリリース一覧</li>
  *   <li>{@code POST   /api/plugin-manager/install/github} — {repo, version?} から導入</li>
@@ -58,6 +59,11 @@ public class PluginManagerController {
     @GetMapping("/installed")
     public List<InstalledPlugin> installed() {
         return service.installed();
+    }
+
+    @GetMapping("/catalog")
+    public ResponseEntity<Object> catalog() {
+        return handle(service::catalog);
     }
 
     @GetMapping("/versions")

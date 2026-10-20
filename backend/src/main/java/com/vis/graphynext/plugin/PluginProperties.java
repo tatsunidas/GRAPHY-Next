@@ -41,7 +41,7 @@ public class PluginProperties {
      */
     private String githubToken;
 
-    /** 公式キュレーション索引の URL（raw JSON）。将来の discovery 用（任意）。 */
+    /** 公式キュレーション索引の URL（raw JSON・https のみ・任意）。GET /api/plugin-manager/catalog が読む。 */
     private String indexUrl;
 
     /**
