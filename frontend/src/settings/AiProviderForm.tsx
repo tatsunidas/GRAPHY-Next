@@ -282,6 +282,16 @@ export function AiProviderForm({ draft: initial, isNew, capabilities, others, de
       </Field>
       <p style={helpBlock}>{t("settings.ai.provider.endpoint.help")}</p>
 
+      {isNew ? (
+        <>
+          <Field label={t("settings.ai.key")}>
+            <input type="password" style={input} value={apiKey} onChange={(e) => setApiKey(e.target.value)}
+                   spellCheck={false} autoComplete="off" data-testid="ai-provider-field-apikey" />
+          </Field>
+          <p style={helpBlock}>{t("settings.ai.provider.key.help")}</p>
+        </>
+      ) : null}
+
       {capabilities.map((cap) => (
         <Field key={cap} label={t(`settings.ai.cap.${cap}`)}>
           <input
@@ -359,16 +369,6 @@ export function AiProviderForm({ draft: initial, isNew, capabilities, others, de
           <p style={helpBlock}>{t("settings.ai.provider.advanced.help")}</p>
         </div>
       </details>
-
-      {isNew ? (
-        <>
-          <Field label={t("settings.ai.key")}>
-            <input type="password" style={input} value={apiKey} onChange={(e) => setApiKey(e.target.value)}
-                   spellCheck={false} autoComplete="off" data-testid="ai-provider-field-apikey" />
-          </Field>
-          <p style={helpBlock}>{t("settings.ai.provider.key.help")}</p>
-        </>
-      ) : null}
 
       {problems.length > 0 ? (
         <ul style={errList} data-testid="ai-provider-form-error">
