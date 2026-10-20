@@ -10,7 +10,7 @@
  *   - 検査コードを人の言葉に写すこと（訳が無いものは生のまま出す）
  */
 import { describe, expect, it } from "vitest";
-import { emptyDraft, fromDraft, toDraft, describeProblem } from "./AiProviderForm";
+import { emptyDraft, fromDraft, toDraft, describeProblem, presetDraft } from "./AiProviderForm";
 import { ja } from "../i18n/ja";
 
 const CAPS = ["image-to-image", "image-to-text"];
@@ -101,5 +101,30 @@ describe("検査コードを人の言葉にする", () => {
 
   it("🔑 訳が無いコードは生のまま出す（何も出ないより手がかりが残る）", () => {
     expect(describeProblem("provider:x:brand-new-rule", t)).toBe("provider:x:brand-new-rule");
+  });
+});
+
+describe("提供元のプリセット", () => {
+  it("OpenAI は id・種別・接続先が入り、モデル名は空（仮の値を置かない）", () => {
+    const d = presetDraft("openai", [], CAPS);
+    expect([d.id, d.kind, d.endpoint]).toEqual(["openai", "openai", "https://api.openai.com"]);
+    expect(Object.values(d.models).every((m) => m === "")).toBe(true);
+    expect(fromDraft(d).models).toEqual({});
+  });
+  it("Gemini は gemini の系統と公式の接続先", () => {
+    const d = presetDraft("gemini", [], CAPS);
+    expect([d.kind, d.endpoint]).toEqual(["gemini", "https://generativelanguage.googleapis.com"]);
+  });
+  it("Azure は接続先が利用者ごとなので空のまま", () => {
+    const d = presetDraft("azure", [], CAPS);
+    expect([d.kind, d.endpoint]).toEqual(["azure-openai", ""]);
+  });
+  it("🔑 id が既存と重なれば -2, -3 を付ける（既存の鍵を上書きしない）", () => {
+    expect(presetDraft("openai", ["openai"], CAPS).id).toBe("openai-2");
+    expect(presetDraft("openai", ["openai", "openai-2"], CAPS).id).toBe("openai-3");
+  });
+  it("その他は白紙（id も接続先も自分で書く）", () => {
+    const d = presetDraft("other", ["openai"], CAPS);
+    expect([d.id, d.label, d.endpoint]).toEqual(["", "", ""]);
   });
 });

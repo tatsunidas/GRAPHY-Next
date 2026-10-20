@@ -162,6 +162,9 @@ async function main(): Promise<void> {
     // --- 2. 提供元を追加 ---
     console.log("\n[2] 提供元の追加");
     await page.getByTestId("ai-provider-add").click();
+    check(await page.getByTestId("ai-provider-field-endpoint").count() === 0, "提供元を選ぶまで入力欄は出ない");
+    check(await page.getByTestId("ai-provider-form-save").count() === 0, "提供元を選ぶまで保存は押せない（欄ごと無い）");
+    await page.getByTestId("ai-provider-preset").selectOption("other");
     await page.getByTestId("ai-provider-field-id").fill(PROVIDER_ID);
     await page.getByTestId("ai-provider-field-label").fill("Spike OpenAI 互換");
     await page.getByTestId("ai-provider-field-kind").selectOption("openai");
@@ -291,6 +294,67 @@ async function main(): Promise<void> {
     check(!cfg4.providers.some((p) => p.id === PROVIDER_ID), "🔴 再起動後に削除した提供元が戻らない", cfg4.providers.map((p) => p.id));
     check(!(await secretHasValue(driver, secretKeyOf)), "🔴 再起動後に鍵が残っていない");
     check(!fs.readFileSync(providersFile, "utf8").includes(SPIKE_KEY), "🔴 ファイルに鍵が無い");
+
+    // --- 9b. 選んで鍵まで入れる追加 ---
+    console.log("\n[9b] 提供元を選んで追加（鍵つき）");
+    await openAiPanel(driver);
+    await installDialogCapture(driver);
+    const FORM_KEY = `form-${crypto.randomBytes(12).toString("hex")}`;
+    const OPENAI_SECRET = "ai.provider.openai.apiKey";
+    const pg = driver.page;
+    pg.on("dialog", (dlg) => void dlg.accept()); // 再起動で作り直したページには、window.confirm の受け皿が無い
+    check(!(await secretHasValue(driver, OPENAI_SECRET)), "追加の前に openai の鍵は無い（検査の前提）");
+    await pg.getByTestId("ai-provider-add").click();
+    await pg.getByTestId("ai-provider-preset").selectOption("openai");
+    check(((await pg.getByTestId("ai-provider-field-id").textContent()) ?? "").trim() === "openai", "OpenAI を選ぶと識別子が入る");
+    check(await pg.getByTestId("ai-provider-field-endpoint-select").inputValue() === "https://api.openai.com", "OpenAI を選ぶと接続先が入る（プルダウン）");
+    check(await pg.getByTestId("ai-provider-field-kind").count() === 0, "選んだ提供元では種別の欄を出さない");
+    check(await pg.getByTestId("ai-provider-form-save").isDisabled(), "🔴 モデル名が空のうちは保存できない（仮のモデル名を入れていない）");
+    await pg.screenshot({ path: path.join(OUT_DIR, "6-preset-openai.png") });
+    await pg.getByTestId(`ai-provider-field-model-${CAP}`).fill("spike-model-b");
+    await pg.getByTestId("ai-provider-field-apikey").fill(FORM_KEY);
+    // 負例: 確認ダイアログを「取り消す」にすると、提供元も鍵も保存されない
+    await driver.app.evaluate(({ dialog }) => { dialog.showMessageBoxSync = (() => 1) as typeof dialog.showMessageBoxSync; });
+    await pg.getByTestId("ai-provider-form-save").click();
+    await pg.waitForFunction(() => document.querySelector('[data-testid="ai-provider-form"]') === null, null, { timeout: 10_000 });
+    check(!(await providersConfig(driver)).providers.some((p) => p.id === "openai"), "🔴 取り消すと提供元は保存されない");
+    check(!(await secretHasValue(driver, OPENAI_SECRET)), "🔴 取り消すと鍵も保存されない");
+    // 正例: 許可する
+    await installDialogCapture(driver);
+    await pg.getByTestId("ai-provider-add").click();
+    await pg.getByTestId("ai-provider-preset").selectOption("openai");
+    await pg.getByTestId(`ai-provider-field-model-${CAP}`).fill("spike-model-b");
+    await pg.getByTestId("ai-provider-field-apikey").fill(FORM_KEY);
+    await pg.getByTestId("ai-provider-form-save").click();
+    await pg.getByTestId("ai-provider-openai").waitFor({ state: "visible", timeout: 10_000 });
+    const d9 = await dialogs(driver);
+    check(d9.length === 1 && String(d9[0].detail).includes("https://api.openai.com"), "main の確認ダイアログに宛先 https://api.openai.com が載る", d9);
+    check(await secretHasValue(driver, OPENAI_SECRET), "🔴 追加フォームで入れた鍵が、保存された提供元の鍵として預かられる");
+    check(((await pg.getByTestId("ai-key-state-openai").textContent()) ?? "").length > 0 && (await providersConfig(driver)).providers.find((p) => p.id === "openai")?.hasApiKey === true, "鍵の状態が「設定済み」になる");
+    check(!fs.readFileSync(providersFile, "utf8").includes(FORM_KEY), "🔴 ai-providers.json に鍵が書かれない");
+    check(!((await pg.getByTestId("ai-panel").textContent()) ?? "").includes(FORM_KEY), "🔴 画面に鍵が出ない");
+    const optsCfg = await providersConfig(driver);
+    const usableI2T = optsCfg.providers.filter((p) => (p as unknown as { models: Record<string, string> }).models[CAP]).map((p) => p.id);
+    check(usableI2T.includes("openai"), "モデル名を入れた用途の選択肢に追加した提供元が出る", usableI2T);
+    check((await pg.getByTestId(`ai-default-${CAP}`).locator("option").allTextContents()).some((x) => x.includes("spike-model-b")), "既定のプルダウンに「表示名 — モデル名」で並ぶ");
+    check((await pg.getByTestId("ai-default-image-to-image").locator("option").allTextContents()).every((x) => !x.includes("spike-model-b")), "モデル名を空にした用途には出ない（負例）");
+    // 重複: 2 つ目の OpenAI は openai-2
+    await pg.getByTestId("ai-provider-add").click();
+    await pg.getByTestId("ai-provider-preset").selectOption("openai");
+    check(((await pg.getByTestId("ai-provider-field-id").textContent()) ?? "").trim() === "openai-2", "🔴 識別子が重なれば openai-2 になる（既存の鍵を上書きしない）");
+    // 負例: その他 + パス付きの接続先は弾かれる
+    await pg.getByTestId("ai-provider-preset").selectOption("other");
+    await pg.getByTestId("ai-provider-field-id").fill("bad-path");
+    await pg.getByTestId("ai-provider-field-endpoint").fill("https://example.com/v1");
+    await pg.getByTestId(`ai-provider-field-model-${CAP}`).fill("m");
+    await pg.getByTestId("ai-provider-form-error").waitFor({ state: "visible", timeout: 5_000 });
+    check(await pg.getByTestId("ai-provider-form-save").isDisabled(), "🔴 パス付きの接続先は保存できない");
+    await pg.screenshot({ path: path.join(OUT_DIR, "7-other-badpath.png") });
+    await pg.getByTestId("ai-provider-form-cancel").click();
+    // 後始末: 鍵ごと消えること
+    await pg.getByTestId("ai-provider-delete-openai").click();
+    await pg.getByTestId("ai-provider-openai").waitFor({ state: "detached", timeout: 10_000 });
+    check(!(await secretHasValue(driver, OPENAI_SECRET)), "削除すると追加フォームで入れた鍵も消える");
 
     // --- 10. 実 Gemini ---
     console.log("\n[10] 実 Gemini");
