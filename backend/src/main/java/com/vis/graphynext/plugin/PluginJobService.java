@@ -17,6 +17,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -108,10 +109,12 @@ public class PluginJobService {
         volatile Object result;
         volatile String error;
         final AtomicBoolean cancelled = new AtomicBoolean();
+        final Task task;
 
-        Job(String id, String pluginId) {
+        Job(String id, String pluginId, Task task) {
             this.id = id;
             this.pluginId = pluginId;
+            this.task = task;
         }
 
         long elapsedMs() {
@@ -131,6 +134,12 @@ public class PluginJobService {
     private final ExecutorService hostPool;
     /** 手元へ取り寄せるジョブ（Drive から。長くなりうる）。取り込み・派生シリーズの列（hostPool）を塞がないよう別の列にする。 */
     private final ExecutorService storagePool;
+    /**
+     * 計算機ごとの直列の列の土台（外部の計算機で走る長いジョブ。H59）。列の数は計算機の数だけで、ジョブが待っている間は
+     * スレッドを持たない（{@link SerialLane}）ので、本体の書き込みの列（hostPool）を塞がない。
+     */
+    private final ExecutorService computePool;
+    private final Map<String, SerialLane> serialLanes = new ConcurrentHashMap<>();
     private volatile com.vis.graphynext.plugin.storage.PluginStorageService storage;
     private volatile com.vis.graphynext.plugin.cache.PluginCacheService cache;
 
@@ -159,6 +168,11 @@ public class PluginJobService {
             t.setDaemon(true);
             return t;
         });
+        this.computePool = Executors.newCachedThreadPool(r -> {
+            Thread t = new Thread(r, "plugin-compute-job-" + seq.incrementAndGet());
+            t.setDaemon(true);
+            return t;
+        });
     }
 
     @PreDestroy
@@ -166,6 +180,7 @@ public class PluginJobService {
         pool.shutdownNow();
         hostPool.shutdownNow();
         storagePool.shutdownNow();
+        computePool.shutdownNow();
     }
 
     /** 手元への取り寄せの口（JAR の args に渡す）。無い構成（web など）では null のまま。 */
@@ -208,6 +223,13 @@ public class PluginJobService {
     @FunctionalInterface
     public interface Task {
         Object run(TaskContext ctx) throws Exception;
+
+        /**
+         * 取り消しが求められた（{@link #cancel}）。順番待ちの間にも呼ばれる——ジョブがまだ始まっていなくても
+         * 呼び出し側が後始末（台帳・データの破棄）をできるようにする。複数回呼ばれても害が無いこと。
+         */
+        default void onCancelRequested() {
+        }
     }
 
     /**
@@ -226,16 +248,63 @@ public class PluginJobService {
         return enqueue(storagePool, pluginId, task);
     }
 
-    private Status enqueue(ExecutorService lane, String pluginId, Task task) {
+    /**
+     * 同じ {@code laneKey} のジョブを 1 本ずつ順に走らせる（外部の計算機ごとの待ち行列）。別の {@code laneKey} は待たない。
+     * 順番待ちの間のジョブは {@link State#QUEUED} のまま。
+     */
+    public Status submitSerialTask(String laneKey, String pluginId, Task task) {
+        return enqueue(serialLanes.computeIfAbsent(laneKey, k -> new SerialLane(computePool)), pluginId, task);
+    }
+
+    /** 1 本ずつ順に走らせる列。順番が来たときだけ土台のスレッドを借りる。 */
+    private static final class SerialLane implements Executor {
+        private final Executor base;
+        private final java.util.ArrayDeque<Runnable> queue = new java.util.ArrayDeque<>();
+        private boolean running;
+
+        SerialLane(Executor base) {
+            this.base = base;
+        }
+
+        @Override
+        public void execute(Runnable r) {
+            synchronized (this) {
+                queue.add(r);
+                if (running) return;
+                running = true;
+            }
+            base.execute(this::drain);
+        }
+
+        private void drain() {
+            while (true) {
+                Runnable next;
+                synchronized (this) {
+                    next = queue.poll();
+                    if (next == null) {
+                        running = false;
+                        return;
+                    }
+                }
+                try {
+                    next.run();
+                } catch (RuntimeException e) {
+                    log.warn("[plugins] serial lane task failed: {}", e.toString());
+                }
+            }
+        }
+    }
+
+    private Status enqueue(Executor lane, String pluginId, Task task) {
         sweep();
-        Job job = new Job(UUID.randomUUID().toString(), pluginId);
+        Job job = new Job(UUID.randomUUID().toString(), pluginId, task);
         jobs.put(job.id, job);
         BiConsumer<Double, String> progress = (p, msg) -> {
             if (p != null && Double.isFinite(p)) job.progress = Math.max(0, Math.min(1, p));
             if (msg != null) job.message = msg;
         };
         TaskContext ctx = new TaskContext(progress, job.cancelled::get);
-        lane.submit(() -> execute(job, task, ctx));
+        lane.execute(() -> execute(job, task, ctx));
         return job.status();
     }
 
@@ -271,6 +340,11 @@ public class PluginJobService {
         job.state = state;
     }
 
+    /** 成果物の預かり所（本体の計算ジョブが結果を自分のフォルダに置くために使う）。 */
+    public PluginArtifacts artifacts() {
+        return artifacts;
+    }
+
     public Optional<Status> status(String jobId) {
         return Optional.ofNullable(jobs.get(jobId)).map(Job::status);
     }
@@ -280,6 +354,11 @@ public class PluginJobService {
         Job job = jobs.get(jobId);
         if (job == null) return Optional.empty();
         job.cancelled.set(true);
+        try {
+            job.task.onCancelRequested();
+        } catch (RuntimeException e) {
+            log.warn("[plugins] onCancelRequested of {} failed: {}", jobId, e.toString());
+        }
         return Optional.of(job.status());
     }
 
