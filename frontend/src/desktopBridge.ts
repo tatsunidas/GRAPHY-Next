@@ -133,6 +133,10 @@ export interface AiProviderEntry {
  * <p>🔴 **ヘッダは名前だけ**（値は返ってこない）。認証ヘッダ名は設定で選べるので、
  * どのヘッダに鍵が載るかは固定できない。
  */
+export type AiListModelsResult =
+  | { ok: true; models: string[]; truncated?: boolean }
+  | { ok: false; verdict: string; error: string; status?: number };
+
 export type AiTestResult = {
   ok: boolean;
   verdict:
@@ -352,6 +356,11 @@ export interface GraphyDesktop {
    * これにより、この口を呼べても患者画像を外へ出すことはできない。
    */
   aiTestConnection?: (providerId: string, capability: AiCapability) => Promise<AiTestResult>;
+  /**
+   * モデル名の一覧を取る（GET のみ）。保存済みの提供元は `providerId`、追加フォームは
+   * `{kind, endpoint, apiKey}`（組み込みの公式ホストだけ通る。それ以外は `verdict:"manual"`）。
+   */
+  aiListModels?: (args: { providerId?: string; kind?: string; endpoint?: string; apiKey?: string }) => Promise<AiListModelsResult>;
   /**
    * 用途ごとの既定だけを差し替える。**確認ダイアログは出ない**
    * （提供元の一覧を送らないので、この口からは新しい送信先が生えない）。

@@ -407,10 +407,93 @@ async function testConnection(args) {
   }
 }
 
+/** 一覧を取得してよい「組み込みの」宛先。未保存の候補（追加フォーム）はここにだけ送れる。 */
+const LIST_PRESET_HOSTS = {
+  [openai.KIND]: "api.openai.com",
+  [gemini.KIND]: "generativelanguage.googleapis.com",
+};
+const LIST_MIN_INTERVAL_MS = 1000;
+const LIST_MAX_PAGES = 10;
+const LIST_MAX_MODELS = 500;
+let lastListAt = 0;
+let listInFlight = false;
+
+/**
+ * 提供元のモデル名の一覧を取る（`GET`。課金も患者データの送信も無い）。
+ *
+ * <p>🔴 **鍵を送る宛先を絞る。** 保存済みの提供元は**保存済みの接続先と鍵**だけを使う（呼び出し側は
+ * 接続先を指せない）。未保存の候補（追加フォームで鍵を入れた直後）は、**組み込みの公式ホストだけ**に限る
+ * ——任意の宛先へ入力中の鍵を送れる口を作らない。それ以外は手入力に落とす。
+ *
+ * @param {{providerId?: string, kind?: string, endpoint?: string, apiKey?: string}} args
+ * @returns {Promise<{ok: true, models: string[], truncated?: boolean} | {ok: false, verdict: string, error: string}>}
+ */
+async function listModels(args) {
+  const a = args || {};
+  let provider;
+  let apiKey;
+  if (typeof a.providerId === "string" && a.providerId) {
+    provider = aiProviders.byId(a.providerId);
+    if (!provider) return { ok: false, verdict: "config", error: "unknown-provider" };
+    apiKey = secretForProvider(provider.id);
+  } else {
+    const host = LIST_PRESET_HOSTS[a.kind];
+    const ep = aiProviders.parseEndpoint(a.endpoint);
+    if (!host || !ep.ok || ep.plaintext || ep.hostname !== host || ep.port !== 443) {
+      return { ok: false, verdict: "manual", error: "unsupported-endpoint" };
+    }
+    provider = { id: "", kind: a.kind, endpoint: ep.endpoint, models: {} };
+    apiKey = typeof a.apiKey === "string" ? a.apiKey.trim() : "";
+    if (apiKey.length > 512) return { ok: false, verdict: "config", error: "invalid-key" };
+  }
+  const adapter = ADAPTERS[provider.kind];
+  if (!adapter || !adapter.buildListRequest) return { ok: false, verdict: "manual", error: "list-unsupported" };
+  if (!apiKey) return { ok: false, verdict: "no-api-key", error: "no-api-key" };
+  const first = adapter.buildListRequest({ provider, apiKey, apiVersion: resolveApiVersion(provider, adapter, {}) });
+  if (first.error) return { ok: false, verdict: "manual", error: first.error };
+  if (listInFlight) return { ok: false, verdict: "busy", error: "busy" };
+  if (Date.now() - lastListAt < LIST_MIN_INTERVAL_MS) return { ok: false, verdict: "too-soon", error: "too-soon" };
+
+  const target = targetOf(provider);
+  console.log(`[ai] list-models provider=${provider.id || "(unsaved)"} host=${target.display}`);
+  listInFlight = true;
+  lastListAt = Date.now();
+  try {
+    const ids = [];
+    let req = first;
+    for (let page = 0; page < LIST_MAX_PAGES; page++) {
+      const res = await aiHttp.get(target, req.path, req.headers);
+      if (res.statusCode !== 200) {
+        const msg = (res.json && res.json.error && res.json.error.message) || res.text || `HTTP ${res.statusCode}`;
+        return { ok: false, verdict: verdictForStatus(res.statusCode), status: res.statusCode, error: mask(msg, apiKey) };
+      }
+      const parsed = res.json ? adapter.parseModelList(res.json) : null;
+      // 200 なのに読めない＝別の API を指している（自前サーバーで起きやすい）。手入力に落とす。
+      if (!parsed) return { ok: false, verdict: "unreadable-response", error: "unreadable-response" };
+      ids.push(...parsed.ids);
+      if (!parsed.next) break;
+      req = adapter.buildListRequest({
+        provider, apiKey, pageToken: parsed.next, apiVersion: resolveApiVersion(provider, adapter, {}),
+      });
+    }
+    const inPath = adapter.modelInPath(provider);
+    // 🔴 保存後に invalid-model で弾かれる名前は候補に出さない（選べるのに使えない、を作らない）。
+    const unique = [...new Set(ids)].filter((m) => validModel(m, inPath)).sort();
+    return { ok: true, models: unique.slice(0, LIST_MAX_MODELS), truncated: unique.length > LIST_MAX_MODELS || undefined };
+  } catch (e) {
+    const message = mask(e && e.message, apiKey);
+    return { ok: false, verdict: verdictForError(message), error: message };
+  } finally {
+    listInFlight = false;
+  }
+}
+
 module.exports = {
   generate,
   resolveCapability,
   testConnection,
+  listModels,
+  LIST_MIN_INTERVAL_MS,
   SECRET_KEY,
   MAX_IMAGE_BYTES,
   TEST_PROMPT,

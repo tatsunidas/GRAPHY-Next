@@ -27,7 +27,7 @@ const MAX_RESPONSE_BYTES = 20 * 1024 * 1024;
  * @param headers アダプタが組んだヘッダ（`Content-Type` と認証を含む）
  * @param body    送る本文（Buffer）。JSON でも multipart でもここでは区別しない
  */
-function post(target, pathname, headers, body) {
+function request(method, target, pathname, headers, body) {
   return new Promise((resolve, reject) => {
     // 🔴 **`host` にポートを含めて渡してはいけない**（Node は解釈しない）。
     //    以前はそうしていたので、`https://ai.hosp.local:8443` が名前解決で落ちていた。
@@ -37,13 +37,13 @@ function post(target, pathname, headers, body) {
         hostname: target.hostname,
         port: target.port,
         path: pathname,
-        method: "POST",
+        method,
         headers: {
           // 🔴 **Content-Length は最後に置く。** アダプタや設定のヘッダで上書きされると
           //    本文の長さが食い違い、相手の解釈が壊れる（検査でも弾いているが二重に守る）。
           "User-Agent": "GRAPHY-Next",
           ...headers,
-          "Content-Length": body.length,
+          ...(body ? { "Content-Length": body.length } : {}),
         },
         timeout: TIMEOUT_MS,
       },
@@ -76,4 +76,13 @@ function post(target, pathname, headers, body) {
     req.end(body);
   });
 }
-module.exports = { post, TIMEOUT_MS, MAX_RESPONSE_BYTES };
+
+function post(target, pathname, headers, body) {
+  return request("POST", target, pathname, headers, body);
+}
+
+/** 一覧の取得など、本文の無い GET。上限・タイムアウト・リダイレクトを追わない点は `post` と同じ。 */
+function get(target, pathname, headers) {
+  return request("GET", target, pathname, headers, null);
+}
+module.exports = { post, get, TIMEOUT_MS, MAX_RESPONSE_BYTES };

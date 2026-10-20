@@ -76,6 +76,8 @@ contextBridge.exposeInMainWorld("graphyDesktop", {
   // 疎通確認。送る内容は main が決める（呼び出し側は提供元と用途だけ）。
   aiTestConnection: (providerId, capability) =>
     ipcRenderer.invoke("graphy:ai-test-connection", { providerId, capability }),
+  // モデル名の一覧。保存済みなら providerId、追加フォームなら { kind, endpoint, apiKey }（公式ホストだけ通る）。
+  aiListModels: (args) => ipcRenderer.invoke("graphy:ai-list-models", args),
   // 外部の計算機（Jupyter Server）。トークンの値は返らない（有無だけ）。fw/remote-compute-design.md
   computeEndpointsGet: () => ipcRenderer.invoke("graphy:compute-endpoints-get"),
   // 送信先が増える・変わる保存は main が確認ダイアログを出す

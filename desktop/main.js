@@ -1289,6 +1289,22 @@ ipcMain.handle("graphy:ai-test-connection", async (e, payload) => {
   return aiGateway.testConnection({ providerId, capability });
 });
 
+/**
+ * モデル名の一覧を取る。GET だけで、課金も患者データの送信も無いので確認は出さない。
+ *
+ * <p>🔴 宛先は main が決める（保存済みの提供元＝保存済みの接続先と鍵／未保存＝組み込みの公式ホストだけ）。
+ * レンダラ（＝プラグイン）が渡せるのは提供元の id か、追加フォームの候補だけ。
+ */
+ipcMain.handle("graphy:ai-list-models", async (_e, payload) => {
+  const p = payload && typeof payload === "object" ? payload : {};
+  return aiGateway.listModels({
+    providerId: typeof p.providerId === "string" ? p.providerId : undefined,
+    kind: typeof p.kind === "string" ? p.kind : undefined,
+    endpoint: typeof p.endpoint === "string" ? p.endpoint : undefined,
+    apiKey: typeof p.apiKey === "string" ? p.apiKey : undefined,
+  });
+});
+
 // ─────────────────────────────────────────────────────────────────────────────
 // 外部の計算機（Jupyter Server）— fw/remote-compute-design.md
 //
