@@ -6,17 +6,24 @@ import { useEffect, useState } from "react";
 import { type AppStatus } from "../api";
 import { useI18n } from "../i18n/i18n";
 import { errorKey, type WatchBarView } from "../settings/importWatchView";
+import type { JobCounts } from "../computejobs/computeJobsView";
 
 export function StatusBar({
   status,
   error,
   importWatch,
+  computeJobs,
+  onOpenComputeJobs,
   onReloadList,
 }: {
   status: AppStatus | null;
   error: string | null;
   /** 監視フォルダの自動取り込みの状態（有効なときだけ visible）。 */
   importWatch?: WatchBarView;
+  /** 計算ジョブの数（standalone で数えるものがあるときだけ）。 */
+  computeJobs?: JobCounts | null;
+  /** 計算ジョブの窓を開く。 */
+  onOpenComputeJobs?: () => void;
   /** 新しい取り込みがあるとき、一覧を読み込み直す。 */
   onReloadList?: () => void;
 }) {
@@ -72,6 +79,15 @@ export function StatusBar({
               </button>
             )}
           </span>
+        )}
+        {computeJobs && (
+          <button
+            data-testid="statusbar-compute-jobs"
+            style={{ ...reloadBtn, marginLeft: 12, ...(computeJobs.failed > 0 ? { background: "#fdeaea", color: "#b00020", borderColor: "#e6b8b8" } : {}) }}
+            onClick={onOpenComputeJobs}
+          >
+            {t("computeJobs.bar.counts", { running: computeJobs.running, queued: computeJobs.queued, failed: computeJobs.failed })}
+          </button>
         )}
       </div>
       <div style={{ fontVariantNumeric: "tabular-nums", color: "#445" }}>{formatClock(now)}</div>
