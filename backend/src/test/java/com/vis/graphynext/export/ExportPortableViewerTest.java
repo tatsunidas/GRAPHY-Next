@@ -89,6 +89,35 @@ class ExportPortableViewerTest {
         assertTrue(new String(files.get("START-VIEWER.sh"), java.nio.charset.StandardCharsets.UTF_8).startsWith("#!/bin/sh"));
     }
 
+    /** 案内ページ: 3 つの起動ファイル名・署名・非診断用が入り、外部へ何も取りに行かない。 */
+    @Test
+    void startViewerHtmlIsASelfContainedGuide() throws Exception {
+        java.util.Map<String, byte[]> files = new java.util.HashMap<>();
+        ExportService.Sink sink = new ExportService.Sink() {
+            @Override
+            public void put(String name, java.io.InputStream in) throws java.io.IOException {
+                files.put(name, in.readAllBytes());
+            }
+
+            @Override
+            public void close() {
+            }
+        };
+        ExportService.copyPortableLauncher(sink);
+        byte[] raw = files.get("START-VIEWER.html");
+        assertTrue(raw != null && raw.length > 0, "START-VIEWER.html が媒体のルートに入る");
+        String html = new String(raw, java.nio.charset.StandardCharsets.UTF_8);
+        for (String must : new String[] {"START-VIEWER.bat", "START-VIEWER.command", "START-VIEWER.sh",
+                "Visionary Imaging Services, Inc.", "非診断用", "not for diagnostic use", "navigator.platform"}) {
+            assertTrue(html.contains(must), "案内ページに「" + must + "」が無い");
+        }
+        for (String banned : new String[] {"http://", "https://", " src=", "<link", "fetch(", "XMLHttpRequest", "eval(", "innerHTML", "WebSocket"}) {
+            assertTrue(!html.contains(banned), "案内ページが外部へ出られる記述を含む: " + banned);
+        }
+        assertTrue(!html.contains("\r"), "LF だけ");
+        assertTrue(html.contains("default-src 'none'"), "CSP で外部への通信を禁じている");
+    }
+
     /** 同梱を頼まれたのに成果物が無いとき、黙って省かず失敗させる（実機で「同梱したのに無い」媒体になった）。 */
     @Test
     void failsLoudlyWhenTheViewerBundleIsMissing() {

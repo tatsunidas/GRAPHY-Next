@@ -19,6 +19,7 @@ class ExportReadmeTest {
         String t = readme(true, true);
         for (String must : new String[] {
                 "START-VIEWER.bat", "START-VIEWER.command", "sh START-VIEWER.sh", // 起動方法（3 OS）
+                "START-VIEWER.html", // 案内ページ
                 "「DICOM」フォルダ", "DICOMDIR", "DICOM/<PatientID>", // DICOM の場所（日・英）
                 "非診断用", "not for diagnostic use", // 非診断の注意（日・英）
                 "Visionary Imaging Services, Inc.", // 署名

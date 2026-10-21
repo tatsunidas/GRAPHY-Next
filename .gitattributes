@@ -6,3 +6,4 @@ backend/src/main/resources/portable-launcher/*.ps1 text eol=crlf
 backend/src/main/resources/portable-launcher/*.sh text eol=lf
 backend/src/main/resources/portable-launcher/*.command text eol=lf
 backend/src/main/resources/portable-launcher/*.pl text eol=lf
+backend/src/main/resources/portable-launcher/*.html text eol=lf
