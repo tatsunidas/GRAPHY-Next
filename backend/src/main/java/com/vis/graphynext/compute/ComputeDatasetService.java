@@ -103,8 +103,11 @@ public class ComputeDatasetService {
     private final PixelCodec codec;
     private final ObjectMapper mapper;
     private final Map<String, Dataset> datasets = new ConcurrentHashMap<>();
+    /** 承認済みの一括に属するデータ。待ちの組のデータを期限（{@link #TTL}）で消さないために、その組が終わるまで保持する。 */
+    private final java.util.Set<String> held = ConcurrentHashMap.newKeySet();
     /** 匿名化済みデータの一時フォルダの置き場（OS の一時フォルダ。テストだけが差し替える）。 */
     private volatile Path tmpRoot = Path.of(System.getProperty("java.io.tmpdir"));
+    private volatile java.util.function.LongSupplier spaceProbe;
 
     void useTempRoot(Path root) {
         this.tmpRoot = root;
@@ -196,8 +199,26 @@ public class ComputeDatasetService {
         return Optional.ofNullable(d);
     }
 
+    /** 一括の組のデータを、{@link #discard} されるまで期限で消さない。 */
+    public void hold(String handle) {
+        if (handle != null && datasets.containsKey(handle)) {
+            held.add(handle);
+        }
+    }
+
+    /** 一時フォルダの空き（バイト）。一括の途中で「残りの組が入るか」を見るのに使う。 */
+    public long usableSpace() {
+        return spaceProbe != null ? spaceProbe.getAsLong() : tmpRoot.toFile().getUsableSpace();
+    }
+
+    /** テストだけが差し替える（空きが足りない状況を作る）。 */
+    void useSpaceProbe(java.util.function.LongSupplier probe) {
+        this.spaceProbe = probe;
+    }
+
     /** 送り終えた・要らなくなったデータセットを消す。 */
     public void discard(String handle) {
+        held.remove(handle);
         Dataset d = datasets.remove(handle);
         if (d != null) {
             deleteDir(d.file().getParent());
@@ -282,8 +303,8 @@ public class ComputeDatasetService {
         }
     }
 
-    private static boolean expired(Dataset d) {
-        return d.createdAt().plus(TTL).isBefore(Instant.now());
+    private boolean expired(Dataset d) {
+        return !held.contains(d.handle()) && d.createdAt().plus(TTL).isBefore(Instant.now());
     }
 
     private static void deleteDir(Path dir) {

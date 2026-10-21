@@ -102,8 +102,14 @@ public class ComputeJobLedger {
 
     // ── 作る ──
 
-    /** 承認済みの要求から、待ちの 1 件（と 1 バッチ）を作る。 */
+    /** 承認済みの要求から、待ちの 1 件（と 1 バッチ）を作る（対話の 1 回）。 */
     synchronized String create(ComputeEgressService.EgressRequest r, List<InputRef> inputs, int timeoutSec) {
+        String batchId = createBatch(r, timeoutSec, true);
+        return createJob(batchId, r, null, inputs);
+    }
+
+    /** 承認済みの要求から、バッチ（同じコード・同じ計算機）を作る。一括は {@code interactive=false}。 */
+    synchronized String createBatch(ComputeEgressService.EgressRequest r, int timeoutSec, boolean interactive) {
         Instant now = clock.instant();
         PluginFacts pf = facts.of(r.pluginId());
         ComputeBatchRecord b = new ComputeBatchRecord("cb_" + UUID.randomUUID());
@@ -119,19 +125,68 @@ public class ComputeJobLedger {
         b.endpointHost = hostOf(r.endpointUrl());
         b.plaintext = r.plaintext();
         b.timeoutSec = timeoutSec;
-        b.interactive = true;
+        b.interactive = interactive;
         b.consentRequestId = r.id();
         b.createdAt = now;
         store.saveBatch(b);
+        return b.id;
+    }
 
-        ComputeJobRecord j = new ComputeJobRecord("cj_" + UUID.randomUUID(), b.id);
+    /** バッチの中の待ちの 1 件。{@code itemKey} は一括の組名（対話の 1 回は null）。 */
+    synchronized String createJob(String batchId, ComputeEgressService.EgressRequest r, String itemKey,
+                                  List<InputRef> inputs) {
+        ComputeJobRecord j = new ComputeJobRecord("cj_" + UUID.randomUUID(), batchId);
+        j.itemKey = itemKey;
         j.inputRefs = json(inputs);
         j.requestId = r.id();
         j.contentHash = r.contentHash();
         j.state = State.QUEUED.name();
-        j.queuedAt = now;
+        j.queuedAt = clock.instant();
         store.saveJob(j);
         return j.id;
+    }
+
+    // ── 一括の一時停止・受け取り ──
+
+    /** 一括を一時停止にする（理由つき）。待ちの組は QUEUED のまま残る。 */
+    synchronized void pauseBatch(String batchId, String reason) {
+        store.findBatch(batchId).ifPresent(b -> {
+            b.pausedReason = cut(reason, 400);
+            store.saveBatch(b);
+        });
+    }
+
+    synchronized void resumeBatch(String batchId) {
+        store.findBatch(batchId).ifPresent(b -> {
+            b.pausedReason = null;
+            store.saveBatch(b);
+        });
+    }
+
+    boolean isPaused(String batchId) {
+        return store.findBatch(batchId).map(b -> b.pausedReason != null).orElse(false);
+    }
+
+    /** バッチの組（作った順＝待ちの順）。 */
+    List<ComputeJobRecord> jobsOfBatch(String batchId) {
+        List<ComputeJobRecord> all = new ArrayList<>(store.listJobs().stream()
+                .filter(j -> batchId.equals(j.batchId)).toList());
+        all.sort(Comparator.comparing((ComputeJobRecord j) -> j.queuedAt, Comparator.nullsLast(Comparator.naturalOrder()))
+                .thenComparing(j -> j.id));
+        return all;
+    }
+
+    /** 結果を受け取った印。終わっていて結果のある行だけ。 */
+    synchronized boolean markCollected(String jobId) {
+        ComputeJobRecord j = job(jobId);
+        if (!State.valueOf(j.state).ended()) {
+            return false;
+        }
+        if (j.collectedAt == null) {
+            j.collectedAt = clock.instant();
+            store.saveJob(j);
+        }
+        return true;
     }
 
     synchronized void attachPluginJob(String jobId, String pluginJobId) {
@@ -425,6 +480,8 @@ public class ComputeJobLedger {
         m.put("outputsBytes", j.outputsBytes);
         m.put("collectedAt", j.collectedAt);
         if (b != null) {
+            m.put("interactive", b.interactive);
+            m.put("pausedReason", b.pausedReason);
             m.put("pluginId", b.pluginId);
             m.put("pluginName", b.pluginName);
             m.put("pluginVersion", b.pluginVersion);
