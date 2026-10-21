@@ -53,6 +53,7 @@ import {
 import { subscribeRoiMaskStore } from "../viewer/roiMaskStore";
 import { getLoadedRois, registerRoiCollector, scheduleRoiSave } from "../viewer/roiSaveStore";
 import { startSolidAutosave } from "../viewer/roiSolidSync";
+import { startMeasureAutosave } from "../viewer/roiMeasureSync";
 import { collectRoisForPatient, sopOfImageId } from "../viewer/roiRestore";
 import { emitRoiReveal } from "../viewer/roiReveal";
 import { frameOfImageId, sopFromImageId } from "../viewer/imageId";
@@ -787,10 +788,13 @@ function TileGrid({
     const unsubMeta = subscribeRoiMaskStore(onChange);
     // 3D の solid（球など）はドキュメントの `solids` へ。変わったシリーズだけ保存する。
     const stopSolids = startSolidAutosave(pk);
+    const stopMeasures = startMeasureAutosave(pk); // 3D の定規（ドキュメントの `measures3d`）
+
     return () => {
       for (const name of names) eventTarget.removeEventListener(name, onChange);
       unsubMeta();
       stopSolids();
+      stopMeasures();
       // 解除時に保留中の保存を流し切る（ウィンドウを閉じて計測が消えるのを防ぐ）。
       unregister();
     };

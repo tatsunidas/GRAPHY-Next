@@ -26,6 +26,7 @@ import {
 import { fetchRoiDocument, saveRoiDocument } from "./roiPersistenceApi";
 import { mergeAnalyses, upsertAnalysis, type SavedQcaAnalysis } from "./qcaAnalysisState";
 import { mergeSolids, type Roi3dBox } from "./roi3dBox";
+import { mergeMeasures, type Measure3d } from "./roiMeasure3d";
 import { announceRoiSaved } from "./roiChangeChannel";
 
 /** 保存 1 回分の結果。UI が「保存済み」表示や失敗通知に使う。 */
@@ -76,8 +77,10 @@ interface PatientState {
    * 編集するのは MPR 窓（`setSolidsForSeries`）。
    */
   solids: Roi3dBox[];
+  /** 3D の 2 点定規。`solids` と同じ作法で持ち越す（編集するのは 3D 窓）。 */
+  measures3d: Measure3d[];
   /**
-   * solid に未保存の編集があるか。2D の収集関数を持たない窓（MPR）が保存してよい条件。
+   * solid・定規に未保存の編集があるか。2D の収集関数を持たない窓（MPR）が保存してよい条件。
    * 収集関数が無い窓が ROI の保存を起こすことは無い（従来どおり `no collector`）。
    */
   solidsDirty?: boolean;
@@ -96,7 +99,7 @@ export const ROI_SAVE_DEBOUNCE_MS = 1500;
 function stateOf(patientKey: string): PatientState {
   let s = states.get(patientKey);
   if (!s) {
-    s = { known: new Set(), pendingTombstones: new Map(), loaded: [], analyses: [], solids: [] };
+    s = { known: new Set(), pendingTombstones: new Map(), loaded: [], analyses: [], solids: [], measures3d: [] };
     states.set(patientKey, s);
   }
   return s;
@@ -181,11 +184,12 @@ export async function loadRois(patientKey: string): Promise<ParsedRoiFile> {
     for (const t of parsed.deleted) s.pendingTombstones.set(t.roiUid, t);
     // solid も未保存の編集を捨てない。同じ id は updatedAt の新しい方（墓標の id は除く）。
     s.solids = mergeSolids(parsed.solids, s.solids, new Set(parsed.deleted.map((t) => t.roiUid)));
-    return { ...parsed, analyses: s.analyses, solids: s.solids };
+    s.measures3d = mergeMeasures(parsed.measures3d, s.measures3d, new Set(parsed.deleted.map((t) => t.roiUid)));
+    return { ...parsed, analyses: s.analyses, solids: s.solids, measures3d: s.measures3d };
   } catch (e) {
     log.warn("roi load failed", patientKey, e);
     // 読めなかったときは版を未確定のままにする（未確定だと保存を試みない＝上書き事故を避ける）。
-    return { rois: [], deleted: [], analyses: [], solids: [] };
+    return { rois: [], deleted: [], analyses: [], solids: [], measures3d: [] };
   }
 }
 
@@ -260,6 +264,7 @@ async function doSave(patientKey: string): Promise<RoiSaveResult> {
     deleted: [...s.pendingTombstones.values()],
     analyses: s.analyses,
     solids: s.solids,
+    measures3d: s.measures3d,
   };
 
   try {
@@ -297,11 +302,11 @@ async function put(
   content: ParsedRoiFile,
   version: number | null | undefined,
 ): Promise<{ content: ParsedRoiFile; version: number | null }> {
-  const file = buildSaveFile(content.rois, content.deleted, "graphy-next", content.analyses, content.solids);
+  const file = buildSaveFile(content.rois, content.deleted, "graphy-next", content.analyses, content.solids, content.measures3d);
   const dto = await saveRoiDocument(patientKey, JSON.stringify(file), file.rois.length, version ?? null);
   // 上限で切られた墓標を状態にも反映するため、保存した内容（＝切られた後）を返す。
   return {
-    content: { rois: file.rois, deleted: file.deleted ?? [], analyses: file.analyses ?? [], solids: file.solids ?? [] },
+    content: { rois: file.rois, deleted: file.deleted ?? [], analyses: file.analyses ?? [], solids: file.solids ?? [], measures3d: file.measures3d ?? [] },
     version: dto.version,
   };
 }
@@ -315,6 +320,7 @@ function commit(s: PatientState, content: ParsedRoiFile, version: number | null)
   s.loaded = content.rois;
   s.analyses = content.analyses;
   s.solids = content.solids;
+  s.measures3d = content.measures3d;
   s.solidsDirty = false;
 }
 
@@ -381,6 +387,37 @@ export function mergeRemoteSolids(patientKey: string, remote: Roi3dBox[], buried
   const s = states.get(patientKey);
   if (!s) return;
   s.solids = mergeSolids(remote, s.solids, new Set(buried));
+}
+
+/** 直近に読み込んだ／保存した定規のうち、このシリーズのもの。 */
+export function getMeasures3dForSeries(patientKey: string, seriesUid: string): Measure3d[] {
+  return (states.get(patientKey)?.measures3d ?? []).filter((x) => x.seriesUid === seriesUid);
+}
+
+/**
+ * このシリーズの定規を現在の内容へ置き換えて保存する（3D 窓が編集のたびに呼ぶ）。
+ * 他のシリーズは触らない。**前回あったのに無くなった id は墓標**にして削除を伝える。
+ */
+export function setMeasures3dForSeries(patientKey: string, seriesUid: string, items: Measure3d[]): Promise<RoiSaveResult> {
+  if (!patientKey) return Promise.resolve({ ok: false, error: "no patient key" });
+  const s = stateOf(patientKey);
+  const now = new Date().toISOString();
+  const keep = new Set(items.map((x) => x.id));
+  for (const prev of s.measures3d) {
+    if (prev.seriesUid === seriesUid && !keep.has(prev.id)) s.pendingTombstones.set(prev.id, { roiUid: prev.id, at: now });
+  }
+  // 削除の Undo で戻った定規は生きているので墓標から外す（墓標が残ると保存のたびに落とされる）。
+  for (const x of items) s.pendingTombstones.delete(x.id);
+  s.measures3d = [...s.measures3d.filter((x) => x.seriesUid !== seriesUid), ...items];
+  s.solidsDirty = true;
+  return saveRoiNow(patientKey);
+}
+
+/** 他の窓が保存した定規を取り込む。{@link mergeRemoteSolids} と同じ理由で、版・loaded・known は動かさない。 */
+export function mergeRemoteMeasures(patientKey: string, remote: Measure3d[], buried: ReadonlySet<string>): void {
+  const s = states.get(patientKey);
+  if (!s) return;
+  s.measures3d = mergeMeasures(remote, s.measures3d, new Set(buried));
 }
 
 /** テスト・患者切替用に状態を捨てる。 */

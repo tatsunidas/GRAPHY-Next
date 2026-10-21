@@ -14,7 +14,8 @@ import {
 } from "../plugins/pluginVesselApi";
 import { calibrationForImageId, loaderSpacingFor, setXaUserCalibration } from "./xaCalibrationProvider";
 import { getViewerContext } from "./viewerContext";
-import { addRoi3d, newRoi3dId } from "./roiLedger";
+import { addMeasure3d, addRoi3d, listMeasure3d, newRoi3dId } from "./roiLedger";
+import { measureDistanceMm } from "./roiMeasure3d";
 import { sphereSolid } from "./roi3dBox";
 import { worldToImageCoords } from "./imageCoords";
 import type { Geometry3DPixelStats } from "./vtkGeometryView";
@@ -1167,6 +1168,8 @@ declare global {
   interface Window {
     __graphyDebug?: {
       seedSphere3D: typeof seedSphere3D;
+      seedMeasure3D: typeof seedMeasure3D;
+      listMeasures3D: typeof listMeasures3D;
       currentRoiContext: typeof currentRoiContext;
       getSpacingProbe: typeof getSpacingProbe;
       probeUserCalibration: typeof probeUserCalibration;
@@ -1341,6 +1344,18 @@ function seedSphere3D(center: [number, number, number], radiusMm: number): strin
   return id;
 }
 
+/** 3D の定規を台帳へ直接作る（DEV 限定。3D 窓の表面ピックを使わずに自動検査が定規を作る口）。 */
+function seedMeasure3D(a: [number, number, number], b: [number, number, number]): string {
+  const id = newRoi3dId();
+  addMeasure3d({ id, a, b });
+  return id;
+}
+
+/** 台帳の 3D 定規（DEV 限定。距離は端点から導いた値）。 */
+function listMeasures3D(): Array<{ id: string; label?: string; visible?: boolean; distMm: number; seriesUid?: string }> {
+  return listMeasure3d().map((m) => ({ id: m.id, label: m.label, visible: m.visible, distMm: measureDistanceMm(m), seriesUid: m.seriesUid }));
+}
+
 /** 先頭ビューポートの患者・スタディ・シリーズ（DEV 限定。自動検査が保存先の患者キーを知る口）。 */
 function currentRoiContext(): { patientKey: string; studyUid: string; seriesUid: string } | null {
   const engine = getRenderingEngine(ENGINE_ID);
@@ -1354,6 +1369,8 @@ export function installDebugApi(): void {
   if (installed || !import.meta.env.DEV) return;
   window.__graphyDebug = {
     seedSphere3D,
+    seedMeasure3D,
+    listMeasures3D,
     currentRoiContext,
     getSpacingProbe,
     probeUserCalibration,

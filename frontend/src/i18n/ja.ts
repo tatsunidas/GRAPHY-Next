@@ -1294,6 +1294,7 @@ export const ja: Record<string, string> = {
   "roiMgr.needSegViewport": "先に対象タイルで Brush/3D Wand などのセグメンテーションツールを選択してください。",
   "roiMgr.empty": "なし",
   "roiMgr.solidDetail": "詳細",
+  "roiMgr.ruler3d": "3D 定規",
   "roiMgr.visible": "表示",
   "roiMgr.lock": "ロック",
   "roiMgr.unlock": "ロック解除",
