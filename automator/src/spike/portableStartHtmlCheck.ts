@@ -3,6 +3,7 @@
 // User-Agent とプラットフォームを差し替えて Windows／Mac／Linux／スマートフォン（判定不能）を再現する
 // （実機の Mac・Linux のブラウザでの判定は、この PC では確かめられない＝未達）。
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { chromium, type Browser } from "@playwright/test";
 
 const HTML = process.env.START_HTML!;
@@ -20,7 +21,7 @@ const ENVS = {
   phone: { ua: "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Mobile Safari/537.36", platform: "Linux armv81", file: "" },
 } as const;
 const ALL = ["START-VIEWER.bat", "START-VIEWER.command", "START-VIEWER.sh"];
-const url = "file:///" + path.resolve(HTML).replace(/\\/g, "/");
+const url = pathToFileURL(path.resolve(HTML)).href;
 
 async function open(browser: Browser, env: (typeof ENVS)[keyof typeof ENVS], locale: string) {
   const ctx = await browser.newContext({ userAgent: env.ua, locale, viewport: { width: 1000, height: 900 } });
