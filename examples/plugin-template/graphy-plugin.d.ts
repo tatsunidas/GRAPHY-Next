@@ -1293,6 +1293,15 @@ interface PluginHostBase {
      * これを呼ぶのはプラグインが別の経路で DB を変えたときだけ。
      */
     notifyChanged: (detail?: { studyUids?: string[]; patientId?: string }) => void;
+    /**
+     * **保管庫のシリーズを、本体の窓で選んでもらう**（H72・**0.5.0 以降**）。検索・絞り込み（患者名・ID・検査日・種類）を
+     * して、スタディを展開してシリーズにチェックを入れる。返すのは**選んだ順の UID だけ**（`[{studyUid, seriesUid}]`）で、
+     * 患者名・記述は窓には出るがプラグインには渡らない。取り消し（Esc）は空配列。新しい権限・同意は要らない
+     * （外へ出すのは `compute.runBatch` の同意が別に聞く）。同時に出すのは 1 つで、2 件目以降は順番を待つ。
+     * `modalities`（`["CT"]` など）を渡すと、その種類のシリーズだけ選べる。例外は投げない。
+     * 結果はそのまま `compute.runBatch` の `items` に使える（組の名前 `key` には患者名を入れないこと）。
+     */
+    pickSeries: (opts?: PickSeriesOptions) => Promise<PickedSeries[]>;
   };
   /**
    * **動画の取り込み**（H47〜H49・**0.3.0 以降**）。standalone 専用。
@@ -1551,6 +1560,22 @@ export interface ComputeRunJobOptions {
   endpointId?: string;
   /** 秒。既定 3600・上限 6 時間。 */
   timeoutSec?: number;
+}
+
+/** `host.db.pickSeries()` の設定（H72）。 */
+export interface PickSeriesOptions {
+  /** 窓のタイトル（120 字まで）。 */
+  title?: string;
+  /** 選べるシリーズの種類（`["CT"]` など。英大文字）。窓の絞り込みの初期値になり、それ以外のシリーズは選べない。 */
+  modalities?: string[];
+  /** 複数選べるか。既定 true。 */
+  multiple?: boolean;
+}
+
+/** `host.db.pickSeries()` が返す 1 件。**UID だけ**（患者名・記述は渡さない）。 */
+export interface PickedSeries {
+  studyUid: string;
+  seriesUid: string;
 }
 
 /** `host.compute.runBatch()` の 1 組（同じコードを組ごとに走らせる）。 */

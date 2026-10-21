@@ -100,6 +100,8 @@ export type {
 import type { AiGenerationOptions, AiGenerationOutcome } from "./pluginAiApi";
 import type { ComputeRunJobOptions, ComputeRunOutcome, ComputeEndpointStatus, ComputeReleaseOutcome } from "./pluginComputeApi";
 export type { ComputeEndpointStatus, ComputeJobInput, ComputeOutputFile, ComputeReleaseOutcome, ComputeRunJobOptions, ComputeRunOutcome } from "./pluginComputeApi";
+import type { PickSeriesOptions, PickedSeries } from "./pluginSeriesPickApi";
+export type { PickSeriesOptions, PickedSeries } from "./pluginSeriesPickApi";
 import type { ComputeBatchOptions, ComputeBatchOutcome, ComputeJobSummary, ComputeRunBatchOptions } from "./pluginComputeBatchApi";
 export type {
   ComputeBatchCounts, ComputeBatchItemInput, ComputeBatchItemOutcome, ComputeBatchOptions, ComputeBatchOutcome, ComputeBatchRefused,
@@ -369,6 +371,14 @@ interface PluginHostBase {
      * これを呼ぶのはプラグインが別の経路で DB を変えたときだけ。
      */
     notifyChanged: (detail?: { studyUids?: string[]; patientId?: string }) => void;
+    /**
+     * **保管庫のシリーズを、本体の窓で選んでもらう**（H72）。検索・絞り込み（患者名・ID・検査日・種類）をして、
+     * スタディを展開してシリーズにチェックを入れる。返すのは**選んだ順の UID だけ**（`[{studyUid, seriesUid}]`）で、
+     * 患者名・記述は窓には出るがプラグインには渡らない。取り消し（Esc）は空配列。新しい権限・同意は要らない
+     * （外へ出すのは `compute.runBatch` の同意が別に聞く）。同時に出すのは 1 つで、2 件目以降は順番を待つ。
+     * `modalities`（`["CT"]` など）を渡すと、その種類のシリーズだけ選べる。例外は投げない。
+     */
+    pickSeries: (opts?: PickSeriesOptions) => Promise<PickedSeries[]>;
   };
   /**
    * **動画の取り込み**（H47〜H49）。standalone 専用（web は 501）。
