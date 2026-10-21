@@ -132,11 +132,19 @@ public class ComputeJobLedger {
         return b.id;
     }
 
-    /** バッチの中の待ちの 1 件。{@code itemKey} は一括の組名（対話の 1 回は null）。 */
+    /** バッチの中の待ちの 1 件（1 回目の試行）。{@code itemKey} は一括の組名（対話の 1 回は null）。 */
     synchronized String createJob(String batchId, ComputeEgressService.EgressRequest r, String itemKey,
                                   List<InputRef> inputs) {
+        return createJob(batchId, r, itemKey, inputs, 1);
+    }
+
+    /** バッチの中の待ちの 1 件。{@code attempt} は同じ組の試行の番号（再実行は 2 以降）。 */
+    synchronized String createJob(String batchId, ComputeEgressService.EgressRequest r, String itemKey,
+                                  List<InputRef> inputs, int attempt) {
         ComputeJobRecord j = new ComputeJobRecord("cj_" + UUID.randomUUID(), batchId);
         j.itemKey = itemKey;
+        j.attempt = attempt;
+        j.pluginVersion = store.findBatch(batchId).map(b -> facts.of(b.pluginId).version()).orElse(null);
         j.inputRefs = json(inputs);
         j.requestId = r.id();
         j.contentHash = r.contentHash();
@@ -163,6 +171,10 @@ public class ComputeJobLedger {
         });
     }
 
+    Optional<ComputeBatchRecord> batchRecord(String batchId) {
+        return store.findBatch(batchId);
+    }
+
     boolean isPaused(String batchId) {
         return store.findBatch(batchId).map(b -> b.pausedReason != null).orElse(false);
     }
@@ -174,6 +186,35 @@ public class ComputeJobLedger {
         all.sort(Comparator.comparing((ComputeJobRecord j) -> j.queuedAt, Comparator.nullsLast(Comparator.naturalOrder()))
                 .thenComparing(j -> j.id));
         return all;
+    }
+
+    /** 今のプラグインの素性（名前・版・パッケージ SHA-256）。再実行で記録との違いを見るのに使う。 */
+    PluginFacts currentFacts(String pluginId) {
+        return facts.of(pluginId);
+    }
+
+    /** 待ち・実行中・利用者待ちの組がバッチにあるか（あるあいだは再実行しない）。 */
+    boolean hasActive(String batchId) {
+        return jobsOfBatch(batchId).stream().anyMatch(j -> !State.valueOf(j.state).ended());
+    }
+
+    /** 同じ組（{@code itemKey}。対話の 1 回は null）の次の試行の番号。 */
+    int nextAttempt(String batchId, String itemKey) {
+        return jobsOfBatch(batchId).stream().filter(j -> java.util.Objects.equals(j.itemKey, itemKey))
+                .mapToInt(j -> j.attempt).max().orElse(0) + 1;
+    }
+
+    /** バッチの組ごとの最新の試行（作った順）。対話の 1 回（組名なし）のバッチは、その 1 つが 1 つの組。 */
+    List<ComputeJobRecord> latestAttempts(String batchId) {
+        Map<String, ComputeJobRecord> latest = new LinkedHashMap<>();
+        for (ComputeJobRecord j : jobsOfBatch(batchId)) {
+            String key = j.itemKey == null ? "#" : j.itemKey; // 組名は英数字と . _ - だけなので "#" は衝突しない
+            ComputeJobRecord cur = latest.get(key);
+            if (cur == null || j.attempt >= cur.attempt) {
+                latest.put(key, j);
+            }
+        }
+        return new ArrayList<>(latest.values());
     }
 
     /** 結果を受け取った印。終わっていて結果のある行だけ。 */
@@ -461,6 +502,7 @@ public class ComputeJobLedger {
         m.put("errorName", j.errorName);
         m.put("errorValue", j.errorValue);
         m.put("attempt", j.attempt);
+        m.put("attemptPluginVersion", j.pluginVersion);
         m.put("itemKey", j.itemKey);
         m.put("inputs", inputsOf(j).stream().map(i -> {
             Map<String, Object> im = new LinkedHashMap<>();

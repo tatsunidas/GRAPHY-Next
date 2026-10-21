@@ -35,6 +35,9 @@ class ComputeJobRecord {
     @Column(length = 128)
     String itemKey;
     int attempt = 1;
+    /** その試行を要求した時点の、プラグインの版（再実行で記録の版との違いを見るため）。null＝不明。 */
+    @Column(length = 64)
+    String pluginVersion;
 
     /** JSON: [{studyUid, seriesUid, format}]。削除されたシリーズは UID が空文字になる。 */
     @Column(length = 4000)

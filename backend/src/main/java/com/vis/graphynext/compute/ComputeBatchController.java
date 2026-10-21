@@ -47,6 +47,7 @@ public class ComputeBatchController {
     private final ComputeEgressService egress;
     private final ComputeJobRunner runner;
     private final ComputeJobLedger ledger;
+    private final ComputeBatchBuilder builder;
 
     public ComputeBatchController(PluginRegistry plugins, ComputeDatasetService datasets,
                                   ComputeEgressService egress, ComputeJobRunner runner, ComputeJobLedger ledger) {
@@ -55,6 +56,7 @@ public class ComputeBatchController {
         this.egress = egress;
         this.runner = runner;
         this.ledger = ledger;
+        this.builder = new ComputeBatchBuilder(datasets);
     }
 
     /** 1 組。{@code key} は組の名前（英数字・{@code . _ -} の 64 字まで。<b>患者名を入れないこと</b>）。 */
@@ -93,70 +95,31 @@ public class ComputeBatchController {
             return error(HttpStatus.UNPROCESSABLE_ENTITY, problem);
         }
 
-        LinkedHashMap<String, List<String>> kept = new LinkedHashMap<>();
-        List<Map<String, Object>> refused = new ArrayList<>();
-        List<String> all = new ArrayList<>();
+        ComputeBatchBuilder.Prepared prepared;
         try {
-            int total = body.items().size();
-            int processed = 0;
-            long createdBytes = 0;
-            for (BatchItem it : body.items()) {
-                List<String> hs = new ArrayList<>();
-                try {
-                    for (ComputeEgressController.Input in : it.inputs()) {
-                        ComputeDatasetService.Format f = ComputeDatasetService.Format
-                                .of(in.format() == null ? "npz" : in.format())
-                                .orElseThrow(() -> new ComputeDatasetService.DatasetRefused("bad-format", in.format()));
-                        ComputeDatasetService.Dataset d = datasets.create(in.studyUid(), in.seriesUid(), f);
-                        hs.add(d.handle());
-                        all.add(d.handle());
-                        createdBytes += d.bytes();
-                    }
-                    kept.put(it.key(), hs);
-                } catch (ComputeDatasetService.DatasetRefused e) {
-                    hs.forEach(datasets::discard);
-                    all.removeAll(hs);
-                    refused.add(Map.of("key", it.key(), "reason", e.reason()));
-                }
-                processed++;
-                // 残りの組が一時フォルダに入るか。作れた分の平均から見積もる（数字は実測。件数の上限は置かない）
-                long need = kept.isEmpty() ? 0 : createdBytes / kept.size() * (total - processed);
-                long free = datasets.usableSpace();
-                if (need > free) {
-                    all.forEach(datasets::discard);
-                    Map<String, Object> out = new LinkedHashMap<>();
-                    out.put("ok", false);
-                    out.put("error", "disk-insufficient");
-                    out.put("neededBytes", need);
-                    out.put("freeBytes", free);
-                    return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY).body(out);
-                }
-            }
-            if (kept.isEmpty()) {
-                Map<String, Object> out = new LinkedHashMap<>();
-                out.put("ok", false);
-                out.put("error", "no-sendable-items");
-                out.put("refused", refused);
-                return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY).body(out);
-            }
-            List<Map<String, String>> refusedRows = refused.stream()
+            prepared = builder.prepare(body.items());
+        } catch (ComputeBatchBuilder.Failure f) {
+            return ResponseEntity.status(f.status).body(f.body);
+        }
+        try {
+            List<Map<String, String>> refusedRows = prepared.refused().stream()
                     .map(x -> Map.of("key", String.valueOf(x.get("key")), "reason", String.valueOf(x.get("reason"))))
                     .toList();
-            ComputeEgressService.EgressRequest r = egress.createBatch(m.id(), m.name(), endpointId, kept,
+            ComputeEgressService.EgressRequest r = egress.createBatch(m.id(), m.name(), endpointId, prepared.kept(),
                     body.code(), CodeInspector.MAX_JOB_CHARS, refusedRows);
             Map<String, Object> out = new LinkedHashMap<>();
             out.put("requestId", r.id());
             out.put("endpoint", Map.of("id", r.endpointId(), "label", r.endpointLabel()));
             out.put("items", r.items());
-            out.put("refused", refused);
+            out.put("refused", prepared.refused());
             out.put("datasets", r.datasets());
             out.put("codeSha256", r.codeSha256());
             return ResponseEntity.ok(out);
         } catch (ComputeEgressService.EgressRefused e) {
-            all.forEach(datasets::discard);
+            builder.discard(prepared.all());
             return error(HttpStatus.UNPROCESSABLE_ENTITY, e.reason());
         } catch (RuntimeException e) {
-            all.forEach(datasets::discard);
+            builder.discard(prepared.all());
             throw e;
         }
     }
