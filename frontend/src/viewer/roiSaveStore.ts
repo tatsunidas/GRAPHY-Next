@@ -26,6 +26,7 @@ import {
 import { fetchRoiDocument, saveRoiDocument } from "./roiPersistenceApi";
 import { mergeAnalyses, upsertAnalysis, type SavedQcaAnalysis } from "./qcaAnalysisState";
 import { mergeSolids, type Roi3dBox } from "./roi3dBox";
+import { announceRoiSaved } from "./roiChangeChannel";
 
 /** 保存 1 回分の結果。UI が「保存済み」表示や失敗通知に使う。 */
 export interface RoiSaveResult {
@@ -264,6 +265,7 @@ async function doSave(patientKey: string): Promise<RoiSaveResult> {
   try {
     const saved = await put(patientKey, local, s.version);
     commit(s, saved.content, saved.version);
+    announceRoiSaved(patientKey);
     return { ok: true, roiCount: saved.content.rois.length };
   } catch (e) {
     const msg = String(e);
@@ -281,6 +283,7 @@ async function doSave(patientKey: string): Promise<RoiSaveResult> {
       const merged = mergeSaveFiles(remote, soloSolids ? { ...local, rois: [] } : local);
       const saved = await put(patientKey, merged, dto.version);
       commit(s, saved.content, saved.version);
+      announceRoiSaved(patientKey);
       return { ok: true, roiCount: saved.content.rois.length, merged: true };
     } catch (e2) {
       log.warn("roi save retry failed", patientKey, e2);
@@ -367,6 +370,17 @@ export function setSolidsForSeries(patientKey: string, seriesUid: string, solids
   s.solids = [...s.solids.filter((x) => x.seriesUid !== seriesUid), ...solids];
   s.solidsDirty = true;
   return saveRoiNow(patientKey);
+}
+
+/**
+ * 他の窓が保存した solid を取り込む（窓間ライブ共有）。**solid だけ**を混ぜる。
+ * 版・`loaded`・`known` は動かさない: 動かすと、2D 窓の収集が「表示していない他窓の ROI」を
+ * 削除とみなして墓標を立てたり、版が進んで 409 による相手の ROI の保護が効かなくなる。
+ */
+export function mergeRemoteSolids(patientKey: string, remote: Roi3dBox[], buried: ReadonlySet<string>): void {
+  const s = states.get(patientKey);
+  if (!s) return;
+  s.solids = mergeSolids(remote, s.solids, new Set(buried));
 }
 
 /** テスト・患者切替用に状態を捨てる。 */
