@@ -75,7 +75,7 @@ test("applyPlan: 知らない OS・prefs が無いときは何も付けない", 
 test("nvidiaGpuCount: ある場所の数を数え、無い場所は 0", () => {
   const d = tmp();
   assert.equal(rp.nvidiaGpuCount(path.join(d, "none")), 0);
-  fs.mkdirSync(path.join(d, "0000:05:00.0"));
+  fs.mkdirSync(path.join(d, "0000-05-00.0")); // Windows ではフォルダ名に : を使えない（中身は数えるだけ）
   assert.equal(rp.nvidiaGpuCount(d), 1);
 });
 
