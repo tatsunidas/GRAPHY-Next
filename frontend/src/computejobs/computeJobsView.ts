@@ -98,6 +98,32 @@ export function filterJobs(jobs: ComputeJobView[], filter: JobFilter, uncollecte
   });
 }
 
+/** 同じ組（一括の組名。対話の 1 回は組名なし）の最新の試行を見分ける印。再実行で古い試行が残るため。 */
+const groupKey = (j: ComputeJobView): string => `${j.batchId ?? j.id}|${j.itemKey ?? "#"}`;
+
+/** 組ごとの最新の試行（attempt が最大）の id。内訳・失敗の数はこれだけを数える（直した古い失敗が残り続けない）。 */
+export function latestIds(jobs: ComputeJobView[]): Set<string> {
+  const best = new Map<string, ComputeJobView>();
+  for (const j of jobs) {
+    const cur = best.get(groupKey(j));
+    if (!cur || j.attempt >= cur.attempt) best.set(groupKey(j), j);
+  }
+  return new Set([...best.values()].map((j) => j.id));
+}
+
+/** 同じ組の試行を古い順に（詳細に並べる）。 */
+export function attemptsOf(jobs: ComputeJobView[], j: ComputeJobView): ComputeJobView[] {
+  return jobs.filter((x) => groupKey(x) === groupKey(j)).sort((a, b) => a.attempt - b.attempt);
+}
+
+/**
+ * 再実行できる行か。終わった失敗・中断・中止の**最新の試行**だけ（完了・古い試行は対象外）。
+ * 同じ一括に動いている組があるあいだは出さない（backend も断る）。
+ */
+export function canRerun(j: ComputeJobView, latest: ReadonlySet<string>, batchActive: boolean): boolean {
+  return !batchActive && latest.has(j.id) && (j.state === "FAILED" || j.state === "INTERRUPTED" || j.state === "CANCELLED");
+}
+
 export interface JobCounts {
   running: number;
   queued: number;
@@ -110,10 +136,11 @@ export function countJobs(jobs: ComputeJobView[], seen: ReadonlySet<string>): Jo
   let running = 0;
   let queued = 0;
   let failed = 0;
+  const latest = latestIds(jobs);
   for (const j of jobs) {
     if (j.state === "RUNNING" || j.state === "AWAITING_USER") running++;
     else if (j.state === "QUEUED") queued++;
-    else if (needsAttention(j.state) && !seen.has(j.id)) failed++;
+    else if (needsAttention(j.state) && !seen.has(j.id) && latest.has(j.id)) failed++;
   }
   return { running, queued, failed };
 }
@@ -146,6 +173,8 @@ export interface BatchGroup {
   pausedReason: string | null;
   /** 待ち・実行中・利用者待ちの組があるか（［一括を中止］を出す条件）。 */
   active: boolean;
+  /** 最新の試行が失敗・中断の組の数（［失敗だけ再実行］を出す条件）。 */
+  rerunnable: number;
   jobs: ComputeJobView[];
   done: number;
   failed: number;
@@ -160,18 +189,21 @@ export interface BatchGroup {
 export function groupByBatch(jobs: ComputeJobView[]): BatchGroup[] {
   const order: BatchGroup[] = [];
   const index = new Map<string, BatchGroup>();
+  const latest = latestIds(jobs);
   for (const j of jobs) {
     const key = j.batchId ?? `single:${j.id}`;
     let g = index.get(key);
     if (!g) {
-      g = { batchId: key, isBatch: j.interactive === false, pausedReason: j.pausedReason ?? null, active: false, jobs: [], done: 0, failed: 0, running: 0, queued: 0 };
+      g = { batchId: key, isBatch: j.interactive === false, pausedReason: j.pausedReason ?? null, active: false, rerunnable: 0, jobs: [], done: 0, failed: 0, running: 0, queued: 0 };
       index.set(key, g);
       order.push(g);
     }
     g.jobs.push(j);
     if (isActive(j.state)) g.active = true;
+    // 内訳は最新の試行だけ（再実行で直した古い失敗は数えない。行は古い試行も残して N 回目と出す）
+    if (!latest.has(j.id)) continue;
     if (j.state === "DONE") g.done++;
-    else if (needsAttention(j.state)) g.failed++;
+    else if (needsAttention(j.state)) { g.failed++; g.rerunnable++; }
     else if (j.state === "RUNNING" || j.state === "AWAITING_USER") g.running++;
     else if (j.state === "QUEUED") g.queued++;
   }

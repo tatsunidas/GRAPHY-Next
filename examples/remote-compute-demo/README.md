@@ -29,6 +29,7 @@ const out = await host.compute.runBatch(
 - 組の名前（`key`）は英数字と `. _ -` の 64 字まで。**患者名を入れないでください**（台帳・監査に残ります）。
 - 1 組が落ちても残りは続きます。実行は本体の台帳が持つので、画面を閉じても計算は続き、開き直して `host.compute.attach(batchId, { onItem })` で受け取っていない結果を受け取れます。
 - `host.compute.listJobs()` は自分のプラグインの行の一覧です。
+- 利用者が計算ジョブの窓で［再実行］［失敗だけ再実行］を押すと、同じ組が `attempt: 2` 以降の行として走ります（本体が記録のコードで要求を作り直し、同意を取り直します）。`attach` で受け取るときは、同じ `key` のうち `attempt` が最大のものを最新として扱ってください。
 
 実用のプラグイン（MONAI Bundle のモデルで臓器を分割し、SEG で保存する）は公式リポジトリ
 [tatsunidas/graphy-next-plugin-monai](https://github.com/tatsunidas/graphy-next-plugin-monai) を見てください。設計: `fw/remote-compute-design.md`。

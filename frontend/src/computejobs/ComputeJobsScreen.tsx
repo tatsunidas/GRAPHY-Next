@@ -19,7 +19,10 @@ import {
   type ComputeLogKind,
 } from "./computeJobsApi";
 import { loadSeen, markSeen, pruneSeen, saveSeen } from "./computeJobsSeen";
+import { startRerun, type RerunTarget } from "./computeRerun";
 import {
+  attemptsOf,
+  canRerun,
   cleanupKey,
   countJobs,
   endpointLoads,
@@ -31,6 +34,7 @@ import {
   groupByBatch,
   isCancellable,
   isEnded,
+  latestIds,
   needsAttention,
   phaseKey,
   progressPct,
@@ -64,6 +68,11 @@ export function ComputeJobsScreen() {
   const [names, setNames] = useState<Map<string, StudyName>>(new Map());
   const [keepAwake, setKeepAwake] = useState(false);
   const [batchBusy, setBatchBusy] = useState<Set<string>>(new Set());
+  const [rerunMsg, setRerunMsg] = useState<string | null>(null);
+  const [rerunBusy, setRerunBusy] = useState(false);
+  // 記録の計算機が登録から消えているとき、選び直すための状態
+  const [pick, setPick] = useState<{ target: RerunTarget; recorded: string | null } | null>(null);
+  const [pickId, setPickId] = useState("");
   const asked = useRef<Set<string>>(new Set());
 
   const poll = useCallback(async () => {
@@ -136,6 +145,7 @@ export function ComputeJobsScreen() {
   const visible = useMemo(() => filterJobs(sorted, filter, uncollectedOnly), [sorted, filter, uncollectedOnly]);
   const groups = useMemo(() => groupByBatch(visible), [visible]);
   const counts = useMemo(() => countJobs(jobs ?? [], seen), [jobs, seen]);
+  const latest = useMemo(() => latestIds(jobs ?? []), [jobs]);
   const loads = useMemo(() => endpointLoads(jobs ?? []), [jobs]);
   const selected = sorted.find((j) => j.id === selectedId) ?? null;
   const totalBytes = useMemo(() => (jobs ?? []).reduce((a, j) => a + (j.outputsBytes ?? 0), 0), [jobs]);
@@ -201,6 +211,36 @@ export function ComputeJobsScreen() {
     void poll();
   };
 
+  const rerunReason = (code: string): string => {
+    const known = ["not-rerunnable", "batch-active", "plugin-unavailable", "series-deleted", "unknown-endpoint", "no-failed-items", "disk-insufficient", "no-sendable-items", "desktop-only", "code-too-large", "code-empty", "code-embedded-data"];
+    return known.includes(code) ? t(`computeJobs.rerunError.${code}`) : t("computeJobs.rerunError.other", { code });
+  };
+
+  // 再実行: 記録で要求を作り直し → main の窓で同意を取り直し → 同じ一括の次の試行として走る
+  const rerun = async (target: RerunTarget, recorded: string | null, override?: string) => {
+    setRerunBusy(true);
+    setRerunMsg(null);
+    try {
+      const out = await startRerun(target, recorded, override);
+      if (out.ok) {
+        setPick(null);
+        if (out.refused.length > 0) {
+          setRerunMsg(t("computeJobs.rerunRefused", { list: out.refused.map((r) => `${r.key}（${rerunReason(r.reason)}）`).join("・") }));
+        }
+      } else if (out.error === "unknown-endpoint" && !override) {
+        setPick({ target, recorded });
+        setPickId(endpoints[0]?.id ?? "");
+        setRerunMsg(t("computeJobs.rerunError.unknown-endpoint"));
+      } else if (!out.cancelled) {
+        const extra = out.refused?.length ? `（${out.refused.map((r) => `${r.key}: ${rerunReason(r.reason)}`).join("・")}）` : "";
+        setRerunMsg(rerunReason(out.error) + extra);
+      }
+    } finally {
+      setRerunBusy(false);
+      void poll();
+    }
+  };
+
   const patientLabel = (j: ComputeJobView): string => {
     if (j.inputs.length === 0) return t("computeJobs.noInput");
     return j.inputs
@@ -220,8 +260,9 @@ export function ComputeJobsScreen() {
     { id: "done", label: t("computeJobs.filter.done") },
   ];
 
-  const row = (j: ComputeJobView, indent: boolean) => {
+  const row = (j: ComputeJobView, indent: boolean, groupActive: boolean) => {
     const pct = progressPct(j.progress);
+    const isLatest = latest.has(j.id);
     const ended = isEnded(j.state);
     const reason = reasonKey(j.reason);
     return (
@@ -230,14 +271,14 @@ export function ComputeJobsScreen() {
         data-testid={`computejobs-row-${j.id}`}
         data-state={j.state}
         onClick={() => select(j)}
-        style={{ ...tr, background: j.id === selectedId ? "#e8f1fb" : undefined, cursor: "pointer" }}
+        style={{ ...tr, background: j.id === selectedId ? "#e8f1fb" : undefined, cursor: "pointer", opacity: isLatest ? 1 : 0.55 }}
       >
         <td style={{ ...td, paddingLeft: indent ? 24 : 8 }}>
           <div style={{ fontWeight: 600 }}>{patientLabel(j)}</div>
           <div style={{ color: "#667" }}>
             {j.pluginName ?? t("computeJobs.unknownPlugin")}
             {j.pluginVersion ? ` ${j.pluginVersion}` : ""}
-            {j.attempt > 1 ? ` · ${t("computeJobs.attempt", { n: j.attempt })}` : ""}
+            {j.attempt > 1 || !isLatest ? ` · ${t("computeJobs.attempt", { n: j.attempt })}` : ""}
           </div>
         </td>
         <td style={td}>{j.endpointLabel ?? "—"}</td>
@@ -275,6 +316,19 @@ export function ComputeJobsScreen() {
               }}
             >
               {cancelling.has(j.id) ? t("computeJobs.cancelling") : t("computeJobs.cancel")}
+            </button>
+          )}
+          {canRerun(j, latest, groupActive) && (
+            <button
+              data-testid={`computejobs-rerun-${j.id}`}
+              disabled={rerunBusy}
+              onClick={(e) => {
+                e.stopPropagation();
+                void rerun({ kind: "job", id: j.id }, j.endpointId ?? null);
+              }}
+              style={{ marginRight: 6 }}
+            >
+              {t("computeJobs.rerun")}
             </button>
           )}
           {ended && (
@@ -353,6 +407,30 @@ export function ComputeJobsScreen() {
         </button>
       </div>
 
+      {rerunMsg && (
+        <div data-testid="computejobs-rerun-msg" style={{ padding: "6px 12px", color: "#8a4b00", background: "#fdf0e3", borderBottom: "1px solid #e0b884" }}>
+          {rerunMsg}
+          {pick && (
+            <span style={{ marginLeft: 12 }}>
+              <select data-testid="computejobs-rerun-endpoint" value={pickId} onChange={(e) => setPickId(e.target.value)}>
+                {endpoints.map((e) => (
+                  <option key={e.id} value={e.id}>
+                    {e.label}
+                  </option>
+                ))}
+              </select>{" "}
+              <button
+                data-testid="computejobs-rerun-endpoint-go"
+                disabled={rerunBusy || !pickId}
+                onClick={() => void rerun(pick.target, pick.recorded, pickId)}
+              >
+                {t("computeJobs.rerunOnThis")}
+              </button>
+            </span>
+          )}
+        </div>
+      )}
+
       {error && (
         <div data-testid="computejobs-error" style={{ padding: 12, color: "#b00020" }}>
           {t("computeJobs.error", { message: error })}
@@ -401,6 +479,16 @@ export function ComputeJobsScreen() {
                           {t("computeJobs.resume")}
                         </button>
                       )}
+                      {g.isBatch && !g.active && g.rerunnable > 0 && (
+                        <button
+                          data-testid={`computejobs-batch-rerun-${g.batchId}`}
+                          disabled={rerunBusy}
+                          onClick={() => void rerun({ kind: "batch", id: g.batchId }, g.jobs[0].endpointId ?? null)}
+                          style={{ marginRight: 6 }}
+                        >
+                          {t("computeJobs.rerunFailed")}
+                        </button>
+                      )}
                       {g.isBatch && g.active && (
                         <button
                           data-testid={`computejobs-batch-cancel-${g.batchId}`}
@@ -412,10 +500,10 @@ export function ComputeJobsScreen() {
                       )}
                     </td>
                   </tr>
-                  {g.jobs.map((j) => row(j, true))}
+                  {g.jobs.map((j) => row(j, true, g.active))}
                 </Fragment>
               ) : (
-                row(g.jobs[0], false)
+                row(g.jobs[0], false, g.active)
               ),
             )}
             {jobs && visible.length === 0 && (
@@ -429,12 +517,12 @@ export function ComputeJobsScreen() {
         </table>
       </div>
 
-      {selected && <JobDetail job={selected} t={t} patient={patientLabel(selected)} />}
+      {selected && <JobDetail job={selected} t={t} patient={patientLabel(selected)} attempts={attemptsOf(sorted, selected)} />}
     </div>
   );
 }
 
-function JobDetail({ job, t, patient }: { job: ComputeJobView; t: TFn; patient: string }) {
+function JobDetail({ job, t, patient, attempts }: { job: ComputeJobView; t: TFn; patient: string; attempts: ComputeJobView[] }) {
   const [log, setLog] = useState<{ kind: ComputeLogKind; text: string | null } | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -514,6 +602,25 @@ function JobDetail({ job, t, patient }: { job: ComputeJobView; t: TFn; patient: 
           {t("computeJobs.detail.outputs")}: {formatBytes(job.outputsBytes)}
         </div>
       )}
+      {attempts.length > 1 && (
+        <div data-testid="computejobs-detail-attempts" style={{ marginTop: 6 }}>
+          <div style={{ fontWeight: 600 }}>{t("computeJobs.detail.attempts")}</div>
+          {attempts.map((a) => (
+            <div key={a.id} data-testid={`computejobs-detail-attempt-${a.attempt}`} style={{ color: a.id === job.id ? "#222" : "#667" }}>
+              {t("computeJobs.attempt", { n: a.attempt })}: {t(stateKey(a.state))}
+              {" · "}
+              {t("computeJobs.detail.codeSha")}: {a.codeSha256 ? short(a.codeSha256) : t("computeJobs.unknown")}
+              {" · "}
+              {t("computeJobs.detail.pluginVersion")}: {a.attemptPluginVersion ?? a.pluginVersion ?? t("computeJobs.unknown")}
+              {" · "}
+              {t("computeJobs.detail.inputs")}: {a.inputs.map((i) => (i.deleted ? t("computeJobs.deletedSeries") : i.format)).join(", ") || t("computeJobs.noInput")}
+            </div>
+          ))}
+          <div data-testid="computejobs-detail-same" style={{ color: "#1a7f37" }}>
+            {sameRecord(attempts) ? t("computeJobs.detail.sameRecord") : t("computeJobs.detail.differentRecord")}
+          </div>
+        </div>
+      )}
       <div style={{ marginTop: 6 }}>
         {(["stderr", "traceback", "stdout"] as ComputeLogKind[]).map((k) => (
           <button key={k} data-testid={`computejobs-log-${k}`} disabled={busy} onClick={() => void open(k)} style={{ marginRight: 6 }}>
@@ -531,6 +638,13 @@ function JobDetail({ job, t, patient }: { job: ComputeJobView; t: TFn; patient: 
 }
 
 const short = (sha: string) => `${sha.slice(0, 8)}…`;
+
+/** 試行のあいだで、コード・プラグインの版・入力がすべて同じか（再実行は記録のものを走らせるので、普通は同じ）。 */
+function sameRecord(attempts: ComputeJobView[]): boolean {
+  const sig = (a: ComputeJobView) =>
+    JSON.stringify([a.codeSha256, a.attemptPluginVersion ?? a.pluginVersion ?? null, a.inputs.map((i) => (i.deleted ? "" : `${i.studyUid}/${i.seriesUid}/${i.format}`))]);
+  return attempts.every((a) => sig(a) === sig(attempts[0]));
+}
 
 function stateColor(s: ComputeJobView["state"]): string {
   switch (s) {

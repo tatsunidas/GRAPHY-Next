@@ -192,6 +192,18 @@ describe("見守りのループ", () => {
     expect(out).toMatchObject({ ok: true, counts: { done: 2 } });
   });
 
+  it("🔴 再実行の行（attempt 2）は新しい行として届き、件数は組ごとの最新の試行で数える", async () => {
+    const { deps } = makeDeps([[
+      row("a1", "DONE", { itemKey: "a" }),
+      row("b1", "FAILED", { itemKey: "b", reason: "code-error", attempt: 1 }),
+      row("b2", "DONE", { itemKey: "b", attempt: 2 }),
+    ]]);
+    const seen: [string | null, number][] = [];
+    const out = await watchBatch("cb_1", deps, { pollMs: 100, onItem: (i) => seen.push([i.key, i.attempt]) });
+    expect(seen).toEqual([["a", 1], ["b", 1], ["b", 2]]);
+    expect(out).toMatchObject({ ok: true, counts: { done: 2, failed: 0, total: 2 } });
+  });
+
   it("同じ組を 2 回届けない（終わった行を何度読んでも）", async () => {
     const same = [row("a", "DONE"), row("b", "RUNNING")];
     const { deps } = makeDeps([same, same, [row("a", "DONE"), row("b", "DONE")]]);

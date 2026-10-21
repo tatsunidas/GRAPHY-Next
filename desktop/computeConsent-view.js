@@ -13,6 +13,13 @@ window.graphyConsent.onShow(({ detail, strings: s }) => {
   // 127.0.0.1 の http は暗号化の話ではない（外へ出ない）。代わりに「コードはこの PC で動く」を言い切らずに出す
   if (local) { $("plaintext").hidden = false; $("plaintext").textContent = s.localNote; }
   else if (detail.plaintext) { $("plaintext").hidden = false; $("plaintext").textContent = s.plaintext; }
+  // 再実行: 毎回の同意に加えて、記録の版と今の版を見せる（違えば記録のコードで走ることを言う）
+  const note = window.graphyConsentRows.rerunNotice(detail);
+  if (note) {
+    $("rerun").hidden = false;
+    const vars = { n: note.attempt, recorded: note.recorded ?? s.unknown, current: note.current ?? s.unknown };
+    $("rerun").textContent = note.changed ? fmt(s.rerunChanged, vars) : fmt(s.rerunSame, vars);
+  }
   $("k-anon").textContent = s.anonymization;
   $("anon").textContent = detail.anonymization;
   $("k-data").textContent = s.datasets;
