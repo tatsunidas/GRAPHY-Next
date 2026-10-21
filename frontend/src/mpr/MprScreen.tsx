@@ -9,7 +9,7 @@
  * desktop=`openViewer("mpr")` / web=`window.open("#mpr")` で本画面（`App` の #mpr ルート）を開く。
  * ボリューム構築・チルト補正・ビューポート配線は `viewer/mpr.ts`。
  */
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { MIN_SLAB_MM, finestVoxelMm, tooFineForVolumeRendering } from "../viewer/volumeScale";
 import { RenderingEngine, Enums, eventTarget } from "@cornerstonejs/core";
 import {
@@ -40,6 +40,8 @@ import {
   readMprOverlay,
   probeMpr,
   setMprTouchTool,
+  setMprRoiTool,
+  mprVolumeBounds,
   type MprViewportIds,
   type MprOverlay,
   type MprProbe,
@@ -47,6 +49,19 @@ import {
 } from "../viewer/mpr";
 import { SliceDuplicatesError, volumeDepthNote, type VolumeDepthNote } from "../viewer/depthVolume";
 import { VolumeDepthChip } from "../viewer/VolumeDepthChip";
+import { Roi3dOverlay } from "./Roi3dOverlay";
+import { MprRoiDialog } from "./MprRoiDialog";
+import type { PlaneId, Roi3dShape } from "../viewer/roi3dBox";
+import {
+  addRoi3d,
+  clearRoi3d,
+  listRoi3d,
+  removeRoi3d,
+  selectRoi3d,
+  selectedRoi3dId,
+  subscribeRoi3d,
+  updateRoi3d,
+} from "../viewer/roi3dBoxStore";
 import { presetLabel } from "../viewer2d/wlPresets";
 import { useWlPresets } from "../viewer2d/wlPresetStore";
 import { useI18n } from "../i18n/i18n";
@@ -110,6 +125,12 @@ export function MprScreen({ status }: { status: AppStatus | null }) {
   // Slab MIP（fw/slab-mip-design.md §B）。null=通常 MPR。厚みは全幅 mm。
   const [slabProj, setSlabProj] = useState<SlabProjection | null>(null);
   const [slabMm, setSlabMm] = useState<number>(5);
+
+  // 3D ROI（メモリのみ）。ツール ON の間は主ボタンのドラッグを作図が受ける（十字線は止める）。
+  const [roiTool, setRoiTool] = useState<Roi3dShape | null>(null);
+  const [roiDialog, setRoiDialog] = useState(false);
+  const roiBoxes = useSyncExternalStore(subscribeRoi3d, listRoi3d);
+  const roiSelected = useSyncExternalStore(subscribeRoi3d, selectedRoi3dId);
 
   const mode = status?.mode === "standalone" ? "standalone" : "web";
 
@@ -294,9 +315,15 @@ export function MprScreen({ status }: { status: AppStatus | null }) {
     void start();
   }, [status, start]);
 
+  useEffect(() => {
+    if (phase !== "ready" || singlePane) return;
+    setMprRoiTool(TOOL_GROUP_ID, roiTool !== null);
+  }, [phase, singlePane, roiTool]);
+
   // アンマウント時のみ後片付け（status 変化で破棄しないよう分離）。
   useEffect(() => {
     return () => {
+      clearRoi3d();
       teardownMpr(engineRef.current, TOOL_GROUP_ID);
       engineRef.current = null;
     };
@@ -358,6 +385,22 @@ export function MprScreen({ status }: { status: AppStatus | null }) {
   };
 
   const busy = phase === "loading" || phase === "idle";
+
+  const roiOverlay = (viewportId: string, plane: PlaneId, hostRef: React.RefObject<HTMLDivElement>) =>
+    phase === "ready" ? (
+      <Roi3dOverlay
+        engine={engineRef.current}
+        viewportId={viewportId}
+        plane={plane}
+        hostRef={hostRef}
+        boxes={roiBoxes}
+        selectedId={roiSelected}
+        drawShape={singlePane ? null : roiTool}
+        onCreate={addRoi3d}
+        onChange={updateRoi3d}
+        onSelect={selectRoi3d}
+      />
+    ) : null;
 
   return (
     <div style={root}>
@@ -446,6 +489,24 @@ export function MprScreen({ status }: { status: AppStatus | null }) {
             <span style={wlLabel}>mm</span>
           </label>
         )}
+        {phase === "ready" && !singlePane && (
+          <label style={wlWrap} title={t("mpr.roi3d.toolHint")}>
+            <span style={wlLabel}>{t("mpr.roi3d.tool")}</span>
+            <select
+              style={wlSelect}
+              value={roiTool ?? "OFF"}
+              onChange={(e) => setRoiTool(e.target.value === "OFF" ? null : (e.target.value as Roi3dShape))}
+              data-testid="mpr-roi3d-tool"
+            >
+              <option value="OFF">{t("mpr.roi3d.off")}</option>
+              <option value="box">{t("mpr.roi3d.box")}</option>
+              <option value="ellipsoid">{t("mpr.roi3d.ellipsoid")}</option>
+            </select>
+            <button style={wlSelect} onClick={() => setRoiDialog(true)} data-testid="mpr-roi3d-measure">
+              {t("mpr.roi3d.measure")}
+            </button>
+          </label>
+        )}
         <VolumeDepthChip note={depthNote} style={tiltChip} />
         {tilt !== null && (
           <span style={tiltChip} title={t("mpr.tiltCorrectedHint")}>
@@ -522,15 +583,32 @@ export function MprScreen({ status }: { status: AppStatus | null }) {
         <Cell label={t("mpr.axial")} color="#00dc00" refEl={axialRef} overlay={overlays[VIEWPORT_IDS.axial]}
           stacked={singlePane} hidden={singlePane && activePane !== "axial"}
           onMove={(e) => onCellMove(VIEWPORT_IDS.axial, e)} onLeave={() => setProbe(null)}
-          onKey={(e) => onCellKey(VIEWPORT_IDS.axial, e)} />
+          onKey={(e) => onCellKey(VIEWPORT_IDS.axial, e)}>
+          {roiOverlay(VIEWPORT_IDS.axial, "axial", axialRef)}
+        </Cell>
         <Cell label={t("mpr.sagittal")} color="#dcdc00" refEl={sagittalRef} overlay={overlays[VIEWPORT_IDS.sagittal]}
           stacked={singlePane} hidden={singlePane && activePane !== "sagittal"}
           onMove={(e) => onCellMove(VIEWPORT_IDS.sagittal, e)} onLeave={() => setProbe(null)}
-          onKey={(e) => onCellKey(VIEWPORT_IDS.sagittal, e)} />
+          onKey={(e) => onCellKey(VIEWPORT_IDS.sagittal, e)}>
+          {roiOverlay(VIEWPORT_IDS.sagittal, "sagittal", sagittalRef)}
+        </Cell>
         <Cell label={t("mpr.coronal")} color="#00a0ff" refEl={coronalRef} overlay={overlays[VIEWPORT_IDS.coronal]}
           stacked={singlePane} hidden={singlePane && activePane !== "coronal"}
           onMove={(e) => onCellMove(VIEWPORT_IDS.coronal, e)} onLeave={() => setProbe(null)}
-          onKey={(e) => onCellKey(VIEWPORT_IDS.coronal, e)} />
+          onKey={(e) => onCellKey(VIEWPORT_IDS.coronal, e)}>
+          {roiOverlay(VIEWPORT_IDS.coronal, "coronal", coronalRef)}
+        </Cell>
+        {roiDialog && (
+          <MprRoiDialog
+            boxes={roiBoxes}
+            selectedId={roiSelected}
+            bounds={engineRef.current ? mprVolumeBounds(engineRef.current, VIEWPORT_IDS.axial) : null}
+            onSelect={selectRoi3d}
+            onChange={updateRoi3d}
+            onRemove={removeRoi3d}
+            onClose={() => setRoiDialog(false)}
+          />
+        )}
         {phase !== "ready" && (
           <div style={overlay}>
             <div style={overlayBox}>{busy ? t("mpr.loading") : message}</div>
@@ -551,6 +629,7 @@ function Cell({
   onMove,
   onLeave,
   onKey,
+  children,
 }: {
   label: string;
   color: string;
@@ -564,6 +643,8 @@ function Cell({
   onLeave?: () => void;
   /** キーボードのスライス送り（↑↓ / テンキー 8・2）。面をクリックしてフォーカスしてから効く。 */
   onKey?: (e: React.KeyboardEvent<HTMLDivElement>) => void;
+  /** ビューポートに重ねる描画（3D ROI など）。 */
+  children?: React.ReactNode;
 }) {
   const m = overlay?.markers ?? null;
   return (
@@ -585,6 +666,7 @@ function Cell({
         onMouseLeave={onLeave}
         onKeyDown={onKey}
       />
+      {children}
       <span style={{ ...cellLabel, color }}>{label}</span>
       {overlay && overlay.total > 0 && (
         <span style={sliceLabel}>
