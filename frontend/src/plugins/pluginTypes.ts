@@ -24,6 +24,8 @@ import type {
   PluginCurveFrameOptions,
 } from "./pluginCenterlineApi";
 import type { Vec3 } from "../viewer/reslice";
+import type { PluginRoi3d } from "../viewer/roiRead3d";
+export type { PluginRoi3d };
 import type { PluginSeriesPanelHandle, PluginSeriesPanelOptions } from "./pluginSeriesPanelApi";
 import type { ViewerDerivedSeriesRequest, ViewerDerivedSeriesResult, ViewerOverlay, ViewerPixelDataOptions, ViewerRoiMeasurements, ViewerTarget, ViewerAngioReportRequest, ViewerPresentationStateRequest, ViewerTilePixelData, ViewerTileSpatialCalibration, ViewerTileXaState, ViewerTileXaCine, ViewerTileRoi, ViewerTileViewState, ViewerSrMeasurementGroup, ViewerSrRequest, ViewerSrResult, ViewerLabelVolume, ViewerLabelVolumeResult } from "../viewer/viewerCommands";
 
@@ -865,6 +867,15 @@ export interface Viewer2DPluginHost extends PluginHostBase {
    * スナップショットを持ち回らないこと。
    */
   getRois: (tileId?: string) => ViewerTileRoi[];
+  /**
+   * ユーザーが置いた **3D ROI（箱・楕円体・球と、3D の 2 点定規）を読む**。座標は**患者 LPS の mm**
+   * （画素座標ではない）。`getRois()`（2D 注釈）とは別系統で、`id` は `roiUid` と別物。
+   * 読めるのはこの窓が読み込んだシリーズ分。呼ぶたびに現在値を読む。読み取り専用。
+   * `patientKey` などは本体が持っていなければ null（推測で埋めない）。
+   */
+  getRois3d: () => PluginRoi3d[];
+  /** 3D ROI の追加・変更・削除を購読する。差分は渡さない（受けたら `getRois3d()` を読み直す）。返り値で解除。 */
+  subscribeRois3d: (listener: () => void) => () => void;
   /**
    * ROI に紐付けた**このプラグインの属性**を読む（H5）。未設定なら空オブジェクト。
    * キーは自動で `plugin.<pluginId>.` 名前空間に置かれるので、他プラグインや本体の属性とは混ざらない。

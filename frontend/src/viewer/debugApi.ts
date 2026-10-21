@@ -14,7 +14,8 @@ import {
 } from "../plugins/pluginVesselApi";
 import { calibrationForImageId, loaderSpacingFor, setXaUserCalibration } from "./xaCalibrationProvider";
 import { getViewerContext } from "./viewerContext";
-import { addMeasure3d, addRoi3d, listMeasure3d, newRoi3dId } from "./roiLedger";
+import { addMeasure3d, addRoi3d, listMeasure3d, newRoi3dId, removeRoi3d } from "./roiLedger";
+import { readRois3d } from "./roiRead3d";
 import { measureDistanceMm } from "./roiMeasure3d";
 import { sphereSolid } from "./roi3dBox";
 import { worldToImageCoords } from "./imageCoords";
@@ -1169,6 +1170,9 @@ declare global {
     __graphyDebug?: {
       seedSphere3D: typeof seedSphere3D;
       seedMeasure3D: typeof seedMeasure3D;
+      seedBox3D: typeof seedBox3D;
+      readRois3D: typeof readRois3d;
+      removeRoi3D: typeof removeRoi3d;
       listMeasures3D: typeof listMeasures3D;
       currentRoiContext: typeof currentRoiContext;
       getSpacingProbe: typeof getSpacingProbe;
@@ -1351,6 +1355,14 @@ function seedMeasure3D(a: [number, number, number], b: [number, number, number])
   return id;
 }
 
+/** 箱 solid を台帳へ直接作る（DEV 限定。プラグインが読む 3D ROI の自動検査用）。 */
+function seedBox3D(center: [number, number, number], size: [number, number, number]): string {
+  const id = newRoi3dId();
+  const ctx = currentRoiContext();
+  addRoi3d({ id, shape: "box", center, size, studyUid: ctx?.studyUid ?? "", seriesUid: ctx?.seriesUid ?? "", c: "all", t: "all", label: "Box" });
+  return id;
+}
+
 /** 台帳の 3D 定規（DEV 限定。距離は端点から導いた値）。 */
 function listMeasures3D(): Array<{ id: string; label?: string; visible?: boolean; distMm: number; seriesUid?: string }> {
   return listMeasure3d().map((m) => ({ id: m.id, label: m.label, visible: m.visible, distMm: measureDistanceMm(m), seriesUid: m.seriesUid }));
@@ -1370,6 +1382,9 @@ export function installDebugApi(): void {
   window.__graphyDebug = {
     seedSphere3D,
     seedMeasure3D,
+    seedBox3D,
+    readRois3D: readRois3d,
+    removeRoi3D: removeRoi3d,
     listMeasures3D,
     currentRoiContext,
     getSpacingProbe,
