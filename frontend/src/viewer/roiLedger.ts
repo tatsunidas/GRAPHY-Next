@@ -32,8 +32,12 @@ export function newRoi3dId(): string {
   return crypto.randomUUID();
 }
 
-export function listRoi3d(): Roi3dBox[] {
-  return boxes;
+/** 窓内の solid。`seriesUid` を渡すとそのシリーズのものだけ（2D 窓は複数シリーズを同時に持つ）。 */
+export function listRoi3d(seriesUid?: string): Roi3dBox[] {
+  return seriesUid === undefined ? boxes : boxes.filter((b) => b.seriesUid === seriesUid);
+}
+export function getRoi3d(id: string): Roi3dBox | undefined {
+  return boxes.find((b) => b.id === id);
 }
 export function selectedRoi3dId(): string | null {
   return selectedId;
@@ -68,6 +72,12 @@ export function selectRoi3d(id: string | null): void {
 export function hydrateRoi3d(solids: Roi3dBox[]): void {
   boxes = solids;
   selectedId = null;
+  emit(listeners);
+}
+/** 保存済みの solid のうち、このシリーズ分だけを置き換える（他のシリーズ・編集通知は触らない）。 */
+export function hydrateRoi3dSeries(seriesUid: string, solids: Roi3dBox[]): void {
+  boxes = [...boxes.filter((b) => b.seriesUid !== seriesUid), ...solids];
+  if (selectedId && !boxes.some((b) => b.id === selectedId)) selectedId = null;
   emit(listeners);
 }
 export function clearRoi3d(): void {

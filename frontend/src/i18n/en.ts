@@ -1386,6 +1386,8 @@ export const en: Record<string, string> = {
   "roiMgr.defineSphere": "Define parametric 3D sphere from circle ROI (live cross-section on all slices)",
   "roiMgr.spheres": "3D spheres (parametric)",
   "roiMgr.radiusMm": "Radius (mm)",
+  "roiMgr.sizeMm": "Size (mm)",
+  "roiMgr.bakeNoRef": "Cannot convert to a mask: no source slice (ROI drawn in MPR)",
   "roiMgr.centerMm": "Center (LPS mm)",
   "roiMgr.centerX": "Center x (LPS mm)",
   "roiMgr.centerY": "Center y (LPS mm)",

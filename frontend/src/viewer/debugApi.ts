@@ -14,7 +14,8 @@ import {
 } from "../plugins/pluginVesselApi";
 import { calibrationForImageId, loaderSpacingFor, setXaUserCalibration } from "./xaCalibrationProvider";
 import { getViewerContext } from "./viewerContext";
-import { addSphere3D } from "./sphere3dStore";
+import { addRoi3d, newRoi3dId } from "./roiLedger";
+import { sphereSolid } from "./roi3dBox";
 import { worldToImageCoords } from "./imageCoords";
 import type { Geometry3DPixelStats } from "./vtkGeometryView";
 import type { VtkRenderStats } from "./vtkVolumeView";
@@ -1166,6 +1167,7 @@ declare global {
   interface Window {
     __graphyDebug?: {
       seedSphere3D: typeof seedSphere3D;
+      currentRoiContext: typeof currentRoiContext;
       getSpacingProbe: typeof getSpacingProbe;
       probeUserCalibration: typeof probeUserCalibration;
       getRoiStatsPair: typeof getRoiStatsPair;
@@ -1320,7 +1322,7 @@ let installed = false;
 
 /** 冪等: 何度呼んでも安全（SeriesViewer マウントの都度呼ばれる想定）。 */
 /**
- * 球（Sphere3D）を、いま表示中のスライスを参照スタックとして直接作る（DEV 限定）。
+ * 球（台帳の楕円体 solid）を、いま表示中のスライスを参照スタックとして直接作る（DEV 限定）。
  * 円 ROI を描く UI が無い（CircleROI ツールは未登録）ため、自動検査が球の行を作る口として使う。
  */
 function seedSphere3D(center: [number, number, number], radiusMm: number): string | null {
@@ -1329,16 +1331,30 @@ function seedSphere3D(center: [number, number, number], radiusMm: number): strin
   const vp = engine?.getViewports()[0] as any;
   const refImageId = vp?.getCurrentImageId?.() as string | undefined;
   if (!refImageId) return null;
-  return addSphere3D({
-    studyUid: "", seriesUid: "", refImageId, center, radiusMm,
-    c: "all", t: "all", patientKey: "", label: "Sphere", color: "#00e5ff", visible: true,
+  const id = newRoi3dId();
+  const ctx = getViewerContext(vp.id as string);
+  addRoi3d({
+    ...sphereSolid(id, center, radiusMm),
+    studyUid: ctx?.studyUid ?? "", seriesUid: ctx?.seriesUid ?? "", refImageId,
+    c: "all", t: "all", patientKey: ctx?.patientKey ?? "", seriesLabel: ctx?.seriesLabel, label: "Sphere", color: "#00e5ff", visible: true,
   });
+  return id;
+}
+
+/** 先頭ビューポートの患者・スタディ・シリーズ（DEV 限定。自動検査が保存先の患者キーを知る口）。 */
+function currentRoiContext(): { patientKey: string; studyUid: string; seriesUid: string } | null {
+  const engine = getRenderingEngine(ENGINE_ID);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const vp = engine?.getViewports()[0] as any;
+  const ctx = vp ? getViewerContext(vp.id as string) : undefined;
+  return ctx ? { patientKey: ctx.patientKey, studyUid: ctx.studyUid, seriesUid: ctx.seriesUid } : null;
 }
 
 export function installDebugApi(): void {
   if (installed || !import.meta.env.DEV) return;
   window.__graphyDebug = {
     seedSphere3D,
+    currentRoiContext,
     getSpacingProbe,
     probeUserCalibration,
     getRoiStatsPair,

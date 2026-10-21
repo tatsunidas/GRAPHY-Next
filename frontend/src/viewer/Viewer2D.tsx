@@ -46,7 +46,9 @@ import { emitRoiReveal } from "./roiReveal";
 import { reconcileGlobalAnnotations } from "./globalRoiSync";
 import { loadRoisCached, scheduleRoiSave } from "./roiSaveStore";
 import { restoreRoisIntoStack } from "./roiRestore";
-import { listSpheres3D, sphereCanvasCircle, subscribeSphere3D, type SphereCanvasCircle } from "./sphere3dStore";
+import { listRoi3d, subscribeRoi3d } from "./roiLedger";
+import { hydrateSolidsForSeries } from "./roiSolidSync";
+import { solidCanvasOutline, type SolidCanvasOutline } from "./solidPreview";
 import { ensureCornerstoneInitialized } from "./cornerstoneSetup";
 import { applyTransform, isPanned, readTransform, type ViewTransform, FIT_TRANSFORM } from "./transform";
 import { readImageInfo, sampleAtCanvas, computeSliceSpacing, calibratedUnit, type ImageInfo, type PixelSample } from "./imageInfo";
@@ -414,7 +416,7 @@ function sameMarkers(a: OrientationMarkers | null, b: OrientationMarkers | null)
 
 /** 空配列は毎回作らず使い回す（新しい配列は「変化した」と誤判定される）。 */
 const EMPTY_SEGMENTS: RefSegment[] = [];
-const EMPTY_CIRCLES: SphereCanvasCircle[] = [];
+const EMPTY_CIRCLES: SolidCanvasOutline[] = [];
 const EMPTY_ROI_ROWS: RoiStatsCornerRow[] = [];
 
 function sameSegments(a: RefSegment[], b: RefSegment[]): boolean {
@@ -428,13 +430,16 @@ function sameSegments(a: RefSegment[], b: RefSegment[]): boolean {
   return true;
 }
 
-function sameCircles(a: SphereCanvasCircle[], b: SphereCanvasCircle[]): boolean {
+function sameCircles(a: SolidCanvasOutline[], b: SolidCanvasOutline[]): boolean {
   if (a === b) return true;
   if (a.length !== b.length) return false;
   for (let i = 0; i < a.length; i++) {
     const p = a[i], q = b[i];
-    if (!nearly(p.cx, q.cx) || !nearly(p.cy, q.cy) || !nearly(p.r, q.r)
+    if (!nearly(p.cx, q.cx) || !nearly(p.cy, q.cy) || p.points.length !== q.points.length
       || p.color !== q.color || p.label !== q.label) return false;
+    for (let k = 0; k < p.points.length; k++) {
+      if (!nearly(p.points[k][0], q.points[k][0]) || !nearly(p.points[k][1], q.points[k][1])) return false;
+    }
   }
   return true;
 }
@@ -702,8 +707,8 @@ export function Viewer2D({
     lastRefSegmentsRef.current = next;
     setRefSegments(next);
   }, []);
-  const lastSphereCirclesRef = useRef<SphereCanvasCircle[]>(EMPTY_CIRCLES);
-  const applySphereCircles = useCallback((next: SphereCanvasCircle[]) => {
+  const lastSphereCirclesRef = useRef<SolidCanvasOutline[]>(EMPTY_CIRCLES);
+  const applySphereCircles = useCallback((next: SolidCanvasOutline[]) => {
     if (sameCircles(lastSphereCirclesRef.current, next)) return;
     lastSphereCirclesRef.current = next;
     setSphereCircles(next);
@@ -721,7 +726,7 @@ export function Viewer2D({
   recomputeRefLinesRef.current = recomputeRefLines;
 
   // パラメトリック 3D 球のライブ断面円プレビュー（現在スライス/scope で交差する円）。
-  const [sphereCircles, setSphereCircles] = useState<SphereCanvasCircle[]>([]);
+  const [sphereCircles, setSphereCircles] = useState<SolidCanvasOutline[]>([]);
   const recomputeSpheresRef = useRef<() => void>(() => {});
   const recomputeSpheres = useCallback(() => {
     const v = viewportRef.current;
@@ -730,10 +735,10 @@ export function Viewer2D({
       applySphereCircles(EMPTY_CIRCLES);
       return;
     }
-    const out: SphereCanvasCircle[] = [];
-    for (const s of listSpheres3D()) {
+    const out: SolidCanvasOutline[] = [];
+    for (const s of listRoi3d()) {
       if (s.seriesUid && s.seriesUid !== ctx.seriesUid) continue;
-      const c = sphereCanvasCircle(v, s, ctx.c, ctx.t);
+      const c = solidCanvasOutline(v, s, ctx.c, ctx.t);
       if (c) out.push(c);
     }
     applySphereCircles(out);
@@ -1551,7 +1556,7 @@ export function Viewer2D({
   // 3D 球プレビュー: ストア変化を購読し、初期化完了・スライス・スタックで再計算。
   useEffect(() => {
     if (compact || syncGroupId) return;
-    return subscribeSphere3D(() => recomputeSpheresRef.current());
+    return subscribeRoi3d(() => recomputeSpheresRef.current());
   }, [compact, syncGroupId]);
   useEffect(() => {
     recomputeSpheres();
@@ -2724,6 +2729,8 @@ export function Viewer2D({
     const seriesLabel = roiContext?.seriesLabel;
     if (!patientKey || !imageIds.length) return;
     let cancelled = false;
+    const seriesUid = roiContext?.seriesUid;
+    if (seriesUid) void hydrateSolidsForSeries(patientKey, seriesUid);
     void loadRoisCached(patientKey).then((parsed) => {
       if (cancelled || !parsed.rois.length) return;
       const v = vp();
@@ -2829,9 +2836,9 @@ export function Viewer2D({
             <svg style={refLineSvg}>
               {sphereCircles.map((c, i) => (
                 <g key={i}>
-                  <circle data-testid="sphere-preview" cx={c.cx} cy={c.cy} r={c.r} fill="none" stroke={c.color} strokeWidth={1.5} strokeDasharray="4 3" opacity={0.9} />
+                  <polygon data-testid="sphere-preview" points={c.points.map((p) => `${p[0]},${p[1]}`).join(" ")} fill="none" stroke={c.color} strokeWidth={1.5} strokeDasharray="4 3" opacity={0.9} />
                   <circle cx={c.cx} cy={c.cy} r={1.5} fill={c.color} />
-                  {c.label && <text x={c.cx + c.r + 4} y={c.cy} fill={c.color} fontSize={11} style={refLineText}>{c.label}</text>}
+                  {c.label && <text x={Math.max(...c.points.map((p) => p[0])) + 4} y={c.cy} fill={c.color} fontSize={11} style={refLineText}>{c.label}</text>}
                 </g>
               ))}
             </svg>

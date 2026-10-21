@@ -35,8 +35,9 @@ import { emitSeriesRefresh } from "../viewer/viewerRefresh";
 import { emitDbChanged } from "../dbEvents";
 import { combineRois, splitMask, roiToMask, withTempMask, isAreaRoi, resolveRoiStack, type BoolOp, type RoiOperand, type SplitConnectivity } from "../viewer/roiBooleanOps";
 import { buildRoiPanelModel, type MeasureRow, type PaintedRoiRow, type RoiPanelModel, type RoiRowEnv, type ShapeRoiRow } from "../viewer/roiRows";
-import { sphereFromCircleRoi, createSphere3DFromCircleRoi, bakeSphere3D, splitMaskToSlices, maskVolumeStats, type MaskVolumeStats } from "../viewer/roi3d";
-import { listSpheres3D, updateSphere3D, deleteSphere3D, subscribeSphere3D, type Sphere3D } from "../viewer/sphere3dStore";
+import { sphereFromCircleRoi, createSphere3DFromCircleRoi, bakeSolid3D, splitMaskToSlices, maskVolumeStats, type MaskVolumeStats } from "../viewer/roi3d";
+import { listRoi3d, updateRoi3d, removeRoi3d, subscribeRoi3d } from "../viewer/roiLedger";
+import { solidRadius, withSize, type Roi3dBox } from "../viewer/roi3dBox";
 import { annotationsToImageJDtos } from "../viewer/imagejExport";
 import { importImageJDtos } from "../viewer/imagejImport";
 import { exportImageJRoiSet, importImageJRoiSet } from "../api";
@@ -123,7 +124,7 @@ export function RoiManagerPanel({
   // SEG⬆ インポートの進捗率（0〜1）。null は非実行中（SEG⬆ ボタンの円形プログレス表示に使う）。
   const [segImportProgress, setSegImportProgress] = useState<number | null>(null);
   const [stats, setStats] = useState<Record<string, MaskVolumeStats>>({});
-  const [spheres, setSpheres] = useState<Sphere3D[]>([]);
+  const [spheres, setSpheres] = useState<Roi3dBox[]>([]);
   // Split の 3D 連結性（6=面/18=面+辺/26=全て）。既定 26＝斜め接続もつなぎ過分割を抑える。
   const [splitConn, setSplitConn] = useState<SplitConnectivity>(26);
   // マスク行の初期値（環境設定 viewer.maskFillOpacity / maskOutlineWidth に追従）。
@@ -180,7 +181,7 @@ export function RoiManagerPanel({
       scopeText,
       isSegmentVisible: getSegmentVisible,
     };
-    const allSpheres = listSpheres3D();
+    const allSpheres = listRoi3d();
     try {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const anns = csAnnotation.state.getAllAnnotations() as any[];
@@ -213,7 +214,7 @@ export function RoiManagerPanel({
     ].filter(Boolean) as string[];
     for (const n of names) eventTarget.addEventListener(n, refresh);
     const unsub = subscribeRoiMaskStore(refresh);
-    const unsubSphere = subscribeSphere3D(refresh);
+    const unsubSphere = subscribeRoi3d(refresh);
     return () => {
       unsubSphere();
       for (const n of names) eventTarget.removeEventListener(n, refresh);
@@ -368,7 +369,7 @@ export function RoiManagerPanel({
     if (busy) return;
     setBusy(true);
     try {
-      const res = await bakeSphere3D(id);
+      const res = await bakeSolid3D(id, activePatientKey);
       if (!res) window.alert(t("roiMgr.opFailed"));
     } finally {
       setBusy(false);
@@ -821,13 +822,30 @@ export function RoiManagerPanel({
   const renderSphereRow = (id: string) => {
     const s = spheres.find((x) => x.id === id);
     if (!s) return null;
+    const color = s.color ?? "#00e5ff";
+    const radius = solidRadius(s);
+    const upd = (patch: Partial<Roi3dBox>) => updateRoi3d({ ...s, ...patch });
     return (
       <div key={s.id} style={row} data-testid="roi-row" data-kind="sphere" data-roi-key={s.id}>
-        <button onClick={() => updateSphere3D(s.id, { visible: !s.visible })} style={eyeBtn} title={t("roiMgr.visible")} data-testid="roi-row-visible">{s.visible ? "👁" : "🚫"}</button>
-        <span title={t("roiMgr.iconSphere")} style={{ color: s.color }}>◍</span>
-        <input type="text" style={name} defaultValue={s.label ?? "Sphere"} onChange={(e) => updateSphere3D(s.id, { label: e.target.value })} />
-        <input type="color" defaultValue={s.color} onChange={(e) => updateSphere3D(s.id, { color: e.target.value })} title={t("roiMgr.color")} style={colorInput} />
-        <input type="number" min={0.1} step={0.5} defaultValue={Number(s.radiusMm.toFixed(1))} onChange={(e) => { const v = Number(e.target.value); if (v > 0) updateSphere3D(s.id, { radiusMm: v }); }} title={t("roiMgr.radiusMm")} style={numInput} data-testid="sphere-radius" />
+        <button onClick={() => upd({ visible: s.visible === false })} style={eyeBtn} title={t("roiMgr.visible")} data-testid="roi-row-visible">{s.visible !== false ? "👁" : "🚫"}</button>
+        <span title={t("roiMgr.iconSphere")} style={{ color }}>{s.shape === "box" ? "▣" : "◍"}</span>
+        <input type="text" style={name} defaultValue={s.label ?? "Sphere"} onChange={(e) => upd({ label: e.target.value })} />
+        <input type="color" defaultValue={color} onChange={(e) => upd({ color: e.target.value })} title={t("roiMgr.color")} style={colorInput} />
+        {radius !== null ? (
+          <input type="number" min={0.1} step={0.5} defaultValue={Number(radius.toFixed(1))} onChange={(e) => { const v = Number(e.target.value); if (v > 0) upd({ size: [2 * v, 2 * v, 2 * v] }); }} title={t("roiMgr.radiusMm")} style={numInput} data-testid="sphere-radius" />
+        ) : (
+          (["X", "Y", "Z"] as const).map((ax, i) => (
+            <NumField
+              key={ax}
+              testid={`solid-size-${ax.toLowerCase()}`}
+              value={s.size[i]}
+              format={(v) => v.toFixed(1)}
+              title={`${t("roiMgr.sizeMm")} ${ax}`}
+              style={numInput}
+              onCommit={(v) => upd(withSize(s, i as 0 | 1 | 2, v))}
+            />
+          ))
+        )}
         <span style={{ color: "#9aa6b2", fontSize: 10 }}>mm</span>
         <span style={{ color: "#9aa6b2", fontSize: 10 }}>{t("roiMgr.centerMm")}</span>
         {(["X", "Y", "Z"] as const).map((ax, i) => (
@@ -838,11 +856,11 @@ export function RoiManagerPanel({
             format={(v) => v.toFixed(2)}
             title={t(`roiMgr.center${ax}`)}
             style={centerInput}
-            onCommit={(v) => { const c = [...s.center] as [number, number, number]; c[i] = v; updateSphere3D(s.id, { center: c }); }}
+            onCommit={(v) => { const c = [...s.center] as [number, number, number]; c[i] = v; upd({ center: c }); }}
           />
         ))}
-        <button onClick={() => runBakeSphere(s.id)} disabled={busy} style={editBtn} title={t("roiMgr.bakeSphere")} data-testid="sphere-bake">{t("roiMgr.bakeSphereShort")}</button>
-        <button onClick={() => deleteSphere3D(s.id)} style={delBtn} title={t("common.delete")} data-testid="roi-row-delete">🗑</button>
+        <button onClick={() => runBakeSphere(s.id)} disabled={busy || !s.refImageId} style={editBtn} title={s.refImageId ? t("roiMgr.bakeSphere") : t("roiMgr.bakeNoRef")} data-testid="sphere-bake">{t("roiMgr.bakeSphereShort")}</button>
+        <button onClick={() => removeRoi3d(s.id)} style={delBtn} title={t("common.delete")} data-testid="roi-row-delete">🗑</button>
       </div>
     );
   };
