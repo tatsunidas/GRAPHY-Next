@@ -6,7 +6,7 @@
 // 共有 RenderingEngine の 1 viewport を担当し、W/L・トランスフォーム・スライス送り・PNG 保存を提供する。
 // P4.4 で複数タイル対応のため、旧 viewer.ts の per-viewport ロジックをここへ分離した。
 import { Enums, metaData, type Types, type RenderingEngine } from "@cornerstonejs/core";
-import dicomImageLoader from "@cornerstonejs/dicom-image-loader";
+import { imageIdOf } from "./imageIds";
 import type { ImageRec } from "./dicomdir";
 import { resolveOverlay, isCalibrated, pixelSpacingColumn } from "./overlay";
 import { computeScaleBar } from "./scalebar";
@@ -109,9 +109,7 @@ export class ViewportPanel {
   /** 1 シリーズの画像を表示する。 */
   async showSeries(images: ImageRec[]): Promise<void> {
     const vp = this.viewport();
-    const imageIds = images
-      .filter((im) => im.file)
-      .map((im) => dicomImageLoader.wadouri.fileManager.add(im.file!));
+    const imageIds = images.map(imageIdOf).filter((id): id is string => id !== null);
     this.imageCount = imageIds.length;
     if (imageIds.length === 0) {
       throw new Error("表示できるファイルがありません（DICOMDIR の参照先が見つかりません）");

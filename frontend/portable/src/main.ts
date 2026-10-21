@@ -6,7 +6,6 @@
 // サーバ不要・Cornerstone3D をローカル File から直接読む（fw/export-portable-viewer.md 方式 A）。
 import "./style.css";
 import { utilities as csUtilities } from "@cornerstonejs/core";
-import dicomImageLoader from "@cornerstonejs/dicom-image-loader";
 import {
   parseDicomDir,
   findDicomDirFile,
@@ -15,6 +14,8 @@ import {
   type SeriesRec,
 } from "./dicomdir";
 import { PortableViewer, ensureInit, LAYOUTS } from "./viewer";
+import { hasSource, imageIdOf } from "./imageIds";
+import { serverBase, loadFromServer, startHeartbeat } from "./mediaSource";
 import { WL_PRESETS } from "./wlPresets";
 
 const $ = <T extends HTMLElement>(sel: string): T => {
@@ -22,6 +23,9 @@ const $ = <T extends HTMLElement>(sel: string): T => {
   if (!el) throw new Error(`要素が見つかりません: ${sel}`);
   return el;
 };
+
+// アプリが起動した＝スクリプトが読めた。file:// 用の案内（index.html）は不要なので消す。
+document.getElementById("boot-guide")?.remove();
 
 const folderInput = $<HTMLInputElement>("#folder-input");
 const pickBtn = $<HTMLButtonElement>("#pick-btn");
@@ -140,7 +144,7 @@ async function ensureViewer(): Promise<PortableViewer> {
  */
 function showVideoSeries(series: SeriesRec): void {
   stopCine();
-  const withVideo = series.images.filter((im) => im.videoFile);
+  const withVideo = series.images.filter((im) => im.videoFile || im.videoUrl);
   gridEl.hidden = true;
   cinebar.hidden = true;
   videoStage.hidden = false;
@@ -156,8 +160,13 @@ function showVideoSeries(series: SeriesRec): void {
     setStatus("動画シリーズですが再生用ファイルがありません", "error");
     return;
   }
-  videoObjectUrl = URL.createObjectURL(withVideo[0].videoFile as File);
-  videoPlayer.src = videoObjectUrl;
+  const v0 = withVideo[0];
+  if (v0.videoFile) {
+    videoObjectUrl = URL.createObjectURL(v0.videoFile);
+    videoPlayer.src = videoObjectUrl;
+  } else {
+    videoPlayer.src = v0.videoUrl as string; // ローカルサーバ経由（Range 対応）
+  }
   videoPlayer.load();
   videoNote.textContent =
     withVideo.length > 1
@@ -190,7 +199,7 @@ async function showSeries(series: SeriesRec): Promise<void> {
   try {
     const v = await ensureViewer();
     stopCine();
-    const withFiles = series.images.filter((im) => im.file).length;
+    const withFiles = series.images.filter(hasSource).length;
     setStatus(`表示中… (${withFiles}/${series.images.length} ファイル)`);
     await v.showSeriesInActive(series.images);
     syncUi();
@@ -216,11 +225,11 @@ async function renderThumb(canvas: HTMLCanvasElement, series: SeriesRec): Promis
     }
     return;
   }
-  const first = series.images.find((im) => im.file);
-  if (!first?.file) return;
+  const first = series.images.find(hasSource);
+  const imageId = first ? imageIdOf(first) : null;
+  if (!imageId) return;
   try {
     await ensureInit();
-    const imageId = dicomImageLoader.wadouri.fileManager.add(first.file);
     await csUtilities.loadImageToCanvas({ canvas, imageId, thumbnail: true, imageAspect: true });
     // loadImageToCanvas は canvas.style を実解像度基準で書き換えるため、44px 枠へ収め直す（アスペクト維持）。
     const box = 44;
@@ -256,7 +265,7 @@ function buildTree(m: DicomDirModel): void {
       for (const se of st.series) {
         const seNode = document.createElement("div");
         seNode.className = "node series";
-        const missing = se.images.filter((im) => !im.file).length;
+        const missing = se.images.filter((im) => !hasSource(im)).length;
         const seLabel =
           se.description || `${se.modality} Series ${se.number ?? ""}`.trim() || "(series)";
 
@@ -285,6 +294,22 @@ function buildTree(m: DicomDirModel): void {
   }
 }
 
+/** 解析済みの媒体を画面へ出す。最初の画像シリーズ（無ければ最初のシリーズ）を自動で表示する。 */
+async function presentModel(m: DicomDirModel): Promise<void> {
+  model = m;
+  await ensureViewer(); // タイル初期化（サムネイル生成にも core init が要る）。
+  buildTree(m);
+  const totalSeries = m.patients.reduce(
+    (n, p) => n + p.studies.reduce((k, s) => k + s.series.length, 0),
+    0,
+  );
+  const miss = m.missingFiles > 0 ? `（未解決参照 ${m.missingFiles} 件）` : "";
+  setStatus(`${m.patients.length} 患者 / ${totalSeries} シリーズを読み込みました${miss}`);
+  const nodes = Array.from(treeEl.querySelectorAll<HTMLElement>(".node.series"));
+  const firstImage = nodes.find((n) => !n.textContent?.includes("🎞")) ?? nodes[0];
+  firstImage?.click();
+}
+
 async function handleFiles(files: File[]): Promise<void> {
   if (files.length === 0) return;
   setStatus("DICOMDIR を探しています…");
@@ -298,15 +323,7 @@ async function handleFiles(files: File[]): Promise<void> {
   }
   try {
     setStatus("DICOMDIR を解析しています…");
-    model = await parseDicomDir(dicomdir, files);
-    await ensureViewer(); // タイル初期化（サムネイル生成にも core init が要る）。
-    buildTree(model);
-    const totalSeries = model.patients.reduce(
-      (n, p) => n + p.studies.reduce((k, s) => k + s.series.length, 0),
-      0,
-    );
-    const miss = model.missingFiles > 0 ? `（未解決参照 ${model.missingFiles} 件）` : "";
-    setStatus(`${model.patients.length} 患者 / ${totalSeries} シリーズを読み込みました${miss}`);
+    await presentModel(await parseDicomDir(dicomdir, files));
   } catch (e) {
     setStatus(`DICOMDIR 解析に失敗: ${e instanceof Error ? e.message : String(e)}`, "error");
   }
@@ -522,9 +539,32 @@ async function runSelfTest(rawBase: string): Promise<void> {
   }
 }
 
+/** 起動スクリプトのローカルサーバから開かれた場合: 操作なしで媒体を読み、最初のシリーズを表示する。 */
+async function autoOpenFromServer(base: string): Promise<void> {
+  setStatus("媒体を読み込んでいます…");
+  startHeartbeat(base);
+  try {
+    await presentModel(await loadFromServer(base));
+  } catch (e) {
+    setStatus(
+      `媒体を自動で開けませんでした: ${e instanceof Error ? e.message : String(e)}（「フォルダを選択」でも開けます）`,
+      "error",
+    );
+  }
+}
+
+videoPlayer.addEventListener("error", () => {
+  if (!videoPlayer.getAttribute("src")) return;
+  videoNote.textContent = "再生用の動画（VIDEO/）が見つかりません。Export 時に「2D Viewer (portable) を同梱」を有効にしてください。";
+  setStatus("動画を再生できません", "error");
+});
+
 const selfTest = new URLSearchParams(location.search).get("selfTest");
+const base = serverBase();
 if (selfTest) {
   void runSelfTest(selfTest);
+} else if (base) {
+  void autoOpenFromServer(base);
 } else {
   setStatus("「フォルダを選択」から Export の媒体（DICOMDIR を含むフォルダ）を選んでください。");
 }
