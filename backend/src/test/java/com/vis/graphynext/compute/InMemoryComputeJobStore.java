@@ -102,6 +102,10 @@ class InMemoryComputeJobStore implements ComputeJobStore {
         ComputeJobRecord d = new ComputeJobRecord(s.id, s.batchId);
         d.itemKey = s.itemKey;
         d.attempt = s.attempt;
+        d.pluginVersion = s.pluginVersion;
+        d.endpointId = s.endpointId;
+        d.endpointLabel = s.endpointLabel;
+        d.endpointHost = s.endpointHost;
         d.inputRefs = s.inputRefs;
         d.requestId = s.requestId;
         d.contentHash = s.contentHash;

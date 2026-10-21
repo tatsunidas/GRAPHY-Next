@@ -273,7 +273,7 @@ export function ComputeJobsScreen() {
         onClick={() => select(j)}
         style={{ ...tr, background: j.id === selectedId ? "#e8f1fb" : undefined, cursor: "pointer", opacity: isLatest ? 1 : 0.55 }}
       >
-        <td style={{ ...td, paddingLeft: indent ? 24 : 8 }}>
+        <td style={{ ...td, padding: indent ? "6px 8px 6px 24px" : td.padding }}>
           <div style={{ fontWeight: 600 }}>{patientLabel(j)}</div>
           <div style={{ color: "#667" }}>
             {j.pluginName ?? t("computeJobs.unknownPlugin")}

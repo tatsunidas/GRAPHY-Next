@@ -145,6 +145,9 @@ public class ComputeJobLedger {
         j.itemKey = itemKey;
         j.attempt = attempt;
         j.pluginVersion = store.findBatch(batchId).map(b -> facts.of(b.pluginId).version()).orElse(null);
+        j.endpointId = r.endpointId();
+        j.endpointLabel = r.endpointLabel();
+        j.endpointHost = hostOf(r.endpointUrl());
         j.inputRefs = json(inputs);
         j.requestId = r.id();
         j.contentHash = r.contentHash();
@@ -529,10 +532,11 @@ public class ComputeJobLedger {
             m.put("pluginVersion", b.pluginVersion);
             m.put("pluginPackageSha256", b.pluginPackageSha256);
             m.put("codeSha256", b.codeSha256);
-            m.put("endpointId", b.endpointId);
-            m.put("endpointLabel", b.endpointLabel);
+            // 試行ごとの計算機（再実行で選び直したときはバッチの記録と違う）。古い行はバッチの記録
+            m.put("endpointId", j.endpointId != null ? j.endpointId : b.endpointId);
+            m.put("endpointLabel", j.endpointLabel != null ? j.endpointLabel : b.endpointLabel);
             m.put("endpointKind", b.endpointKind);
-            m.put("endpointHost", b.endpointHost);
+            m.put("endpointHost", j.endpointHost != null ? j.endpointHost : b.endpointHost);
             m.put("plaintext", b.plaintext);
             m.put("timeoutSec", b.timeoutSec);
         }

@@ -209,7 +209,9 @@ class ComputeRerunControllerTest {
     @Test
     void aMissingComputerIsRefusedUntilAnotherIsChosen() {
         String b = batch(false, "gone");
-        String failed = job(b, "k1", State.FAILED, Reason.ENDPOINT_UNREACHABLE, 1);
+        String failed = ledger.createJob(b, request("gone"), "k1", series(), 1); // 走らせた計算機が今は登録に無い
+        ledger.start(failed, null);
+        ledger.finish(failed, State.FAILED, Reason.ENDPOINT_UNREACHABLE, null, null, 0);
         ResponseEntity<Map<String, Object>> r = ctl.rerunJob(failed, null);
         assertEquals(HttpStatus.CONFLICT, r.getStatusCode());
         assertEquals("unknown-endpoint", body(r, "error"));
@@ -219,6 +221,18 @@ class ComputeRerunControllerTest {
         assertEquals("lab2", t.endpointId(), "選び直した計算機が同意画面の送り先になる");
         assertEquals("https://gpu2.example.org/", t.endpointUrl());
         assertEquals("unknown-endpoint", body(ctl.rerunJob(failed, new ComputeRerunController.RerunBody("nope")), "error"));
+    }
+
+    @Test
+    void theRerunDefaultsToTheComputerTheLastAttemptRanOn() {
+        String b = batch(false, "gone"); // バッチの記録の計算機はもう無い
+        String id = ledger.createJob(b, request("lab2"), "k1", series(), 1); // 直前の試行は lab2 で走った
+        ledger.start(id, null);
+        ledger.finish(id, State.FAILED, Reason.CODE_ERROR, "E", null, 0);
+        ResponseEntity<Map<String, Object>> r = ctl.rerunJob(id, null);
+        assertEquals(HttpStatus.OK, r.getStatusCode(), String.valueOf(r.getBody()));
+        assertEquals("lab2", egress.detail((String) body(r, "requestId")).orElseThrow().endpointId());
+        assertEquals("lab2", ledger.view(ledger.find(id).orElseThrow()).get("endpointId"), "窓には試行ごとの計算機が出る");
     }
 
     @Test

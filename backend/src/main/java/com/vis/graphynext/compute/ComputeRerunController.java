@@ -110,7 +110,9 @@ public class ComputeRerunController {
         if (ledger.hasActive(b.id)) {
             return error(HttpStatus.CONFLICT, "batch-active");
         }
-        String endpointId = endpointOverride != null && !endpointOverride.isBlank() ? endpointOverride : b.endpointId;
+        // 既定は直前の試行を走らせた計算機（選び直していればそちら）。無ければバッチの記録
+        String lastEndpoint = sources.get(0).endpointId != null ? sources.get(0).endpointId : b.endpointId;
+        String endpointId = endpointOverride != null && !endpointOverride.isBlank() ? endpointOverride : lastEndpoint;
         if (endpoints.get(endpointId).isEmpty()) {
             return error(HttpStatus.CONFLICT, "unknown-endpoint");
         }
