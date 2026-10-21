@@ -54,7 +54,19 @@ wholeBody の出力格子は、`highres` の true／false どちらも入力の�
 - vista3d の点: Bundle のコードの 1 行（`scripts/evaluator.py` の `torch.from_numpy(points)`）が、Colab の MONAI で `TypeError: expected np.ndarray (got Tensor)` になる。型だけを揃える手当て（`torch.as_tensor(np.asarray(points))`）を計算機の上で当てた。当てた箇所は結果の `bundleCodePatched` に残る。
 - vista3d は点を使うと、点の窓の外を 255 で返す（Bundle の仕様）。プラグインは 255 を背景にし、その数を画面に出す（255 を臓器として SEG に保存しないため）。
 - ラベル指定・点を渡すには、Bundle の `scripts/` を import できるようにする必要があった（実行前に `sys.path` へ Bundle の置き場を足す）。
-- **未確認**: 「点 ROI から読み込む」ボタン（ROI の画素座標 → 患者座標）。入力欄に座標を直接書く経路だけを実機で確認した。
+- 「点 ROI から読み込む」ボタン（ROI の画素座標 → 患者座標）は、下の 3.1 で実機確認した。
+
+### 3.1 点 ROI の読み込み（Colab 不使用）
+
+`automator/src/spike/computeMonaiRoiButton.ts`。MSD 脾臓 spleen_56 を取り込み、点 ROI を 3 スライス × 4 点置いてボタンを押し、出た座標の位置の画素値を NIfTI から独立に読んで（`automator/tools/monai_roi_probe.py`）、ビューアが同じ点で示す値と突き合わせる。
+
+| 版 | 画面の値と一致 | 負例: z 反転 | 負例: x と y の入れ替え |
+|---|---|---|---|
+| 0.4.0（修正前） | 3/12 | 1/12 | 0/12 |
+| 0.4.1（修正後） | 12/12 | 4/12 | 0/12 |
+
+- 原因: `getRois` の画素座標は「画素の左上隅が 0」（`roiRead.ts`）。`indexToWorld` は画素中心が整数なので、0.5 を引いていなかった。面内で最大 0.5 画素（この画像で約 0.35 mm）ずれ、最近傍の画素が 1 つ隣になった。スライス方向は修正前から正しい。
+- 点は 1 つの画像・1 つのシリーズでの確認。陽性・陰性の割り当て（ROI のラベル）は未確認。
 
 ## 4. 見つけた不具合
 
