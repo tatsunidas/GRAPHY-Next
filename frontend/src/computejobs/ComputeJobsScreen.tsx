@@ -311,7 +311,7 @@ export function ComputeJobsScreen() {
         </label>
         <span style={{ flex: 1 }} />
         <span data-testid="computejobs-counts" style={{ color: "#445" }}>
-          {t("computeJobs.bar.counts", counts)}
+          {t("computeJobs.bar.counts", { running: counts.running, queued: counts.queued, failed: counts.failed })}
         </span>
         <span style={{ color: "#667" }}>{t("computeJobs.outputsTotal", { size: formatBytes(totalBytes) ?? "—" })}</span>
         <button data-testid="computejobs-clear-finished" onClick={() => void clearFinished()}>
