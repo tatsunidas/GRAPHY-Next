@@ -50,6 +50,8 @@ export interface ComputeJobView {
   outputsBytes: number | null;
   collectedAt: string | number | null;
   // バッチの記録があるときだけ。
+  /** その試行を要求した時点のプラグインの版（再実行の詳細で並べる）。 */
+  attemptPluginVersion?: string | null;
   /** 対話の 1 回（runJob）なら true、一括なら false。 */
   interactive?: boolean;
   /** 一括が一時停止中のとき、その理由（`endpoint-unreachable`）。 */
@@ -91,5 +93,13 @@ export const resumeComputeBatch = (batchId: string) =>
 /** 一括を中止する（待ちの組は計算機へ何も送らず、実行中の組は中断する）。 */
 export const cancelComputeBatch = (batchId: string) =>
   httpSend<{ cancelled: number }>(`/api/compute/batches/${encodeURIComponent(batchId)}/cancel`, "POST");
+
+/** 再実行の要求を作る口の応答（成功時）。何も送っていない。 */
+export interface RerunCreated {
+  requestId: string;
+  items: { key: string | null; datasets: unknown[] }[];
+  refused: { key: string; reason: string }[];
+  rerun: { batchId: string; attempt: string; recordedVersion: string; currentVersion: string; changed: string };
+}
 
 export const deleteComputeJob = (id: string) => httpSend(`${BASE}/${encodeURIComponent(id)}`, "DELETE");

@@ -25,6 +25,9 @@ import {
   studyUidsOf,
   toMillis,
   wantsKeepAwake,
+  latestIds,
+  attemptsOf,
+  canRerun,
 } from "./computeJobsView";
 
 const ALL: ComputeJobState[] = ["QUEUED", "RUNNING", "AWAITING_USER", "DONE", "FAILED", "CANCELLED", "INTERRUPTED"];
@@ -180,10 +183,11 @@ describe("計算機ごとの負荷・バッチのまとめ", () => {
   });
   it("同じバッチをまとめ、batchId の無い行は別々", () => {
     const g = groupByBatch([
-      job("1", "DONE", { batchId: "cb_1" }),
-      job("2", "FAILED", { batchId: "cb_1" }),
-      job("3", "RUNNING", { batchId: "cb_1" }),
-      job("4", "QUEUED", { batchId: "cb_1" }),
+      // 一括の行には必ず組名がある（組名が同じ行は同じ組の試行）
+      job("1", "DONE", { batchId: "cb_1", itemKey: "k1" }),
+      job("2", "FAILED", { batchId: "cb_1", itemKey: "k2" }),
+      job("3", "RUNNING", { batchId: "cb_1", itemKey: "k3" }),
+      job("4", "QUEUED", { batchId: "cb_1", itemKey: "k4" }),
       job("5", "DONE"),
       job("6", "DONE"),
     ]);
@@ -235,5 +239,49 @@ describe("一括の見出し・眠り止め", () => {
     expect(wantsKeepAwake([])).toBe(false);
     // 停止中の組があっても、別の動いている組があれば止める
     expect(wantsKeepAwake([job("7", "QUEUED", { interactive: false, pausedReason: "x" }), run])).toBe(true);
+  });
+});
+
+describe("再実行（試行）", () => {
+  const rows = [
+    job("a1", "FAILED", { batchId: "cb_1", itemKey: "a", attempt: 1, reason: "code-error", interactive: false }),
+    job("a2", "DONE", { batchId: "cb_1", itemKey: "a", attempt: 2, interactive: false }),
+    job("b1", "FAILED", { batchId: "cb_1", itemKey: "b", attempt: 1, reason: "code-error", interactive: false }),
+    job("c1", "DONE", { batchId: "cb_1", itemKey: "c", attempt: 1, interactive: false }),
+    job("d1", "CANCELLED", { batchId: "cb_1", itemKey: "d", attempt: 1, interactive: false }),
+  ];
+
+  it("組ごとの最新の試行だけを見分け、別の一括の同じ組名とは混ざらない", () => {
+    expect([...latestIds(rows)].sort()).toEqual(["a2", "b1", "c1", "d1"]);
+    const other = job("a1x", "FAILED", { batchId: "cb_2", itemKey: "a", attempt: 1 });
+    expect(latestIds([...rows, other]).has("a1x")).toBe(true);
+  });
+
+  it("🔴 直した古い失敗は、状態バーの失敗数にも見出しの内訳にも数えない", () => {
+    expect(countJobs(rows, new Set())).toEqual({ running: 0, queued: 0, failed: 1 }); // b1 だけ（a1 は a2 で直った）
+    const g = groupByBatch(rows)[0];
+    expect(g).toMatchObject({ done: 2, failed: 1, rerunnable: 1 });
+    expect(g.jobs).toHaveLength(5); // 古い試行の行は残す
+  });
+
+  it("再実行できるのは終わった失敗・中断・中止の最新の試行だけ（完了・古い試行・動いている一括では出さない）", () => {
+    const latest = latestIds(rows);
+    const byId = Object.fromEntries(rows.map((r) => [r.id, r]));
+    expect(canRerun(byId.b1, latest, false)).toBe(true);
+    expect(canRerun(byId.d1, latest, false)).toBe(true); // 中止
+    expect(canRerun(byId.c1, latest, false)).toBe(false); // 完了
+    expect(canRerun(byId.a1, latest, false)).toBe(false); // 古い試行
+    expect(canRerun(byId.b1, latest, true)).toBe(false); // 動いている組がある
+    expect(canRerun(job("i1", "INTERRUPTED", { batchId: "cb_9", attempt: 1 }), latestIds([job("i1", "INTERRUPTED", { batchId: "cb_9", attempt: 1 })]), false)).toBe(true);
+  });
+
+  it("同じ組の試行を古い順に並べる", () => {
+    expect(attemptsOf([rows[1], rows[0], rows[2]], rows[1]).map((r) => r.id)).toEqual(["a1", "a2"]);
+  });
+
+  it("対話の 1 回（組名なし）の再実行も、同じバッチの試行として最新を選ぶ", () => {
+    const x = [job("s1", "FAILED", { batchId: "cb_5", attempt: 1 }), job("s2", "FAILED", { batchId: "cb_5", attempt: 2 })];
+    expect([...latestIds(x)]).toEqual(["s2"]);
+    expect(countJobs(x, new Set()).failed).toBe(1);
   });
 });

@@ -35,6 +35,16 @@ class ComputeJobRecord {
     @Column(length = 128)
     String itemKey;
     int attempt = 1;
+    /** その試行を要求した時点の、プラグインの版（再実行で記録の版との違いを見るため）。null＝不明。 */
+    @Column(length = 64)
+    String pluginVersion;
+    /** その試行を走らせた計算機（再実行で選び直したときにバッチの記録と違う）。null＝バッチの記録と同じ（古い行）。 */
+    @Column(length = 128)
+    String endpointId;
+    @Column(length = 256)
+    String endpointLabel;
+    @Column(length = 256)
+    String endpointHost;
 
     /** JSON: [{studyUid, seriesUid, format}]。削除されたシリーズは UID が空文字になる。 */
     @Column(length = 4000)

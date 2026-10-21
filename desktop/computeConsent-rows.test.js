@@ -50,3 +50,23 @@ test("refused が無い一括でも落ちない", () => {
   const r = buildRows({ datasets: [], items: [{ key: "a", datasets: [] }] });
   assert.deepEqual(r.refused, []);
 });
+
+const { rerunNotice } = require("./computeConsent-rows.js");
+
+test("再実行でなければ注記は無い", () => {
+  assert.equal(rerunNotice({ datasets: [] }), null);
+  assert.equal(rerunNotice({ rerun: null }), null);
+});
+
+test("再実行の注記は試行・記録の版・今の版・違いの有無を返す", () => {
+  assert.deepEqual(rerunNotice({ rerun: { batchId: "cb_1", attempt: "2", recordedVersion: "1.0.0", currentVersion: "1.0.0", changed: "false" } }),
+    { attempt: "2", recorded: "1.0.0", current: "1.0.0", changed: false });
+  assert.deepEqual(rerunNotice({ rerun: { attempt: "3", recordedVersion: "1.0.0", currentVersion: "2.0.0", changed: "true" } }),
+    { attempt: "3", recorded: "1.0.0", current: "2.0.0", changed: true });
+});
+
+test("版が取れていないときは null（『不明』と出す側に任せる。空文字や 0 で埋めない）", () => {
+  const n = rerunNotice({ rerun: { attempt: "2", recordedVersion: "", currentVersion: "", changed: "false" } });
+  assert.equal(n.recorded, null);
+  assert.equal(n.current, null);
+});

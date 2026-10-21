@@ -1594,7 +1594,13 @@ export interface ComputeBatchOptions {
 }
 
 /** 終わった 1 組の結果。`runJob` の結果と同じ形に、組の名前と受け取りの印が付く。 */
-export type ComputeBatchItemOutcome = { key: string | null; jobId: string; markCollected: () => Promise<void> } & (
+export type ComputeBatchItemOutcome = {
+  key: string | null;
+  jobId: string;
+  /** 同じ組の試行の番号。利用者が計算ジョブの窓で［再実行］すると 2 以降が届く（同じ `key` のうち最大のものが最新）。 */
+  attempt: number;
+  markCollected: () => Promise<void>;
+} & (
   | {
       ok: true;
       /** `error` は Python の例外（組としては走り終えている）。 */
@@ -1637,6 +1643,8 @@ export interface ComputeJobSummary {
   jobId: string;
   batchId: string | null;
   key: string | null;
+  /** 同じ組の試行の番号（再実行で 2 以降）。 */
+  attempt: number;
   state: "QUEUED" | "RUNNING" | "AWAITING_USER" | "DONE" | "FAILED" | "CANCELLED" | "INTERRUPTED";
   /** 失敗・中断の分類（`code-error` `timeout` `endpoint-unreachable` `dataset-changed` …）。 */
   reason: string | null;

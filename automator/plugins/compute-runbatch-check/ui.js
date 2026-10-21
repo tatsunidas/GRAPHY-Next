@@ -9,7 +9,7 @@ export async function activate(host) {
   const input = window.__batchInput || {};
   const run = (window.__batch = { started: null, items: [], outcome: null, collected: [] });
   const onItem = async (item) => {
-    const rec = { key: item.key, jobId: item.jobId, ok: item.ok, status: item.status, error: item.error, errorName: item.errorName, summary: null, files: item.files };
+    const rec = { key: item.key, jobId: item.jobId, attempt: item.attempt, ok: item.ok, status: item.status, error: item.error, errorName: item.errorName, summary: null, files: item.files };
     if (item.ok) {
       const s = await item.readFile("summary.json");
       rec.summary = s ? JSON.parse(new TextDecoder().decode(s)) : null;

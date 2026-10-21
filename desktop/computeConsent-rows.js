@@ -31,7 +31,22 @@
     };
   }
 
-  const api = { buildRows };
+  /**
+   * 再実行の注記（同意画面の警告の枠に出す）。再実行でなければ null。版の欄が空なら「不明」（空のまま出さない・0 で埋めない）。
+   * {@code changed} は版かパッケージが記録と違うとき（記録のコードで走る旨を添える）。
+   */
+  function rerunNotice(detail) {
+    const r = detail && detail.rerun;
+    if (!r) return null;
+    return {
+      attempt: r.attempt,
+      recorded: r.recordedVersion ? r.recordedVersion : null,
+      current: r.currentVersion ? r.currentVersion : null,
+      changed: r.changed === "true",
+    };
+  }
+
+  const api = { buildRows, rerunNotice };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.graphyConsentRows = api;
 })(typeof window !== "undefined" ? window : globalThis);

@@ -67,6 +67,26 @@ class ComputeJobLedgerPersistenceTest {
     }
 
     @Test
+    void rerunAttemptsKeepTheirOwnComputerAndVersionInH2() {
+        String id = ledger.create(request("print(1)"), List.of(), 60);
+        String batchId = ledger.find(id).orElseThrow().batchId;
+        ComputeEgressService.EgressRequest other = new ComputeEgressService.EgressRequest("egr_q", "seg", "Seg", "second",
+                "Second", "http://localhost:9999/", false, "jupyter", List.of(), "print(1)", "sha", "anon", "v1", Instant.now(),
+                ComputeEgressService.Status.CONSUMED);
+        String id2 = ledger.createJob(batchId, other, null, List.of(), 2);
+        ComputeJobRecord first = ledger.find(id).orElseThrow();
+        ComputeJobRecord again = ledger.find(id2).orElseThrow();
+        assertEquals(1, first.attempt);
+        assertEquals(2, again.attempt);
+        assertEquals("local", first.endpointId, "1 回目は走らせた計算機を自分の行に持つ");
+        assertEquals("second", again.endpointId, "🔴 2 回目は選び直した計算機を自分の行に持つ（バッチの記録とは別）");
+        assertEquals("localhost:9999", again.endpointHost);
+        assertEquals("second", ledger.view(again).get("endpointId"));
+        assertEquals("local", ledger.view(first).get("endpointId"));
+        assertEquals(2, ledger.latestAttempts(batchId).get(0).attempt);
+    }
+
+    @Test
     void recoversRowsLeftRunning() {
         String id = ledger.create(request("print(1)"), List.of(), 60);
         ledger.start(id, "graphy/left-over");

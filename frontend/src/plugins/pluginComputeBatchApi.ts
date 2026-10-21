@@ -48,6 +48,8 @@ export interface ComputeJobSummary {
   batchId: string | null;
   /** 一括のときの組の名前。 */
   key: string | null;
+  /** 同じ組の試行の番号（再実行で 2 以降）。同じ `key` のうち最大のものが最新。 */
+  attempt: number;
   state: "QUEUED" | "RUNNING" | "AWAITING_USER" | "DONE" | "FAILED" | "CANCELLED" | "INTERRUPTED";
   /** 失敗・中断の分類（`code-error` `timeout` `endpoint-unreachable` `dataset-changed` …）。 */
   reason: string | null;
@@ -58,7 +60,7 @@ export interface ComputeJobSummary {
 }
 
 /** 終わった 1 組の結果。`runJob` の結果と同じ形に、組の名前と受け取りの印が付く。 */
-export type ComputeBatchItemOutcome = { key: string | null; jobId: string; markCollected: () => Promise<void> } & (
+export type ComputeBatchItemOutcome = { key: string | null; jobId: string; attempt: number; markCollected: () => Promise<void> } & (
   | {
       ok: true;
       /** `error` は Python の例外（組としては走り終えている）。 */
@@ -122,6 +124,8 @@ export interface LedgerRow {
   id: string;
   batchId: string | null;
   itemKey: string | null;
+  /** 試行の番号（古い台帳の行には無い）。 */
+  attempt?: number;
   state: ComputeJobSummary["state"];
   reason: string | null;
   errorName: string | null;
@@ -147,6 +151,7 @@ export function summarize(r: LedgerRow): ComputeJobSummary {
     jobId: r.id,
     batchId: r.batchId,
     key: r.itemKey,
+    attempt: r.attempt ?? 1,
     state: r.state,
     reason: r.reason,
     errorName: r.errorName,
@@ -158,7 +163,7 @@ export function summarize(r: LedgerRow): ComputeJobSummary {
 
 /** 終わった行 1 つを、`runJob` と同じ形の結果にする。Python の例外（code-error）は `status: "error"` で、`ok: true`。 */
 export async function buildItemOutcome(row: LedgerRow, deps: BatchDeps): Promise<ComputeBatchItemOutcome> {
-  const base = { key: row.itemKey, jobId: row.id, markCollected: () => deps.markCollected(row.id) };
+  const base = { key: row.itemKey, jobId: row.id, attempt: row.attempt ?? 1, markCollected: () => deps.markCollected(row.id) };
   if (row.state === "CANCELLED") return { ...base, ok: false, cancelled: true, error: "canceled" };
   const ran = row.state === "DONE" || (row.state === "FAILED" && row.reason === "code-error");
   if (!ran) return { ...base, ok: false, error: row.reason ?? (row.state === "INTERRUPTED" ? "interrupted" : "failed") };
@@ -246,7 +251,15 @@ export async function watchBatch(
   }
 }
 
-function countRows(rows: LedgerRow[]): ComputeBatchCounts {
+/** 件数は組ごとの最新の試行だけ（再実行で直した古い失敗は数えない）。 */
+function countRows(all: LedgerRow[]): ComputeBatchCounts {
+  const best = new Map<string, LedgerRow>();
+  for (const r of all) {
+    const k = r.itemKey ?? "#";
+    const cur = best.get(k);
+    if (!cur || (r.attempt ?? 1) >= (cur.attempt ?? 1)) best.set(k, r);
+  }
+  const rows = [...best.values()];
   return {
     done: rows.filter((r) => r.state === "DONE").length,
     failed: rows.filter((r) => r.state === "FAILED").length,

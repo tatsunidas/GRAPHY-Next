@@ -59,19 +59,31 @@ public class ComputeEgressService {
      * @param anonymization 匿名化の方法（同意画面に出す）
      * @param items         一括の組。{@code null} は対話の 1 回（runJob＝組名なしの 1 組。{@link #itemsOrSingle}）
      * @param refused       一括で<b>送らなかった組</b>（組名と理由）。同意画面に出すだけで、内容のハッシュには含めない
+     * @param rerun         再実行のとき、同意画面に出す注記（{@code batchId}・{@code attempt}・{@code recordedVersion}・
+     *                      {@code currentVersion}・{@code changed}）。表示だけで、内容のハッシュには含めない
      */
     public record EgressRequest(String id, String pluginId, String pluginName, String endpointId,
                                 String endpointLabel, String endpointUrl, boolean plaintext,
                                 String endpointKind, List<DatasetSummary> datasets, String code, String codeSha256,
                                 String anonymization, String contentHash, Instant createdAt, Status status,
-                                List<Item> items, List<Map<String, String>> refused) {
-        /** 一括（送らなかった組の表示なし）。 */
+                                List<Item> items, List<Map<String, String>> refused, Map<String, String> rerun) {
+        /** 一括（送らなかった組・再実行の表示なし）。 */
         public EgressRequest(String id, String pluginId, String pluginName, String endpointId,
                              String endpointLabel, String endpointUrl, boolean plaintext, String endpointKind,
                              List<DatasetSummary> datasets, String code, String codeSha256, String anonymization,
                              String contentHash, Instant createdAt, Status status, List<Item> items) {
             this(id, pluginId, pluginName, endpointId, endpointLabel, endpointUrl, plaintext, endpointKind, datasets,
-                    code, codeSha256, anonymization, contentHash, createdAt, status, items, null);
+                    code, codeSha256, anonymization, contentHash, createdAt, status, items, null, null);
+        }
+
+        /** 一括（送らなかった組の表示あり）。 */
+        public EgressRequest(String id, String pluginId, String pluginName, String endpointId,
+                             String endpointLabel, String endpointUrl, boolean plaintext, String endpointKind,
+                             List<DatasetSummary> datasets, String code, String codeSha256, String anonymization,
+                             String contentHash, Instant createdAt, Status status, List<Item> items,
+                             List<Map<String, String>> refused) {
+            this(id, pluginId, pluginName, endpointId, endpointLabel, endpointUrl, plaintext, endpointKind, datasets,
+                    code, codeSha256, anonymization, contentHash, createdAt, status, items, refused, null);
         }
 
         /** 対話の 1 回（組なし）。 */
@@ -80,12 +92,12 @@ public class ComputeEgressService {
                              List<DatasetSummary> datasets, String code, String codeSha256, String anonymization,
                              String contentHash, Instant createdAt, Status status) {
             this(id, pluginId, pluginName, endpointId, endpointLabel, endpointUrl, plaintext, endpointKind, datasets,
-                    code, codeSha256, anonymization, contentHash, createdAt, status, null, null);
+                    code, codeSha256, anonymization, contentHash, createdAt, status, null, null, null);
         }
 
         EgressRequest with(Status s) {
             return new EgressRequest(id, pluginId, pluginName, endpointId, endpointLabel, endpointUrl, plaintext,
-                    endpointKind, datasets, code, codeSha256, anonymization, contentHash, createdAt, s, items, refused);
+                    endpointKind, datasets, code, codeSha256, anonymization, contentHash, createdAt, s, items, refused, rerun);
         }
 
         /** 組の一覧。対話の 1 回は「組名なしの 1 組」。 */
@@ -96,7 +108,7 @@ public class ComputeEgressService {
         /** 1 組だけの見た目（同じ札の id・内容のハッシュ・宛先のまま、データセットだけをその組のものにする）。 */
         EgressRequest forItem(Item it) {
             return new EgressRequest(id, pluginId, pluginName, endpointId, endpointLabel, endpointUrl, plaintext,
-                    endpointKind, it.datasets(), code, codeSha256, anonymization, contentHash, createdAt, status, null, null);
+                    endpointKind, it.datasets(), code, codeSha256, anonymization, contentHash, createdAt, status, null, null, rerun);
         }
     }
 
@@ -136,6 +148,12 @@ public class ComputeEgressService {
      */
     public EgressRequest create(String pluginId, String pluginName, String endpointId, List<String> handles,
                                 String code, int maxCodeChars) {
+        return create(pluginId, pluginName, endpointId, handles, code, maxCodeChars, null);
+    }
+
+    /** @param rerun 再実行のとき同意画面に出す注記（表示だけ・ハッシュに含めない）。通常は null */
+    public EgressRequest create(String pluginId, String pluginName, String endpointId, List<String> handles,
+                                String code, int maxCodeChars, Map<String, String> rerun) {
         sweep();
         ComputeEndpointRegistry.Entry ep = endpoints.get(endpointId)
                 .orElseThrow(() -> new EgressRefused("unknown-endpoint"));
@@ -155,11 +173,12 @@ public class ComputeEgressService {
         String hash = contentHash(pluginId, endpointId, url, ds, codeSha);
         EgressRequest r = new EgressRequest(id, pluginId, pluginName == null ? pluginId : pluginName, endpointId,
                 ep.label(), url, plaintext, ep.kind(), List.copyOf(ds), code, codeSha, ANONYMIZATION, hash, Instant.now(),
-                Status.PENDING);
+                Status.PENDING, null, null, rerun);
         requests.put(id, r);
         ObjectNode line = base("egress-requested", r);
         line.put("codeHead", ComputeAuditLog.codeHead(code)).put("codeChars", code.length());
         audit.append(line);
+        auditRerun(r);
         return r;
     }
 
@@ -181,6 +200,13 @@ public class ComputeEgressService {
     public EgressRequest createBatch(String pluginId, String pluginName, String endpointId,
                                      java.util.LinkedHashMap<String, List<String>> itemHandles, String code,
                                      int maxCodeChars, List<Map<String, String>> refused) {
+        return createBatch(pluginId, pluginName, endpointId, itemHandles, code, maxCodeChars, refused, null);
+    }
+
+    /** @param rerun 再実行のとき同意画面に出す注記（表示だけ・ハッシュに含めない）。通常は null */
+    public EgressRequest createBatch(String pluginId, String pluginName, String endpointId,
+                                     java.util.LinkedHashMap<String, List<String>> itemHandles, String code,
+                                     int maxCodeChars, List<Map<String, String>> refused, Map<String, String> rerun) {
         sweep();
         if (itemHandles == null || itemHandles.isEmpty()) {
             throw new EgressRefused("no-items");
@@ -214,7 +240,7 @@ public class ComputeEgressService {
         String hash = contentHashBatch(pluginId, endpointId, url, items, codeSha);
         EgressRequest r = new EgressRequest(id, pluginId, pluginName == null ? pluginId : pluginName, endpointId,
                 ep.label(), url, plaintext, ep.kind(), List.copyOf(flat), code, codeSha, ANONYMIZATION, hash,
-                Instant.now(), Status.PENDING, List.copyOf(items), List.copyOf(refused));
+                Instant.now(), Status.PENDING, List.copyOf(items), List.copyOf(refused), rerun);
         requests.put(id, r);
         ObjectNode line = base("egress-requested", r);
         line.put("codeHead", ComputeAuditLog.codeHead(code)).put("codeChars", code.length());
@@ -222,6 +248,7 @@ public class ComputeEgressService {
         audit.append(audit.event("compute-batch-requested").put("requestId", id).put("pluginId", pluginId)
                 .put("endpointId", endpointId).put("items", items.size()).put("datasets", flat.size())
                 .put("totalBytes", flat.stream().mapToLong(DatasetSummary::bytes).sum()));
+        auditRerun(r);
         return r;
     }
 
@@ -243,6 +270,25 @@ public class ComputeEgressService {
     /** 送る前に弾いたこと（権限が無い等）を監査ログに残す。 */
     public void refused(String pluginId, String endpointId, String reason) {
         auditRefused(pluginId, endpointId, reason, null);
+    }
+
+    /** 再実行の要求を作ったことを残す（元の台帳の組・試行・版の違いの有無だけ。UID・患者情報は入れない）。 */
+    private void auditRerun(EgressRequest r) {
+        if (r.rerun() == null) {
+            return;
+        }
+        audit.append(audit.event("compute-rerun-requested").put("requestId", r.id()).put("pluginId", r.pluginId())
+                .put("batchId", r.rerun().get("batchId")).put("attempt", r.rerun().get("attempt"))
+                .put("versionChanged", "true".equals(r.rerun().get("changed"))));
+    }
+
+    /**
+     * 承認済みの<b>再実行</b>の要求（まだ使っていないもの）。再実行の口が「これは再実行の札か」を確かめるのに使う
+     * （プラグインの通常の札を、窓の口から使わせない）。承認前・使用済み・期限切れ・再実行でないものは空。
+     */
+    public Optional<EgressRequest> approvedRerun(String id) {
+        EgressRequest r = current(id);
+        return r != null && r.status() == Status.APPROVED && r.rerun() != null ? Optional.of(r) : Optional.empty();
     }
 
     /** main が同意画面に出すための全文。期限切れ・決定済みなら空。 */
@@ -303,10 +349,16 @@ public class ComputeEgressService {
      */
     public Optional<EgressRequest> consumeFor(String pluginId, String id) {
         EgressRequest r = current(id);
-        if (r == null || !r.pluginId().equals(pluginId)) {
+        // 再実行の札は窓の口（consumeRerun）だけが使う。プラグインの口から使わせない
+        if (r == null || !r.pluginId().equals(pluginId) || r.rerun() != null) {
             return Optional.empty();
         }
         return consume(id);
+    }
+
+    /** 再実行の札を使う（窓の口）。再実行でない札・未承認・使用済みは空。 */
+    public Optional<EgressRequest> consumeRerun(String id) {
+        return approvedRerun(id).flatMap(r -> consume(id));
     }
 
     public Optional<Status> status(String id) {

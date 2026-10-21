@@ -138,15 +138,18 @@ public class ComputeJobRunner {
         final String batchId;
         final ComputeEgressService.EgressRequest request;
         final Duration timeout;
+        /** 低優先（一括の組）で並べるか。対話の 1 回の再実行は通常の優先度。 */
+        final boolean low;
         /** 組（ジョブ id → 組）。作った順＝列に並べる順。 */
         final Map<String, ComputeEgressService.Item> items = new LinkedHashMap<>();
         /** ジョブごとの世代。列へ並べ直したとき古い待ちの実行を無効にする（二重に走らせない）。 */
         final Map<String, java.util.concurrent.atomic.AtomicInteger> generation = new ConcurrentHashMap<>();
 
-        BatchCtx(String batchId, ComputeEgressService.EgressRequest request, Duration timeout) {
+        BatchCtx(String batchId, ComputeEgressService.EgressRequest request, Duration timeout, boolean low) {
             this.batchId = batchId;
             this.request = request;
             this.timeout = timeout;
+            this.low = low;
         }
     }
 
@@ -166,7 +169,7 @@ public class ComputeJobRunner {
         // 待ちの組のデータを期限（2 時間）で消さない。その組が終わるか一括が中止されるまで持つ
         r.datasets().forEach(d -> datasets.hold(d.handle()));
         String batchId = ledger.createBatch(r, timeout, false);
-        BatchCtx bc = new BatchCtx(batchId, r, Duration.ofSeconds(timeout));
+        BatchCtx bc = new BatchCtx(batchId, r, Duration.ofSeconds(timeout), true);
         List<Map<String, Object>> out = new ArrayList<>();
         for (ComputeEgressService.Item it : r.itemsOrSingle()) {
             List<ComputeJobLedger.InputRef> inputs = it.datasets().stream()
@@ -187,7 +190,7 @@ public class ComputeJobRunner {
     private void enqueueItem(BatchCtx bc, String cj) {
         ComputeEgressService.EgressRequest ir = bc.request.forItem(bc.items.get(cj));
         int gen = bc.generation.computeIfAbsent(cj, k -> new java.util.concurrent.atomic.AtomicInteger()).incrementAndGet();
-        PluginJobService.Status st = jobs.submitSerialTaskLow(ir.endpointId(), ir.pluginId(), new PluginJobService.Task() {
+        PluginJobService.Task task = new PluginJobService.Task() {
             @Override
             public Object run(PluginJobService.TaskContext ctx) throws Exception {
                 if (bc.generation.get(cj).get() != gen) {
@@ -203,8 +206,55 @@ public class ComputeJobRunner {
             public void onCancelRequested() {
                 cancelQueued(cj, ir);
             }
-        });
+        };
+        PluginJobService.Status st = bc.low ? jobs.submitSerialTaskLow(ir.endpointId(), ir.pluginId(), task)
+                : jobs.submitSerialTask(ir.endpointId(), ir.pluginId(), task);
         ledger.attachPluginJob(cj, st.jobId());
+    }
+
+    /**
+     * 再実行を投入する。<b>承認の札（再実行の要求）はここで使用済みになる</b>——前の実行の承認は使えず、毎回の同意が要る。
+     * 記録のバッチの中に、同じ組の次の試行（{@code attempt + 1}）として並べる。1 件の再実行（対話の 1 回）は通常の優先度、
+     * 一括の失敗だけの再実行は低優先度。
+     *
+     * @return {@code batchId} と、組名 → ジョブ id・試行の番号
+     * @throws ComputeEgressService.EgressRefused 承認されていない・期限切れ・使用済み・再実行の札でない・動いている組がある
+     */
+    public Map<String, Object> submitRerun(String requestId, Integer timeoutSec) {
+        ComputeEgressService.EgressRequest r = egress.consumeRerun(requestId)
+                .orElseThrow(() -> new ComputeEgressService.EgressRefused("not-approved"));
+        String batchId = r.rerun().get("batchId");
+        ComputeBatchRecord batch = ledger.batchRecord(batchId).orElse(null);
+        if (batch == null || ledger.hasActive(batchId)) {
+            // 承認してから投入までのあいだに、台帳の行が消えた・別の実行が始まった。送らずにデータを捨てる
+            r.datasets().forEach(d -> datasets.discard(d.handle()));
+            throw new ComputeEgressService.EgressRefused(batch == null ? "unknown-batch" : "batch-active");
+        }
+        int timeout = timeoutSec == null ? Math.max(10, Math.min(MAX_TIMEOUT_SEC, batch.timeoutSec))
+                : Math.max(10, Math.min(MAX_TIMEOUT_SEC, timeoutSec));
+        r.datasets().forEach(d -> datasets.hold(d.handle()));
+        ledger.resumeBatch(batchId); // 前の一時停止の印は残さない
+        List<ComputeEgressService.Item> items = r.itemsOrSingle();
+        BatchCtx bc = new BatchCtx(batchId, r, Duration.ofSeconds(timeout), !batch.interactive || items.size() > 1);
+        List<Map<String, Object>> out = new ArrayList<>();
+        for (ComputeEgressService.Item it : items) {
+            List<ComputeJobLedger.InputRef> inputs = it.datasets().stream()
+                    .map(d -> datasets.get(d.handle())
+                            .map(ds -> new ComputeJobLedger.InputRef(ds.sourceStudyUid(), ds.sourceSeriesUid(), d.format()))
+                            .orElse(new ComputeJobLedger.InputRef("", "", d.format())))
+                    .toList();
+            int attempt = ledger.nextAttempt(batchId, it.key());
+            String cj = ledger.createJob(batchId, r, it.key(), inputs, attempt);
+            bc.items.put(cj, it);
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("key", it.key() == null ? "" : it.key());
+            row.put("jobId", cj);
+            row.put("attempt", attempt);
+            out.add(row);
+        }
+        batches.put(batchId, bc);
+        bc.items.keySet().forEach(cj -> enqueueItem(bc, cj));
+        return Map.of("batchId", batchId, "items", out);
     }
 
     /**
