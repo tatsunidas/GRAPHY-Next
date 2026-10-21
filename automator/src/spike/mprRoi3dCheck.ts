@@ -212,6 +212,46 @@ async function main(): Promise<void> {
     const a2 = await sliceLabels(mpr);
     check(JSON.stringify(b2) !== JSON.stringify(a2), "ツール OFF ではクリックで十字線が動く（対照）", { b2, a2 });
     await mpr.screenshot({ path: path.join(OUT_DIR, "04-tool-off.png") });
+
+    // ── 保存と復元（G0a）: 患者単位ドキュメントの solids ──
+    const docOf = async (pk: string) => {
+      const res = await fetch(`http://127.0.0.1:${driver.ports.http}/api/rois?patientKey=${encodeURIComponent(pk)}`);
+      const dto = (await res.json()) as { json: string | null };
+      return dto.json ? (JSON.parse(dto.json) as { schema: number; rois: unknown[]; solids?: { id: string; size: number[] }[]; deleted?: { roiUid: string }[] }) : null;
+    };
+    await mpr.waitForTimeout(2_000);
+    const doc1 = await docOf("ROI3D");
+    check(doc1?.schema === 1 && (doc1.rois?.length ?? -1) === 0 && doc1.solids?.length === 2, "保存: schema は 1 のまま・ROI は空・solids が 2 件", doc1);
+    const sizes1 = (doc1?.solids ?? []).map((x) => x.size.join("x")).sort();
+    check(JSON.stringify(sizes1) === JSON.stringify(["10x10x10", "20x10x10"]), "保存された径が入力した値（20×10×10 と 10×10×10）", sizes1);
+    const other = await docOf("OTHER-PATIENT");
+    check(other === null, "負例: 別の患者のドキュメントには出ない", other);
+
+    // 閉じて開き直す → 復元（容積が同じ）
+    await mpr.close();
+    const mpr2 = await driver.waitForNewPage(() => main.locator('button[title="MPR Viewer"]').click(), (url) => url.includes("mpr"));
+    await mpr2.getByTestId("mpr-roi3d-tool").waitFor({ timeout: 90_000 });
+    await mpr2.waitForTimeout(3_000);
+    await mpr2.getByTestId("mpr-roi3d-measure").click();
+    const d2 = mpr2.getByTestId("mpr-roi3d-dialog");
+    await d2.waitFor({ timeout: 5_000 });
+    const vols2 = (await d2.getByTestId("mpr-roi3d-volume").allTextContents()).map((v) => v.trim()).sort();
+    check(JSON.stringify(vols2) === JSON.stringify(["1.0000 mL", "1.0472 mL"]), "復元: 開き直しても 2 件・容積が同じ（1.0472 / 1.0000 mL）", vols2);
+    await mpr2.screenshot({ path: path.join(OUT_DIR, "05-restored.png") });
+
+    // 1 件削除 → 保存 → 開き直しで復活しない（墓標）
+    await d2.getByTestId("mpr-roi3d-row").first().click();
+    await d2.getByRole("button", { name: /^(Delete|削除)$/ }).click();
+    await mpr2.waitForTimeout(2_000);
+    const doc2 = await docOf("ROI3D");
+    check(doc2?.solids?.length === 1 && (doc2.deleted ?? []).length === 1, "削除: solids が 1 件に減り、墓標が 1 件立つ", doc2);
+    await mpr2.close();
+    const mpr3 = await driver.waitForNewPage(() => main.locator('button[title="MPR Viewer"]').click(), (url) => url.includes("mpr"));
+    await mpr3.getByTestId("mpr-roi3d-tool").waitFor({ timeout: 90_000 });
+    await mpr3.waitForTimeout(3_000);
+    await mpr3.getByTestId("mpr-roi3d-measure").click();
+    const n3 = await mpr3.getByTestId("mpr-roi3d-dialog").getByTestId("mpr-roi3d-row").count();
+    check(n3 === 1, "削除した solid は開き直しても復活しない", n3);
   } finally {
     await driver.stop().catch(() => undefined);
   }

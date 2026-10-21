@@ -25,7 +25,7 @@ import {
   type Roi3dShape,
   type Vec3,
 } from "../viewer/roi3dBox";
-import { nextRoi3dId } from "../viewer/roi3dBoxStore";
+import { newRoi3dId } from "../viewer/roiLedger";
 
 const HANDLE_PX = 9;
 const MIN_DRAG_PX = 3;
@@ -211,7 +211,7 @@ export function Roi3dOverlay(props: Props) {
       const [x, y] = local(e);
       if (Math.abs(x - d.startPx[0]) < MIN_DRAG_PX || Math.abs(y - d.startPx[1]) < MIN_DRAG_PX) return;
       const w = m.fromCanvas(x, y);
-      const b = boxFromDiagonal(nextRoi3dId(), p.drawShape, p.plane, d.planePos, d.start, [w.u, w.v]);
+      const b = boxFromDiagonal(newRoi3dId(), p.drawShape, p.plane, d.planePos, d.start, [w.u, w.v]);
       if (b) p.onCreate(b);
     };
     host.addEventListener("pointerdown", onDown);

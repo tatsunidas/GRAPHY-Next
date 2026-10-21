@@ -6,6 +6,8 @@ import {
   outOfBounds,
   resizeEdge,
   sectionAt,
+  mergeSolids,
+  sanitizeSolid,
   translate,
   volumeMl,
   volumeMm3,
@@ -120,5 +122,34 @@ describe("ボリュームからのはみ出し", () => {
   it("負例: 内側・ちょうど接するのは出ない", () => {
     expect(outOfBounds(mk("box", [20, 20, 20], [0, 0, 0]), bounds)).toBe(false);
     expect(outOfBounds(mk("box", [20, 20, 20], [40, 0, 0]), bounds)).toBe(false);
+  });
+});
+
+describe("sanitizeSolid / mergeSolids", () => {
+  const ok = { id: "a", shape: "ellipsoid", center: [1, 2, 3], size: [20, 10, 10], updatedAt: "2026-10-21T00:00:00.000Z" };
+  it("正例: 正しい solid はそのまま読める（メタも保つ）", () => {
+    expect(sanitizeSolid({ ...ok, label: "L", seriesUid: "s", visible: false })).toMatchObject({ id: "a", shape: "ellipsoid", label: "L", seriesUid: "s", visible: false });
+  });
+  it.each([
+    ["id が無い", { ...ok, id: "" }],
+    ["形が未知", { ...ok, shape: "sphere" }],
+    ["中心が欠ける", { ...ok, center: [1, 2] }],
+    ["径が 0", { ...ok, size: [20, 0, 10] }],
+    ["径が負", { ...ok, size: [20, -1, 10] }],
+    ["径が NaN", { ...ok, size: [20, NaN, 10] }],
+    ["null", null],
+  ])("負例: %s は落とす", (_n, v) => {
+    expect(sanitizeSolid(v)).toBeNull();
+  });
+  const s = (id: string, at: string, x = 10): Roi3dBox => ({ id, shape: "box", center: [0, 0, 0], size: [x, 10, 10], updatedAt: at });
+  it("同じ id は updatedAt の新しい方（古いローカルが新しいリモートを潰さない）", () => {
+    const m = mergeSolids([s("a", "2026-10-21T10:00:00Z", 30)], [s("a", "2026-10-21T09:00:00Z", 10)], new Set());
+    expect(m[0].size[0]).toBe(30);
+    const m2 = mergeSolids([s("a", "2026-10-21T09:00:00Z", 30)], [s("a", "2026-10-21T10:00:00Z", 10)], new Set());
+    expect(m2[0].size[0]).toBe(10);
+  });
+  it("和を取り、墓標の id は除き、順序は id で決定的", () => {
+    const m = mergeSolids([s("z", "t"), s("b", "t")], [s("a", "t"), s("b", "t")], new Set(["z"]));
+    expect(m.map((x) => x.id)).toEqual(["a", "b"]);
   });
 });

@@ -25,6 +25,7 @@ import {
 } from "./roiPersistence";
 import { fetchRoiDocument, saveRoiDocument } from "./roiPersistenceApi";
 import { mergeAnalyses, upsertAnalysis, type SavedQcaAnalysis } from "./qcaAnalysisState";
+import { mergeSolids, type Roi3dBox } from "./roi3dBox";
 
 /** 保存 1 回分の結果。UI が「保存済み」表示や失敗通知に使う。 */
 export interface RoiSaveResult {
@@ -68,6 +69,17 @@ interface PatientState {
    * 解析状態が消える**。
    */
   analyses: SavedQcaAnalysis[];
+  /**
+   * パラメトリック 3D ROI（`roi3dBox.ts`）。**`analyses` と同じ作法で持ち越す**: 2D の窓は solid を
+   * 知らないまま読み込み、保存のたびに書き戻す（持ち越さないと 2D の保存で消える）。
+   * 編集するのは MPR 窓（`setSolidsForSeries`）。
+   */
+  solids: Roi3dBox[];
+  /**
+   * solid に未保存の編集があるか。2D の収集関数を持たない窓（MPR）が保存してよい条件。
+   * 収集関数が無い窓が ROI の保存を起こすことは無い（従来どおり `no collector`）。
+   */
+  solidsDirty?: boolean;
 }
 
 /** いま保存すべき内容を集めて返す関数（呼び出し側＝Viewer2D が Cornerstone から集める）。 */
@@ -83,7 +95,7 @@ export const ROI_SAVE_DEBOUNCE_MS = 1500;
 function stateOf(patientKey: string): PatientState {
   let s = states.get(patientKey);
   if (!s) {
-    s = { known: new Set(), pendingTombstones: new Map(), loaded: [], analyses: [] };
+    s = { known: new Set(), pendingTombstones: new Map(), loaded: [], analyses: [], solids: [] };
     states.set(patientKey, s);
   }
   return s;
@@ -166,11 +178,13 @@ export async function loadRois(patientKey: string): Promise<ParsedRoiFile> {
     //    走ることがある）。同じ id は新しい方を採る。
     s.analyses = mergeAnalyses(parsed.analyses, s.analyses);
     for (const t of parsed.deleted) s.pendingTombstones.set(t.roiUid, t);
-    return { ...parsed, analyses: s.analyses };
+    // solid も未保存の編集を捨てない。同じ id は updatedAt の新しい方（墓標の id は除く）。
+    s.solids = mergeSolids(parsed.solids, s.solids, new Set(parsed.deleted.map((t) => t.roiUid)));
+    return { ...parsed, analyses: s.analyses, solids: s.solids };
   } catch (e) {
     log.warn("roi load failed", patientKey, e);
     // 読めなかったときは版を未確定のままにする（未確定だと保存を試みない＝上書き事故を避ける）。
-    return { rois: [], deleted: [], analyses: [] };
+    return { rois: [], deleted: [], analyses: [], solids: [] };
   }
 }
 
@@ -216,9 +230,11 @@ export function saveRoiNow(patientKey: string): Promise<RoiSaveResult> {
 }
 
 async function doSave(patientKey: string): Promise<RoiSaveResult> {
-  const collect = collectors.get(patientKey);
-  if (!collect) return { ok: false, error: "no collector" };
   const s = stateOf(patientKey);
+  // 2D の収集関数が無い窓（MPR）は solid の保存に限り、直近に読んだ ROI をそのまま書き戻す。
+  const collect = collectors.get(patientKey) ?? (s.solidsDirty ? () => s.loaded : undefined);
+  if (!collect) return { ok: false, error: "no collector" };
+  const soloSolids = !collectors.has(patientKey);
   // 版が未確定なら、まず読む（読まずに保存すると backend が 409 を返す仕様）。
   if (s.version === undefined) {
     await loadRois(patientKey);
@@ -242,6 +258,7 @@ async function doSave(patientKey: string): Promise<RoiSaveResult> {
     rois,
     deleted: [...s.pendingTombstones.values()],
     analyses: s.analyses,
+    solids: s.solids,
   };
 
   try {
@@ -259,7 +276,9 @@ async function doSave(patientKey: string): Promise<RoiSaveResult> {
     try {
       const dto = await fetchRoiDocument(patientKey);
       const remote = parseSaveFile(dto.json);
-      const merged = mergeSaveFiles(remote, local);
+      // 収集関数の無い窓の `loaded` は古いことがある（2D の窓が先に編集した ROI を巻き戻さない）。
+      // ROI は相手（remote）をそのまま採り、こちらは solid だけを混ぜる。
+      const merged = mergeSaveFiles(remote, soloSolids ? { ...local, rois: [] } : local);
       const saved = await put(patientKey, merged, dto.version);
       commit(s, saved.content, saved.version);
       return { ok: true, roiCount: saved.content.rois.length, merged: true };
@@ -275,11 +294,11 @@ async function put(
   content: ParsedRoiFile,
   version: number | null | undefined,
 ): Promise<{ content: ParsedRoiFile; version: number | null }> {
-  const file = buildSaveFile(content.rois, content.deleted, "graphy-next", content.analyses);
+  const file = buildSaveFile(content.rois, content.deleted, "graphy-next", content.analyses, content.solids);
   const dto = await saveRoiDocument(patientKey, JSON.stringify(file), file.rois.length, version ?? null);
   // 上限で切られた墓標を状態にも反映するため、保存した内容（＝切られた後）を返す。
   return {
-    content: { rois: file.rois, deleted: file.deleted ?? [], analyses: file.analyses ?? [] },
+    content: { rois: file.rois, deleted: file.deleted ?? [], analyses: file.analyses ?? [], solids: file.solids ?? [] },
     version: dto.version,
   };
 }
@@ -292,6 +311,8 @@ function commit(s: PatientState, content: ParsedRoiFile, version: number | null)
   s.pendingTombstones = new Map(content.deleted.map((t) => [t.roiUid, t]));
   s.loaded = content.rois;
   s.analyses = content.analyses;
+  s.solids = content.solids;
+  s.solidsDirty = false;
 }
 
 /**
@@ -323,6 +344,28 @@ export function upsertQcaAnalysis(patientKey: string, analysis: SavedQcaAnalysis
   if (!patientKey) return Promise.resolve({ ok: false, error: "no patient key" });
   const s = stateOf(patientKey);
   s.analyses = upsertAnalysis(s.analyses, analysis);
+  return saveRoiNow(patientKey);
+}
+
+/** 直近に読み込んだ／保存した solid のうち、このシリーズのもの。 */
+export function getSolidsForSeries(patientKey: string, seriesUid: string): Roi3dBox[] {
+  return (states.get(patientKey)?.solids ?? []).filter((x) => x.seriesUid === seriesUid);
+}
+
+/**
+ * このシリーズの solid を現在の内容へ置き換えて保存する（MPR 窓が編集のたびに呼ぶ）。
+ * 他のシリーズの solid は触らない。**前回あったのに無くなった id は墓標**にして削除を伝える。
+ */
+export function setSolidsForSeries(patientKey: string, seriesUid: string, solids: Roi3dBox[]): Promise<RoiSaveResult> {
+  if (!patientKey) return Promise.resolve({ ok: false, error: "no patient key" });
+  const s = stateOf(patientKey);
+  const now = new Date().toISOString();
+  const keep = new Set(solids.map((x) => x.id));
+  for (const prev of s.solids) {
+    if (prev.seriesUid === seriesUid && !keep.has(prev.id)) s.pendingTombstones.set(prev.id, { roiUid: prev.id, at: now });
+  }
+  s.solids = [...s.solids.filter((x) => x.seriesUid !== seriesUid), ...solids];
+  s.solidsDirty = true;
   return saveRoiNow(patientKey);
 }
 

@@ -55,13 +55,18 @@ import type { PlaneId, Roi3dShape } from "../viewer/roi3dBox";
 import {
   addRoi3d,
   clearRoi3d,
+  hydrateRoi3d,
   listRoi3d,
   removeRoi3d,
   selectRoi3d,
   selectedRoi3dId,
+  setRoi3dContext,
   subscribeRoi3d,
+  subscribeRoi3dEdits,
   updateRoi3d,
-} from "../viewer/roi3dBoxStore";
+} from "../viewer/roiLedger";
+import { derivePatientKey } from "../viewer/patientKey";
+import { getSolidsForSeries, loadRois, setSolidsForSeries } from "../viewer/roiSaveStore";
 import { presetLabel } from "../viewer2d/wlPresets";
 import { useWlPresets } from "../viewer2d/wlPresetStore";
 import { useI18n } from "../i18n/i18n";
@@ -114,6 +119,8 @@ export function MprScreen({ status }: { status: AppStatus | null }) {
   const coronalRef = useRef<HTMLDivElement>(null);
   const engineRef = useRef<RenderingEngine | null>(null);
   const startedRef = useRef(false);
+  // 3D ROI の保存先（患者・シリーズ）。ボリュームが出来てから確定する。
+  const roiSaveRef = useRef<{ patientKey: string; seriesUid: string } | null>(null);
 
   const [phase, setPhase] = useState<Phase>("idle");
   const [message, setMessage] = useState<string>("");
@@ -290,6 +297,12 @@ export function MprScreen({ status }: { status: AppStatus | null }) {
         volumeId,
         TOOL_GROUP_ID,
       );
+      // 保存済みの 3D ROI を読み込む（読めなくても空で続行。保存は読めた版を土台にする）。
+      const patientKey = derivePatientKey(ctx.study);
+      setRoi3dContext({ studyUid: ctx.study.studyInstanceUid, seriesUid: series.seriesInstanceUid });
+      await loadRois(patientKey);
+      hydrateRoi3d(getSolidsForSeries(patientKey, series.seriesInstanceUid));
+      roiSaveRef.current = { patientKey, seriesUid: series.seriesInstanceUid };
       setPhase("ready");
       // 初回オーバーレイ計算（レイアウト確定後に読む）。
       requestAnimationFrame(() => refreshOverlays());
@@ -319,6 +332,29 @@ export function MprScreen({ status }: { status: AppStatus | null }) {
     if (phase !== "ready" || singlePane) return;
     setMprRoiTool(TOOL_GROUP_ID, roiTool !== null);
   }, [phase, singlePane, roiTool]);
+
+  // 3D ROI の編集を、落ち着いてから患者単位ドキュメントへ保存する（ドラッグ中は連続で変わる）。
+  // 解除時は保留中の保存を流し切る（窓を閉じて消えない）。
+  useEffect(() => {
+    if (phase !== "ready") return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const flush = () => {
+      timer = undefined;
+      const t = roiSaveRef.current;
+      if (t) void setSolidsForSeries(t.patientKey, t.seriesUid, listRoi3d());
+    };
+    const unsub = subscribeRoi3dEdits(() => {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(flush, 800);
+    });
+    return () => {
+      unsub();
+      if (timer) {
+        clearTimeout(timer);
+        flush();
+      }
+    };
+  }, [phase]);
 
   // アンマウント時のみ後片付け（status 変化で破棄しないよう分離）。
   useEffect(() => {
