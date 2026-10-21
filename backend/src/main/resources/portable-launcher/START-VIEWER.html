@@ -17,13 +17,13 @@ header .sp{flex:1}
 .seg button{border:0;background:transparent;color:var(--muted);padding:4px 12px;border-radius:6px;font:inherit;font-size:14px;cursor:pointer}
 .seg button[aria-pressed=true]{background:#2a3442;color:var(--text)}
 main{max-width:760px;margin:0 auto;padding:32px 24px 48px}
-h1{font-size:24px;margin:0 0 6px}
-.lead{color:var(--muted);margin:0 0 24px}
+h1{font-size:30px;line-height:1.4;margin:0 0 24px}
+.fine{color:var(--muted);font-size:13px;line-height:1.6;margin:0 0 6px}
 .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:24px;margin-bottom:20px}
 .os{color:var(--muted);font-size:14px;margin:0 0 8px}
 .file{display:flex;flex-wrap:wrap;align-items:center;gap:12px;margin:0 0 16px}
-.file code{font:600 22px ui-monospace,Consolas,"SF Mono",monospace;background:var(--bg);border:2px solid var(--accent);border-radius:10px;padding:8px 16px}
-.btn{font:inherit;font-size:15px;border:1px solid #2f4258;background:#1a2635;color:var(--text);border-radius:8px;padding:8px 14px;cursor:pointer}
+.file code{font:700 30px ui-monospace,Consolas,"SF Mono",monospace;background:var(--bg);border:2px solid var(--accent);border-radius:12px;padding:12px 24px}
+.btn{font:inherit;font-size:13px;border:1px solid #2f4258;background:#1a2635;color:var(--muted);border-radius:8px;padding:4px 10px;cursor:pointer}
 .btn:hover{filter:brightness(1.2)}
 .btn:focus-visible,.seg button:focus-visible,summary:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .status{color:var(--accent);font-size:14px;min-height:1.7em;margin:0}
@@ -35,7 +35,6 @@ summary{cursor:pointer;color:var(--muted)}
 .others li{padding:8px 0;border-top:1px solid var(--line)}
 .others code{font-family:ui-monospace,Consolas,monospace;background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:2px 8px}
 .others li.here code{border-color:var(--accent)}
-.why{color:var(--muted);font-size:14px;margin:0}
 .notice{border-left:4px solid #c9a227;background:#1c1a12;border-radius:0 10px 10px 0;padding:12px 16px;font-size:14px;margin:0 0 20px}
 .notice b{display:block;margin-bottom:2px}
 footer{color:var(--muted);font-size:14px;text-align:center;border-top:1px solid var(--line);padding-top:16px}
@@ -53,7 +52,6 @@ footer b{color:var(--text)}
 </header>
 <main>
   <h1 id="t-title"></h1>
-  <p class="lead" id="t-lead"></p>
 
   <section class="card" aria-labelledby="t-os">
     <p class="os" id="t-os"></p>
@@ -66,7 +64,8 @@ footer b{color:var(--text)}
     </details>
   </section>
 
-  <p class="why" id="t-why"></p>
+  <p class="fine" id="t-lead"></p>
+  <p class="fine" id="t-why"></p>
   <br>
   <div class="notice" role="note"><b id="t-notice-h"></b><span id="t-notice"></span></div>
 
@@ -87,14 +86,19 @@ footer b{color:var(--text)}
     ja: { windows: "ダブルクリックします。", mac: "ダブルクリックします（開けないときは、右クリック →「開く」）。", linux: "ターミナルで次のコマンドを実行します：sh START-VIEWER.sh" },
     en: { windows: "Double-click it.", mac: "Double-click it (if it does not open: right-click > Open).", linux: "Run this in a terminal: sh START-VIEWER.sh" }
   };
+  var EXTRA = {
+    ja: { mac: "開けないときは、右クリック →「開く」を選びます。" },
+    en: { mac: "If it does not open: right-click > Open." }
+  };
   var T = {
     ja: {
-      title: "画像をビューアで開く",
+      title: "下のファイルをダブルクリックして実行してください",
+      titleRun: "下のファイルを実行してください",
       lead: "このフォルダの画像を、付属のビューアで見ます。インストールは要りません。",
       osKnown: "このパソコン（%OS%）では、次のファイルを実行します",
       osUnknown: "お使いの環境を判定できませんでした。お使いの OS に合うファイルを、下から選んで実行します",
       copy: "ファイル名をコピー", copied: "コピーしました：", copyFail: "コピーできませんでした。ファイル名を選んでコピーしてください。",
-      s1: "このフォルダ（このページと同じ場所）にある、上のファイルを実行します。", s2: "ブラウザが開き、画像が自動で表示されます。", s3: "終わるときは、黒い画面（起動ファイルの窓）を閉じます。",
+      s1: "上のファイルをダブルクリックします。", s2: "ブラウザが開き、画像が表示されます。", s3: "終わるときは、黒い画面を閉じます。",
       other: "ほかの OS の場合", here: "（このパソコン）",
       why: "ブラウザの安全のための制限で、このページから直接ビューアを起動することはできません。上のファイルをご自身でダブルクリックしてください。画像はこのパソコンの外へは送られません。",
       noticeH: "ご注意（非診断用）",
@@ -102,12 +106,13 @@ footer b{color:var(--text)}
       signBy: "Exported by GRAPHY"
     },
     en: {
-      title: "Open the images in the viewer",
+      title: "Double-click the file below to start",
+      titleRun: "Run the file below to start",
       lead: "Use the bundled viewer to look at the images in this folder. No installation is needed.",
       osKnown: "On this computer (%OS%), run this file",
       osUnknown: "Your system could not be detected. Choose the file for your OS below and run it",
       copy: "Copy file name", copied: "Copied: ", copyFail: "Could not copy. Please select the file name and copy it.",
-      s1: "Run the file above. It is in this folder (the same place as this page).", s2: "Your browser opens and shows the images automatically.", s3: "To finish, close the black launcher window.",
+      s1: "Double-click the file above.", s2: "Your browser opens and shows the images.", s3: "To finish, close the black window.",
       other: "Other operating systems", here: " (this computer)",
       why: "For browser security, this page cannot start the viewer by itself. Please double-click the file above yourself. Images are never sent outside this computer.",
       noticeH: "Notice (not for diagnostic use)",
@@ -152,7 +157,7 @@ footer b{color:var(--text)}
     document.documentElement.lang = lang;
     $("lang-ja").setAttribute("aria-pressed", String(lang === "ja"));
     $("lang-en").setAttribute("aria-pressed", String(lang === "en"));
-    $("t-title").textContent = t.title;
+    $("t-title").textContent = os === "windows" || os === "mac" ? t.title : t.titleRun;
     $("t-lead").textContent = t.lead;
     $("t-os").textContent = os === "unknown" ? t.osUnknown : t.osKnown.replace("%OS%", OS_LABEL[lang][os]);
     $("status").textContent = "";
@@ -174,9 +179,8 @@ footer b{color:var(--text)}
 
     var steps = $("steps");
     steps.textContent = "";
-    steps.appendChild(el("li", t.s1));
-    steps.appendChild(el("li", os === "unknown" ? t.s2 : LAUNCH[lang][os] + " " + t.s2));
-    steps.appendChild(el("li", t.s3));
+    steps.appendChild(el("li", os === "linux" ? LAUNCH[lang].linux : t.s1 + (os === "mac" ? " " + EXTRA[lang].mac : "")));
+    steps.appendChild(el("li", t.s2 + " " + t.s3));
 
     $("t-other").textContent = t.other;
     var list = $("others");
