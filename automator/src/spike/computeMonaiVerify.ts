@@ -23,8 +23,8 @@ import { resetDb } from "../backend/dbReset.js";
 import { DesktopDriver } from "../driver/desktopDriver.js";
 import { importFixtureCategory } from "../fixtures/importFixtures.js";
 import { AUTOMATOR_ROOT, categoryDir, getCategory } from "../fixtures/manifest.js";
-import { installOfficialPlugin, openViewer, state } from "./computeMonaiShared.js";
-import { consentWindow, createChecker } from "./computeSpikeShared.js";
+import { PLUGIN_ID, installOfficialPlugin, openViewer, state } from "./computeMonaiShared.js";
+import { consentWindow, createChecker, openAnalysisPlugin } from "./computeSpikeShared.js";
 
 const DATA_ROOT = path.join(os.homedir(), "monai-verify-data");
 const PY = path.join(DATA_ROOT, ".venv", "bin", "python");
@@ -43,7 +43,22 @@ interface BundleSpec {
   orient?: { label: number; expect: string };
   /** 報告された指標（出典は fw/monai-verification/<bundle>.md）。比較は人が見る。 */
   reported: { metric: string; value: number; note: string };
+  /** 複数チャネル入力: チャネルごとに 1 シリーズ（同じ検査）として取り込み、タイルを開いて選ぶ。 */
+  multi?: {
+    /** Bundle のチャネル順。取り込むシリーズの説明にもなる */
+    channels: string[];
+    /** 症例の 4D 画像と基準を Bundle の形（チャネル別 NIfTI と振り直した基準）へ並べ替える */
+    prep(caseFile: string, caseId: string, outDir: string): void;
+    /** 領域（SEG 名の和）ごとの Dice。キー = 領域名、値 = SEG 名 */
+    regions: Record<string, { seg: string[]; ref: number[] }>;
+  };
 }
+
+const BRATS_PREP = path.join(AUTOMATOR_ROOT, "tools", "monai_brats_prep.py");
+// SEG のセグメント名は計算機側の LABEL_NAMES（ui.js）に合わせる
+const BRATS_CORE = "腫瘍コア（壊死・非造影。BraTS の 1）";
+const BRATS_EDEMA = "浮腫（全腫瘍のうちコア以外。BraTS の 2）";
+const BRATS_ET = "造影される腫瘍（BraTS の 4）";
 
 const BUNDLES: Record<string, BundleSpec> = {
   spleen_ct_segmentation: {
@@ -53,6 +68,24 @@ const BUNDLES: Record<string, BundleSpec> = {
     labelMap: { spleen: 1 },
     orient: { label: 1, expect: "x=+1,y=+1" }, // 脾臓: 患者の左（x 大）・体の重心より後ろ（y 大）
     reported: { metric: "mean Dice", value: 0.961, note: "検証 9 例の平均（学習中の検証に使用。独立性は限定的）" },
+  },
+  brats_mri_segmentation: {
+    dataset: path.join(DATA_ROOT, "msd", "x", "Task01_BrainTumour_ex", "Task01_BrainTumour"),
+    cases: (files) => [...files].sort(),
+    labelMap: { [BRATS_CORE]: 1, [BRATS_EDEMA]: 2, [BRATS_ET]: 4 },
+    reported: { metric: "mean Dice（TC / WT / ET）", value: 0.8518, note: "TC 0.8559・WT 0.9026・ET 0.7905。学習は BraTS 2018 で MSD Task01 と重なるため独立ではない" },
+    multi: {
+      channels: ["T1c", "T1", "T2", "FLAIR"],
+      prep(caseFile, caseId, outDir) {
+        const r = spawnSync(PY, ["-I", BRATS_PREP, "--image", caseFile, "--label", caseFile.replace("imagesTr", "labelsTr"), "--out-dir", outDir, "--case", caseId], { encoding: "utf8" });
+        if (r.status !== 0) throw new Error(`症例の並べ替えに失敗: ${r.stderr || r.stdout}`);
+      },
+      regions: {
+        WT: { seg: [BRATS_CORE, BRATS_EDEMA, BRATS_ET], ref: [1, 2, 4] },
+        TC: { seg: [BRATS_CORE, BRATS_ET], ref: [1, 4] },
+        ET: { seg: [BRATS_ET], ref: [4] },
+      },
+    },
   },
 };
 
@@ -71,10 +104,16 @@ function sd(xs: number[]): number | null {
   return Math.sqrt(xs.reduce((a, b) => a + (b - m) ** 2, 0) / (xs.length - 1));
 }
 
-function score(segPath: string, refPath: string, labelMap: Record<string, number>, outPath: string): Record<string, any> {
+function score(segPath: string, refPath: string, labelMap: Record<string, number>, outPath: string, regions?: Record<string, unknown>): Record<string, any> {
   const mapPath = `${outPath}.labelmap.json`;
   fs.writeFileSync(mapPath, JSON.stringify(labelMap));
-  const r = spawnSync(PY, ["-I", SCORE_PY, "--seg", segPath, "--reference", refPath, "--label-map", mapPath, "--out", outPath], { encoding: "utf8" });
+  const extra: string[] = [];
+  if (regions) {
+    const regPath = `${outPath}.regions.json`;
+    fs.writeFileSync(regPath, JSON.stringify(regions));
+    extra.push("--regions", regPath);
+  }
+  const r = spawnSync(PY, ["-I", SCORE_PY, "--seg", segPath, "--reference", refPath, "--label-map", mapPath, "--out", outPath, ...extra], { encoding: "utf8" });
   if (r.status !== 0) throw new Error(`採点に失敗: ${r.stderr || r.stdout}`);
   return JSON.parse(fs.readFileSync(outPath, "utf8"));
 }
@@ -94,7 +133,7 @@ async function main(): Promise<void> {
   console.log(`[${bundle}] 症例 ${cases.length} 件: ${cases.join(", ")}`);
 
   const OUT_DIR = path.join(AUTOMATOR_ROOT, ".results", "compute-monai-verify", bundle);
-  const RES_DIR = path.join(DATA_ROOT, "results", bundle);
+  const RES_DIR = path.join(DATA_ROOT, "results", process.argv.includes("--swap-channels") ? `${bundle}-swap` : bundle);
   fs.mkdirSync(OUT_DIR, { recursive: true });
   fs.mkdirSync(RES_DIR, { recursive: true });
   installOfficialPlugin();
@@ -113,9 +152,29 @@ async function main(): Promise<void> {
     const base = `http://localhost:${driver.ports.http}`;
 
     // 症例を NIfTI で取り込む（取り込みの向きの誤りは画像と基準が同じ誤りになり Dice に出ない。向きは DICOM の c で見る）
-    const series: Record<string, { studyUid: string; seriesUid: string }> = {};
+    const series: Record<string, { studyUid: string; seriesUid: string; ref?: string }> = {};
     for (const c of cases) {
       const id = c.replace(/\.nii\.gz$/, "");
+      if (spec.multi) {
+        // 4D → チャネル別の 3D（Bundle の順）。同じ検査（study）に 4 シリーズとして入れる
+        const prepDir = path.join(RES_DIR, "prep");
+        spec.multi.prep(path.join(imagesDir, c), id, prepDir);
+        let studyUid: string | undefined;
+        let first = "";
+        for (const [k, ch] of spec.multi.channels.entries()) {
+          const r = await fetch(`${base}/api/nifti/import`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ path: path.join(prepDir, `${id}_${ch}.nii.gz`), modality: "MR", patientId: `VERIFY-${id}`, patientName: `VERIFY^${id}`, seriesDescription: `${id}_${ch}`, seriesNumber: k + 1, ...(studyUid ? { studyInstanceUid: studyUid } : {}) }),
+          });
+          const j = (await r.json()) as { studyInstanceUid: string; seriesInstanceUid: string; error?: string };
+          if (!r.ok || j.error) throw new Error(`NIfTI の取り込みに失敗: ${id}_${ch} ${JSON.stringify(j)}`);
+          studyUid = j.studyInstanceUid;
+          if (k === 0) first = j.seriesInstanceUid;
+        }
+        series[id] = { studyUid: studyUid!, seriesUid: first, ref: path.join(prepDir, `${id}_label.nii.gz`) };
+        continue;
+      }
       const r = await fetch(`${base}/api/nifti/import`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -164,6 +223,37 @@ async function main(): Promise<void> {
       console.log(`\n[${bundle}] ${id}`);
       const v: Page = await openViewer(driver, page, s.studyUid, s.seriesUid);
       await v.getByTestId("monai-bundle").selectOption(bundle);
+      if (spec.multi) {
+        // 残りのシリーズをタイルに足し、チャネルごとにシリーズを選ぶ
+        for (let k = 1; k < spec.multi.channels.length; k++) {
+          console.log(`  追加ボタン ${await v.locator("button[title='タイルに追加']").count()} 個`);
+          await v.locator("button[title='タイルに追加']").first().click();
+          await v.waitForTimeout(1500);
+        }
+        // 🔴 プラグインは開いた時点のタイル一覧を持つ（後から足したタイルは見えない）ので、閉じて開き直す
+        await v.getByTestId("monai-bundle").waitFor({ state: "visible" });
+        await v.locator("div", { has: v.getByTestId("monai-bundle") }).getByText("×", { exact: true }).last().click();
+        await v.getByTestId("monai-bundle").waitFor({ state: "detached", timeout: 10_000 });
+        await openAnalysisPlugin(v, PLUGIN_ID);
+        await v.getByTestId("monai-bundle").selectOption(bundle);
+        await v.waitForTimeout(2_000);
+        const nOpt = await v.getByTestId("monai-channel-0").evaluate((sel) => (sel as HTMLSelectElement).options.length);
+        check(nOpt === spec.multi.channels.length + 1, `${id}: チャネルの選択肢に 4 シリーズが出る`, nOpt);
+        // 負例: --swap-channels はチャネル 0 と 1 のシリーズを入れ替えて渡す（順序の取り違えを採点が見分けられるかを見る）
+        const swap = process.argv.includes("--swap-channels");
+        for (const [k, ch0] of spec.multi.channels.entries()) {
+          const ch = swap && k < 2 ? spec.multi.channels[1 - k] : ch0;
+          const val = await v.getByTestId(`monai-channel-${k}`).evaluate((sel, re) => {
+            const o = Array.from((sel as HTMLSelectElement).options).find((x) => x.value && new RegExp(re).test(x.textContent ?? ""));
+            return o?.value ?? null;
+          }, `_${ch}(?![A-Za-z0-9])`);
+          if (!val) console.log("  ", await v.locator("#root, body").first().evaluate(() => Array.from(document.querySelectorAll("div")).map((d) => d.textContent ?? "").filter((t) => t.startsWith("シリーズは、同じ患者")).slice(0, 1).join()));
+          if (!val) await v.screenshot({ path: path.join(OUT_DIR, "debug-tiles.png") });
+          if (!val) throw new Error(`チャネル ${k}（${ch}）のタイルが見つかりません: ${JSON.stringify(await v.getByTestId(`monai-channel-${k}`).evaluate((sel) => Array.from((sel as HTMLSelectElement).options).map((o) => o.textContent)))}`);
+          await v.getByTestId(`monai-channel-${k}`).selectOption(val);
+        }
+        check(await v.getByTestId("monai-run").isEnabled(), `${id}: 4 チャネルが揃うと実行できる`);
+      }
       if (shotsTaken === 0) { await v.screenshot({ path: path.join(OUT_DIR, "01-before-run.png") }); shotsTaken++; }
       const t0 = Date.now();
       await v.getByTestId("monai-run").click();
@@ -217,8 +307,11 @@ async function main(): Promise<void> {
           }
         }
         if (id !== "DICOM-ct-basic") {
-          const refPath = path.join(spec.dataset, "labelsTr", `${id}.nii.gz`);
-          const sc = score(segPath, refPath, spec.labelMap, path.join(RES_DIR, `${id}.score.json`));
+          const refPath = s.ref ?? path.join(spec.dataset, "labelsTr", `${id}.nii.gz`);
+          const sc = score(segPath, refPath, spec.labelMap, path.join(RES_DIR, `${id}.score.json`), spec.multi?.regions);
+          for (const [name, r] of Object.entries((sc.regions ?? {}) as Record<string, any>)) {
+            check(r.dice !== null, `${id}: 領域 ${name} の Dice が出る（${r.dice}${r.reason ? `・${r.reason}` : ""}）`, r);
+          }
           row.score = sc;
           for (const [name, r] of Object.entries(sc.labels as Record<string, any>)) {
             check(r.dice !== null, `${id}: ${name} の Dice が出る（${r.dice}${r.reason ? `・${r.reason}` : ""}）`, r);

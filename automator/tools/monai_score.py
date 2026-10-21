@@ -2,7 +2,7 @@
 """MONAI Bundle の結果（本体が書いた DICOM SEG）を、基準ラベル（NIfTI）と突き合わせて採点する。
 
 使い方:
-  python3 -I monai_score.py --seg result.dcm --reference ref.nii.gz --label-map map.json --out score.json
+  python3 -I monai_score.py --seg result.dcm --reference ref.nii.gz --label-map map.json --out score.json [--regions regions.json]
   label-map: {"<SEG のセグメント名>": <基準ラベルの値>, ...}（名前と番号の対応そのものも検査の対象）
 
 座標はすべて患者座標 LPS・mm。ボクセル番号の計算は read_seg / read_nifti_labels / resample_nearest だけに閉じ込める。
@@ -165,7 +165,25 @@ def swap_label_names(names: dict, a: int, b: int) -> dict:
     return out
 
 
-def score_volumes(seg: LabelVolume, ref: LabelVolume, label_map: dict) -> dict:
+def score_regions(seg: LabelVolume, ref: LabelVolume, regions: dict) -> dict:
+    """領域（複数ラベルの和集合）ごとの Dice。regions = {名前: {"seg": [SEG のセグメント名…], "ref": [基準の値…]}}。
+    BraTS の WT・TC・ET のように、報告が「ラベルの和」で書かれているときに使う。名前が SEG に無いものは理由つきで None。"""
+    pred_on_ref = resample_nearest(seg, ref)
+    by_name = {n: v for v, n in seg.names.items()}
+    rows = {}
+    for rname, spec in regions.items():
+        lost = [n for n in spec["seg"] if n not in by_name]
+        if lost:
+            rows[rname] = {"dice": None, "reason": f"SEG にその名前のセグメントがない: {lost}"}
+            continue
+        pred = np.isin(pred_on_ref.data, [by_name[n] for n in spec["seg"]])
+        truth = np.isin(ref.data, spec["ref"])
+        d, why = dice(pred, truth)
+        rows[rname] = {"dice": d, "reason": why, "pred_ml": float(pred.sum()) * ref.voxel_ml, "ref_ml": float(truth.sum()) * ref.voxel_ml}
+    return rows
+
+
+def score_volumes(seg: LabelVolume, ref: LabelVolume, label_map: dict, regions: dict | None = None) -> dict:
     pred_on_ref = resample_nearest(seg, ref)
     by_name = {n: v for v, n in seg.names.items()}
     rows = {}
@@ -179,11 +197,14 @@ def score_volumes(seg: LabelVolume, ref: LabelVolume, label_map: dict) -> dict:
             "pred_ml": volume_ml(pred_on_ref, by_name[name]), "ref_ml": volume_ml(ref, ref_value),
         }
     extra = sorted(n for n in by_name if n not in label_map)
-    return {"labels": rows, "seg_names_not_in_map": extra, "reference_voxel_ml": ref.voxel_ml}
+    out = {"labels": rows, "seg_names_not_in_map": extra, "reference_voxel_ml": ref.voxel_ml}
+    if regions:
+        out["regions"] = score_regions(seg, ref, regions)
+    return out
 
 
-def score(seg_path: str, ref_path: str, label_map: dict) -> dict:
-    return score_volumes(read_seg(seg_path), read_nifti_labels(ref_path), label_map)
+def score(seg_path: str, ref_path: str, label_map: dict, regions: dict | None = None) -> dict:
+    return score_volumes(read_seg(seg_path), read_nifti_labels(ref_path), label_map, regions)
 
 
 def main(argv=None) -> int:
@@ -192,13 +213,21 @@ def main(argv=None) -> int:
     p.add_argument("--reference", required=True)
     p.add_argument("--label-map", required=True)
     p.add_argument("--out", required=True)
+    p.add_argument("--regions", help='領域の JSON: {"WT": {"seg": [名前…], "ref": [値…]}, ...}')
     a = p.parse_args(argv)
     with open(a.label_map, encoding="utf-8") as f:
-        result = score(a.seg, a.reference, json.load(f))
+        label_map = json.load(f)
+    regions = None
+    if a.regions:
+        with open(a.regions, encoding="utf-8") as f:
+            regions = json.load(f)
+    result = score(a.seg, a.reference, label_map, regions)
     with open(a.out, "w", encoding="utf-8") as f:
         json.dump(result, f, ensure_ascii=False, indent=2)
     for n, r in result["labels"].items():
         print(f"{n}: Dice={'-' if r['dice'] is None else format(r['dice'], '.4f')}" + (f"（{r['reason']}）" if r["reason"] else ""))
+    for n, r in result.get("regions", {}).items():
+        print(f"[領域] {n}: Dice={'-' if r['dice'] is None else format(r['dice'], '.4f')}" + (f"（{r['reason']}）" if r["reason"] else ""))
     return 0
 
 
