@@ -2,7 +2,7 @@
 import type { SeriesLayoutDto } from "../../../src/api";
 import { layoutFor, seriesByUid } from "../data";
 
-export const fetchSeriesLayout = (_studyUid: string, seriesUid: string): Promise<SeriesLayoutDto> => {
+export const fetchSeriesLayout = (studyUid: string, seriesUid: string): Promise<SeriesLayoutDto> => {
   const s = seriesByUid(seriesUid);
-  return s ? layoutFor(s) : Promise.reject(new Error("portable: unknown series"));
+  return s ? layoutFor(s, studyUid) : Promise.reject(new Error("portable: unknown series"));
 };

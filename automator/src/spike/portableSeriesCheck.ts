@@ -11,7 +11,7 @@ const check = (ok: boolean, name: string, d?: unknown) => {
   if (!ok) fail++;
   console.log(`  ${ok ? "合格" : "失敗"}  ${name}${ok || d === undefined ? "" : "  → " + JSON.stringify(d)}`);
 };
-const proc = spawn(`"${path.join(MEDIA, "START-VIEWER.bat")}"`, [], { cwd: MEDIA, env: { ...process.env, GRAPHY_VIEWER_NO_BROWSER: "1", GRAPHY_VIEWER_IDLE_SECONDS: "300" }, shell: true, stdio: ["ignore", "pipe", "pipe"] });
+const proc = spawn(`"${path.join(MEDIA, "START-VIEWER.bat")}"`, [], { cwd: MEDIA, env: { ...process.env, GRAPHY_VIEWER_NO_BROWSER: "1", GRAPHY_VIEWER_IDLE_SECONDS: "20" }, shell: true, stdio: ["ignore", "pipe", "pipe"] });
 let out = "";
 proc.stdout?.on("data", (d: Buffer) => (out += d.toString()));
 let url = "";
@@ -33,16 +33,26 @@ try {
     const expected = Number((/(\d+)\s*(枚|images)/.exec(label) ?? [])[1]);
     await card.click();
     await sleep(3500);
-    const pos = (await p.locator(".pv-pos").textContent())?.trim() ?? "";
-    const png = await p.locator('[data-pv-tile="0"]').screenshot();
-    const lit = await helper.evaluate(async (b64) => {
-      const img = new Image(); img.src = "data:image/png;base64," + b64; await img.decode();
-      const c = document.createElement("canvas"); c.width = img.width; c.height = img.height;
-      const g = c.getContext("2d")!; g.drawImage(img, 0, 0);
-      const d = g.getImageData(0, 0, c.width, c.height).data; let k = 0;
-      for (let j = 0; j < d.length; j += 4) if (0.299 * d[j] + 0.587 * d[j + 1] + 0.114 * d[j + 2] > 100) k++;
-      return k / (d.length / 4);
-    }, png.toString("base64"));
+    const pos = (await p.locator(".pv-pos:not(.pv-tpos)").textContent())?.trim() ?? "";
+    const measure = async () => {
+      const png = await p.locator('[data-pv-tile="0"]').screenshot();
+      return helper.evaluate(async (b64) => {
+        const img = new Image(); img.src = "data:image/png;base64," + b64; await img.decode();
+        const c = document.createElement("canvas"); c.width = img.width; c.height = img.height;
+        const g = c.getContext("2d")!; g.drawImage(img, 0, 0);
+        const d = g.getImageData(0, 0, c.width, c.height).data; let k = 0;
+        for (let j = 0; j < d.length; j += 4) if (0.299 * d[j] + 0.587 * d[j + 1] + 0.114 * d[j + 2] > 100) k++;
+        return k / (d.length / 4);
+      }, png.toString("base64"));
+    };
+    let lit = await measure();
+    // 端のスライスは空白（穴）や空気だけのことがある。真ん中の位置も見て、最大を採る。
+    const total0 = Number((/\/\s*(\d+)/.exec(pos) ?? [])[1]);
+    if (lit <= 0.005 && total0 > 2) {
+      await p.locator(".pv-slider").first().fill(String(Math.floor(total0 / 2)));
+      await sleep(2500);
+      lit = Math.max(lit, await measure());
+    }
     console.log(`- [${i}] ${label} | 位置表示 ${pos} | 明るい画素 ${(lit * 100).toFixed(1)}%`);
     const total = Number((/\/\s*(\d+)/.exec(pos) ?? [])[1]);
     check(Number.isFinite(total) && total >= 1, `シリーズ ${i}: 位置表示が出る`, pos);

@@ -1,9 +1,12 @@
 // 本体の SeriesLayoutDto を、媒体の DICOM ヘッダからクライアント側で組む（本体では backend が行う）。
 // 描画核（viewer/SeriesViewer）は DTO を受け取るだけなので、同じ形で渡せば本体と同じ挙動になる。
 //
-// 範囲（段 2）:
+// 役割: Export した媒体は backend の計算結果（VIEWER/layouts.json）をそのまま使う。ここは、それが無い媒体
+// （他社製の DICOMDIR など）のための代替で、本体の規則のうち下の範囲だけを写す。
+// 範囲:
 // - 単一フレーム画像の通常シリーズ: IPP を法線へ射影して Z 昇順。同じ位置が同数ずつ繰り返す場合は T 軸。
-// - マルチフレームの 1 インスタンス（XA/US シネなど）: フレームを T 軸（stackAxis="t"）。
+// - XA/XRF: 本体と同じ規則（インスタンス＝ラン＝Z、フレーム＝T、短いランは最終フレームで止める）。
+// - その他のマルチフレーム 1 インスタンス（US シネなど）: フレームを T 軸（stackAxis="t"）。
 // - Siemens モザイクのデモザイク・欠損スライスのブランク埋め・Enhanced の位置別フレームは未対応
 //   （単一軸のフォールバックで表示する。画像は出る）。
 import dicomParser from "dicom-parser";
@@ -20,9 +23,18 @@ export interface HeaderInfo {
   pixelSpacing: [number, number] | null;
   frameOfReference: string | null;
   frames: number;
+  sopClass: string;
   temporalPos: number | null;
   acqTime: number | null;
 }
+
+const XA_SOP_CLASSES = new Set([
+  "1.2.840.10008.5.1.4.1.1.12.1", // X-Ray Angiographic
+  "1.2.840.10008.5.1.4.1.1.12.1.1", // Enhanced XA
+  "1.2.840.10008.5.1.4.1.1.12.2", // X-Ray Radiofluoroscopic
+  "1.2.840.10008.5.1.4.1.1.12.2.1", // Enhanced XRF
+  "1.2.840.10008.5.1.4.1.1.12.3", // XA Bi-Plane (retired)
+]);
 
 const HEAD_BYTES = 128 * 1024;
 
@@ -68,6 +80,7 @@ export async function readHeader(sopUid: string, url: string, instanceNumber: nu
     pixelSpacing: ps,
     frameOfReference: ds.string("x00200052") ?? null,
     frames: Number.isFinite(nf) && nf > 0 ? nf : 1,
+    sopClass: ds.string("x00080016") ?? "",
     temporalPos: ds.string("x00200100") ? Number(ds.string("x00200100")) : null,
     acqTime: timeToSec(ds.string("x00080032") ?? ds.string("x00080033")),
   };
@@ -113,7 +126,24 @@ export function buildLayoutDto(hs: HeaderInfo[]): SeriesLayoutDto {
     frameOfReferenceUID: first?.frameOfReference ?? null,
   };
 
-  // マルチフレーム 1 インスタンス: フレーム軸（XA/US シネ）。
+  // XA/XRF（本体の XaFrameExpander と同じ規則）。投影像なので幾何は付けない。
+  const xa = hs.filter((x) => XA_SOP_CLASSES.has(x.sopClass));
+  if (xa.length > 0) {
+    const runs = [...xa].sort((a, b) => a.instanceNumber - b.instanceNumber || (a.sopUid < b.sopUid ? -1 : a.sopUid > b.sopUid ? 1 : 0));
+    const nT = Math.max(...runs.map((r) => Math.max(1, r.frames)));
+    const cells: SeriesLayoutCell[] = [];
+    runs.forEach((r, z) => {
+      for (let t = 0; t < nT; t++) cells.push({ c: 0, z, t, sopInstanceUid: r.sopUid, frame: Math.min(t, Math.max(1, r.frames) - 1) });
+    });
+    return {
+      cDimension: null, tDimension: null, imageOrientationPatient: null, pixelSpacingRow: 0, pixelSpacingCol: 0,
+      imageWidth: runs[0].cols, imageHeight: runs[0].rows, frameOfReferenceUID: null,
+      nZ: runs.length, nC: 1, nT, cells, zSpatial: null,
+      axes: { z: { label: "Run", kind: "run" }, c: null, t: { label: "Frame", kind: "frame" }, stackAxis: "t" },
+    };
+  }
+
+  // マルチフレーム 1 インスタンス: フレーム軸（US シネなど）。
   if (hs.length === 1 && first.frames > 1) {
     const cells: SeriesLayoutCell[] = Array.from({ length: first.frames }, (_, t) => ({ c: 0, z: 0, t, sopInstanceUid: first.sopUid, frame: t }));
     return {

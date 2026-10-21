@@ -243,7 +243,7 @@ async function main(): Promise<void> {
     check((await page.locator("#boot-guide").count()) === 0, "アプリが起動し、file:// 用の案内が消えている");
     const seriesCards = await page.locator(".pv-card").count();
     check(seriesCards >= 1, "シリーズが一覧に出ている（フォルダ選択なし）", seriesCards);
-    await page.waitForFunction(() => /\d+ \/ \d+/.test(document.querySelector(".pv-pos")?.textContent ?? ""), null, { timeout: 60_000 });
+    await page.waitForFunction(() => /\d+ \/ \d+/.test(document.querySelector(".pv-pos:not(.pv-tpos)")?.textContent ?? ""), null, { timeout: 60_000 });
     check((await page.locator(".pv-card[aria-current=true]").count()) === 1, "最初のシリーズが自動で開いている");
     await sleep(2000);
     const png = await page.locator('[data-pv-tile="0"]').screenshot();
@@ -251,7 +251,7 @@ async function main(): Promise<void> {
     const st = await pixelStats(helper, png);
     check(st.lit > 0.002 && st.max > 100, "画像の矩形に画像が描かれている（黒一色ではない）", st);
     const overlay = await page.locator('[data-pv-tile="0"]').innerText();
-    check(/Image\s*1\s*\/\s*\d+/i.test(overlay) || /\d+\s*\/\s*\d+/.test(await page.locator(".pv-pos").innerText()), "枚数（N / M）が出ている", overlay.slice(0, 120));
+    check(/Image\s*1\s*\/\s*\d+/i.test(overlay) || /\d+\s*\/\s*\d+/.test(await page.locator(".pv-pos:not(.pv-tpos)").innerText()), "枚数（N / M）が出ている", overlay.slice(0, 120));
     await page.screenshot({ path: path.join(OUT_DIR, "auto-open-full.png") });
     check(logs.filter((l) => !/favicon|404/.test(l)).length === 0, "コンソールにエラーが出ていない", logs);
 

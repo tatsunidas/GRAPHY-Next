@@ -15,6 +15,7 @@ import java.util.zip.ZipInputStream;
 import java.util.zip.ZipOutputStream;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -86,6 +87,26 @@ class ExportPortableViewerTest {
         assertTrue(ps1.length > 3 && (ps1[0] & 0xff) == 0xEF && (ps1[1] & 0xff) == 0xBB && (ps1[2] & 0xff) == 0xBF,
                 "serve.ps1 は BOM 付き UTF-8（Windows PowerShell 5.1 が日本語を cp932 と読まない）");
         assertTrue(new String(files.get("START-VIEWER.sh"), java.nio.charset.StandardCharsets.UTF_8).startsWith("#!/bin/sh"));
+    }
+
+    /** 同梱を頼まれたのに成果物が無いとき、黙って省かず失敗させる（実機で「同梱したのに無い」媒体になった）。 */
+    @Test
+    void failsLoudlyWhenTheViewerBundleIsMissing() {
+        java.util.Map<String, byte[]> files = new java.util.HashMap<>();
+        ExportService.Sink sink = new ExportService.Sink() {
+            @Override
+            public void put(String name, java.io.InputStream in) throws java.io.IOException {
+                files.put(name, in.readAllBytes());
+            }
+
+            @Override
+            public void close() {
+            }
+        };
+        java.io.IOException e = assertThrows(java.io.IOException.class,
+                () -> ExportService.copyPortableViewer(sink, "classpath*:/no-such-viewer-dir/**"));
+        assertTrue(e.getMessage().contains("portable"), e.getMessage());
+        assertTrue(files.isEmpty(), "失敗時に中途半端な同梱を書かない");
     }
 
     @Test

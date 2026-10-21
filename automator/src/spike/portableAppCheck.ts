@@ -20,7 +20,7 @@ function check(ok: boolean, name: string, detail?: unknown): void {
 }
 
 async function counter(page: Page): Promise<string> {
-  return ((await page.locator(".pv-pos").textContent()) ?? "").trim();
+  return ((await page.locator(".pv-pos:not(.pv-tpos)").textContent()) ?? "").trim();
 }
 
 /** タイルの画像領域のスクリーンショットで、明るい画素の割合を数える。 */
@@ -42,7 +42,7 @@ async function lit(page: Page, helper: Page, tile: number): Promise<number> {
   }, png.toString("base64"));
 }
 
-const env = { ...process.env, GRAPHY_VIEWER_NO_BROWSER: "1", GRAPHY_VIEWER_IDLE_SECONDS: "600" };
+const env = { ...process.env, GRAPHY_VIEWER_NO_BROWSER: "1", GRAPHY_VIEWER_IDLE_SECONDS: "20" };
 const proc = spawn(`"${path.join(MEDIA, "START-VIEWER.bat")}"`, [], { cwd: MEDIA, env, shell: true, stdio: ["ignore", "pipe", "pipe"] });
 let out = "";
 proc.stdout?.on("data", (d: Buffer) => (out += d.toString("utf8")));
@@ -69,7 +69,7 @@ try {
   await page.waitForSelector(".pv-card", { timeout: 60_000 });
   check((await page.locator(".pv-card").count()) === 2, "シリーズが 2 件、一覧に出ている（フォルダ選択なし）", await page.locator(".pv-card").count());
   check((await page.locator("#boot-guide").count()) === 0, "file:// 用の案内が消えている");
-  await page.waitForFunction(() => /\d+ \/ \d+/.test(document.querySelector(".pv-pos")?.textContent ?? ""), null, { timeout: 60_000 });
+  await page.waitForFunction(() => /\d+ \/ \d+/.test(document.querySelector(".pv-pos:not(.pv-tpos)")?.textContent ?? ""), null, { timeout: 60_000 });
   check((await counter(page)) === "1 / 9", "先頭の CT が自動で開き、枚数が 9 枚", await counter(page));
   check((await page.locator(".pv-card[aria-current=true]").count()) === 1, "開いているシリーズのカードが強調されている");
   await sleep(1500);
@@ -80,7 +80,7 @@ try {
 
   console.log("\n[2] スライス送り・シネ（PT 21 枚）");
   await page.locator(".pv-card").nth(1).click();
-  await page.waitForFunction(() => document.querySelector(".pv-pos")?.textContent?.includes("/ 21"), null, { timeout: 30_000 });
+  await page.waitForFunction(() => document.querySelector(".pv-pos:not(.pv-tpos)")?.textContent?.includes("/ 21"), null, { timeout: 30_000 });
   check((await counter(page)) === "1 / 21", "PT を開くと 1 / 21", await counter(page));
   await sleep(1200);
   const tileBox = (await page.locator('[data-pv-tile="0"]').boundingBox())!;
@@ -107,7 +107,7 @@ try {
 
   console.log("\n[3] W/L・表示（CT へ戻って）");
   await page.locator(".pv-card").nth(0).click();
-  await page.waitForFunction(() => document.querySelector(".pv-pos")?.textContent?.includes("/ 9"), null, { timeout: 30_000 });
+  await page.waitForFunction(() => document.querySelector(".pv-pos:not(.pv-tpos)")?.textContent?.includes("/ 9"), null, { timeout: 30_000 });
   await sleep(1200);
   await page.getByRole("button", { name: "軟部" }).click();
   await sleep(800);
@@ -126,7 +126,7 @@ try {
 
   console.log("\n[4] 計測（長さ）");
   await page.locator(".pv-card").nth(1).click();
-  await page.waitForFunction(() => document.querySelector(".pv-pos")?.textContent?.includes("/ 21"), null, { timeout: 30_000 });
+  await page.waitForFunction(() => document.querySelector(".pv-pos:not(.pv-tpos)")?.textContent?.includes("/ 21"), null, { timeout: 30_000 });
   await sleep(1500);
   await page.getByRole("button", { name: /^長さ/ }).click();
   check((await page.getByRole("button", { name: /^長さ/ }).getAttribute("aria-pressed")) === "true", "長さツールが選ばれる");
@@ -164,7 +164,7 @@ try {
   check((await page.getByRole("dialog").count()) === 1, "? で操作の案内が開く");
   await page.keyboard.press("Escape");
 
-  const real = errors.filter((e) => !/favicon|__ping/.test(e));
+  const real = errors.filter((e) => !/favicon|__ping|VIEWER\/(layouts|blanks)\.json/.test(e));
   console.log("\n[7] 負例");
   const filePage = await browser.newPage({ viewport: { width: 1280, height: 800 } });
   const fileUrl = "file:///" + path.join(MEDIA, "VIEWER", "index.html").replace(/\\/g, "/");

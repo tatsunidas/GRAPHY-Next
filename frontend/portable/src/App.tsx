@@ -32,7 +32,7 @@ const toolDefs = TOOLS.filter((t): t is ToolDef => t !== "sep");
 
 const tileKey = (i: number) => `ptile-${i}`;
 
-interface SeriesMeta { n: number; axis: "z" | "t" }
+interface SeriesMeta { n: number; axis: "z" | "t"; /** Z 軸でスタックするシリーズの時相数（2 以上なら T スライダーを出す）。 */ nT: number; tLabel: string }
 
 /** 画像として開けないオブジェクト（セグメンテーション・構造セット・レポートなど）。ポータブル版は ROI・SEG を扱わない。 */
 const NON_IMAGE_MODALITIES = new Set(["SEG", "RTSTRUCT", "RTPLAN", "RTDOSE", "SR", "PR", "KO", "DOC", "REG"]);
@@ -139,10 +139,10 @@ export function App({ model }: { model: DicomDirModel }) {
     for (const uid of assign.slice(0, tiles)) {
       const se = list.find((x) => x.se.seriesUid === uid)?.se;
       if (!se || metas[se.seriesUid] || isVideoSeries(se)) continue;
-      void layoutFor(se).then((dto) => {
+      void layoutFor(se, list.find((x) => x.se === se)?.s.studyUid ?? "").then((dto) => {
         const axis = dto.axes?.stackAxis === "t" ? "t" : "z";
-        setMetas((m) => ({ ...m, [se.seriesUid]: { n: axis === "t" ? dto.nT : dto.nZ, axis } }));
-      }).catch(() => setMetas((m) => ({ ...m, [se.seriesUid]: { n: se.images.length, axis: "z" } })));
+        setMetas((m) => ({ ...m, [se.seriesUid]: { n: axis === "t" ? dto.nT : dto.nZ, axis, nT: axis === "z" ? dto.nT : 1, tLabel: dto.tDimension ?? "T" } }));
+      }).catch(() => setMetas((m) => ({ ...m, [se.seriesUid]: { n: se.images.length, axis: "z", nT: 1, tLabel: "T" } })));
     }
   }, [assign, tiles, list, metas]);
 
@@ -371,6 +371,14 @@ export function App({ model }: { model: DicomDirModel }) {
         </label>
         <input className="pv-slider" type="range" min={0} max={Math.max(0, (meta?.n ?? 1) - 1)} value={Math.min(pos, Math.max(0, (meta?.n ?? 1) - 1))} disabled={!meta || meta.n < 2} onChange={(e) => goTo(Number(e.target.value))} aria-label={tx("スライス", "Slice")} />
         <span className="pv-pos">{meta ? `${pos + 1} / ${meta.n}` : "—"}</span>
+        {meta && meta.nT > 1 && (
+          <label className="pv-fps" title={meta.tLabel}>
+            {meta.tLabel}
+            <input className="pv-slider" style={{ flex: "none", width: 96 }} type="range" min={0} max={meta.nT - 1} value={Math.min(dims[active]?.t ?? 0, meta.nT - 1)}
+              onChange={(e) => runSeriesCommand([tileKey(active)], (c) => c.goTo({ t: Number(e.target.value) }))} aria-label={tx("時相", "Phase")} />
+            <span className="pv-pos pv-tpos" style={{ minWidth: 40 }}>{(dims[active]?.t ?? 0) + 1} / {meta.nT}</span>
+          </label>
+        )}
         <div className="pv-sep" />
         <div className="pv-wl" role="group" aria-label="W/L">
           {isCt && DEFAULT_PRESETS.slice(0, 4).map((p) => (

@@ -4,6 +4,7 @@ import { I18nProvider, useI18n } from "../../src/i18n/i18n";
 import { loadFromServer, serverBase, startHeartbeat } from "./mediaSource";
 import type { DicomDirModel } from "./dicomdir";
 import { App } from "./App";
+import { loadExportedLayouts } from "./data";
 import { IcLock } from "./icons";
 import "./style.css";
 
@@ -20,6 +21,7 @@ function Boot() {
       setError(tx("START-VIEWER から開いてください。このページを直接開いても、画像は読み込めません。", "Please open this viewer with START-VIEWER. Opening this page directly cannot load images."));
       return;
     }
+    loadExportedLayouts(base);
     const stop = startHeartbeat(base);
     loadFromServer(base).then(setModel).catch((e) => setError(e instanceof Error ? e.message : String(e)));
     return stop;

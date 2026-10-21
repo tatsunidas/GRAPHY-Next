@@ -5,7 +5,12 @@ const routes = new Map<string, string>();
 let installed = false;
 
 export function registerMediaRoute(sopUid: string, url: string): void {
-  routes.set(`/__media/api/instances/${encodeURIComponent(sopUid)}/file`, url);
+  registerRoute(`/__media/api/instances/${encodeURIComponent(sopUid)}/file`, url);
+}
+
+/** key は `/__media/...` のパス（クエリを含めて照合する URL も可）。 */
+export function registerRoute(key: string, url: string): void {
+  routes.set(key, url);
   install();
 }
 
@@ -18,7 +23,8 @@ function install(): void {
     const q = s.search(/[?&]/);
     const path = q >= 0 ? s.slice(0, q) : s;
     const tail = q >= 0 ? s.slice(q) : "";
-    const target = routes.get(path);
-    return (open as (...a: unknown[]) => void).call(this, method, target ? target + tail : url, ...rest);
+    const exact = routes.get(s); // クエリまで含めて登録した URL（空白画像など）
+    const target = exact ?? routes.get(path);
+    return (open as (...a: unknown[]) => void).call(this, method, exact ? exact : target ? target + tail : url, ...rest);
   } as typeof XMLHttpRequest.prototype.open;
 }
