@@ -14,7 +14,14 @@ import { openAnalysisPlugin } from "./computeSpikeShared.js";
 export const PLUGIN_ID = "vis-monai";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-export const state = (viewer: Page): Promise<any> => viewer.evaluate(() => (window as unknown as { __monaiState?: unknown }).__monaiState ?? null);
+// 🔴 labels は結果のラベル画像（大きな型付き配列）。丸ごと返すと大きい症例で直列化に失敗して null になるので外す
+export const state = (viewer: Page): Promise<any> =>
+  viewer.evaluate(() => {
+    const s = (window as unknown as { __monaiState?: Record<string, unknown> }).__monaiState;
+    if (!s) return null;
+    const { labels: _labels, ...rest } = s;
+    return rest;
+  });
 
 export async function openViewer(driver: DesktopDriver, page: Page, studyUid: string, seriesUid: string): Promise<Page> {
   await dismissStartupDialogs(page);

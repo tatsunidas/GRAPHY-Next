@@ -27,6 +27,8 @@ import { PLUGIN_ID, installOfficialPlugin, openViewer, state } from "./computeMo
 import { consentWindow, createChecker, openAnalysisPlugin } from "./computeSpikeShared.js";
 
 const DATA_ROOT = path.join(os.homedir(), "monai-verify-data");
+// 重いデータの置き場（外付け）。AMOS22 は ZIP（24 GB）から検証用の CT 10 例だけを取り出して置く
+const BIG_ROOT = process.env.GRAPHY_MONAI_BIG_DATA ?? "/media/tatsunidas/visionary01/monai-verify-data";
 const PY = path.join(DATA_ROOT, ".venv", "bin", "python");
 const ORIENT_PY = path.join(AUTOMATOR_ROOT, "tools", "monai_orient.py");
 const SCORE_PY = path.join(AUTOMATOR_ROOT, "tools", "monai_score.py");
@@ -62,6 +64,21 @@ const BRATS_CORE = "腫瘍コア（壊死・非造影。BraTS の 1）";
 const BRATS_EDEMA = "浮腫（全腫瘍のうちコア以外。BraTS の 2）";
 const BRATS_ET = "造影される腫瘍（BraTS の 4）";
 
+
+const AMOS_DIR = path.join(BIG_ROOT, "AMOS_CT10");
+// AMOS のラベル番号。名前は各 Bundle の channel_def（SEG のセグメント名）に合わせる
+const AMOS_ORGANS_TS: Record<string, number> = {
+  spleen: 1, kidney_right: 2, kidney_left: 3, gallbladder: 4, esophagus: 5, liver: 6, stomach: 7, aorta: 8,
+  inferior_vena_cava: 9, pancreas: 10, adrenal_gland_right: 11, adrenal_gland_left: 12, duodenum: 13, urinary_bladder: 14,
+};
+const AMOS_ORGANS_BTCV: Record<string, number> = {
+  spleen: 1, "Right Kidney": 2, "Left Kideny": 3, Gallbladder: 4, Esophagus: 5, Liver: 6, Stomach: 7, Aorta: 8, IVC: 9, Pancreas: 10,
+  "Right adrenal gland": 11, "Left adrenal gland": 12,
+};
+function AMOS(_bundle: string, labelMap: Record<string, number>, reported: BundleSpec["reported"]): BundleSpec {
+  return { dataset: AMOS_DIR, cases: (files) => [...files].sort(), labelMap, reported };
+}
+
 const BUNDLES: Record<string, BundleSpec> = {
   spleen_ct_segmentation: {
     dataset: path.join(DATA_ROOT, "msd", "x", "Task09_Spleen"),
@@ -87,6 +104,11 @@ const BUNDLES: Record<string, BundleSpec> = {
     reported: { metric: "（スパイク）", value: NaN, note: "動作の確認だけ。Bundle の README は点の数による Dice 0.97 を報告（独立ではない）" },
     prompt: { labels: [], pointValue: 1 },
   },
+  // 独立した検証データ: AMOS22（CT 検証セット id<500 の辞書順の先頭 10 例。Zenodo 7155725、CC BY 4.0 と dataset.json の CC-BY-SA 4.0）。
+  // 取り出し: tools/zip_remote_extract.py。AMOS_CT10/{imagesTr,labelsTr} は取り出したファイルへの symlink
+  "spleen_ct_segmentation@amos": AMOS("spleen_ct_segmentation", { spleen: 1 }, { metric: "mean Dice（脾臓）", value: 0.961, note: "MSD Task09 の検証 9 例（学習中の検証）。AMOS は別施設・別データで独立" }),
+  "wholeBody_ct_segmentation@amos": AMOS("wholeBody_ct_segmentation", AMOS_ORGANS_TS, { metric: "（数値の報告なし）", value: NaN, note: "README は学習曲線の図だけで数値が無い。TotalSegmentator で学習、AMOS は独立" }),
+  "swin_unetr_btcv_segmentation@amos": AMOS("swin_unetr_btcv_segmentation", AMOS_ORGANS_BTCV, { metric: "mean Dice", value: 0.82, note: "BTCV 内の評価。AMOS は独立" }),
   brats_mri_segmentation: {
     dataset: path.join(DATA_ROOT, "msd", "x", "Task01_BrainTumour_ex", "Task01_BrainTumour"),
     cases: (files) => [...files].sort(),
@@ -139,8 +161,9 @@ function score(segPath: string, refPath: string, labelMap: Record<string, number
 }
 
 async function main(): Promise<void> {
-  const bundle = process.argv[2];
-  const spec = BUNDLES[bundle ?? ""];
+  const key = process.argv[2] ?? "";
+  const spec = BUNDLES[key];
+  const bundle = key.split("@")[0]; // 「<Bundle>@<データ>」のとき、画面で選ぶのは Bundle の名前
   if (!spec) throw new Error(`使い方: computeMonaiVerify.ts <bundle>（対応: ${Object.keys(BUNDLES).join(", ")}）`);
   const casesArg = numArg("--cases") ?? "1";
   const withDicom = process.argv.includes("--dicom");
@@ -152,9 +175,9 @@ async function main(): Promise<void> {
   if (casesArg !== "all") cases = cases.slice(0, Number(casesArg));
   console.log(`[${bundle}] 症例 ${cases.length} 件: ${cases.join(", ")}`);
 
-  const OUT_DIR = path.join(AUTOMATOR_ROOT, ".results", "compute-monai-verify", bundle);
-  const runTag = ["--swap-channels:swap", "--points-swap-roles:roleswap", "--points:points", "--points-positive-only:posonly", "--no-labels:nolabel"].filter((f) => process.argv.includes(f.split(":")[0])).map((f) => f.split(":")[1]).join("-");
-  const RES_DIR = path.join(DATA_ROOT, "results", runTag ? `${bundle}-${runTag}` : bundle);
+  const OUT_DIR = path.join(AUTOMATOR_ROOT, ".results", "compute-monai-verify", key);
+  const runTag = ["--swap-channels:swap", "--points-swap-roles:roleswap", "--points:points", "--points-positive-only:posonly", "--no-labels:nolabel"].filter((f) => process.argv.includes(f.split(":")[0])).map((f) => f.split(":")[1]).concat(numArg("--set") ? ["set-" + (numArg("--set") as string).replace(/[^A-Za-z0-9.=,_-]/g, "")] : []).join("-");
+  const RES_DIR = path.join(DATA_ROOT, "results", runTag ? `${key}-${runTag}` : key);
   fs.mkdirSync(OUT_DIR, { recursive: true });
   fs.mkdirSync(RES_DIR, { recursive: true });
   installOfficialPlugin();
@@ -244,6 +267,13 @@ async function main(): Promise<void> {
       console.log(`\n[${bundle}] ${id}`);
       const v: Page = await openViewer(driver, page, s.studyUid, s.seriesUid);
       await v.getByTestId("monai-bundle").selectOption(bundle);
+      // --set highres=false,sw_overlap=0.5: 設定値の欄に入れる（真偽→チェック、数→入力欄）
+      for (const kv of (numArg("--set") ?? "").split(",").filter(Boolean)) {
+        const [k, val] = kv.split("=");
+        const box = v.getByTestId(`monai-setting-${k}`);
+        if (val === "true" || val === "false") await box.setChecked(val === "true");
+        else await box.fill(val);
+      }
       if (spec.prompt) {
         const note = v.getByTestId("monai-prompt-note");
         if (!process.argv.includes("--no-labels")) {
@@ -309,8 +339,13 @@ async function main(): Promise<void> {
       ]);
       await w.getByTestId("consent-ack").check();
       await w.getByTestId("consent-send").click();
-      await v.waitForFunction(() => (window as unknown as { __monaiState?: { phase: string } }).__monaiState?.phase === "idle", null, { timeout: 3_600_000 });
+      // 同意の直後はまだ idle のことがある。結果（summary）か失敗（error）が出るまで待つ
+      await v.waitForFunction(() => {
+        const s = (window as unknown as { __monaiState?: { phase: string; summary?: unknown; error?: unknown } }).__monaiState;
+        return !!s && s.phase === "idle" && !!(s.summary || s.error);
+      }, null, { timeout: 3_600_000 });
       const st = await state(v);
+      if (!st) { await v.screenshot({ path: path.join(OUT_DIR, `debug-nostate-${id}.png`) }); throw new Error(`プラグインの状態が読めません（${id}）`); }
       const sec = Math.round((Date.now() - t0) / 1000);
       const fg = Object.keys(st.summary?.labels ?? {}).filter((k) => k !== "0").length;
       const ok = !!st.summary && !st.error;
