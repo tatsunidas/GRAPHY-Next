@@ -34,8 +34,13 @@ const tileKey = (i: number) => `ptile-${i}`;
 
 interface SeriesMeta { n: number; axis: "z" | "t" }
 
+/** 画像として開けないオブジェクト（セグメンテーション・構造セット・レポートなど）。ポータブル版は ROI・SEG を扱わない。 */
+const NON_IMAGE_MODALITIES = new Set(["SEG", "RTSTRUCT", "RTPLAN", "RTDOSE", "SR", "PR", "KO", "DOC", "REG"]);
+
 function allSeries(m: DicomDirModel): { p: PatientRec; s: StudyRec; se: SeriesRec }[] {
-  return m.patients.flatMap((p) => p.studies.flatMap((s) => s.series.map((se) => ({ p, s, se }))));
+  return m.patients.flatMap((p) =>
+    p.studies.flatMap((s) => s.series.filter((se) => !NON_IMAGE_MODALITIES.has(se.modality)).map((se) => ({ p, s, se }))),
+  );
 }
 
 function Thumb({ series, ready }: { series: SeriesRec; ready: boolean }) {
