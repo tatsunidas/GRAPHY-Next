@@ -18,8 +18,10 @@ export interface ImageRec {
   instanceNumber: number;
   /** ReferencedFileID を "/" 連結した媒体相対パス（小文字化前の生値）。 */
   fileId: string;
-  /** 引き当てた実ファイル（見つからなければ undefined）。 */
+  /** 引き当てた実ファイル（フォルダ選択のとき。見つからなければ undefined）。 */
   file?: File;
+  /** 配信元の URL（起動スクリプトのローカルサーバ経由のとき。`wadouri:` の imageId にする）。 */
+  url?: string;
   /** ReferencedSOPClassUIDInFile(0004,1510)。動画かどうかの判定に使う。 */
   sopClassUid?: string;
   /**
@@ -27,6 +29,8 @@ export interface ImageRec {
    * Export が MP4 実体を媒体へ入れる（`fw/video-viewer-design.md` §7 / P5）。
    */
   videoFile?: File;
+  /** 同梱 MP4 の URL（ローカルサーバ経由のとき）。 */
+  videoUrl?: string;
 }
 
 /** encapsulated video の SOP クラス（Video Photographic / Endoscopic / Microscopic）。 */
@@ -121,16 +125,43 @@ export function findDicomDirFile(files: File[]): File | null {
   return null;
 }
 
+/** 媒体相対パス → 実体（File か URL）の引き当て。 */
+export interface MediaResolver {
+  /** DICOM 画像ファイル。見つからなければ null。 */
+  image(relPath: string): { file?: File; url?: string } | null;
+  /** 同梱の再生用 MP4（`VIDEO/{sop}.mp4`）。無ければ null。 */
+  video(sopUid: string): { file?: File; url?: string } | null;
+}
+
 /**
- * DICOMDIR を解析し、実ファイルを引き当てた木を返す。
+ * DICOMDIR を解析し、実ファイルを引き当てた木を返す（フォルダ選択用）。
  * @param dicomdir DICOMDIR ファイル
  * @param allFiles 選択フォルダ配下の全ファイル（実ファイル引き当て用）
  */
 export async function parseDicomDir(dicomdir: File, allFiles: File[]): Promise<DicomDirModel> {
-  const byteArray = new Uint8Array(await dicomdir.arrayBuffer());
+  const bytes = new Uint8Array(await dicomdir.arrayBuffer());
+  const { byPath, byBase } = indexFiles(allFiles);
+  return parseDicomDirBytes(bytes, {
+    image: (relPath) => {
+      let file = byPath.get(relPath.toLowerCase());
+      if (!file) {
+        const base = relPath.split("/").pop()?.toLowerCase() ?? "";
+        const cands = byBase.get(base);
+        if (cands && cands.length === 1) file = cands[0];
+      }
+      return file ? { file } : null;
+    },
+    video: (sopUid) => {
+      const f = byPath.get(`video/${sopUid}.mp4`.toLowerCase());
+      return f ? { file: f } : null;
+    },
+  });
+}
+
+/** DICOMDIR のバイト列を解析し、`resolver` で実体を引き当てた木を返す。 */
+export function parseDicomDirBytes(byteArray: Uint8Array, resolver: MediaResolver): DicomDirModel {
   const dataSet = dicomParser.parseDicom(byteArray);
   const seq = dataSet.elements.x00041220; // Directory Record Sequence
-  const { byPath, byBase } = indexFiles(allFiles);
 
   const patients: PatientRec[] = [];
   let curPatient: PatientRec | null = null;
@@ -213,18 +244,17 @@ export async function parseDicomDir(dicomdir: File, allFiles: File[]): Promise<D
             fileId: relPath,
             sopClassUid: (ds.string("x00041510") || "").trim() || undefined,
           };
-          // 実ファイル引き当て: 相対パス一致 → 末端 basename 一致（フォールバック）。
-          let file = byPath.get(relPath.toLowerCase());
-          if (!file) {
-            const base = relPath.split("/").pop()?.toLowerCase() ?? "";
-            const cands = byBase.get(base);
-            if (cands && cands.length === 1) file = cands[0];
-          }
-          if (file) rec.file = file;
-          else missingFiles++;
+          // 実体の引き当て（フォルダ選択=File／ローカルサーバ=URL）。
+          const hit = resolver.image(relPath);
+          if (hit) {
+            rec.file = hit.file;
+            rec.url = hit.url;
+          } else missingFiles++;
           // 動画は同梱 MP4（VIDEO/{sop}.mp4）を引き当てる。無い媒体（旧 Export）もあるので任意扱い。
           if (rec.sopClassUid && VIDEO_SOP_CLASSES.has(rec.sopClassUid) && rec.sopUid) {
-            rec.videoFile = byPath.get(`video/${rec.sopUid}.mp4`.toLowerCase());
+            const v = resolver.video(rec.sopUid);
+            rec.videoFile = v?.file;
+            rec.videoUrl = v?.url;
           }
           ensureSeries().images.push(rec);
           break;
