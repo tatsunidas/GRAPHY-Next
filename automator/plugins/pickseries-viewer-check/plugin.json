@@ -1,0 +1,11 @@
+{
+  "id": "pickseries-viewer-check",
+  "name": "PickSeries Viewer Check",
+  "version": "0.1.0",
+  "engines": { "graphy": ">=0.5.0", "os": ["win32", "darwin", "linux"] },
+  "description": "Calls host.db.pickSeries() from the 2D viewer menu so the series-pick dialog can be verified from the viewer window.",
+  "author": "automator",
+  "license": "MIT",
+  "contributes": ["viewer2d.menu"],
+  "ui": "ui.js"
+}
