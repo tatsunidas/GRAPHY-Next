@@ -10,8 +10,8 @@
  *   [2] 「NVIDIA GPU を使う」を選ぶ: ファイルが high・再起動待ちが出る・GPU 名はまだ変わらない
  *   [3] 再起動（起動し直し。開発起動と同じく、scripts/dev-desktop.sh が起動前に足す環境変数を renderPrefsEnv.js から取って渡す）:
  *       GPU が NVIDIA・再起動待ちなし・Electron の GPU プロセスが nvidia-smi に出る
- *   [3b] 環境変数なしの直接起動（配布版と同じ経路）: main が環境変数を足して 1 回だけ起動し直し、起動し直した側の GPU プロセスの
- *        環境に PRIME オフロードの変数が付き、nvidia-smi に出る。auto に戻すと起動し直さない（負例）
+ *   [3b] 環境変数なしの直接起動（配布版と同じ経路）: main が環境変数を足して 1 回だけ起動し直し、起動し直した側の GPU プロセスが
+ *        nvidia-smi に出る。auto に戻すと起動し直さない（負例）
  *   [4] 「OS の既定」に戻して再起動: GPU が NVIDIA 以外に戻り、nvidia-smi から消える（負例）
  *   [5] 壊れた render-prefs.json: 起動でき、auto として扱う
  * 🔴 先に、基準の起動（[1]）で Electron が nvidia-smi に出ていないことを確かめてから、[3] の「出る」を判定する。
@@ -43,13 +43,6 @@ const pidsByMarker = (marker: string): number[] =>
     .filter((l) => l.includes(marker) && !l.includes("ps -eo"))
     .map((l) => Number(l.trim().split(/\s+/)[0]))
     .filter((n) => n > 0);
-const envOf = (pid: number): string => {
-  try {
-    return fs.readFileSync(`/proc/${pid}/environ`, "utf8");
-  } catch {
-    return "";
-  }
-};
 
 const ppidOf = (pid: number): number => {
   try {
@@ -63,6 +56,15 @@ const isDescendant = (pid: number, root: number): boolean => {
   for (let p = pid, n = 0; p > 1 && n < 20; p = ppidOf(p), n++) if (p === root) return true;
   return false;
 };
+const argsOf = (pid: number): string => {
+  try {
+    return execFileSync("ps", ["-o", "args=", "-p", String(pid)], { encoding: "utf8" });
+  } catch {
+    return "";
+  }
+};
+const allPids = (): number[] =>
+  execFileSync("ps", ["-eo", "pid"], { encoding: "utf8" }).split("\n").map(Number).filter((n) => n > 0);
 /** nvidia-smi に出ている（描画・計算の）プロセスの PID。 */
 const smiPids = (): number[] => {
   const out = execFileSync("nvidia-smi", ["pmon", "-c", "1", "-s", "u"], { encoding: "utf8" });
@@ -181,10 +183,11 @@ async function main(): Promise<void> {
       const alive = pidsByMarker(mHigh);
       check(firstPid > 0 && !alive.includes(firstPid), "最初に起動したプロセスは、環境変数を足して終わっている（起動し直した）", { firstPid, alive: alive.length });
       check(alive.length > 0, "起動し直した側のプロセスが動いている", alive.length);
-      const gpuProcs = alive.filter((p) => /--type=gpu-process/.test(execFileSync("ps", ["-o", "args=", "-p", String(p)], { encoding: "utf8" })));
+      // GPU プロセスの引数には --graphy-spike-marker が引き継がれないので、印の付いた main の子孫から探す
+      const gpuProcs = allPids().filter((p) => alive.some((r) => isDescendant(p, r)) && /--type=gpu-process/.test(argsOf(p)));
       check(gpuProcs.length > 0, "（前提）起動し直した側に GPU プロセスがある", gpuProcs);
-      check(gpuProcs.length > 0 && gpuProcs.every((p) => envOf(p).includes("__NV_PRIME_RENDER_OFFLOAD=1") && envOf(p).includes("__GLX_VENDOR_LIBRARY_NAME=nvidia")), "🔴 GPU プロセスの環境に PRIME オフロードの変数が付いている", gpuProcs);
-      check(smiPids().some((p) => alive.includes(p)), "🔴 起動し直した側が nvidia-smi に出る");
+      // /proc/<pid>/environ は Chromium が書き換えて空に近くなる（実測: 1 行）ので、環境変数そのものは見ない。nvidia-smi に出ることで判定する
+      check(smiPids().some((p) => gpuProcs.includes(p)), "🔴 起動し直した側の GPU プロセスが nvidia-smi に出る", { gpuProcs, smi: smiPids() });
       killMarked(mHigh);
       await sleep(3000);
       // 負例: auto は起動し直さない・環境変数を付けない
@@ -193,8 +196,9 @@ async function main(): Promise<void> {
       const autoPid = await direct(mAuto);
       const aliveAuto = pidsByMarker(mAuto);
       check(aliveAuto.includes(autoPid), "（負例）auto では起動し直さない（最初のプロセスがそのまま動く）", { autoPid, aliveAuto: aliveAuto.length });
-      check(aliveAuto.every((p) => !envOf(p).includes("__NV_PRIME_RENDER_OFFLOAD")), "（負例）auto では PRIME オフロードの変数が付かない");
-      check(smiPids().every((p) => !aliveAuto.includes(p)), "（負例）auto の Electron は nvidia-smi に出ない");
+      const autoGpu = allPids().filter((p) => aliveAuto.some((r) => isDescendant(p, r)) && /--type=gpu-process/.test(argsOf(p)));
+      check(autoGpu.length > 0, "（負例の前提）auto の側にも GPU プロセスがある", autoGpu);
+      check(smiPids().every((p) => !autoGpu.includes(p)), "（負例）auto の Electron の GPU プロセスは nvidia-smi に出ない");
       killMarked(mAuto);
       await sleep(2000);
       fs.writeFileSync(PREFS, JSON.stringify({ gpu: "high" }), "utf8");

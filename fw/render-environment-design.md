@@ -6,7 +6,7 @@
 
 | OS | 仕組み | 状態 |
 |---|---|---|
-| Linux（NVIDIA） | PRIME オフロードの環境変数を、Electron 起動前に付ける（起動後では zygote に届かない） | ユーザーが実機確認済み（ログ・結果の記録は無し） |
+| Linux（NVIDIA） | PRIME オフロードの環境変数を、Electron 起動前に付ける（起動後では zygote に届かない） | 実測済み（2026-10-21、内蔵 Intel＋GTX 1050 Ti の機械。`automator/src/spike/hybridGpuCheck.ts` 27 合格・0 失敗。選ぶ→再起動待ち→再起動で GPU が NVIDIA になり nvidia-smi に出る／戻すと消える／環境変数なしの直接起動（配布版の経路）でも 1 回の起動し直しで効く／auto は起動し直さない／壊れた保存ファイルは auto）。判定は main の子孫の GPU プロセスが nvidia-smi に出るかで行う（GPU プロセスの引数には印が引き継がれず、`/proc/<pid>/environ` は Chromium に書き換えられて環境変数を読めないため） |
 | Windows | Chromium の `force_high_performance_gpu` を `app.commandLine.appendSwitch` で付ける | **未確認**（実機なし） |
 | macOS | 同上 | **未確認**（実機なし） |
 
