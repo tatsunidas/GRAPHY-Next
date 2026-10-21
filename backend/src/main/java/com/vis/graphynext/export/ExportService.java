@@ -6,6 +6,7 @@ package com.vis.graphynext.export;
 
 import com.vis.graphynext.dicom.store.DicomInstance;
 import com.vis.graphynext.dicom.store.DicomInstanceRepository;
+import com.vis.graphynext.dicom.store.DicomStorageService;
 import com.vis.graphynext.dicom.store.StorageLayout;
 import com.vis.graphynext.dicom.video.VideoRenderService;
 import org.dcm4che3.data.Attributes;
@@ -83,11 +84,15 @@ public class ExportService {
     /** 動画の MP4 化（P5: portable viewer は backend 非同伴なので媒体に MP4 実体を同梱する）。 */
     private final VideoRenderService videoRender;
     private final StorageLayout layout;
+    /** シリーズの ZCT レイアウトの計算元（本体の 2D ビューアと同じ規則を、ポータブル版へそのまま渡すため）。 */
+    private final DicomStorageService storage;
 
-    public ExportService(DicomInstanceRepository repo, VideoRenderService videoRender, StorageLayout layout) {
+    public ExportService(DicomInstanceRepository repo, VideoRenderService videoRender, StorageLayout layout,
+            DicomStorageService storage) {
         this.repo = repo;
         this.videoRender = videoRender;
         this.layout = layout;
+        this.storage = storage;
     }
 
     /** 書き出し先（ZIP のエントリ、またはフォルダ配下のファイル）。 */
@@ -296,6 +301,7 @@ public class ExportService {
         java.util.Set<String> studyUidsExported = new java.util.LinkedHashSet<>();
         int seriesCount = 0;
         int instanceCount = 0;
+        List<String[]> exportedSeries = new java.util.ArrayList<>(); // {studyUid, seriesUid}
 
         try {
             for (Selection sel : selections) {
@@ -342,6 +348,7 @@ public class ExportService {
                             studyUidsExported.add(sel.studyUid());
                             serDir = layout.series(patDir, styDir, inst, ds.getString(Tag.ProtocolName));
                             seriesCount++;
+                            exportedSeries.add(new String[] {sel.studyUid(), seriesUid});
                         }
                         String imgName = ExportNaming.imageName(++img);
                         String[] fileIDs = {"DICOM", patDir, styDir, serDir, imgName};
@@ -372,6 +379,7 @@ public class ExportService {
 
             if (opts.includePortableViewer()) {
                 copyPortableViewer(sink);
+                writeLayouts(sink, exportedSeries);
             }
 
             Summary summary = new Summary(layout.patDir.size(), studyUidsExported.size(), seriesCount, instanceCount);
@@ -499,10 +507,15 @@ public class ExportService {
     }
 
     static void copyPortableViewer(Sink sink) throws IOException {
+        copyPortableViewer(sink, "classpath*:/portable-viewer/**");
+    }
+
+    /** @param pattern 成果物の探索パターン（本番は固定。成果物が無い場合の試験のために引数にしてある）。 */
+    static void copyPortableViewer(Sink sink, String pattern) throws IOException {
         var resolver = new org.springframework.core.io.support.PathMatchingResourcePatternResolver();
         org.springframework.core.io.Resource[] resources;
         try {
-            resources = resolver.getResources("classpath*:/portable-viewer/**");
+            resources = resolver.getResources(pattern);
         } catch (IOException e) {
             log.warn("export: portable viewer 成果物の列挙に失敗（同梱をスキップ）", e);
             return;
@@ -535,10 +548,94 @@ public class ExportService {
             copied++;
         }
         if (copied == 0) {
-            log.warn("export: portable viewer 成果物が classpath:/portable-viewer に見つかりません（VIEWER/ 同梱なし）");
+            // 黙って省くと、利用者は「同梱にチェックしたのにビューアが無い」媒体を受け取る（2026-10-21 の実機で発生）。
+            // 同梱を頼まれたのに作れないときは、Export ごと失敗させて理由を画面に出す。
+            log.error("export: portable viewer 成果物が classpath:/portable-viewer に見つかりません");
+            throw new IOException("2D Viewer (portable) の成果物がこのアプリに入っていません。"
+                    + "（ビューアの成果物を含まないビルドです。同梱のチェックを外して実行してください）"
+                    + " / The portable viewer bundle is not part of this build. Uncheck the option and retry.");
         } else {
             copyPortableLauncher(sink);
             log.info("export: portable viewer を同梱しました（{} ファイル＋起動スクリプト）", copied);
+        }
+    }
+
+    /**
+     * 各シリーズのレイアウト（Z/C/T の割当・軸・位置・間隔）を {@code VIEWER/layouts.json} へ書く。
+     * 本体の 2D ビューアが使う backend の計算結果そのもので、ポータブル版は同じ並び・軸で表示できる
+     * （ブラウザ側に同じ規則を二重に持たない）。失敗したシリーズは載せない（ビューアがヘッダから組み直す）。
+     */
+    void writeLayouts(Sink sink, List<String[]> series) throws IOException {
+        if (storage == null) {
+            return;
+        }
+        Map<String, Object> out = new LinkedHashMap<>();
+        // 穴（ある C/T が覆わない Z 位置）を埋める空白画像。本体は backend が都度作るが、ポータブル版には backend が
+        // 無いので、同じ生成（storage.blankDicom）の結果を媒体へ書いておく。{seriesUid: [{z, file}]}（z=null は位置なし）。
+        Map<String, List<Map<String, Object>>> blanks = new LinkedHashMap<>();
+        for (String[] s : series) {
+            try {
+                com.vis.graphynext.dicom.SeriesLayout lay = storage.seriesLayout(s[0], s[1]);
+                out.put(s[1], lay);
+                writeBlanks(sink, s[0], s[1], lay, blanks);
+            } catch (RuntimeException e) {
+                log.warn("export: レイアウトの計算に失敗（ビューア側で組み直す） series={}", s[1], e);
+            }
+        }
+        com.fasterxml.jackson.databind.ObjectMapper om = new com.fasterxml.jackson.databind.ObjectMapper();
+        sink.put("VIEWER/layouts.json", om.writeValueAsBytes(out));
+        sink.put("VIEWER/blanks.json", om.writeValueAsBytes(blanks));
+    }
+
+    /** Z 方向のスタックで欠けているスライス位置ごとに、空白の DICOM を {@code VIEWER/blank/<series>/<z>.dcm} へ書く。 */
+    private void writeBlanks(Sink sink, String studyUid, String seriesUid, com.vis.graphynext.dicom.SeriesLayout lay,
+            Map<String, List<Map<String, Object>>> blanks) throws IOException {
+        if (lay == null || lay.cells() == null || (lay.axes() != null && "t".equals(lay.axes().stackAxis()))) {
+            return; // 時間軸スタック（XA など）はブランクを挟まない
+        }
+        java.util.Set<String> have = new java.util.HashSet<>();
+        for (com.vis.graphynext.dicom.SeriesLayout.Cell c : lay.cells()) {
+            have.add(c.c() + "/" + c.t() + "/" + c.z());
+        }
+        java.util.Set<Integer> gapZ = new java.util.TreeSet<>();
+        for (int c = 0; c < lay.nC(); c++) {
+            for (int t = 0; t < lay.nT(); t++) {
+                for (int z = 0; z < lay.nZ(); z++) {
+                    if (!have.contains(c + "/" + t + "/" + z)) {
+                        gapZ.add(z);
+                    }
+                }
+            }
+        }
+        if (gapZ.isEmpty()) {
+            return;
+        }
+        List<Map<String, Object>> list = new java.util.ArrayList<>();
+        for (int z : gapZ) {
+            double[] ipp = null;
+            if (lay.zSpatial() != null) {
+                for (com.vis.graphynext.dicom.SeriesLayout.ZSpatial zs : lay.zSpatial()) {
+                    if (zs.z() == z) {
+                        ipp = zs.imagePositionPatient();
+                    }
+                }
+            }
+            byte[] bytes = storage.blankDicom(studyUid, seriesUid, ipp);
+            if (bytes == null) {
+                continue;
+            }
+            String file = "blank/" + seriesUid + "/" + z + ".dcm";
+            sink.put("VIEWER/" + file, bytes);
+            Map<String, Object> e = new LinkedHashMap<>();
+            e.put("z", ipp == null ? null : z);
+            e.put("file", file);
+            list.add(e);
+            if (ipp == null) {
+                break; // 位置なしの空白は 1 枚を共有する
+            }
+        }
+        if (!list.isEmpty()) {
+            blanks.put(seriesUid, list);
         }
     }
 
@@ -569,48 +666,97 @@ public class ExportService {
         }
     }
 
-    private static String readme(Options opts, Summary s) {
+    /**
+     * 媒体のルートに置く README.txt。受け取る人が読む文章なので、日本語を先、同じ内容の英語を後に置く。
+     * 起動方法・DICOM の場所・非診断の注意・署名の 4 点を、短く書く。
+     */
+    static String readme(Options opts, Summary s) {
+        boolean viewer = opts.includePortableViewer();
         StringBuilder sb = new StringBuilder();
-        sb.append("GRAPHY DICOM Export\n");
-        sb.append("===================\n\n");
-        sb.append("Contents / 内容:\n");
-        sb.append("  Patients/患者:   ").append(s.patients()).append('\n');
-        sb.append("  Studies/検査:    ").append(s.studies()).append('\n');
-        sb.append("  Series/シリーズ: ").append(s.series()).append('\n');
-        sb.append("  Images/画像:     ").append(s.instances()).append("\n\n");
-        sb.append("Layout / 構成:\n");
-        sb.append("  DICOM/<PatientID>/<StudyDate>/<SeriesDescription>/00000001.dcm ...\n");
-        sb.append("  例 DICOM/PID-0001/2026-06-30/CT Chest/00000001.dcm\n");
-        sb.append("  (Patient > Study > Series > Image hierarchy)\n\n");
+
+        sb.append("GRAPHY DICOM Export（画像の書き出し）\n");
+        sb.append("======================================\n\n");
+
+        // ---------------- 日本語 ----------------
+        sb.append("■ このフォルダの中身\n");
+        sb.append("  患者 ").append(s.patients()).append(" 名／検査 ").append(s.studies())
+                .append(" 件／シリーズ ").append(s.series()).append(" 件／画像 ").append(s.instances()).append(" 枚\n\n");
+
+        sb.append("■ DICOM ファイルの場所\n");
+        sb.append("  画像は「DICOM」フォルダの中にあります。\n");
+        sb.append("    DICOM/患者ID/検査日/シリーズ名/00000001.dcm …\n");
         if (opts.effectiveDicomDir()) {
-            sb.append("DICOMDIR:\n");
-            sb.append("  A DICOMDIR index is included at the root. Most DICOM viewers can\n");
-            sb.append("  open this media by selecting the DICOMDIR file.\n");
-            sb.append("  ルートの DICOMDIR を読み込むと一覧表示できます。\n\n");
+            sb.append("  いちばん上の「DICOMDIR」は、画像の一覧表です。他の DICOM ビューアで開くときは、このファイルを選びます。\n");
         }
-        if (opts.includePortableViewer()) {
-            sb.append("Portable 2D Viewer (VIEWER/):\n");
-            sb.append("  A standalone GRAPHY 2D Viewer is bundled under VIEWER/. No installation is required.\n");
-            sb.append("  1) Run the launcher in this folder (the one that contains DICOMDIR):\n");
+        sb.append('\n');
+
+        if (viewer) {
+            sb.append("■ 画像の見かた（付属のビューア・インストール不要）\n");
+            sb.append("  1. このフォルダにある起動ファイルを実行します。\n");
+            sb.append("       Windows … START-VIEWER.bat をダブルクリック\n");
+            sb.append("       Mac     … START-VIEWER.command をダブルクリック（開けないときは右クリック →「開く」）\n");
+            sb.append("       Linux   … ターミナルで sh START-VIEWER.sh\n");
+            sb.append("  2. ブラウザが開き、画像が自動で表示されます。\n");
+            sb.append("  3. 終わるときは、黒い画面（起動ファイルの窓）を閉じます。\n");
+            sb.append("  ・画像はこの PC の外へは送られません。\n");
+            sb.append("  ・VIEWER フォルダの index.html を直接開いても動きません。上の起動ファイルを使ってください。\n");
+            sb.append("  ・動画がある場合は、VIDEO フォルダに再生用の MP4 も入っています。\n\n");
+        }
+
+        sb.append("■ ご注意（非診断用）\n");
+        if (viewer) {
+            sb.append("  この付属ビューアは、診断や治療方針の決定を目的としたものではありません（非診断用）。\n");
+            sb.append("  画像の参照・共有のための表示です。診断には、承認・認証を受けた医療機器または診断用ビューアと、\n");
+            sb.append("  元の画像をお使いください。\n\n");
+        } else {
+            sb.append("  この書き出しは、画像の参照・共有を目的としたものであり、診断や治療方針の決定を目的としたものではありません\n");
+            sb.append("  （非診断用）。診断には、承認・認証を受けた医療機器または診断用ビューアと、元の画像をお使いください。\n\n");
+        }
+
+        // ---------------- English ----------------
+        sb.append("--------------------------------------\n");
+        sb.append("English\n");
+        sb.append("--------------------------------------\n\n");
+
+        sb.append("* Contents\n");
+        sb.append("  ").append(s.patients()).append(" patient(s), ").append(s.studies()).append(" study(ies), ")
+                .append(s.series()).append(" series, ").append(s.instances()).append(" image(s)\n\n");
+
+        sb.append("* Where the DICOM files are\n");
+        sb.append("  The images are in the \"DICOM\" folder:\n");
+        sb.append("    DICOM/<PatientID>/<StudyDate>/<SeriesDescription>/00000001.dcm ...\n");
+        if (opts.effectiveDicomDir()) {
+            sb.append("  \"DICOMDIR\" at the top is the index of the images. Select it when opening this media in another DICOM viewer.\n");
+        }
+        sb.append('\n');
+
+        if (viewer) {
+            sb.append("* How to view the images (bundled viewer, no installation needed)\n");
+            sb.append("  1. Run the launcher in this folder:\n");
             sb.append("       Windows : double-click START-VIEWER.bat\n");
-            sb.append("       Mac     : double-click START-VIEWER.command\n");
-            sb.append("                 (if it does not open: right-click > Open, or run 'sh START-VIEWER.command')\n");
-            sb.append("       Linux   : run 'sh START-VIEWER.sh'\n");
-            sb.append("  2) The viewer opens in your browser and loads this media automatically.\n");
-            sb.append("  3) Close the black launcher window (or the browser) to stop. Nothing is sent outside\n");
-            sb.append("     this computer: the launcher only serves this folder to your own browser (127.0.0.1).\n");
-            sb.append("  Opening VIEWER/index.html directly does not work (browser security restriction).\n");
-            sb.append("  付属の 2D Viewer は、このフォルダ（DICOMDIR のある場所）の起動ファイルで開きます。\n");
-            sb.append("    Windows: START-VIEWER.bat をダブルクリック／Mac: START-VIEWER.command をダブルクリック\n");
-            sb.append("    （開けないときは右クリック →「開く」、または 'sh START-VIEWER.command'）／Linux: 'sh START-VIEWER.sh'\n");
-            sb.append("  ブラウザでビューアが開き、この媒体を自動で読み込みます。終了は黒い画面（またはブラウザ）を閉じます。\n");
-            sb.append("  画像データはこの PC の外へは送られません（起動ファイルは、この PC のブラウザにだけ 127.0.0.1 で配信します）。\n");
-            sb.append("  VIEWER/index.html を直接開いても動きません（ブラウザの安全のための制限です）。\n");
-            sb.append("  Videos (if any) are also bundled as playable MP4 under VIDEO/<SOPInstanceUID>.mp4,\n");
-            sb.append("  because DICOM encapsulated video cannot be drawn as a 2D image.\n");
-            sb.append("  動画がある場合は VIDEO/<SOPInstanceUID>.mp4 として再生可能な MP4 も同梱しています。\n\n");
+            sb.append("       Mac     : double-click START-VIEWER.command (if it does not open: right-click > Open)\n");
+            sb.append("       Linux   : run \"sh START-VIEWER.sh\" in a terminal\n");
+            sb.append("  2. Your browser opens and shows the images automatically.\n");
+            sb.append("  3. To finish, close the black launcher window.\n");
+            sb.append("  - Images are never sent outside this computer.\n");
+            sb.append("  - Opening VIEWER/index.html directly does not work. Please use the launcher above.\n");
+            sb.append("  - Videos (if any) are also included as playable MP4 files in the VIDEO folder.\n\n");
         }
-        sb.append("Exported by GRAPHY (Visionary Imaging Services, Inc.)\n");
+
+        sb.append("* Notice (not for diagnostic use)\n");
+        if (viewer) {
+            sb.append("  This bundled viewer is not intended for diagnosis or for deciding treatment (not for diagnostic use).\n");
+            sb.append("  It is provided for reviewing and sharing images. For diagnosis, please use an approved or certified\n");
+            sb.append("  medical device or diagnostic viewer together with the original images.\n\n");
+        } else {
+            sb.append("  This export is provided for reviewing and sharing images. It is not intended for diagnosis or for deciding\n");
+            sb.append("  treatment (not for diagnostic use). For diagnosis, please use an approved or certified medical device or\n");
+            sb.append("  diagnostic viewer together with the original images.\n\n");
+        }
+
+        sb.append("======================================\n");
+        sb.append("Exported by GRAPHY\n");
+        sb.append("Visionary Imaging Services, Inc.\n");
         return sb.toString();
     }
 

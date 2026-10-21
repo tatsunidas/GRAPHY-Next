@@ -86,7 +86,7 @@ class ExportVideoBundleTest {
         props.setStorageDir(storageDir.toString());
         // repo は copyPlayableVideo では使わない（ZIP 書き出しの単体検証）。
         return new ExportService(null, new VideoRenderService(new FfmpegLocator("ffmpeg", ""), props),
-                new com.vis.graphynext.dicom.store.StorageLayout(storageDir));
+                new com.vis.graphynext.dicom.store.StorageLayout(storageDir), null);
     }
 
     private static Map<String, byte[]> unzip(byte[] zipBytes) throws IOException {

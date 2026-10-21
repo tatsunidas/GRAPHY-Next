@@ -481,6 +481,7 @@ export function Viewer2D({
   height,
   fill,
   showControls = true,
+  chrome = true,
   syncGroupId,
   viewSyncEnabled,
   referenceLinesEnabled,
@@ -504,6 +505,8 @@ export function Viewer2D({
   fill?: boolean;
   /** 画像下の操作バー（ツールボタン列）を表示するか。false で畳んで画像領域を広げる。既定 true。 */
   showControls?: boolean;
+  /** false で画像外の状態バー・操作バーをすべて隠す（ポータブル版が自前の UI を使うとき）。既定 true。 */
+  chrome?: boolean;
   /** 指定すると、共有ツールグループ＋camera/VOI 同期に参加（GridView リンク）。 */
   syncGroupId?: string;
   /** シリーズ Sync: true で base ビューポートをグローバル presentation+VOI synchronizer に参加させ、
@@ -2956,7 +2959,7 @@ export function Viewer2D({
         ...(fill ? { display: "flex", flexDirection: "column", minHeight: 0 } : {}),
       }}>
         {/* 画像外の状態ラベルエリア（必須情報）。 */}
-        <StatusBar>
+        <StatusBar hidden={!chrome}>
           {(compact) => (
           <>
           {/* 項目は左グループに入れて折り返さない。カーソルの出入りで値の幅が変わっても
@@ -3014,7 +3017,7 @@ export function Viewer2D({
         {imagePanel}
 
         {/* 操作バー（canvas の外＝ツール入力と競合しない）。showControls=false で畳む。 */}
-        {showControls && (
+        {showControls && chrome && (
         <OverflowRow style={toolbar} moreTestId="viewer-toolbar-more">
           <button onClick={fit} style={btn} title={t("viewer.fit")}><ToolIcon file={UI_ICON_FILES.fit} size={16} /></button>
           <button
@@ -3139,7 +3142,7 @@ const STATUS_BAR_COMPACT_BELOW_PX = 460;
  * 画像外の状態バー。自分の幅を測り、狭ければ詰めた表示を子に指示する。
  * 高さは常に 1 行分なので、詰めても詰めなくても画像の位置は変わらない。
  */
-function StatusBar({ children }: { children: (compact: boolean) => React.ReactNode }) {
+function StatusBar({ children, hidden }: { children: (compact: boolean) => React.ReactNode; hidden?: boolean }) {
   const ref = useRef<HTMLDivElement>(null);
   const [compact, setCompact] = useState(false);
   useLayoutEffect(() => {
@@ -3152,7 +3155,7 @@ function StatusBar({ children }: { children: (compact: boolean) => React.ReactNo
     return () => ro.disconnect();
   }, []);
   return (
-    <div ref={ref} data-compact={compact || undefined} style={compact ? { ...statusBar, ...statusBarCompact } : statusBar}>
+    <div ref={ref} data-compact={compact || undefined} style={{ ...(compact ? { ...statusBar, ...statusBarCompact } : statusBar), ...(hidden ? { display: "none" } : null) }}>
       {children(compact)}
     </div>
   );
