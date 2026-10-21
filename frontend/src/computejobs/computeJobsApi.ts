@@ -50,6 +50,10 @@ export interface ComputeJobView {
   outputsBytes: number | null;
   collectedAt: string | number | null;
   // バッチの記録があるときだけ。
+  /** 対話の 1 回（runJob）なら true、一括なら false。 */
+  interactive?: boolean;
+  /** 一括が一時停止中のとき、その理由（`endpoint-unreachable`）。 */
+  pausedReason?: string | null;
   pluginId?: string | null;
   pluginName?: string | null;
   pluginVersion?: string | null;
@@ -79,5 +83,13 @@ export async function fetchComputeLog(id: string, kind: ComputeLogKind): Promise
 
 export const cancelComputeJob = (id: string) =>
   httpSend<ComputeJobView>(`${BASE}/${encodeURIComponent(id)}/cancel`, "POST");
+
+/** 一時停止中の一括を続ける（待ちのままの組を元の順で並べ直す）。 */
+export const resumeComputeBatch = (batchId: string) =>
+  httpSend<{ requeued: number }>(`/api/compute/batches/${encodeURIComponent(batchId)}/resume`, "POST");
+
+/** 一括を中止する（待ちの組は計算機へ何も送らず、実行中の組は中断する）。 */
+export const cancelComputeBatch = (batchId: string) =>
+  httpSend<{ cancelled: number }>(`/api/compute/batches/${encodeURIComponent(batchId)}/cancel`, "POST");
 
 export const deleteComputeJob = (id: string) => httpSend(`${BASE}/${encodeURIComponent(id)}`, "DELETE");

@@ -390,6 +390,10 @@ export interface GraphyDesktop {
   computeConfirm?: (requestId: string) => Promise<
     { ok: true; approved: boolean } | { ok: false; error: string }
   >;
+  /** 一括の計算の間、OS の眠りを止める。返すのは「いま実際に止めているか」（画面はこれを見て表示する）。 */
+  computeKeepAwake?: (on: boolean) => Promise<{ ok: true; active: boolean }>;
+  /** 眠りを止めているかの読み取りだけ（計算ジョブの窓の表示用。止めたり外したりしない）。 */
+  computeKeepAwakeStatus?: () => Promise<{ ok: true; active: boolean }>;
   /** Colab: ログインの状態（トークンは返らない）。fw/remote-compute-design.md §15 */
   computeColabStatus?: () => Promise<ColabStatus>;
   /** Colab: Google でログイン（利用者のブラウザが開く）。 */

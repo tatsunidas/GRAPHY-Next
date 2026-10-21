@@ -24,6 +24,7 @@ import {
   stateKey,
   studyUidsOf,
   toMillis,
+  wantsKeepAwake,
 } from "./computeJobsView";
 
 const ALL: ComputeJobState[] = ["QUEUED", "RUNNING", "AWAITING_USER", "DONE", "FAILED", "CANCELLED", "INTERRUPTED"];
@@ -206,5 +207,33 @@ describe("患者名を引く検査 UID", () => {
       }),
     ];
     expect(studyUidsOf(jobs)).toEqual(["S1", "S2"]);
+  });
+});
+
+describe("一括の見出し・眠り止め", () => {
+  it("一括は interactive=false で見分け、一時停止の理由と『動いている組があるか』を持つ", () => {
+    const g = groupByBatch([
+      job("1", "FAILED", { batchId: "cb_1", interactive: false, pausedReason: "endpoint-unreachable", reason: "endpoint-unreachable" }),
+      job("2", "QUEUED", { batchId: "cb_1", interactive: false, pausedReason: "endpoint-unreachable" }),
+      job("3", "DONE", { batchId: "cb_2", interactive: false }),
+      job("4", "DONE", { batchId: "cb_3", interactive: true }),
+    ]);
+    expect(g.map((x) => x.isBatch)).toEqual([true, true, false]);
+    expect(g[0]).toMatchObject({ pausedReason: "endpoint-unreachable", active: true });
+    expect(g[1]).toMatchObject({ pausedReason: null, active: false });
+    expect(g[2].isBatch).toBe(false);
+  });
+
+  it("🔴 眠り止めは『一時停止でない一括の組が動いている』ときだけ", () => {
+    const run = job("1", "RUNNING", { interactive: false });
+    expect(wantsKeepAwake([run])).toBe(true);
+    expect(wantsKeepAwake([job("2", "QUEUED", { interactive: false })])).toBe(true);
+    expect(wantsKeepAwake([job("3", "RUNNING", { interactive: true })])).toBe(false); // 対話の 1 回は対象外
+    expect(wantsKeepAwake([job("4", "QUEUED", { interactive: false, pausedReason: "endpoint-unreachable" })])).toBe(false); // 一時停止中
+    expect(wantsKeepAwake([job("5", "DONE", { interactive: false })])).toBe(false);
+    expect(wantsKeepAwake([job("6", "FAILED", { interactive: false })])).toBe(false);
+    expect(wantsKeepAwake([])).toBe(false);
+    // 停止中の組があっても、別の動いている組があれば止める
+    expect(wantsKeepAwake([job("7", "QUEUED", { interactive: false, pausedReason: "x" }), run])).toBe(true);
   });
 });

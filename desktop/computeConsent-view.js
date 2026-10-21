@@ -16,21 +16,47 @@ window.graphyConsent.onShow(({ detail, strings: s }) => {
   $("k-anon").textContent = s.anonymization;
   $("anon").textContent = detail.anonymization;
   $("k-data").textContent = s.datasets;
-  for (const h of [s.colModality, s.colInstances, s.colFormat, s.colSize, s.colBurned, s.colSha]) {
+  const view = window.graphyConsentRows.buildRows(detail);
+  // 一括（組あり）は先頭に「組」の列を足す。対話の 1 回は今までと同じ 6 列
+  const cols = (view.batch ? [s.colKey] : []).concat([s.colModality, s.colInstances, s.colFormat, s.colSize, s.colBurned, s.colSha]);
+  for (const h of cols) {
     const th = document.createElement("th"); th.textContent = h; $("data-head").appendChild(th);
   }
-  if (detail.datasets.length === 0) {
-    const tr = document.createElement("tr"); const td = document.createElement("td");
-    td.colSpan = 6; td.textContent = s.noData; tr.appendChild(td); $("data-body").appendChild(tr);
+  if (view.batch) {
+    $("data-summary").hidden = false;
+    $("data-summary").textContent = fmt(s.batchSummary, { items: view.itemCount, datasets: view.datasetCount, size: size(view.totalBytes) });
   }
-  for (const d of detail.datasets) {
+  if (view.rows.length === 0) {
+    const tr = document.createElement("tr"); const td = document.createElement("td");
+    td.colSpan = cols.length; td.textContent = s.noData; tr.appendChild(td); $("data-body").appendChild(tr);
+  }
+  for (const row of view.rows) {
     const tr = document.createElement("tr");
-    for (const v of [d.modality ?? "?", d.instances, d.format, size(d.bytes), d.burnedInstances, d.sha256]) {
-      const td = document.createElement("td"); td.textContent = String(v);
-      if (v === d.sha256) td.className = "mono";
+    const cells = [];
+    if (view.batch) cells.push({ v: row.key });
+    if (row.noInput) {
+      cells.push({ v: s.noInputItem, span: 6 });
+    } else {
+      const d = row.d;
+      for (const v of [d.modality ?? "?", d.instances, d.format, size(d.bytes), d.burnedInstances, d.sha256]) {
+        cells.push({ v, mono: v === d.sha256 });
+      }
+    }
+    for (const c of cells) {
+      const td = document.createElement("td"); td.textContent = String(c.v);
+      if (c.mono) td.className = "mono";
+      if (c.span) td.colSpan = c.span;
       tr.appendChild(td);
     }
     $("data-body").appendChild(tr);
+  }
+  // 送れずに外した組（黙って減らさない）
+  if (view.refused.length > 0) {
+    $("refused").hidden = false;
+    $("k-refused").textContent = fmt(s.refusedTitle, { n: view.refused.length });
+    for (const r of view.refused) {
+      const li = document.createElement("li"); li.textContent = r.key + " — " + r.reason; $("refused-list").appendChild(li);
+    }
   }
   $("k-code").textContent = s.code;
   $("code").textContent = detail.code;

@@ -7,6 +7,7 @@
 // 動的 import して activate(host) を呼ぶ。設計: fw/plugin-architecture.md。
 import { importMicroscopyVolume } from "./pluginMicroscopyApi";
 import { runComputeJob, computeStatus, releaseComputeRuntime } from "./pluginComputeApi";
+import { runComputeBatch, listComputeJobs, attachComputeBatch } from "./pluginComputeBatchApi";
 import { useEffect, useState } from "react";
 import { httpGet, httpSend } from "../http";
 import { apiBase } from "../apiBase";
@@ -114,6 +115,10 @@ function withHostApis(m: PluginManifest, host: PluginHostSeed): PluginHost {
       // H61: 状態と解放（解放の確認は本体が出す）
       status: () => computeStatus(m),
       releaseRuntime: (endpointId, opts) => releaseComputeRuntime(m, endpointId, opts),
+      // 一括（同意は全組で 1 回）。見守りは本体の台帳が持つので、画面を閉じても計算は続く
+      runBatch: (opts, bopts) => runComputeBatch(m, opts, bopts),
+      listJobs: (opts) => listComputeJobs(m, opts),
+      attach: (batchId, bopts) => attachComputeBatch(m, batchId, bopts),
     },
     // H45: ジョブの投入先はマニフェストの id に固定する（他のプラグインの JAR は走らせられない）
     runBackendJob: (payload, opts) => runBackendJob(m.id, payload, opts),

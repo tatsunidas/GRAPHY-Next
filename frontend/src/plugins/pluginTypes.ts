@@ -100,6 +100,11 @@ export type {
 import type { AiGenerationOptions, AiGenerationOutcome } from "./pluginAiApi";
 import type { ComputeRunJobOptions, ComputeRunOutcome, ComputeEndpointStatus, ComputeReleaseOutcome } from "./pluginComputeApi";
 export type { ComputeEndpointStatus, ComputeJobInput, ComputeOutputFile, ComputeReleaseOutcome, ComputeRunJobOptions, ComputeRunOutcome } from "./pluginComputeApi";
+import type { ComputeBatchOptions, ComputeBatchOutcome, ComputeJobSummary, ComputeRunBatchOptions } from "./pluginComputeBatchApi";
+export type {
+  ComputeBatchCounts, ComputeBatchItemInput, ComputeBatchItemOutcome, ComputeBatchOptions, ComputeBatchOutcome, ComputeBatchRefused,
+  ComputeJobSummary, ComputeRunBatchOptions,
+} from "./pluginComputeBatchApi";
 import type { StorageEnsureOutcome, StorageEnsureRequest, StorageStatus } from "./pluginStorageApi";
 export type { StorageEnsureOutcome, StorageEnsureRequest, StorageStatus };
 import type { CachePutOutcome, PluginCache, PluginCacheCheckpoint } from "./pluginCacheApi";
@@ -306,6 +311,16 @@ interface PluginHostBase {
      * 確保していなければ `{ok:true, released:false}`。次の `runJob` が自動で確保し直す。
      */
     releaseRuntime: (endpointId: string, opts?: { ask?: boolean }) => Promise<ComputeReleaseOutcome>;
+    /**
+     * 同じコードを入力の組ごとに走らせる（一括）。**同意は全組で 1 回**（本体の窓が全組の行を見せる）。組が終わるたびに
+     * `onItem` が届き、全部終わると返る。計算機に届かなくなると一時停止し（残りは失敗にしない）`paused: true` で返る。
+     * 実行は本体の台帳が持つので、画面を閉じても計算は続く（`attach` で受け取れる）。実装は `pluginComputeBatchApi.ts`。
+     */
+    runBatch: (opts: ComputeRunBatchOptions, bopts?: ComputeBatchOptions) => Promise<ComputeBatchOutcome>;
+    /** 自分のプラグインの計算ジョブの一覧（患者名は含まない）。 */
+    listJobs: (opts?: { batchId?: string; uncollectedOnly?: boolean }) => Promise<ComputeJobSummary[]>;
+    /** 画面を閉じている間に終わった組のうち、受け取っていないものを届ける（`item.markCollected()` で受け取り済みにする）。 */
+    attach: (batchId: string, bopts?: ComputeBatchOptions) => Promise<ComputeBatchOutcome>;
   };
   /**
    * **保管庫の画像を手元に確保する**（H67）。Drive が正本のモード（手元は上限つきのキャッシュ）で、手元に無い画像を

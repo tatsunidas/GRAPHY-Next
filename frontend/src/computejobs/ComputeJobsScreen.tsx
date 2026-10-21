@@ -9,10 +9,12 @@ import { fetchStudies } from "../api";
 import { desktop, type ComputeEndpointEntry } from "../desktopBridge";
 import { useI18n, type TFn } from "../i18n/i18n";
 import {
+  cancelComputeBatch,
   cancelComputeJob,
   deleteComputeJob,
   fetchComputeJobs,
   fetchComputeLog,
+  resumeComputeBatch,
   type ComputeJobView,
   type ComputeLogKind,
 } from "./computeJobsApi";
@@ -60,6 +62,8 @@ export function ComputeJobsScreen() {
   const [seen, setSeen] = useState<Set<string>>(() => loadSeen());
   const [cancelling, setCancelling] = useState<Set<string>>(new Set());
   const [names, setNames] = useState<Map<string, StudyName>>(new Map());
+  const [keepAwake, setKeepAwake] = useState(false);
+  const [batchBusy, setBatchBusy] = useState<Set<string>>(new Set());
   const asked = useRef<Set<string>>(new Set());
 
   const poll = useCallback(async () => {
@@ -87,6 +91,12 @@ export function ComputeJobsScreen() {
       if (cfg) setEndpoints(cfg.endpoints);
     } catch {
       /* 計算機の帯は無くても一覧は見える */
+    }
+    try {
+      const r = await desktop()?.computeKeepAwakeStatus?.();
+      setKeepAwake(r?.active === true);
+    } catch {
+      setKeepAwake(false);
     }
   }, []);
 
@@ -175,6 +185,22 @@ export function ComputeJobsScreen() {
     void poll();
   };
 
+  // 一括の［再開］［一括を中止］。押している間は二重に押せないようにする
+  const batchAction = async (batchId: string, f: (id: string) => Promise<unknown>) => {
+    setBatchBusy((b) => new Set(b).add(batchId));
+    try {
+      await f(batchId);
+    } catch {
+      /* 409（再開できない・もう終わっている）は次の周期の表示で分かる */
+    }
+    setBatchBusy((b) => {
+      const n = new Set(b);
+      n.delete(batchId);
+      return n;
+    });
+    void poll();
+  };
+
   const patientLabel = (j: ComputeJobView): string => {
     if (j.inputs.length === 0) return t("computeJobs.noInput");
     return j.inputs
@@ -233,6 +259,9 @@ export function ComputeJobsScreen() {
           )}
           {ended && j.state === "DONE" && j.collectedAt == null && (
             <span style={{ color: "#667" }}> · {t("computeJobs.uncollected")}</span>
+          )}
+          {ended && j.state === "DONE" && j.collectedAt != null && (
+            <span data-testid={`computejobs-collected-${j.id}`} style={{ color: "#667" }}> · {t("computeJobs.collected")}</span>
           )}
         </td>
         <td style={td}>
@@ -310,6 +339,11 @@ export function ComputeJobsScreen() {
           {t("computeJobs.uncollectedOnly")}
         </label>
         <span style={{ flex: 1 }} />
+        {keepAwake && (
+          <span data-testid="computejobs-awake" style={{ color: "#667" }}>
+            {t("computeJobs.awake")}
+          </span>
+        )}
         <span data-testid="computejobs-counts" style={{ color: "#445" }}>
           {t("computeJobs.bar.counts", { running: counts.running, queued: counts.queued, failed: counts.failed })}
         </span>
@@ -337,10 +371,10 @@ export function ComputeJobsScreen() {
           </thead>
           <tbody data-testid="computejobs-list">
             {groups.map((g) =>
-              g.jobs.length > 1 ? (
+              g.isBatch || g.jobs.length > 1 ? (
                 <Fragment key={g.batchId}>
                   <tr style={{ background: "#f0f3f6" }} data-testid={`computejobs-batch-${g.batchId}`}>
-                    <td colSpan={4} style={{ ...td, fontWeight: 600 }}>
+                    <td colSpan={3} style={{ ...td, fontWeight: 600 }}>
                       {t("computeJobs.batchSummary", {
                         n: g.jobs.length,
                         done: g.done,
@@ -348,6 +382,34 @@ export function ComputeJobsScreen() {
                         running: g.running,
                         queued: g.queued,
                       })}
+                      {g.pausedReason && (
+                        <span data-testid={`computejobs-batch-paused-${g.batchId}`} style={{ color: "#8a5a00", marginLeft: 12 }}>
+                          {t("computeJobs.batchPaused", {
+                            reason: reasonKey(g.pausedReason) ? t(reasonKey(g.pausedReason) as string) : g.pausedReason,
+                          })}
+                        </span>
+                      )}
+                    </td>
+                    <td style={td}>
+                      {g.isBatch && g.pausedReason && (
+                        <button
+                          data-testid={`computejobs-batch-resume-${g.batchId}`}
+                          disabled={batchBusy.has(g.batchId)}
+                          onClick={() => void batchAction(g.batchId, resumeComputeBatch)}
+                          style={{ marginRight: 6 }}
+                        >
+                          {t("computeJobs.resume")}
+                        </button>
+                      )}
+                      {g.isBatch && g.active && (
+                        <button
+                          data-testid={`computejobs-batch-cancel-${g.batchId}`}
+                          disabled={batchBusy.has(g.batchId)}
+                          onClick={() => void batchAction(g.batchId, cancelComputeBatch)}
+                        >
+                          {t("computeJobs.cancelBatch")}
+                        </button>
+                      )}
                     </td>
                   </tr>
                   {g.jobs.map((j) => row(j, true))}
