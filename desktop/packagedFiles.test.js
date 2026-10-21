@@ -28,5 +28,5 @@ test("テストのファイルはインストーラに入れない", () => {
 test("require 以外で読むファイル（loadFile の html・preload・html の script）もたどる", () => {
   const req = requiredFiles();
   for (const f of ["splash.html", "splash-preload.js", "computeConsent.html", "computeConsent-preload.js",
-                   "computeConsent-view.js"]) assert.ok(req.includes(f), f);
+                   "computeConsent-view.js", "computeConsent-rows.js"]) assert.ok(req.includes(f), f);
 });

@@ -58,24 +58,34 @@ public class ComputeEgressService {
      * @param datasets      <b>全組</b>のデータセットを平らに並べたもの（同意画面はこれを全部出す）
      * @param anonymization 匿名化の方法（同意画面に出す）
      * @param items         一括の組。{@code null} は対話の 1 回（runJob＝組名なしの 1 組。{@link #itemsOrSingle}）
+     * @param refused       一括で<b>送らなかった組</b>（組名と理由）。同意画面に出すだけで、内容のハッシュには含めない
      */
     public record EgressRequest(String id, String pluginId, String pluginName, String endpointId,
                                 String endpointLabel, String endpointUrl, boolean plaintext,
                                 String endpointKind, List<DatasetSummary> datasets, String code, String codeSha256,
                                 String anonymization, String contentHash, Instant createdAt, Status status,
-                                List<Item> items) {
+                                List<Item> items, List<Map<String, String>> refused) {
+        /** 一括（送らなかった組の表示なし）。 */
+        public EgressRequest(String id, String pluginId, String pluginName, String endpointId,
+                             String endpointLabel, String endpointUrl, boolean plaintext, String endpointKind,
+                             List<DatasetSummary> datasets, String code, String codeSha256, String anonymization,
+                             String contentHash, Instant createdAt, Status status, List<Item> items) {
+            this(id, pluginId, pluginName, endpointId, endpointLabel, endpointUrl, plaintext, endpointKind, datasets,
+                    code, codeSha256, anonymization, contentHash, createdAt, status, items, null);
+        }
+
         /** 対話の 1 回（組なし）。 */
         public EgressRequest(String id, String pluginId, String pluginName, String endpointId,
                              String endpointLabel, String endpointUrl, boolean plaintext, String endpointKind,
                              List<DatasetSummary> datasets, String code, String codeSha256, String anonymization,
                              String contentHash, Instant createdAt, Status status) {
             this(id, pluginId, pluginName, endpointId, endpointLabel, endpointUrl, plaintext, endpointKind, datasets,
-                    code, codeSha256, anonymization, contentHash, createdAt, status, null);
+                    code, codeSha256, anonymization, contentHash, createdAt, status, null, null);
         }
 
         EgressRequest with(Status s) {
             return new EgressRequest(id, pluginId, pluginName, endpointId, endpointLabel, endpointUrl, plaintext,
-                    endpointKind, datasets, code, codeSha256, anonymization, contentHash, createdAt, s, items);
+                    endpointKind, datasets, code, codeSha256, anonymization, contentHash, createdAt, s, items, refused);
         }
 
         /** 組の一覧。対話の 1 回は「組名なしの 1 組」。 */
@@ -86,7 +96,7 @@ public class ComputeEgressService {
         /** 1 組だけの見た目（同じ札の id・内容のハッシュ・宛先のまま、データセットだけをその組のものにする）。 */
         EgressRequest forItem(Item it) {
             return new EgressRequest(id, pluginId, pluginName, endpointId, endpointLabel, endpointUrl, plaintext,
-                    endpointKind, it.datasets(), code, codeSha256, anonymization, contentHash, createdAt, status, null);
+                    endpointKind, it.datasets(), code, codeSha256, anonymization, contentHash, createdAt, status, null, null);
         }
     }
 
@@ -164,6 +174,13 @@ public class ComputeEgressService {
     public EgressRequest createBatch(String pluginId, String pluginName, String endpointId,
                                      java.util.LinkedHashMap<String, List<String>> itemHandles, String code,
                                      int maxCodeChars) {
+        return createBatch(pluginId, pluginName, endpointId, itemHandles, code, maxCodeChars, List.of());
+    }
+
+    /** @param refused 送れずに外した組（組名と理由）。同意画面に出す（黙って減らさない） */
+    public EgressRequest createBatch(String pluginId, String pluginName, String endpointId,
+                                     java.util.LinkedHashMap<String, List<String>> itemHandles, String code,
+                                     int maxCodeChars, List<Map<String, String>> refused) {
         sweep();
         if (itemHandles == null || itemHandles.isEmpty()) {
             throw new EgressRefused("no-items");
@@ -197,7 +214,7 @@ public class ComputeEgressService {
         String hash = contentHashBatch(pluginId, endpointId, url, items, codeSha);
         EgressRequest r = new EgressRequest(id, pluginId, pluginName == null ? pluginId : pluginName, endpointId,
                 ep.label(), url, plaintext, ep.kind(), List.copyOf(flat), code, codeSha, ANONYMIZATION, hash,
-                Instant.now(), Status.PENDING, List.copyOf(items));
+                Instant.now(), Status.PENDING, List.copyOf(items), List.copyOf(refused));
         requests.put(id, r);
         ObjectNode line = base("egress-requested", r);
         line.put("codeHead", ComputeAuditLog.codeHead(code)).put("codeChars", code.length());

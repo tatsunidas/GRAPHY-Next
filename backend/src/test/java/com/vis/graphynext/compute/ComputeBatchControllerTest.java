@@ -180,6 +180,35 @@ class ComputeBatchControllerTest {
     }
 
     @Test
+    void theLogsOfAJobAreOnlyForItsOwnerAndTheRefusedItemsRideOnTheTicket() throws Exception {
+        ResponseEntity<Map<String, Object>> r = create("seg", item("ok1", DatasetFixture.CT_SERIES), item("missing", "9.9.9.9"));
+        assertEquals(HttpStatus.OK, r.getStatusCode());
+        // 送らなかった組は札に載る（同意画面に出す）が、内容のハッシュには含まれない
+        ComputeEgressService.EgressRequest ticket = egressOf().detail((String) r.getBody().get("requestId")).orElseThrow();
+        assertEquals(List.of(Map.of("key", "missing", "reason", "series-not-found")), ticket.refused());
+        assertEquals(ComputeEgressService.contentHashBatch("seg", "lab", ticket.endpointUrl(), ticket.items(),
+                ticket.codeSha256()), ticket.contentHash(), "🔴 送らなかった組はハッシュに入らない（送る内容だけが対象）");
+
+        ComputeEgressService.EgressRequest er = new ComputeEgressService.EgressRequest("egr_y", "seg", "Seg", "lab", "Lab",
+                "https://gpu.example.org/", false, "jupyter", List.of(), "print(1)", "sha", "anon", "hash",
+                java.time.Instant.now(), ComputeEgressService.Status.CONSUMED);
+        String job = ledger.createJob(ledger.createBatch(er, 60, false), er, "k1", List.of());
+        ledger.writeLogs(job, "out text", "", "Traceback X");
+        ResponseEntity<?> mine = ctl.log("seg", job, "stdout");
+        assertEquals("out text", mine.getBody());
+        assertEquals("Traceback X", ctl.log("seg", job, "traceback").getBody());
+        assertEquals(HttpStatus.NOT_FOUND, ctl.log("other", job, "stdout").getStatusCode(), "🔴 他のプラグインのログは見せない");
+        assertEquals(HttpStatus.FORBIDDEN, ctl.log("noperm", job, "stdout").getStatusCode());
+        assertEquals(HttpStatus.NOT_FOUND, ctl.log("seg", job, "nope").getStatusCode(), "kind は stdout/stderr/traceback だけ");
+    }
+
+    private ComputeEgressService egressOf() throws Exception {
+        var f = ComputeBatchController.class.getDeclaredField("egress");
+        f.setAccessible(true);
+        return (ComputeEgressService) f.get(ctl);
+    }
+
+    @Test
     void batchOperationsRejectUnknownIds() {
         assertEquals(HttpStatus.NOT_FOUND, ctl.cancel("not-a-batch").getStatusCode());
         assertEquals(HttpStatus.NOT_FOUND, ctl.resume("not-a-batch").getStatusCode());

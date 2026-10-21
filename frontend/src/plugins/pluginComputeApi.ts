@@ -77,6 +77,42 @@ interface EgressCreated {
 /** この PC（main が起動した Jupyter）の接続先 id。`opts.endpointId` に名指しされたときだけ使う。 */
 const LOCAL_ENDPOINT_ID = "local";
 
+/**
+ * 行き先の決定（H59 の `runJob` と一括 `runBatch` で共通）。名指し（登録の id か "local"）、無ければ main が決めた既定の
+ * 計算機（規則は desktop/computeDefault.js だけにある）。"local"（この PC）は main が Jupyter を起動して登録簿へ入れる。
+ * 登録された接続先の一覧には載らない（起動のたびに URL とトークンが変わる）。Colab はランタイムを確保してから返す
+ * （同意画面に実際の送り先が出るように。確保だけでは患者のデータもコードも出ない）。
+ */
+export async function resolveComputeEndpoint(
+  d: NonNullable<ReturnType<typeof desktop>>,
+  requested: string | undefined,
+): Promise<{ ok: true; endpointId: string } | { ok: false; error: string }> {
+  let target = requested;
+  if (!target) {
+    // 登録が 0 件なら Colab の T4 を足し、自機が使えるならそれを返す。自機を既定に選んでいて使えなければ理由つきで断る
+    if (!d.computeEnsureDefault) return { ok: false, error: "desktop-only" };
+    const ensured = await d.computeEnsureDefault();
+    if (!ensured.ok) return { ok: false, error: ensured.error };
+    target = ensured.endpointId;
+  }
+  if (target === LOCAL_ENDPOINT_ID) {
+    if (!d.computeLocalEnsure) return { ok: false, error: "desktop-only" };
+    const local = await d.computeLocalEnsure();
+    if (!local.ok) return { ok: false, error: local.error ?? "local-failed" };
+    return { ok: true, endpointId: LOCAL_ENDPOINT_ID };
+  }
+  if (!d.computeEndpointsGet) return { ok: false, error: "desktop-only" };
+  const cfg = await d.computeEndpointsGet();
+  const endpoint = cfg.endpoints.find((e) => e.id === target);
+  if (!endpoint) return { ok: false, error: requested ? "unknown-endpoint" : "no-endpoint" };
+  if (endpoint.kind === "colab") {
+    if (!d.computeColabEnsure) return { ok: false, error: "desktop-only" };
+    const rt = await d.computeColabEnsure(endpoint.id);
+    if (!rt.ok) return { ok: false, error: rt.error ?? "colab-runtime-failed" };
+  }
+  return { ok: true, endpointId: endpoint.id };
+}
+
 /** H59。 */
 export async function runComputeJob(
   m: PluginManifest,
@@ -87,36 +123,9 @@ export async function runComputeJob(
   if (!d?.computeConfirm || !d.computeEndpointsGet) return { ok: false, error: "desktop-only" };
   if (!(m.permissions ?? []).includes(REMOTE_COMPUTE_PERMISSION)) return { ok: false, error: "permission-denied" };
 
-  // 行き先: 名指し（登録の id か "local"）、無ければ main が決めた既定の計算機（規則は desktop/computeDefault.js だけにある）。
-  // "local"（この PC）は main が Jupyter を起動して登録簿へ入れる。登録された接続先の一覧には載らない
-  // （起動のたびに URL とトークンが変わる）。
-  let target = opts.endpointId;
-  if (!target) {
-    // 登録が 0 件なら Colab の T4 を足し、自機が使えるならそれを返す。自機を既定に選んでいて使えなければ理由つきで断る
-    if (!d.computeEnsureDefault) return { ok: false, error: "desktop-only" };
-    const ensured = await d.computeEnsureDefault();
-    if (!ensured.ok) return { ok: false, error: ensured.error };
-    target = ensured.endpointId;
-  }
-  let endpointId: string;
-  if (target === LOCAL_ENDPOINT_ID) {
-    if (!d.computeLocalEnsure) return { ok: false, error: "desktop-only" };
-    const local = await d.computeLocalEnsure();
-    if (!local.ok) return { ok: false, error: local.error ?? "local-failed" };
-    endpointId = LOCAL_ENDPOINT_ID;
-  } else {
-    const cfg = await d.computeEndpointsGet();
-    const endpoint = cfg.endpoints.find((e) => e.id === target);
-    if (!endpoint) return { ok: false, error: opts.endpointId ? "unknown-endpoint" : "no-endpoint" };
-    endpointId = endpoint.id;
-    // Colab はランタイムを確保してから要求を作る（同意画面に実際の送り先が出るように）。
-    // 確保だけでは患者のデータもコードも出ない——送るのは同意のあと。
-    if (endpoint.kind === "colab") {
-      if (!d.computeColabEnsure) return { ok: false, error: "desktop-only" };
-      const rt = await d.computeColabEnsure(endpointId);
-      if (!rt.ok) return { ok: false, error: rt.error ?? "colab-runtime-failed" };
-    }
-  }
+  const resolved = await resolveComputeEndpoint(d, opts.endpointId);
+  if (!resolved.ok) return resolved;
+  const endpointId = resolved.endpointId;
   const id = encodeURIComponent(m.id);
 
   // 1. 要求（本体が匿名化したデータを作る。まだ送らない）
@@ -220,6 +229,34 @@ export function readStoredZipEntry(zip: Uint8Array, name: string): Uint8Array | 
     p += 46 + nameLen + extraLen + commentLen;
   }
   return null;
+}
+
+/** 無圧縮 zip のエントリの一覧（名前とサイズ）。{@link readStoredZipEntry} と同じ読み方で、フォルダのエントリは除く。 */
+export function listStoredZipEntries(zip: Uint8Array): ComputeOutputFile[] {
+  const v = new DataView(zip.buffer, zip.byteOffset, zip.byteLength);
+  let eocd = -1;
+  for (let i = zip.length - 22; i >= Math.max(0, zip.length - 22 - 0xffff); i--) {
+    if (v.getUint32(i, true) === 0x06054b50) {
+      eocd = i;
+      break;
+    }
+  }
+  if (eocd < 0) return [];
+  const count = v.getUint16(eocd + 10, true);
+  let p = v.getUint32(eocd + 16, true);
+  const dec = new TextDecoder();
+  const out: ComputeOutputFile[] = [];
+  for (let n = 0; n < count && p + 46 <= zip.length; n++) {
+    if (v.getUint32(p, true) !== 0x02014b50) return out;
+    const size = v.getUint32(p + 24, true);
+    const nameLen = v.getUint16(p + 28, true);
+    const extraLen = v.getUint16(p + 30, true);
+    const commentLen = v.getUint16(p + 32, true);
+    const name = dec.decode(zip.subarray(p + 46, p + 46 + nameLen));
+    if (!name.endsWith("/")) out.push({ name, size });
+    p += 46 + nameLen + extraLen + commentLen;
+  }
+  return out;
 }
 
 // ── H61: 計算機の状態と、Colab のランタイムの解放 ──

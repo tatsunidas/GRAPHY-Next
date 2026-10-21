@@ -62,7 +62,7 @@ export function MainScreen({
   const [filters, setFilters] = useState<StudyFilters | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
   const importWatch = useImportWatchStatus(isStandalone);
-  const computeJobs = useComputeJobsStatus(isStandalone);
+  const computeJobsStatus = useComputeJobsStatus(isStandalone);
   // 取り込み直後は、一覧を「いま取り込んだ検査」に絞る（既定の検索条件「今日」では過去の検査が出ないため）。
   const [importedView, setImportedView] = useState<ImportedView | null>(null);
   const searchFiltersRef = useRef<StudyFilters | null>(null);
@@ -467,7 +467,8 @@ export function MainScreen({
         status={status}
         error={error}
         importWatch={importWatch.view}
-        computeJobs={computeJobs}
+        computeJobs={computeJobsStatus.counts}
+        keepAwake={computeJobsStatus.keepAwake}
         onOpenComputeJobs={() => handleOpenViewer("computejobs")}
         onReloadList={() => {
           setReloadKey((k) => k + 1);

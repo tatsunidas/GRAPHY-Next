@@ -140,6 +140,12 @@ export function endpointLoads(jobs: ComputeJobView[]): EndpointLoad[] {
 
 export interface BatchGroup {
   batchId: string;
+  /** 一括（同じコードを組ごとに走らせたもの）か。対話の 1 回は false。 */
+  isBatch: boolean;
+  /** 一時停止中ならその理由。 */
+  pausedReason: string | null;
+  /** 待ち・実行中・利用者待ちの組があるか（［一括を中止］を出す条件）。 */
+  active: boolean;
   jobs: ComputeJobView[];
   done: number;
   failed: number;
@@ -158,17 +164,26 @@ export function groupByBatch(jobs: ComputeJobView[]): BatchGroup[] {
     const key = j.batchId ?? `single:${j.id}`;
     let g = index.get(key);
     if (!g) {
-      g = { batchId: key, jobs: [], done: 0, failed: 0, running: 0, queued: 0 };
+      g = { batchId: key, isBatch: j.interactive === false, pausedReason: j.pausedReason ?? null, active: false, jobs: [], done: 0, failed: 0, running: 0, queued: 0 };
       index.set(key, g);
       order.push(g);
     }
     g.jobs.push(j);
+    if (isActive(j.state)) g.active = true;
     if (j.state === "DONE") g.done++;
     else if (needsAttention(j.state)) g.failed++;
     else if (j.state === "RUNNING" || j.state === "AWAITING_USER") g.running++;
     else if (j.state === "QUEUED") g.queued++;
   }
   return order;
+}
+
+/**
+ * 一括の計算が動いていて OS の眠りを止めたいか。一時停止中の一括は含めない（動いていないので眠ってよい）。
+ * 対話の 1 回（runJob）も含めない（一括のように長く放っておく使い方ではない）。
+ */
+export function wantsKeepAwake(jobs: ComputeJobView[]): boolean {
+  return jobs.some((j) => j.interactive === false && isActive(j.state) && !j.pausedReason);
 }
 
 /** 環境の 1 行表示。何も取れていなければ null（呼び出し側が「不明」と出す）。 */

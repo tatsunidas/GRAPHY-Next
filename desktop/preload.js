@@ -87,6 +87,9 @@ contextBridge.exposeInMainWorld("graphyDesktop", {
   computeTestConnection: (id) => ipcRenderer.invoke("graphy:compute-test-connection", id),
   // 送る前の同意。渡せるのは要求の id だけ（見せる内容は main が backend から取り直し、main の窓で聞く）
   computeConfirm: (requestId) => ipcRenderer.invoke("graphy:compute-confirm", requestId),
+  // 一括の計算の間、OS の眠りを止める（true/false）。返すのは「いま実際に止めているか」
+  computeKeepAwake: (on) => ipcRenderer.invoke("graphy:compute-keep-awake", on),
+  computeKeepAwakeStatus: () => ipcRenderer.invoke("graphy:compute-keep-awake-status"),
   // Colab（Google でログイン・ランタイムの確保と解放）。トークンは返らない
   computeColabStatus: () => ipcRenderer.invoke("graphy:compute-colab-status"),
   computeColabSignIn: () => ipcRenderer.invoke("graphy:compute-colab-signin"),

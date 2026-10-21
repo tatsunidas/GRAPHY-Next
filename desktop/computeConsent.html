@@ -13,6 +13,12 @@
       .key { width: 90px; color: #52606d; flex: none; }
       .mono { font-family: Consolas, "Courier New", monospace; }
       .warn { font-size: 12px; color: #8a4b00; background: #fdf0e3; border: 1px solid #e0b884; border-radius: 4px; padding: 4px 8px; }
+      /* 組が多い一括でもコード欄が潰れないよう、表は窓の高さの一部で巻く */
+      .tablewrap { max-height: 30vh; overflow: auto; flex: none; }
+      .tablewrap th { position: sticky; top: 0; }
+      .summary { font-size: 12px; font-weight: 600; }
+      .refused { font-size: 12px; color: #8a4b00; background: #fdf0e3; border: 1px solid #e0b884; border-radius: 4px; padding: 4px 8px; max-height: 80px; overflow: auto; }
+      .refused ul { margin: 2px 0 0; padding-left: 18px; }
       table { border-collapse: collapse; font-size: 12px; width: 100%; }
       th, td { border: 1px solid #dfe6ee; padding: 3px 6px; text-align: left; }
       th { background: #f5f7fa; font-weight: 600; }
@@ -34,10 +40,17 @@
       <div class="warn" id="plaintext" data-testid="consent-note" hidden></div>
       <div class="row"><span class="key" id="k-anon"></span><span id="anon"></span></div>
       <div class="sec" id="k-data"></div>
-      <table data-testid="consent-datasets">
-        <thead><tr id="data-head"></tr></thead>
-        <tbody id="data-body"></tbody>
-      </table>
+      <div class="summary" id="data-summary" data-testid="consent-summary" hidden></div>
+      <div class="tablewrap">
+        <table data-testid="consent-datasets">
+          <thead><tr id="data-head"></tr></thead>
+          <tbody id="data-body"></tbody>
+        </table>
+      </div>
+      <div class="refused" id="refused" data-testid="consent-refused" hidden>
+        <div id="k-refused"></div>
+        <ul id="refused-list"></ul>
+      </div>
       <div class="sec" id="k-code"></div>
       <pre id="code" data-testid="consent-code"></pre>
       <div class="meta" id="code-meta"></div>
@@ -47,6 +60,7 @@
         <button id="send" class="primary" disabled data-testid="consent-send"></button>
       </div>
     </div>
+    <script src="computeConsent-rows.js"></script>
     <script src="computeConsent-view.js"></script>
   </body>
 </html>

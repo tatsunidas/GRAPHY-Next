@@ -13,6 +13,7 @@ export function StatusBar({
   error,
   importWatch,
   computeJobs,
+  keepAwake,
   onOpenComputeJobs,
   onReloadList,
 }: {
@@ -22,6 +23,8 @@ export function StatusBar({
   importWatch?: WatchBarView;
   /** 計算ジョブの数（standalone で数えるものがあるときだけ）。 */
   computeJobs?: JobCounts | null;
+  /** 一括の計算のために OS の眠りを止めているか（main の返答）。 */
+  keepAwake?: boolean;
   /** 計算ジョブの窓を開く。 */
   onOpenComputeJobs?: () => void;
   /** 新しい取り込みがあるとき、一覧を読み込み直す。 */
@@ -88,6 +91,11 @@ export function StatusBar({
           >
             {t("computeJobs.bar.counts", { running: computeJobs.running, queued: computeJobs.queued, failed: computeJobs.failed })}
           </button>
+        )}
+        {keepAwake && (
+          <span data-testid="statusbar-keep-awake" style={{ marginLeft: 8, color: "#667" }}>
+            {t("computeJobs.awake")}
+          </span>
         )}
       </div>
       <div style={{ fontVariantNumeric: "tabular-nums", color: "#445" }}>{formatClock(now)}</div>

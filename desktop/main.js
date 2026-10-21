@@ -13,7 +13,7 @@
 //   GRAPHY_BACKEND_PROFILE     … backend プロファイル（既定 config.backend.profile）
 //   GRAPHY_DEV_SERVER_URL      … Vite dev サーバの URL（既定 config.devServerUrl の 5173）
 
-const { app, BrowserWindow, shell, dialog, ipcMain, nativeImage, screen, clipboard } = require("electron");
+const { app, BrowserWindow, shell, dialog, ipcMain, nativeImage, screen, clipboard, powerSaveBlocker } = require("electron");
 const { spawn } = require("node:child_process");
 const path = require("node:path");
 const os = require("node:os");
@@ -40,6 +40,7 @@ const { waitPortFree } = require("./portWait");
 const { ensureDefaultEndpoint, resolveDefault, effectiveDefaultId, LOCAL_ID } = require("./computeDefault");
 const computeBridge = require("./computeBridge");
 const computeConsent = require("./computeConsent");
+const computeKeepAwake = require("./computeKeepAwake").create(powerSaveBlocker);
 const { createColabAuth, REFRESH_KEY: COLAB_REFRESH_KEY } = require("./colabAuth");
 const { createColabApi } = require("./colabApi");
 const { createColabRuntimes } = require("./colabRuntimes");
@@ -1886,6 +1887,23 @@ ipcMain.handle("graphy:compute-confirm", async (e, requestId) => {
   if (!approve) return { ok: true, approved: false };
   return r.ok ? { ok: true, approved: true } : { ok: false, error: "decision-rejected" };
 });
+
+/**
+ * 一括の計算が動いている間、OS の眠りを止める（Colab のランタイムが idle で回収されるのを避ける）。
+ * メイン画面が台帳の数を見て「一時停止でない一括の組がある」かを渡す。返すのは**いま実際に止めているか**。
+ * 窓が閉じる・アプリが終わるときは必ず外す。
+ */
+const keepAwakeSenders = new WeakSet();
+ipcMain.handle("graphy:compute-keep-awake", (e, on) => {
+  if (!keepAwakeSenders.has(e.sender)) {
+    keepAwakeSenders.add(e.sender);
+    e.sender.once("destroyed", () => computeKeepAwake.set(false));
+  }
+  return { ok: true, active: computeKeepAwake.set(on === true) };
+});
+// 計算ジョブの窓が「いま眠りを止めているか」を表示するための読み取り（止めたり外したりはしない）
+ipcMain.handle("graphy:compute-keep-awake-status", () => ({ ok: true, active: computeKeepAwake.active() }));
+app.on("before-quit", () => computeKeepAwake.set(false));
 
 // 名前を付けて保存。OS ネイティブのダイアログを使うので、**同名ファイルの上書き確認は
 // OS が標準で出す**（アプリ側で自前実装しない）。保存したパスを返す。取り消しなら null。

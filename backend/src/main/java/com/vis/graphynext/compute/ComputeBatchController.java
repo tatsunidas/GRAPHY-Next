@@ -139,8 +139,11 @@ public class ComputeBatchController {
                 out.put("refused", refused);
                 return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY).body(out);
             }
+            List<Map<String, String>> refusedRows = refused.stream()
+                    .map(x -> Map.of("key", String.valueOf(x.get("key")), "reason", String.valueOf(x.get("reason"))))
+                    .toList();
             ComputeEgressService.EgressRequest r = egress.createBatch(m.id(), m.name(), endpointId, kept,
-                    body.code(), CodeInspector.MAX_JOB_CHARS);
+                    body.code(), CodeInspector.MAX_JOB_CHARS, refusedRows);
             Map<String, Object> out = new LinkedHashMap<>();
             out.put("requestId", r.id());
             out.put("endpoint", Map.of("id", r.endpointId(), "label", r.endpointLabel()));
@@ -227,6 +230,18 @@ public class ComputeBatchController {
         }
         return ResponseEntity.ok().contentType(MediaType.parseMediaType("application/zip"))
                 .body(new FileSystemResource(zip));
+    }
+
+    /** 台帳のログの全文（stdout / stderr / traceback）。自分のプラグインの行だけ。無ければ空の本文。 */
+    @GetMapping(value = "/api/plugins/{id}/compute/jobs/{jobId}/log/{kind}",
+            produces = MediaType.TEXT_PLAIN_VALUE + ";charset=UTF-8")
+    public ResponseEntity<?> log(@PathVariable String id, @PathVariable String jobId, @PathVariable String kind) {
+        ResponseEntity<Map<String, Object>> denied = guard(id, jobId);
+        if (denied != null) {
+            return ResponseEntity.status(denied.getStatusCode()).build(); // text/plain の口なので本文は付けない
+        }
+        return ledger.readLog(jobId, kind).<ResponseEntity<?>>map(ResponseEntity::ok)
+                .orElseGet(() -> ResponseEntity.notFound().build());
     }
 
     /** 一時停止（計算機に届かない）から続ける。待ちのままの組を元の順で並べ直す。 */

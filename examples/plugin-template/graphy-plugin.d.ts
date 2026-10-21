@@ -1224,6 +1224,22 @@ interface PluginHostBase {
      * 確保していなければ `{ok:true, released:false}`。次の `runJob` が自動で確保し直す。
      */
     releaseRuntime: (endpointId: string, opts?: { ask?: boolean }) => Promise<ComputeReleaseOutcome>;
+    /**
+     * 同じコードを入力の組ごとに走らせる（一括・**0.5.0 以降**）。**同意は全組で 1 回**——本体の窓が全組の行
+     * （種類・枚数・形式・大きさ・SHA-256）と合計、コードの全文を見せる。送れない組（焼き込み・格子など）は外れて
+     * `refused` に理由が出る（黙って減らさない）。組が終わるたびに `onItem` が届き、全部終わると返る。
+     * 1 組が落ちても残りは続く。計算機に届かなくなると一時停止し（残りは失敗にしない）`paused: true` で返る
+     * （続きは利用者が計算ジョブの窓で［再開］を押す）。実行は本体の台帳が持つので、画面を閉じても計算は続く。
+     * 例外は投げない。デスクトップ専用。
+     */
+    runBatch: (opts: ComputeRunBatchOptions, bopts?: ComputeBatchOptions) => Promise<ComputeBatchOutcome>;
+    /** 自分のプラグインの計算ジョブの一覧（患者名は含まない）。 */
+    listJobs: (opts?: { batchId?: string; uncollectedOnly?: boolean }) => Promise<ComputeJobSummary[]>;
+    /**
+     * 画面を閉じている間に終わった組のうち、受け取っていないものを `onItem` で届ける。届いた組は
+     * `item.markCollected()` で受け取り済みにする（計算ジョブの窓に「受け取り済み」と出る）。
+     */
+    attach: (batchId: string, bopts?: ComputeBatchOptions) => Promise<ComputeBatchOutcome>;
   };
   /**
    * **保管庫の画像を手元に確保する**（H67・**0.5.0 以降**）。Drive が正本のモード（手元は上限つきのキャッシュ）で、
@@ -1535,6 +1551,99 @@ export interface ComputeRunJobOptions {
   endpointId?: string;
   /** 秒。既定 3600・上限 6 時間。 */
   timeoutSec?: number;
+}
+
+/** `host.compute.runBatch()` の 1 組（同じコードを組ごとに走らせる）。 */
+export interface ComputeBatchItemInput {
+  /** 組の名前。英数字・`. _ -` の 64 字まで・重複不可。**患者名を入れないこと**（台帳・監査に残る）。 */
+  key: string;
+  /** 0〜8 件（1 組 = 計算機の上の 1 回の実行）。 */
+  inputs: ComputeJobInput[];
+}
+
+/** `host.compute.runBatch()` の引数。 */
+export interface ComputeRunBatchOptions {
+  /** 全組で同じコード（64KB まで）。 */
+  script: string;
+  items: ComputeBatchItemInput[];
+  /** `ComputeRunJobOptions.endpointId` と同じ。 */
+  endpointId?: string;
+  /** 1 組あたりの秒。既定 3600・上限 6 時間。 */
+  timeoutSec?: number;
+}
+
+/** 一括で送れずに外した組。 */
+export interface ComputeBatchRefused {
+  key: string;
+  /** 理由のコード（焼き込み・格子など。例 `series-not-found`）。 */
+  reason: string;
+}
+
+/** 一括の見守りの設定。 */
+export interface ComputeBatchOptions {
+  /** 組が終わるたびに呼ぶ（同じ組を 2 度は呼ばない）。 */
+  onItem?: (item: ComputeBatchItemOutcome) => void;
+  /** 終わった組の割合（0..1）と一言。 */
+  onProgress?: (fraction: number, message: string) => void;
+  /** 承認・投入が済んだ直後（`runBatch` のみ）。 */
+  onStarted?: (info: { batchId: string; items: { key: string; jobId: string }[]; refused: ComputeBatchRefused[] }) => void;
+  /** abort すると一括を中止する（待ちの組は計算機へ何も送らず、実行中の組は中断する）。 */
+  signal?: AbortSignal;
+  /** 台帳を読む間隔（ミリ秒）。既定 1000。 */
+  pollMs?: number;
+}
+
+/** 終わった 1 組の結果。`runJob` の結果と同じ形に、組の名前と受け取りの印が付く。 */
+export type ComputeBatchItemOutcome = { key: string | null; jobId: string; markCollected: () => Promise<void> } & (
+  | {
+      ok: true;
+      /** `error` は Python の例外（組としては走り終えている）。 */
+      status: "ok" | "error";
+      stdout: string;
+      stderr: string;
+      errorName?: string;
+      errorValue?: string;
+      traceback?: string[];
+      files: ComputeOutputFile[];
+      readFile: (name: string) => Promise<Uint8Array | null>;
+    }
+  | { ok: false; cancelled?: boolean; error: string }
+);
+
+export interface ComputeBatchCounts {
+  done: number;
+  failed: number;
+  cancelled: number;
+  interrupted: number;
+  total: number;
+}
+
+/** `runBatch` / `attach` の結果。 */
+export type ComputeBatchOutcome =
+  | {
+      ok: true;
+      batchId: string;
+      counts: ComputeBatchCounts;
+      refused: ComputeBatchRefused[];
+      /** 計算機に届かなくなって一時停止中。残りは待ちのまま（失敗にしていない）。 */
+      paused?: boolean;
+      reason?: string;
+      cancelled?: boolean;
+    }
+  | { ok: false; cancelled?: boolean; error: string; neededBytes?: number; freeBytes?: number; refused?: ComputeBatchRefused[] };
+
+/** `host.compute.listJobs()` の 1 行（患者名は含まない）。 */
+export interface ComputeJobSummary {
+  jobId: string;
+  batchId: string | null;
+  key: string | null;
+  state: "QUEUED" | "RUNNING" | "AWAITING_USER" | "DONE" | "FAILED" | "CANCELLED" | "INTERRUPTED";
+  /** 失敗・中断の分類（`code-error` `timeout` `endpoint-unreachable` `dataset-changed` …）。 */
+  reason: string | null;
+  errorName: string | null;
+  errorValue: string | null;
+  outputsBytes: number | null;
+  collected: boolean;
 }
 
 /** `outputs/` のファイル。 */
