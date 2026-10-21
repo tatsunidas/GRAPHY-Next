@@ -50,6 +50,11 @@ try {
     check(primary.length === 1 && primary[0] === env.file, `主表示は ${env.file} の 1 つだけ`, primary);
     for (const other of ALL.filter((f) => f !== env.file)) check(!primary.includes(other), `主表示に ${other} が出ない（負例）`);
     check((await page.locator("#t-os").textContent())!.includes("このパソコン"), "日本語で見出しが出る（ja-JP）");
+    const h = (await page.locator("#t-title").textContent())!;
+    check(key === "linux" ? h.includes("実行してください") : h.includes("ダブルクリック"), `見出しが直感的な指示になっている（${key}）`, h);
+    const size = (sel: string) => page.locator(sel).first().evaluate((e) => parseFloat(getComputedStyle(e).fontSize));
+    const [hs, fs, ls, ws] = [await size("#t-title"), await size(".primary-file code"), await size("#t-lead"), await size("#t-why")];
+    check(!h.includes("インストール") && hs > ls && hs > ws && fs > ls, "『インストール不要』の注記は見出し・ファイル名より小さい（見出し自体には出ない）", { hs, fs, ls, ws });
     check((await page.locator(`.others li.here code`).textContent()) === env.file, "『ほかの OS』の一覧で、この PC の行が強調される");
     check((await page.locator("#other-box").evaluate((e: HTMLDetailsElement) => e.open)) === false, "『ほかの OS』は閉じている");
     // コピー: file:// ではクリップボード権限が許可されないことがある。成功なら中身、失敗なら失敗の案内が出ること。
@@ -62,7 +67,7 @@ try {
     check(page.url() === url, "ボタンを押してもページは移動しない（起動は試みない）");
     // 言語
     await page.locator("#lang-en").click();
-    check((await page.locator("#t-title").textContent()) === "Open the images in the viewer", "English に切り替わる");
+    check((await page.locator("#t-title").textContent()) === (key === "linux" ? "Run the file below to start" : "Double-click the file below to start"), "English に切り替わる");
     check((await page.locator(".primary-file code").textContent()) === env.file, "言語を切り替えても主表示は同じ");
     check((await page.locator("#t-sign-by").textContent())!.includes("GRAPHY") && (await page.locator("footer").textContent())!.includes("Visionary Imaging Services, Inc."), "署名が出る");
     check((await page.locator(".notice").textContent())!.includes("not for diagnostic use"), "非診断用の注意が出る（英語）");
@@ -78,7 +83,7 @@ try {
   const prim = await u.page.locator(".primary-file code").allTextContents();
   check(prim.length === 3 && ALL.every((f) => prim.includes(f)), "3 つのファイル名がすべて並ぶ", prim);
   check((await u.page.locator("#other-box").evaluate((e: HTMLDetailsElement) => e.open)) === true, "『ほかの OS』が開いている");
-  check((await u.page.locator("#t-title").textContent()) === "Open the images in the viewer", "英語の環境では英語で始まる（en-US）");
+  check((await u.page.locator("#t-title").textContent()) === "Run the file below to start", "英語の環境では英語で始まる（en-US・判定不能は「実行」）");
   await u.page.screenshot({ path: path.join(OUT, "start-html-unknown.png") });
   await u.ctx.close();
 } finally {
