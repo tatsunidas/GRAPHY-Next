@@ -1,5 +1,5 @@
 // 媒体（DICOMDIR）から読んだ内容の保持。画像の URL 向け直し・レイアウト DTO の供給を行う。
-import type { DicomDirModel, SeriesRec } from "../../portable/src/dicomdir";
+import type { DicomDirModel, SeriesRec } from "./dicomdir";
 import type { Instance, SeriesLayoutDto } from "../../src/api";
 import { buildLayoutDto, readHeaders } from "./layout";
 import { registerMediaRoute } from "./mediaRoute";
@@ -13,13 +13,21 @@ export function registerModel(model: DicomDirModel): void {
         for (const im of se.images) if (im.url) registerMediaRoute(im.sopUid, im.url);
 }
 
+// 描画核は instances の参照が変わるとビューポートを組み直す。毎回同じ配列を返すこと。
+const instanceCache = new Map<string, Instance[]>();
+
 export function instancesOf(series: SeriesRec): Instance[] {
-  return series.images.map((im) => ({
-    sopInstanceUid: im.sopUid,
-    instanceNumber: im.instanceNumber,
-    sopClassUid: im.sopClassUid ?? null,
-    transferSyntaxUid: null,
-  }));
+  let v = instanceCache.get(series.seriesUid);
+  if (!v) {
+    v = series.images.map((im) => ({
+      sopInstanceUid: im.sopUid,
+      instanceNumber: im.instanceNumber,
+      sopClassUid: im.sopClassUid ?? null,
+      transferSyntaxUid: null,
+    }));
+    instanceCache.set(series.seriesUid, v);
+  }
+  return v;
 }
 
 /** シリーズのレイアウト（初回のみヘッダを読む。同じシリーズへの再要求は同じ結果を返す）。 */

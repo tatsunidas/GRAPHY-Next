@@ -2,7 +2,7 @@
  * Export 媒体のポータブル 2D ビューア: 起動スクリプト（ローカルサーバ）→ 自動認識の実機検証。
  *
  * 実行（通し・推奨）: backend の完全ビルド（cd backend && mvn -DskipTests package）のあと
- *        cd automator && PORTABLE_E2E=1 [PORTABLE_FIXTURE=<DICOM のフォルダ。既定は fixtures/ct-basic>] npx tsx src/spike/portableLauncherCheck.ts
+ *        cd automator && PORTABLE_E2E=1 [PORTABLE_FIXTURE=<DICOM のフォルダ。複数は ; 区切り（Windows）。既定は fixtures/ct-basic>] npx tsx src/spike/portableLauncherCheck.ts
  *   → backend を起動し、フィクスチャ（ct-basic）を取り込み、**本物の Export（ZIP）**を展開した媒体で試す
  *     （媒体の VIEWER/・START-VIEWER.* は Export が書いたもの）。
  * 実行（媒体を指定）: cd frontend && npm run build:portable のあと
@@ -87,7 +87,11 @@ async function exportMedia(): Promise<void> {
     const imp = await fetch(`${base}/api/import/paths`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ paths: [(process.env.PORTABLE_FIXTURE ?? path.join(AUTOMATOR_ROOT, "fixtures", "ct-basic")).replace(/\\/g, "/")] }),
+      body: JSON.stringify({
+        paths: (process.env.PORTABLE_FIXTURE ?? path.join(AUTOMATOR_ROOT, "fixtures", "ct-basic"))
+          .split(path.delimiter)
+          .map((x) => x.replace(/\\/g, "/")),
+      }),
     });
     const impBody = (await imp.json()) as { imported: number };
     check(imp.ok && impBody.imported > 0, "（前提）フィクスチャを取り込めた", impBody);
@@ -230,25 +234,24 @@ async function main(): Promise<void> {
     console.log(`  （Chrome ${browser.version()}・フラグなし）`);
 
     console.log("\n[2] 正例: 操作なしで自動認識・表示（実 Chrome）");
-    const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
+    const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
     const logs: string[] = [];
     page.on("console", (m) => m.type() === "error" && logs.push(m.text().slice(0, 160)));
     page.on("pageerror", (e) => logs.push("pageerror " + String(e).slice(0, 160)));
     await page.goto(server.url);
-    await page.waitForFunction(() => /読み込みました/.test(document.querySelector("#status")?.textContent ?? ""), null, { timeout: 60_000 });
-    const guideGone = (await page.locator("#boot-guide").count()) === 0;
-    check(guideGone, "アプリが起動し、file:// 用の案内が消えている");
-    const seriesNodes = await page.locator(".node.series").count();
-    check(seriesNodes >= 1, "シリーズが一覧に出ている（フォルダ選択なし）", seriesNodes);
-    await page.waitForFunction(() => /画像を読み込みました/.test(document.querySelector("#status")?.textContent ?? ""), null, { timeout: 60_000 });
-    check((await page.locator(".node.series.active").count()) === 1, "最初のシリーズが自動で選ばれている");
-    await sleep(1500);
-    const png = await page.locator("#grid").screenshot();
+    await page.waitForSelector(".pv-card", { timeout: 60_000 });
+    check((await page.locator("#boot-guide").count()) === 0, "アプリが起動し、file:// 用の案内が消えている");
+    const seriesCards = await page.locator(".pv-card").count();
+    check(seriesCards >= 1, "シリーズが一覧に出ている（フォルダ選択なし）", seriesCards);
+    await page.waitForFunction(() => /\d+ \/ \d+/.test(document.querySelector(".pv-pos")?.textContent ?? ""), null, { timeout: 60_000 });
+    check((await page.locator(".pv-card[aria-current=true]").count()) === 1, "最初のシリーズが自動で開いている");
+    await sleep(2000);
+    const png = await page.locator('[data-pv-tile="0"]').screenshot();
     await fs.promises.writeFile(path.join(OUT_DIR, "auto-open.png"), png);
     const st = await pixelStats(helper, png);
     check(st.lit > 0.002 && st.max > 100, "画像の矩形に画像が描かれている（黒一色ではない）", st);
-    const overlay = await page.locator("#grid").innerText();
-    check(/Image\s*1\s*\/\s*\d+/i.test(overlay), "オーバレイに『Image 1 / N』が出ている", overlay.slice(0, 160));
+    const overlay = await page.locator('[data-pv-tile="0"]').innerText();
+    check(/Image\s*1\s*\/\s*\d+/i.test(overlay) || /\d+\s*\/\s*\d+/.test(await page.locator(".pv-pos").innerText()), "枚数（N / M）が出ている", overlay.slice(0, 120));
     await page.screenshot({ path: path.join(OUT_DIR, "auto-open-full.png") });
     check(logs.filter((l) => !/favicon|404/.test(l)).length === 0, "コンソールにエラーが出ていない", logs);
 

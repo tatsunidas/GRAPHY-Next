@@ -1,4 +1,4 @@
-// 自動スタブの実体（portable-app/stubPlugin.ts が生成するモジュールから使う）。
+// 自動スタブの実体（portable/stubPlugin.ts が生成するモジュールから使う）。
 type AnyFn = (...a: unknown[]) => unknown;
 
 /** 何もしない関数。プロパティ参照・呼び出しの結果も同じ関数（チェーン呼び出しで落ちない）。 */

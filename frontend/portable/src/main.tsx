@@ -1,8 +1,8 @@
 import { createRoot } from "react-dom/client";
 import { useEffect, useState } from "react";
 import { I18nProvider, useI18n } from "../../src/i18n/i18n";
-import { loadFromServer, serverBase, startHeartbeat } from "../../portable/src/mediaSource";
-import type { DicomDirModel } from "../../portable/src/dicomdir";
+import { loadFromServer, serverBase, startHeartbeat } from "./mediaSource";
+import type { DicomDirModel } from "./dicomdir";
 import { App } from "./App";
 import { IcLock } from "./icons";
 import "./style.css";

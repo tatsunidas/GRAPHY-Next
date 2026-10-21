@@ -5,7 +5,7 @@ import { transformWithEsbuild, type Plugin } from "vite";
 
 // ポータブル版は本体の backend・DB・Electron・プラグイン・レポートを持たない。
 // 本体の描画核（viewer/SeriesViewer）をそのまま使うため、それらへ触れる「葉」のモジュールだけを
-// 差し替える。差し替え先は portable-app/src/shims/<元のパス>.ts（あればその export を優先）。
+// 差し替える。差し替え先は portable/src/shims/<元のパス>.ts（あればその export を優先）。
 // shim に無い export は自動スタブ: fetch*/save* などは reject する Promise、他は何もしない関数。
 // → 本体コードは 1 行も変えない（本体との挙動差を作らない）。
 

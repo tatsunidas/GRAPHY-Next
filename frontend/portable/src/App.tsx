@@ -7,8 +7,10 @@ import { imageIdForInstance } from "../../src/viewer/imageId";
 import { runViewerCommand, queryViewerCommand, type ViewerViewState } from "../../src/viewer/viewerCommands";
 import { runSeriesCommand } from "../../src/viewer/seriesCommands";
 import { DEFAULT_PRESETS } from "../../src/viewer2d/wlPresets";
+import { computeSuvScale, extractSuvParams, isPetSeries, isSuvError } from "../../src/viewer/suv";
+import { setSuv } from "../../src/viewer/suvStore";
 import { useI18n } from "../../src/i18n/i18n";
-import type { DicomDirModel, SeriesRec, StudyRec, PatientRec } from "../../portable/src/dicomdir";
+import { isVideoSeries, type DicomDirModel, type SeriesRec, type StudyRec, type PatientRec } from "./dicomdir";
 import { indexSeries, instancesOf, layoutFor, registerModel } from "./data";
 import * as I from "./icons";
 import "./style.css";
@@ -58,6 +60,42 @@ function Thumb({ series, ready }: { series: SeriesRec; ready: boolean }) {
   return <canvas ref={ref} width={96} height={96} />;
 }
 
+/** 動画シリーズ: 同梱の MP4（VIDEO/<sop>.mp4）をそのまま再生する。 */
+function VideoTile({ series }: { series: SeriesRec }) {
+  const { locale } = useI18n();
+  const [failed, setFailed] = useState(false);
+  const url = series.images.find((im) => im.videoUrl)?.videoUrl;
+  if (!url || failed) {
+    return <div className="pv-empty">{locale === "ja" ? "再生用の動画ファイルが媒体にないか、このブラウザでは再生できません。" : "The video file is missing from the media, or this browser cannot play it."}</div>;
+  }
+  return <video src={url} controls loop playsInline preload="metadata" onError={() => setFailed(true)} style={{ flex: 1, minHeight: 0, width: "100%", background: "#000" }} />;
+}
+
+/** PET は、画像のタグ（体重・投与量・半減期・時刻）から SUVbw を自動で補正する。タグが足りなければ何もしない（値を作らない）。 */
+function useAutoSuv(series: SeriesRec | null, ready: boolean): void {
+  useEffect(() => {
+    const first = series?.images[0];
+    if (!series || !first || !ready) return;
+    const imageId = imageIdForInstance("standalone", first.sopUid, "", series.seriesUid);
+    let tries = 0;
+    const id = window.setInterval(() => {
+      tries++;
+      try {
+        if (isPetSeries(imageId)) {
+          const r = computeSuvScale(extractSuvParams(imageId), "bw");
+          if (!isSuvError(r)) setSuv(series.seriesUid, { scale: r.scale, unit: r.unit, type: r.type });
+          window.clearInterval(id);
+          return;
+        }
+      } catch {
+        /* メタデータがまだ無い */
+      }
+      if (tries >= 20) window.clearInterval(id);
+    }, 500);
+    return () => window.clearInterval(id);
+  }, [series, ready]);
+}
+
 export function App({ model }: { model: DicomDirModel }) {
   const { locale, setLocale } = useI18n();
   const tx = useCallback((ja: string, en: string) => (locale === "ja" ? ja : en), [locale]);
@@ -89,12 +127,13 @@ export function App({ model }: { model: DicomDirModel }) {
   const keys = useMemo(() => Array.from({ length: tiles }, (_, i) => tileKey(i)), [tiles]);
   const activeUid = assign[active] ?? null;
   const activeSeries = list.find((x) => x.se.seriesUid === activeUid)?.se ?? null;
+  useAutoSuv(activeSeries && !isVideoSeries(activeSeries) ? activeSeries : null, csReady);
 
   // シリーズ長（スライダー用）。レイアウトは本体と同じ DTO から得る。
   useEffect(() => {
     for (const uid of assign.slice(0, tiles)) {
       const se = list.find((x) => x.se.seriesUid === uid)?.se;
-      if (!se || metas[se.seriesUid]) continue;
+      if (!se || metas[se.seriesUid] || isVideoSeries(se)) continue;
       void layoutFor(se).then((dto) => {
         const axis = dto.axes?.stackAxis === "t" ? "t" : "z";
         setMetas((m) => ({ ...m, [se.seriesUid]: { n: axis === "t" ? dto.nT : dto.nZ, axis } }));
@@ -111,7 +150,10 @@ export function App({ model }: { model: DicomDirModel }) {
 
   // W/L・倍率の表示（アクティブなタイル）。
   useEffect(() => {
-    const id = window.setInterval(() => setView(queryViewerCommand(tileKey(active), (c) => c.getViewState())), 300);
+    const id = window.setInterval(() => {
+      const v = queryViewerCommand(tileKey(active), (c) => c.getViewState());
+      setView((prev) => (prev && v && prev.windowCenter === v.windowCenter && prev.windowWidth === v.windowWidth && prev.invert === v.invert && prev.zoom === v.zoom ? prev : v));
+    }, 300);
     return () => window.clearInterval(id);
   }, [active]);
 
@@ -172,7 +214,9 @@ export function App({ model }: { model: DicomDirModel }) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const t = e.target as HTMLElement | null;
-      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
+      const typing = t instanceof HTMLInputElement ? !["range", "checkbox", "button"].includes(t.type) : t?.tagName === "TEXTAREA" || !!t?.isContentEditable;
+      if (typing) return;
+      if (e.key === " " && t instanceof HTMLButtonElement) return; // ボタン上の Space はそのボタンの操作
       if (e.ctrlKey || e.metaKey || e.altKey) return;
       const k = e.key.toLowerCase();
       const td = toolDefs.find((d) => d.key === k);
@@ -239,7 +283,7 @@ export function App({ model }: { model: DicomDirModel }) {
                     draggable onDragStart={(e) => e.dataTransfer.setData("text/pv-series", se.seriesUid)}
                     onClick={() => showSeries(se.seriesUid)} onDoubleClick={() => showSeries(se.seriesUid)}
                   >
-                    <div className="pv-thumb"><Thumb series={se} ready={csReady} /></div>
+                    <div className="pv-thumb">{isVideoSeries(se) ? <span style={{ fontSize: 28 }} aria-hidden="true">🎞</span> : <Thumb series={se} ready={csReady} />}</div>
                     <div className="pv-meta">
                       <div className="row"><span className={`pv-mod ${se.modality === "PT" ? "pt" : ""}`}>{se.modality || "—"}</span><small>{tx("シリーズ", "Series")} {se.number ?? "—"}</small></div>
                       <strong>{se.description || tx("（説明なし）", "(no description)")}</strong>
@@ -293,7 +337,9 @@ export function App({ model }: { model: DicomDirModel }) {
                 onDragOver={(e) => { e.preventDefault(); setDropTile(i); }} onDragLeave={() => setDropTile(null)}
                 onDrop={(e) => { e.preventDefault(); setDropTile(null); const u = e.dataTransfer.getData("text/pv-series"); if (u) showSeries(u, i); }}
               >
-                {se && csReady ? (
+                {se && isVideoSeries(se.se) ? (
+                  <VideoTile series={se.se} />
+                ) : se && csReady ? (
                   <SeriesViewer
                     key={`${i}-${se.se.seriesUid}`}
                     instances={instancesOf(se.se)} mode="standalone" studyUid={se.s.studyUid} seriesUid={se.se.seriesUid}
