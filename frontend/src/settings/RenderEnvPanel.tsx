@@ -109,7 +109,16 @@ export function RenderEnvPanel() {
               volMax: String(s.volumeMaxMb),
             })}
           />
-          <Row id="gpu-memory" k={t("renderenv.row.gpuMemory")} value="" text={t("renderenv.gpuMemoryUnknown")} />
+          <Row
+            id="gpu-memory"
+            k={t("renderenv.row.gpuMemory")}
+            value={s.gpuMemory ? String(s.gpuMemory.reduce((n, g) => n + g.totalBytes, 0)) : ""}
+            text={
+              s.gpuMemory
+                ? s.gpuMemory.map((g) => `${g.name}: ${(g.totalBytes / GB).toFixed(1)} GB`).join(" / ")
+                : t("renderenv.gpuMemoryUnknown")
+            }
+          />
           <Row
             id="still3d"
             k={t("renderenv.row.still3d")}

@@ -106,6 +106,8 @@ export interface MemoryFacts {
   totalBytes: number | null;
   /** ボリューム構築の上限（MB）。 */
   volumeMaxMb: number;
+  /** GPU ごとの搭載メモリ。取れなければ null（取得はデスクトップの Linux・NVIDIA のみ）。 */
+  gpuMemory?: { name: string; totalBytes: number }[] | null;
 }
 
 export interface RenderEnvSummary {
@@ -121,8 +123,8 @@ export interface RenderEnvSummary {
   textureFloatLinear: boolean | null;
   totalBytes: number | null;
   volumeMaxMb: number;
-  /** ブラウザからは取得できない。常に null（推測の値を出さない）。 */
-  gpuMemoryBytes: null;
+  /** GPU ごとの搭載メモリ。取れなければ null（推測の値を出さない）。 */
+  gpuMemory: { name: string; totalBytes: number }[] | null;
   featureStatus: GpuFeatureStatus | null;
   gpuDevices: GpuDeviceInfo[] | null;
   hybrid: HybridDetection;
@@ -148,7 +150,7 @@ export function summarize(
     textureFloatLinear: used ? used.textureFloatLinear : null,
     totalBytes: memory.totalBytes,
     volumeMaxMb: memory.volumeMaxMb,
-    gpuMemoryBytes: null,
+    gpuMemory: memory.gpuMemory ?? null,
     featureStatus: gpu?.featureStatus ?? null,
     gpuDevices: gpu?.devices ?? null,
     hybrid: detectHybrid(probe.defaultCtx?.renderer, probe.highPerformanceCtx?.renderer, gpu?.devices),

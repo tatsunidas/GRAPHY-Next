@@ -2549,7 +2549,7 @@ export const en: Record<string, string> = {
   "renderenv.unavailable": "Unavailable",
   "renderenv.unknown": "Unknown",
   "renderenv.notDone": "Not checked (desktop only)",
-  "renderenv.gpuMemoryUnknown": "Unknown (the browser cannot report it)",
+  "renderenv.gpuMemoryUnknown": "Unknown (only available for NVIDIA GPUs on Linux)",
   "renderenv.gpuPick.title": "GPU used for rendering",
   "renderenv.gpuPick.intro": "This PC has more than one GPU. You can choose which one draws 3D and MPR. The change takes effect after a restart.",
   "renderenv.gpuPick.auto": "OS default",

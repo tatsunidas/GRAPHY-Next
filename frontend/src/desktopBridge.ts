@@ -46,6 +46,12 @@ export interface GpuStatus {
 /** 描画に使う GPU の選択。auto＝OS の既定、high＝高性能 GPU。 */
 export type RenderGpuChoice = "auto" | "high";
 
+/** GPU 1 つ分の搭載メモリ。 */
+export interface GpuMemoryEntry {
+  name: string;
+  totalBytes: number;
+}
+
 export interface RenderPrefsState {
   platform: string;
   prefs: { gpu: RenderGpuChoice };
@@ -289,6 +295,8 @@ export interface GraphyDesktop {
   getMemoryInfo?: () => Promise<MemoryInfo>;
   /** Chromium の GPU 機能状態と GPU 一覧（描画環境の自己診断用、デスクトップのみ）。 */
   getGpuStatus?: () => Promise<GpuStatus>;
+  /** GPU の搭載メモリ（設定＞描画環境、デスクトップのみ）。取れなければ null（Linux の NVIDIA 以外は未対応）。 */
+  getGpuMemory?: () => Promise<GpuMemoryEntry[] | null>;
   /** 描画に使う GPU の選択（設定＞描画環境。ハイブリッド GPU の機械だけ。反映は再起動）。デスクトップのみ。 */
   getRenderPrefs?: () => Promise<RenderPrefsState>;
   setRenderPrefs?: (prefs: { gpu: RenderGpuChoice }) => Promise<{ ok: boolean; reason?: string }>;

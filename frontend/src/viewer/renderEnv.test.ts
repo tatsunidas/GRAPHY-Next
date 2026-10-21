@@ -121,7 +121,7 @@ describe("summarize", () => {
   });
   it("GPU メモリは常に null（ブラウザから取得できない）", () => {
     const s = summarize({ defaultCtx: ctx(NVIDIA, 2048), highPerformanceCtx: ctx(NVIDIA, 2048) }, null, mem);
-    expect(s.gpuMemoryBytes).toBeNull();
+    expect(s.gpuMemory).toBeNull();
   });
   it("デスクトップの機能状態を種別に反映する", () => {
     const s = summarize(

@@ -39,5 +39,13 @@ async function collect(): Promise<RenderEnvSummary> {
       /* 同上 */
     }
   }
-  return summarize(probe, gpu, { totalBytes, volumeMaxMb: getAppliedVolumeMaxMb() });
+  let gpuMemory = null;
+  if (d?.getGpuMemory) {
+    try {
+      gpuMemory = await d.getGpuMemory();
+    } catch {
+      /* 同上 */
+    }
+  }
+  return summarize(probe, gpu, { totalBytes, volumeMaxMb: getAppliedVolumeMaxMb(), gpuMemory });
 }

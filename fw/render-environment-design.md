@@ -26,4 +26,12 @@
 
 ## GPU メモリ
 
-（段 2 で追記）
+Chromium は GPU のメモリ量を返さない（`getGPUInfo` の gpuDevice に VRAM の項目なし。WebGL からも取れない）ので、main プロセスが OS の道具に聞く。実装: `desktop/gpuMemory.js`、IPC `graphy:gpu-memory`。
+
+| OS | 方法 | 状態 |
+|---|---|---|
+| Linux（NVIDIA） | `nvidia-smi --query-gpu=name,memory.total --format=csv,noheader,nounits`（MiB。引数は配列で渡す） | パーサーは単体テスト済み。**実機の出力での確認は未了**（eGPU 未接続のため。ドライバ不応答時の失敗文言が null になることだけ実測済み） |
+| Windows | 未対応（null＝「不明」） | 実機で出力を確かめられないため取らない。WMI の AdapterRAM は 4GB で頭打ちになるので使わない |
+| macOS | 未対応（null＝「不明」） | 同上。`system_profiler SPDisplaysDataType` は候補だが未確認。Apple Silicon はユニファイドメモリ |
+
+画面は GPU ごとに `名前: N GB` を並べる（描画に使っている GPU とは限らないので、名前を必ず併記する）。取れないときは 0 で埋めず「不明」。

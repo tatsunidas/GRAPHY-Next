@@ -2538,7 +2538,7 @@ export const ja: Record<string, string> = {
   "renderenv.unavailable": "利用できません",
   "renderenv.unknown": "不明",
   "renderenv.notDone": "未実施（デスクトップのみ）",
-  "renderenv.gpuMemoryUnknown": "不明（ブラウザから取得できない）",
+  "renderenv.gpuMemoryUnknown": "不明（Linux の NVIDIA 以外では取得できない）",
   "renderenv.gpuPick.title": "描画に使う GPU",
   "renderenv.gpuPick.intro": "この PC には GPU が複数あります。3D・MPR を描く GPU を選べます。変更は再起動で反映されます。",
   "renderenv.gpuPick.auto": "OS の既定",
