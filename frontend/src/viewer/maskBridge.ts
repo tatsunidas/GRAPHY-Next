@@ -17,7 +17,8 @@
 import { annotation as csAnnotation, segmentation as csSeg } from "@cornerstonejs/tools";
 import { getRoiMaskMeta, getMaskSegments } from "./roiMaskStore";
 import { extractMaskFrames, type MaskFramesInput } from "./maskFrames";
-import { listSpheres3D } from "./sphere3dStore";
+import { listRoi3d } from "./roiLedger";
+import { solidRadius } from "./roi3dBox";
 import { buildAnnounceEntries, type AnnounceEntry, type AnnounceQuery, type AnnounceShapeInput } from "./maskBridgeCore";
 import { withTempMask } from "./roiBooleanOps";
 
@@ -114,17 +115,13 @@ export function collectLocalRois(q: AnnounceQuery): AnnounceEntry[] {
     metaOf: getRoiMaskMeta,
     segmentsOf: getMaskSegments,
     colorOf: segmentColor255,
-    spheres: listSpheres3D().map((s) => ({
-      id: s.id,
-      studyUid: s.studyUid,
-      seriesUid: s.seriesUid,
-      center: s.center,
-      radiusMm: s.radiusMm,
-      c: s.c,
-      t: s.t,
-      label: s.label,
-      color: s.color,
-    })),
+    // 3D シーンが扱えるのは球（等軸の楕円体）だけ。直方体・非等軸は G4 で対応する。
+    spheres: listRoi3d().flatMap((s) => {
+      const radiusMm = solidRadius(s);
+      return radiusMm === null
+        ? []
+        : [{ id: s.id, studyUid: s.studyUid ?? "", seriesUid: s.seriesUid ?? "", center: s.center, radiusMm, c: s.c ?? "all", t: s.t ?? "all", label: s.label, color: s.color ?? "#00e5ff" }];
+    }),
     shapes: localShapes(),
   });
 }

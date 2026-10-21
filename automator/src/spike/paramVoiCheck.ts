@@ -53,11 +53,30 @@ async function gotoSlice(page: Page, k: number): Promise<void> {
 }
 
 /** プレビュー円の属性を文字列で読む（無ければ null）。 */
+/** 断面プレビューの識別文字列（円なら cx,cy,r、多角形なら points 全体）。無ければ null。 */
 async function previewAttrs(page: Page): Promise<string | null> {
   return page.evaluate(`(function () {
     var c = document.querySelector('[data-testid="sphere-preview"]');
-    return c ? [c.getAttribute("cx"), c.getAttribute("cy"), c.getAttribute("r")].join(",") : null;
+    if (!c) return null;
+    if (c.tagName.toLowerCase() === "polygon") return c.getAttribute("points");
+    return [c.getAttribute("cx"), c.getAttribute("cy"), c.getAttribute("r")].join(",");
   })()`) as Promise<string | null>;
+}
+
+/** プレビューの幾何: 中心 (cx,cy) と水平・垂直の半幅（円は r, r、多角形は外接矩形の半幅）。旧実装（円）との位置比較用。 */
+async function previewGeom(page: Page): Promise<{ cx: number; cy: number; hx: number; hy: number } | null> {
+  return page.evaluate(`(function () {
+    var c = document.querySelector('[data-testid="sphere-preview"]');
+    if (!c) return null;
+    if (c.tagName.toLowerCase() === "polygon") {
+      var p = c.getAttribute("points").split(" ").map(function (s) { return s.split(",").map(Number); });
+      var xs = p.map(function (q) { return q[0]; }), ys = p.map(function (q) { return q[1]; });
+      var x0 = Math.min.apply(null, xs), x1 = Math.max.apply(null, xs), y0 = Math.min.apply(null, ys), y1 = Math.max.apply(null, ys);
+      return { cx: (x0 + x1) / 2, cy: (y0 + y1) / 2, hx: (x1 - x0) / 2, hy: (y1 - y0) / 2 };
+    }
+    var r = Number(c.getAttribute("r"));
+    return { cx: Number(c.getAttribute("cx")), cy: Number(c.getAttribute("cy")), hx: r, hy: r };
+  })()`) as Promise<{ cx: number; cy: number; hx: number; hy: number } | null>;
 }
 
 const axes = ["x", "y", "z"] as const;
@@ -113,9 +132,12 @@ async function main(): Promise<void> {
       + geo.dir[i] * geo.spacing[0] * geo.dims[0] / 2 + geo.dir[3 + i] * geo.spacing[1] * geo.dims[1] / 2);
 
     console.log("\n[P1] 球の行");
-    await v.getByTestId("viewer2d-menu-roiTools").click();
-    await v.getByRole("button", { name: /ROI マネージャ|ROI manager/ }).first().click();
-    await v.waitForTimeout(500);
+    // 既に開いているパネルをメニューで閉じないよう、開いていなければ開く。
+    if (!(await v.getByTestId("roi-new-painted").isVisible().catch(() => false))) {
+      await v.getByTestId("viewer2d-menu-roiTools").click();
+      await v.getByText(/^(ROI マネージャ|ROI manager)$/i).first().click();
+      await v.waitForTimeout(500);
+    }
     await v.evaluate(`window.__graphyDebug.seedSphere3D(${JSON.stringify(c0)}, ${R})`);
     await v.waitForTimeout(500);
     check((await v.locator('[data-testid="roi-row"][data-kind="sphere"]').count()) === 1, "球の行が 1 行できる");
@@ -127,6 +149,7 @@ async function main(): Promise<void> {
     console.log("\n[P2] 中心 z を 2×半径だけ遠くへ打つ");
     const before = await previewAttrs(v);
     check(before !== null, "中間スライスにプレビューが出ている（操作前）", before);
+    console.log("  PREVIEW_GEOM " + JSON.stringify(await previewGeom(v)));
     // 法線方向に 2R 動かす。軸平行でない場合は 3 成分すべてを差し替える。
     const far = [0, 1, 2].map((i) => centre[i] + 2 * R * n[i]);
     const shownBefore = await readCenter(v);

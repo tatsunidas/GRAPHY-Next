@@ -1388,6 +1388,8 @@ export const ja: Record<string, string> = {
   "roiMgr.defineSphere": "円 ROI からパラメトリック 3D 球を定義（全スライスにライブ断面円）",
   "roiMgr.spheres": "3D 球（パラメトリック）",
   "roiMgr.radiusMm": "半径 (mm)",
+  "roiMgr.sizeMm": "サイズ (mm)",
+  "roiMgr.bakeNoRef": "作成スライスの情報が無いため塗りにできません（MPR で作った ROI）",
   "roiMgr.centerMm": "中心 (LPS mm)",
   "roiMgr.centerX": "中心 x (LPS mm)",
   "roiMgr.centerY": "中心 y (LPS mm)",

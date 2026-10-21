@@ -34,7 +34,18 @@ export interface Roi3dBox {
   seriesUid?: string;
   /** 最後に編集した時刻（ISO-8601）。窓をまたぐ保存の競合で新しい方を採る鍵。 */
   updatedAt?: string;
+  /** 次元 scope（チャンネル c／時相 t）。未指定は全て。2D のスライス表示の絞り込みに使う。 */
+  c?: DimIndex;
+  t?: DimIndex;
+  /** マスクへ焼き込むときの積み先（スタック）を引くための、作成スライスの imageId。 */
+  refImageId?: string;
+  seriesLabel?: string;
+  /** 2D 窓で複数患者を同時に開くときの絞り込み用（保存先は患者単位なので、無くても復元はできる）。 */
+  patientKey?: string;
 }
+
+/** 次元 scope の値: 0 以上の整数、または全て。 */
+export type DimIndex = number | "all";
 
 /** 各断面の法線軸と、画面の横(u)・縦(v)に当たる世界軸（`viewer/orthoMpr.ts` のフレームと同じ対応）。 */
 export const PLANE_AXES: Record<PlaneId, { normal: Axis3; u: Axis3; v: Axis3 }> = {
@@ -163,6 +174,8 @@ export function outOfBounds(b: Roi3dBox, bounds: Bounds6): boolean {
   return false;
 }
 
+const isDimIndex = (v: unknown): v is DimIndex => v === "all" || (typeof v === "number" && Number.isInteger(v) && v >= 0);
+
 const isVec3 = (v: unknown): v is Vec3 => Array.isArray(v) && v.length === 3 && v.every((x) => typeof x === "number" && Number.isFinite(x));
 
 /**
@@ -182,6 +195,11 @@ export function sanitizeSolid(v: unknown): Roi3dBox | null {
   if (typeof s.studyUid === "string") out.studyUid = s.studyUid;
   if (typeof s.seriesUid === "string") out.seriesUid = s.seriesUid;
   if (typeof s.updatedAt === "string") out.updatedAt = s.updatedAt;
+  if (isDimIndex(s.c)) out.c = s.c;
+  if (isDimIndex(s.t)) out.t = s.t;
+  if (typeof s.refImageId === "string") out.refImageId = s.refImageId;
+  if (typeof s.seriesLabel === "string") out.seriesLabel = s.seriesLabel;
+  if (typeof s.patientKey === "string") out.patientKey = s.patientKey;
   return out;
 }
 
@@ -199,4 +217,136 @@ export function mergeSolids(remote: Roi3dBox[], local: Roi3dBox[], buried: Set<s
   }
   for (const id of buried) byId.delete(id);
   return [...byId.values()].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+}
+
+/** 3 軸の全長が等しい（球）なら半径、そうでなければ null。楕円体のみ。 */
+export function solidRadius(b: Pick<Roi3dBox, "shape" | "size">): number | null {
+  if (b.shape !== "ellipsoid") return null;
+  const [x, y, z] = b.size;
+  const tol = 1e-9 * Math.max(x, y, z);
+  return Math.abs(x - y) <= tol && Math.abs(y - z) <= tol ? x / 2 : null;
+}
+
+/** 中心と半径（mm）から球（3 軸が等しい楕円体）の形を作る。 */
+export function sphereSolid(id: string, center: Vec3, radiusMm: number): Roi3dBox {
+  const d = radiusMm * 2;
+  return { id, shape: "ellipsoid", center: [...center], size: [d, d, d] };
+}
+
+/** 世界座標の点が ROI の内側（境界を含む）か。楕円体は `Σ((p−c)/半軸)²≤1`、直方体は各軸 `|p−c|≤L/2`。 */
+export function containsPoint(b: Pick<Roi3dBox, "shape" | "center" | "size">, p: Vec3): boolean {
+  if (b.shape === "box") {
+    return [0, 1, 2].every((i) => Math.abs(p[i] - b.center[i]) <= b.size[i] / 2);
+  }
+  let sum = 0;
+  for (let i = 0; i < 3; i++) {
+    const q = (p[i] - b.center[i]) / (b.size[i] / 2);
+    sum += q * q;
+  }
+  return sum <= 1;
+}
+
+const dot3 = (a: Vec3, b: Vec3): number => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+const cross3 = (a: Vec3, b: Vec3): Vec3 => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+
+/** 楕円体と平面の断面（楕円）。中心と、2 本の主軸（単位方向・半長, mm）。 */
+export interface EllipseSection {
+  center: Vec3;
+  axes: [{ dir: Vec3; half: number }, { dir: Vec3; half: number }];
+}
+
+/**
+ * 軸平行の楕円体と、点 `origin` を通り面内の単位基底 `u`, `v`（直交）で張られる平面との断面。
+ * 面内の点 `p=origin+a·u+b·v` を楕円体の式に入れた 2 次形式 `[a b]M[a b]ᵀ + 2g·[a b] + k ≤ 1` を解く。
+ * 球の断面が円（半径 √(r²−d²)）になるのは、その特別な場合。交わらない（接する）ときは null。
+ */
+export function ellipsoidSection(b: Pick<Roi3dBox, "center" | "size">, origin: Vec3, u: Vec3, v: Vec3): EllipseSection | null {
+  const iw = b.size.map((l) => 4 / (l * l)); // 1/半軸²
+  const w: Vec3 = [origin[0] - b.center[0], origin[1] - b.center[1], origin[2] - b.center[2]];
+  const q = (x: Vec3, y: Vec3): number => x[0] * y[0] * iw[0] + x[1] * y[1] * iw[1] + x[2] * y[2] * iw[2];
+  const m11 = q(u, u);
+  const m12 = q(u, v);
+  const m22 = q(v, v);
+  const g1 = q(w, u);
+  const g2 = q(w, v);
+  const det = m11 * m22 - m12 * m12;
+  if (!(det > 0)) return null;
+  // 中心 s = −M⁻¹g、そこでの F の最小値 k0 = k − gᵀM⁻¹g
+  const s1 = -(m22 * g1 - m12 * g2) / det;
+  const s2 = -(-m12 * g1 + m11 * g2) / det;
+  const k0 = q(w, w) + g1 * s1 + g2 * s2;
+  const rest = 1 - k0;
+  if (!(rest > 0)) return null;
+  // M の固有分解（2×2 対称）。主軸の半長は √(rest/λ)。
+  const tr = m11 + m22;
+  const disc = Math.sqrt(Math.max(0, ((m11 - m22) / 2) ** 2 + m12 * m12));
+  const l1 = tr / 2 + disc;
+  const l2 = tr / 2 - disc;
+  const theta = 0.5 * Math.atan2(2 * m12, m11 - m22); // l1 に属する固有ベクトルの角度
+  const e1: [number, number] = [Math.cos(theta), Math.sin(theta)];
+  const e2: [number, number] = [-Math.sin(theta), Math.cos(theta)];
+  const world = (e: [number, number]): Vec3 => [
+    e[0] * u[0] + e[1] * v[0],
+    e[0] * u[1] + e[1] * v[1],
+    e[0] * u[2] + e[1] * v[2],
+  ];
+  return {
+    center: [origin[0] + s1 * u[0] + s2 * v[0], origin[1] + s1 * u[1] + s2 * v[1], origin[2] + s1 * u[2] + s2 * v[2]],
+    axes: [
+      { dir: world(e1), half: Math.sqrt(rest / l1) },
+      { dir: world(e2), half: Math.sqrt(rest / l2) },
+    ],
+  };
+}
+
+/**
+ * ROI と平面の断面の輪郭（世界座標の閉じた点列、`n` 点）。交わらなければ null。
+ * 平面は 点 `origin`＋面内の直交単位基底 `u`, `v`。楕円体は {@link ellipsoidSection} を `n` 分割、
+ * 直方体は 12 辺と平面の交点を面内の角度順に並べる。
+ */
+export function sectionOutline(b: Pick<Roi3dBox, "shape" | "center" | "size">, origin: Vec3, u: Vec3, v: Vec3, n = 64): Vec3[] | null {
+  if (b.shape === "ellipsoid") {
+    const e = ellipsoidSection(b, origin, u, v);
+    if (!e) return null;
+    const [A, B] = e.axes;
+    const pts: Vec3[] = [];
+    for (let i = 0; i < n; i++) {
+      const th = (2 * Math.PI * i) / n;
+      const ca = Math.cos(th) * A.half;
+      const sb = Math.sin(th) * B.half;
+      pts.push([
+        e.center[0] + ca * A.dir[0] + sb * B.dir[0],
+        e.center[1] + ca * A.dir[1] + sb * B.dir[1],
+        e.center[2] + ca * A.dir[2] + sb * B.dir[2],
+      ]);
+    }
+    return pts;
+  }
+  const nrm = cross3(u, v);
+  const corner = (i: number): Vec3 => [
+    b.center[0] + (i & 1 ? 1 : -1) * (b.size[0] / 2),
+    b.center[1] + (i & 2 ? 1 : -1) * (b.size[1] / 2),
+    b.center[2] + (i & 4 ? 1 : -1) * (b.size[2] / 2),
+  ];
+  const dist = (p: Vec3): number => dot3([p[0] - origin[0], p[1] - origin[1], p[2] - origin[2]], nrm);
+  const hits: Vec3[] = [];
+  for (let i = 0; i < 8; i++) {
+    for (const bit of [1, 2, 4]) {
+      if (i & bit) continue; // 各辺を 1 回だけ（i が小さい側から）
+      const p = corner(i);
+      const q = corner(i | bit);
+      const dp = dist(p);
+      const dq = dist(q);
+      if (dp * dq > 0) continue; // 同じ側
+      if (dp === 0 && dq === 0) continue; // 辺が平面内: 端点は他の辺で拾う
+      const t = dp === dq ? 0 : dp / (dp - dq);
+      hits.push([p[0] + t * (q[0] - p[0]), p[1] + t * (q[1] - p[1]), p[2] + t * (q[2] - p[2])]);
+    }
+  }
+  const uniq: Vec3[] = [];
+  for (const h of hits) if (!uniq.some((x) => Math.hypot(x[0] - h[0], x[1] - h[1], x[2] - h[2]) < 1e-9)) uniq.push(h);
+  if (uniq.length < 3) return null;
+  const cen: Vec3 = [0, 1, 2].map((i) => uniq.reduce((a, p) => a + p[i], 0) / uniq.length) as Vec3;
+  const ang = (p: Vec3): number => Math.atan2(dot3([p[0] - cen[0], p[1] - cen[1], p[2] - cen[2]], v), dot3([p[0] - cen[0], p[1] - cen[1], p[2] - cen[2]], u));
+  return uniq.sort((a, b2) => ang(a) - ang(b2));
 }

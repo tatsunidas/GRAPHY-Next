@@ -17,13 +17,14 @@ import { cache, imageLoader, metaData } from "@cornerstonejs/core";
 import { annotation as csAnnotation, segmentation as csSeg, Enums as csToolsEnums } from "@cornerstonejs/tools";
 import { createResultSeg, resolveRoiStack, setScopeZFromForeground } from "./roiBooleanOps";
 import { getRoiMaskMeta, setRoiMaskMeta } from "./roiMaskStore";
-import { addSphere3D, getSphere3D } from "./sphere3dStore";
+import { addRoi3d, getRoi3d, newRoi3dId } from "./roiLedger";
+import { containsPoint, sectionOutline, sphereSolid, type Roi3dBox } from "./roi3dBox";
 import { getModalityCalibration, readModalitySlice, resolveValueUnit } from "./pixelCalibration";
 import { accumulateMaskStats, collectMaskValues, isSegmentForeground, type MaskSliceInput } from "./maskStatsCore";
 import { maskVoxelDumpCsvChunks, type MaskDumpSlice } from "./maskVoxelDump";
 import { roiHistogram, summarizeValues, type RoiValueStats } from "./roiStats";
 import type { HistogramData } from "./histogram";
-import { worldToImageOnPlane, type PlaneGeometry } from "./imageCoords";
+import { imageToWorldOnPlane, worldToImageOnPlane, type PlaneGeometry } from "./imageCoords";
 import { ensureStackMetadata, maskDepthContext } from "./maskVolume";
 import { maskVolumeFromLabels, type MaskDepthContext, type MaskMeshVolume } from "./depthVolume";
 
@@ -37,17 +38,6 @@ function img(id: string): any {
 }
 
 type V3 = [number, number, number];
-const sub = (a: V3, b: V3): V3 => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
-const dot = (a: V3, b: V3): number => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
-const cross = (a: V3, b: V3): V3 => [
-  a[1] * b[2] - a[2] * b[1],
-  a[2] * b[0] - a[0] * b[2],
-  a[0] * b[1] - a[1] * b[0],
-];
-const norm = (a: V3): V3 => {
-  const n = Math.hypot(a[0], a[1], a[2]) || 1;
-  return [a[0] / n, a[1] / n, a[2] / n];
-};
 
 interface Plane {
   ipp: V3;
@@ -88,24 +78,21 @@ function worldToPx(p: Plane, w: V3): [number, number] {
 }
 
 /**
- * 3D 球（中心 world + 半径 mm）をボリューム labelmap にラスタ化し新規 Mask を返す（GRAPHY SphereRoi3D→mask）。
- * `refImageId` は球が属するスタックを解決するための任意の 1 スライス imageId（作成スライス等）。
- * 解決不能/交差ゼロなら null。`scopeFromId` があれば meta(patient/series/scope) を継承。
+ * 3D の solid（楕円体・直方体、患者座標 mm）をボリューム labelmap にラスタ化し新規 Mask を返す。
+ * `refImageId` は solid が属するスタックを解決するための任意の 1 スライス imageId（作成スライス等）。
+ * 各スライスで**画素中心の world 位置**が solid の内側（境界を含む）なら前景。解決不能/交差ゼロなら null。
+ * `scopeFromId` があれば meta(patient/series/scope) を継承。
  */
-export async function rasterizeSphereToMask(
-  center: V3,
-  radiusMm: number,
+export async function rasterizeSolidToMask(
+  solid: Pick<Roi3dBox, "shape" | "center" | "size">,
   refImageId: string,
   label: string,
   scopeFromId?: string,
 ): Promise<string | null> {
-  if (!(radiusMm > 0)) return null;
   const stack = resolveRoiStack(refImageId);
   if (!stack) return null;
   const planes = stack.sourceIds.map(planeOf);
   if (planes.some((p) => !p)) return null;
-  const p0 = planes[0] as Plane;
-  const normal = norm(cross(p0.rowCos, p0.colCos));
 
   const res = await createResultSeg(stack.sourceIds, stack.viewportIds, label, scopeFromId ?? "");
   if (!res) return null;
@@ -113,21 +100,20 @@ export async function rasterizeSphereToMask(
   const modified: number[] = [];
   for (let z = 0; z < stack.sourceIds.length; z++) {
     const pl = planes[z] as Plane;
-    const d = dot(sub(center, pl.ipp), normal); // 球中心からスライス平面までの符号付き距離
-    if (Math.abs(d) > radiusMm) continue;
-    const crossR = Math.sqrt(Math.max(0, radiusMm * radiusMm - d * d)); // 断面円半径(mm)
+    // この平面との断面の外接矩形（画素）だけを走査する。交わらないスライスは飛ばす。
+    const outline = sectionOutline(solid, pl.ipp, pl.rowCos, pl.colCos, 64);
+    if (!outline) continue;
     const vm = img(res.labelmapIds[z])?.voxelManager;
     const cols = pl.cols, rows = pl.rows;
     if (!vm || !cols || !rows) continue;
-    const [cx, cy] = worldToPx(pl, center);
-    const rx = crossR / pl.colSp, ry = crossR / pl.rowSp; // 画素半径（x は列間隔・y は行間隔）
-    const x0 = Math.max(0, Math.floor(cx - rx)), x1 = Math.min(cols - 1, Math.ceil(cx + rx));
-    const y0 = Math.max(0, Math.floor(cy - ry)), y1 = Math.min(rows - 1, Math.ceil(cy + ry));
+    const px = outline.map((w) => worldToPx(pl, w));
+    const x0 = Math.max(0, Math.floor(Math.min(...px.map((q) => q[0])) - 1)), x1 = Math.min(cols - 1, Math.ceil(Math.max(...px.map((q) => q[0])) + 1));
+    const y0 = Math.max(0, Math.floor(Math.min(...px.map((q) => q[1])) - 1)), y1 = Math.min(rows - 1, Math.ceil(Math.max(...px.map((q) => q[1])) + 1));
+    const geom = { imagePositionPatient: pl.ipp, rowCosines: pl.rowCos, columnCosines: pl.colCos, rowPixelSpacing: pl.rowSp, columnPixelSpacing: pl.colSp };
     let touched = false;
     for (let y = y0; y <= y1; y++) {
       for (let x = x0; x <= x1; x++) {
-        const nx = (x + 0.5 - cx) / (rx || 0.5), ny = (y + 0.5 - cy) / (ry || 0.5);
-        if (nx * nx + ny * ny <= 1) {
+        if (containsPoint(solid, imageToWorldOnPlane(geom, [x + 0.5, y + 0.5]))) {
           vm.setAtIndex(y * cols + x, 1);
           touched = true;
         }
@@ -163,43 +149,45 @@ function circleParams(annotationUid: string): { center: V3; radiusMm: number; re
 export async function sphereFromCircleRoi(annotationUid: string): Promise<string | null> {
   const p = circleParams(annotationUid);
   if (!p) return null;
-  return rasterizeSphereToMask(p.center, p.radiusMm, p.refId, p.label || "Sphere", annotationUid);
+  return rasterizeSolidToMask(sphereSolid("", p.center, p.radiusMm), p.refId, p.label || "Sphere", annotationUid);
 }
 
 /**
- * 円 ROI から**パラメトリック 3D 球（Sphere3D）**を作成しストアへ登録（全スライスにライブ断面円プレビュー）。
- * 患者/シリーズ/scope は円 ROI のメタ（作成時に紐付け済）から継承。作成した sphereId を返す。
+ * 円 ROI から**パラメトリック 3D 球**（3 軸が等しい楕円体の solid）を作り台帳へ登録する
+ * （全スライスにライブ断面プレビュー。保存対象）。シリーズ/scope は円 ROI のメタ（作成時に紐付け済）から継承。
+ * 作成した solid の id を返す。
  */
 export function createSphere3DFromCircleRoi(annotationUid: string): string | null {
   const p = circleParams(annotationUid);
   if (!p) return null;
   const meta = getRoiMaskMeta(annotationUid);
   const sc = meta?.scope;
-  return addSphere3D({
+  const id = newRoi3dId();
+  addRoi3d({
+    ...sphereSolid(id, p.center, p.radiusMm),
     studyUid: sc?.studyUid ?? "",
     seriesUid: sc?.seriesUid ?? "",
     refImageId: p.refId,
-    center: p.center,
-    radiusMm: p.radiusMm,
     c: sc?.c ?? "all",
     t: sc?.t ?? "all",
-    patientKey: meta?.patientKey ?? "",
     seriesLabel: meta?.seriesLabel,
+    patientKey: meta?.patientKey ?? "",
     label: p.label || "Sphere",
     color: "#00e5ff",
     visible: true,
   });
+  return id;
 }
 
-/** パラメトリック Sphere3D を Mask にラスタ化（焼き込み）。patient/series/scope を継承。 */
-export async function bakeSphere3D(sphereId: string): Promise<string | null> {
-  const s = getSphere3D(sphereId);
-  if (!s) return null;
-  const segId = await rasterizeSphereToMask(s.center, s.radiusMm, s.refImageId, s.label || "Sphere");
+/** 台帳の solid（楕円体・直方体）を Mask にラスタ化（焼き込み）。patient/series/scope を継承。 */
+export async function bakeSolid3D(solidId: string, patientKey: string): Promise<string | null> {
+  const s = getRoi3d(solidId);
+  if (!s?.refImageId) return null;
+  const segId = await rasterizeSolidToMask(s, s.refImageId, s.label || "Sphere");
   if (!segId) return null;
-  const scope = { studyUid: s.studyUid, seriesUid: s.seriesUid, z: "all" as const, c: s.c, t: s.t };
+  const scope = { studyUid: s.studyUid ?? "", seriesUid: s.seriesUid ?? "", z: "all" as const, c: s.c ?? "all", t: s.t ?? "all" };
   setRoiMaskMeta(segId, {
-    patientKey: s.patientKey,
+    patientKey,
     seriesLabel: s.seriesLabel,
     scope,
     origin: scope,

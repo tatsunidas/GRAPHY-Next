@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
   boxFromDiagonal,
+  containsPoint,
+  ellipsoidSection,
+  sectionOutline,
+  solidRadius,
+  sphereSolid,
+  type Vec3,
   formatMl,
   formulaText,
   outOfBounds,
@@ -151,5 +157,111 @@ describe("sanitizeSolid / mergeSolids", () => {
   it("和を取り、墓標の id は除き、順序は id で決定的", () => {
     const m = mergeSolids([s("z", "t"), s("b", "t")], [s("a", "t"), s("b", "t")], new Set(["z"]));
     expect(m.map((x) => x.id)).toEqual(["a", "b"]);
+  });
+});
+
+describe("球・断面・包含（G0b）", () => {
+  const X: Vec3 = [1, 0, 0];
+  const Y: Vec3 = [0, 1, 0];
+  const sphere = (c: Vec3, r: number) => sphereSolid("s", c, r);
+  const halves = (e: NonNullable<ReturnType<typeof ellipsoidSection>>) => e.axes.map((a) => a.half).sort((a, b) => a - b);
+
+  it("sphereSolid / solidRadius: 等軸の楕円体だけが半径を持つ", () => {
+    const s = sphere([1, 2, 3], 7);
+    expect(s.size).toEqual([14, 14, 14]);
+    expect(solidRadius(s)).toBe(7);
+    expect(solidRadius({ shape: "ellipsoid", size: [20, 10, 10] })).toBeNull();
+    expect(solidRadius({ shape: "box", size: [10, 10, 10] })).toBeNull();
+  });
+
+  it("球の断面は半径 √(r²−d²) の円（r=10, d=6 → 8）", () => {
+    const e = ellipsoidSection(sphere([0, 0, 0], 10), [0, 0, 6], X, Y)!;
+    expect(halves(e)[0]).toBeCloseTo(8, 9);
+    expect(halves(e)[1]).toBeCloseTo(8, 9);
+    expect(e.center).toEqual([0, 0, 6]);
+  });
+
+  it("面が中心から外れていても断面の中心は ROI 中心の射影（中心 (5,5,5), z=8, r=10 → (5,5,8), 半径 √91）", () => {
+    const e = ellipsoidSection(sphere([5, 5, 5], 10), [0, 0, 8], X, Y)!;
+    expect(e.center[0]).toBeCloseTo(5, 9);
+    expect(e.center[1]).toBeCloseTo(5, 9);
+    expect(e.center[2]).toBeCloseTo(8, 9);
+    expect(halves(e)[1]).toBeCloseTo(Math.sqrt(91), 9);
+  });
+
+  it("負例: 接する（d=r）・離れる（d>r）は null", () => {
+    expect(ellipsoidSection(sphere([0, 0, 0], 10), [0, 0, 10], X, Y)).toBeNull();
+    expect(ellipsoidSection(sphere([0, 0, 0], 10), [0, 0, 11], X, Y)).toBeNull();
+    expect(ellipsoidSection(sphere([0, 0, 0], 10), [0, 0, -10.5], X, Y)).toBeNull();
+  });
+
+  it("非等軸（半軸 10/5/5）: z=0 で 10×5、z=3 で 0.8 倍の 8×4", () => {
+    const b = { center: [0, 0, 0] as Vec3, size: [20, 10, 10] as Vec3 };
+    expect(halves(ellipsoidSection(b, [0, 0, 0], X, Y)!)).toEqual([expect.closeTo(5, 9), expect.closeTo(10, 9)]);
+    expect(halves(ellipsoidSection(b, [0, 0, 3], X, Y)!)).toEqual([expect.closeTo(4, 9), expect.closeTo(8, 9)]);
+  });
+
+  it("斜めの面: 半軸 10/5/5 を y 軸のまわりに 30° 傾けた面 → 半長 5 と 1/√(0.0175)", () => {
+    const c = Math.cos(Math.PI / 6);
+    const s = Math.sin(Math.PI / 6);
+    const e = ellipsoidSection({ center: [0, 0, 0], size: [20, 10, 10] }, [0, 0, 0], [c, 0, s], Y)!;
+    expect(halves(e)[0]).toBeCloseTo(5, 9);
+    expect(halves(e)[1]).toBeCloseTo(1 / Math.sqrt(0.0175), 9);
+    // 主軸の方向は単位ベクトルで、面内にある（法線 (−s,0,c) と直交）
+    for (const a of e.axes) {
+      expect(Math.hypot(...a.dir)).toBeCloseTo(1, 9);
+      expect(-s * a.dir[0] + c * a.dir[2]).toBeCloseTo(0, 9);
+    }
+  });
+
+  it("輪郭点は楕円体の表面上にある（全点で Σ((p−c)/半軸)² = 1）", () => {
+    const b = { shape: "ellipsoid" as const, center: [3, -2, 4] as Vec3, size: [20, 10, 14] as Vec3 };
+    const c = Math.cos(0.4);
+    const s = Math.sin(0.4);
+    const pts = sectionOutline(b, [3, -2, 5], [c, s, 0], [-s, c, 0], 32)!;
+    expect(pts).toHaveLength(32);
+    for (const p of pts) {
+      const f = ((p[0] - 3) / 10) ** 2 + ((p[1] + 2) / 5) ** 2 + ((p[2] - 4) / 7) ** 2;
+      expect(f).toBeCloseTo(1, 9);
+    }
+  });
+
+  it("直方体の断面: 軸平行なら 4 点の矩形、体対角に垂直な面は正六角形、離れれば null", () => {
+    const b = { shape: "box" as const, center: [0, 0, 0] as Vec3, size: [10, 10, 10] as Vec3 };
+    const sq = sectionOutline(b, [0, 0, 2], X, Y)!;
+    expect(sq).toHaveLength(4);
+    for (const p of sq) {
+      expect(Math.abs(p[0])).toBeCloseTo(5, 9);
+      expect(Math.abs(p[1])).toBeCloseTo(5, 9);
+      expect(p[2]).toBeCloseTo(2, 9);
+    }
+    const k = 1 / Math.sqrt(2);
+    const kk = 1 / Math.sqrt(6);
+    const hex = sectionOutline(b, [0, 0, 0], [k, -k, 0], [kk, kk, -2 * kk])!; // 面の法線 ∝ (1,1,1)
+    expect(hex).toHaveLength(6);
+    const radii = hex.map((p) => Math.hypot(...p));
+    for (const r of radii) expect(r).toBeCloseTo(5 * Math.SQRT2, 9); // 頂点は辺の中点（例 (5,−5,0)）= 中心から 5√2
+    expect(sectionOutline(b, [0, 0, 6], X, Y)).toBeNull();
+  });
+
+  it("containsPoint: 楕円体と直方体の境界（内側・境界は真、外は偽）", () => {
+    const e = { shape: "ellipsoid" as const, center: [0, 0, 0] as Vec3, size: [20, 10, 10] as Vec3 };
+    expect(containsPoint(e, [10, 0, 0])).toBe(true);
+    expect(containsPoint(e, [10.001, 0, 0])).toBe(false);
+    expect(containsPoint(e, [7, 3.5, 0])).toBe(true); // 0.49 + 0.49 = 0.98
+    expect(containsPoint(e, [7.5, 3.5, 0])).toBe(false); // 0.5625 + 0.49 > 1
+    const b = { shape: "box" as const, center: [1, 1, 1] as Vec3, size: [4, 4, 4] as Vec3 };
+    expect(containsPoint(b, [3, 3, 3])).toBe(true);
+    expect(containsPoint(b, [3.001, 1, 1])).toBe(false);
+  });
+
+  it("sanitizeSolid の c/t/refImageId: 'all'・0 以上の整数は通り、負・小数・文字列は落ちる（他の項目は無傷）", () => {
+    const base = { id: "a", shape: "ellipsoid", center: [0, 0, 0], size: [2, 2, 2] };
+    expect(sanitizeSolid({ ...base, c: "all", t: 3, refImageId: "x", seriesLabel: "L" })).toMatchObject({ c: "all", t: 3, refImageId: "x", seriesLabel: "L" });
+    const bad = sanitizeSolid({ ...base, c: -1, t: 1.5 })!;
+    expect(bad.c).toBeUndefined();
+    expect(bad.t).toBeUndefined();
+    expect(sanitizeSolid({ ...base, c: "0" })!.c).toBeUndefined();
+    expect(bad.id).toBe("a");
   });
 });
