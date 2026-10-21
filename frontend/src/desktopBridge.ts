@@ -43,6 +43,18 @@ export interface GpuStatus {
   devices: { vendorId: number; deviceId: number; active: boolean }[];
 }
 
+/** 描画に使う GPU の選択。auto＝OS の既定、high＝高性能 GPU。 */
+export type RenderGpuChoice = "auto" | "high";
+
+export interface RenderPrefsState {
+  platform: string;
+  prefs: { gpu: RenderGpuChoice };
+  /** 設定の節を出せるか（GPU が 2 つ以上。Linux は NVIDIA ドライバが GPU を持つこと）。 */
+  supported: boolean;
+  /** この起動で、高性能 GPU の指定を実際に付けたか。保存した値との食い違い＝再起動待ち。 */
+  appliedHigh: boolean;
+}
+
 /** 秘密情報の状態。**値そのものは決して返らない**（main プロセスから出さない設計）。 */
 export interface SecretStatus {
   /** 設定済みか。 */
@@ -277,6 +289,9 @@ export interface GraphyDesktop {
   getMemoryInfo?: () => Promise<MemoryInfo>;
   /** Chromium の GPU 機能状態と GPU 一覧（描画環境の自己診断用、デスクトップのみ）。 */
   getGpuStatus?: () => Promise<GpuStatus>;
+  /** 描画に使う GPU の選択（設定＞描画環境。ハイブリッド GPU の機械だけ。反映は再起動）。デスクトップのみ。 */
+  getRenderPrefs?: () => Promise<RenderPrefsState>;
+  setRenderPrefs?: (prefs: { gpu: RenderGpuChoice }) => Promise<{ ok: boolean; reason?: string }>;
   /** 外部 URL / mailto を OS の既定アプリ（ブラウザ・メーラ）で開く。 */
   openExternal?: (url: string) => void;
   /** GitHub Releases の最新リリース情報を取得（更新確認、デスクトップのみ）。失敗時 null。 */

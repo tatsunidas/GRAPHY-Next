@@ -46,6 +46,7 @@ const { createColabApi } = require("./colabApi");
 const { createColabRuntimes } = require("./colabRuntimes");
 const { createGdriveAuth, REFRESH_KEY: GDRIVE_REFRESH_KEY } = require("./gdriveAuth");
 const gdrivePicker = require("./gdrivePicker");
+const renderPrefs = require("./renderPrefs");
 const { createBackupFolder, describeBackupFolder } = require("./gdriveFolder");
 const gdriveMode = require("./gdriveMode");
 
@@ -198,6 +199,8 @@ function resolveDataDir() {
   }
   return dir;
 }
+
+let renderPrefsApplied = { env: {}, switches: [] };
 
 /** 同梱の公式プラグインの置き場を backend に渡す引数（無ければ空）。開発では GRAPHY_BUNDLED_PLUGINS_DIR で試せる。 */
 function bundledPluginsArgs() {
@@ -805,6 +808,30 @@ ipcMain.handle("graphy:gpu-status", async () => {
     /* 同上 */
   }
   return { featureStatus, devices };
+});
+
+// 描画に使う GPU の選択（設定＞描画環境）。supported は GPU 一覧が要るので ready 後にここで返す。
+// applied は「この起動で実際に付けたか」（保存した値との食い違い＝再起動待ちを画面が見せる）。
+ipcMain.handle("graphy:render-prefs-get", async () => {
+  let devices = [];
+  try {
+    const info = await app.getGPUInfo("basic");
+    devices = Array.isArray(info?.gpuDevice) ? info.gpuDevice : [];
+  } catch {
+    /* 取れなければ空＝節を出さない */
+  }
+  return {
+    platform: process.platform,
+    prefs: renderPrefs.load(resolveDataDir()),
+    supported: renderPrefs.supported({ platform: process.platform, devices, nvidiaGpuCount: renderPrefs.nvidiaGpuCount() }),
+    appliedHigh: Object.keys(renderPrefsApplied.env).length > 0 || renderPrefsApplied.switches.length > 0,
+  };
+});
+
+ipcMain.handle("graphy:render-prefs-set", (_e, payload) => {
+  const gpu = payload && payload.gpu;
+  if (!renderPrefs.VALUES.includes(gpu)) return { ok: false, reason: "bad-value" };
+  return { ok: renderPrefs.save(resolveDataDir(), { gpu }) };
 });
 
 // 外部 URL / mailto を OS の既定アプリ（ブラウザ・メーラ）で開く（Help メニューのリンク等）。
@@ -2137,6 +2164,41 @@ function relaunchApp() {
   }
   app.quit();
 }
+// 描画に使う GPU の選択（設定＞描画環境）を、GPU プロセスが生まれる前（ready の前）に付ける。保存先は resolveDataDir()
+// （開発では GRAPHY_DEV_DATA_DIR）。壊れていても起動は止めない（auto になる）。
+//   Windows・macOS … Chromium のスイッチ（force_high_performance_gpu）。ここで付ければ足りる。
+//   Linux … PRIME オフロードの環境変数。**GPU プロセスは起動直後に作られる zygote から生まれ、zygote の環境は main.js が動く前に
+//     決まる**ので、ここで process.env に足しても効かない（実測 2026-10-21。--no-zygote なら効くが、サンドボックスを切ることになる）。
+//     そのため環境変数が無い起動では、足してから 1 回だけ起動し直す（GRAPHY_RENDER_REEXEC で繰り返さない）。起動し直しは
+//     app.relaunch が今の環境変数を引き継ぐ（実測）。開発起動（scripts/dev-desktop.sh）は起動し直せない（スクリプトが終了コードを
+//     見て Vite を止める）ので、スクリプトが起動前に環境変数を足す（renderPrefsEnv.js）。付いていない開発起動は OS の既定のまま動く。
+// 付けた環境変数は子プロセス（backend・Jupyter）にも引き継がれるが、描画（GL・Vulkan）にしか効かない。
+function applyRenderPrefsAtStartup() {
+  try {
+    const plan = renderPrefs.applyPlan(renderPrefs.load(resolveDataDir()), {
+      platform: process.platform,
+      nvidiaPresent: renderPrefs.nvidiaGpuCount() > 0,
+    });
+    for (const s of plan.switches) app.commandLine.appendSwitch(s);
+    const missing = Object.entries(plan.env).filter(([k, v]) => process.env[k] !== v);
+    for (const [k, v] of missing) process.env[k] = v;
+    renderPrefsApplied = { env: plan.env, switches: plan.switches };
+    if (missing.length === 0) return;
+    if (DEV_RELAUNCH_EXIT > 0 || process.env.GRAPHY_RENDER_REEXEC === "1") {
+      // 効いていない起動。「高性能 GPU を使っている」と画面に出さない
+      renderPrefsApplied = { env: {}, switches: plan.switches };
+      console.warn("[render-prefs] 環境変数が起動前に付いていないため、この起動では高性能 GPU になりません（開発は make dev-desktop 経由で起動してください）");
+      return;
+    }
+    process.env.GRAPHY_RENDER_REEXEC = "1";
+    relaunchApp();
+    app.exit(0);
+  } catch (e) {
+    console.error("[render-prefs] 適用できませんでした（OS の既定で起動します）:", e && e.message);
+  }
+}
+applyRenderPrefsAtStartup();
+
 // before-quit の後始末（Colab の解放・backend の停止）が済んだあとに、終了コードを付けて終える
 app.on("will-quit", (event) => {
   if (!devRelaunchRequested) return;

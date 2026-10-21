@@ -13,6 +13,7 @@ import { loadRenderEnvSummary } from "../viewer/renderEnvReport";
 import type { SelfTestRun } from "../viewer/render3dSelfTest";
 import { fetchStatus } from "../api";
 import { SelfTestSection } from "./SelfTestSection";
+import { RenderGpuPick } from "./RenderGpuPick";
 
 const GB = 1024 * 1024 * 1024;
 
@@ -139,6 +140,7 @@ export function RenderEnvPanel() {
           </span>
         )}
       </div>
+      <RenderGpuPick />
       <h4 style={sectionHead}>{t("selftest.title")}</h4>
       <p style={note}>{t("selftest.intro")}</p>
       <SelfTestSection kind={s.kind} onResult={setSelfTest} />

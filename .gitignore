@@ -48,6 +48,8 @@ deploy/demo/.env
 
 # Electron 起動時(CWD=desktop)に backend が作るランタイムデータ
 desktop/data/
+# 描画に使う GPU の選択（開発起動の CWD=desktop に作られる）
+desktop/render-prefs.json
 # プラグインの導入先（graphy.plugins.dir=./plugins が CWD 相対で作られる）と台帳
 desktop/plugins/
 # 外部 AI の API キー保管庫（OS キーチェーンが使えない環境でここへ暗号化して置く）。
