@@ -260,6 +260,9 @@ export function ComputeJobsScreen() {
           {ended && j.state === "DONE" && j.collectedAt == null && (
             <span style={{ color: "#667" }}> · {t("computeJobs.uncollected")}</span>
           )}
+          {ended && j.state === "DONE" && j.collectedAt != null && (
+            <span data-testid={`computejobs-collected-${j.id}`} style={{ color: "#667" }}> · {t("computeJobs.collected")}</span>
+          )}
         </td>
         <td style={td}>
           {isCancellable(j.state) && (

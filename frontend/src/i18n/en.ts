@@ -99,6 +99,7 @@ export const en: Record<string, string> = {
   "system.log": "Log",
   "system.memoryMonitor": "Memory Monitor",
   "computeJobs.menu": "Compute Jobs…",
+  "computeJobs.collected": "collected",
   "computeJobs.awake": "Keeping the PC awake while computing",
   "computeJobs.resume": "Resume",
   "computeJobs.cancelBatch": "Cancel batch",

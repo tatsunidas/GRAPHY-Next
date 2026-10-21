@@ -99,6 +99,7 @@ export const ja: Record<string, string> = {
   "system.log": "ログ",
   "system.memoryMonitor": "メモリモニタ",
   "computeJobs.menu": "計算ジョブ…",
+  "computeJobs.collected": "受け取り済み",
   "computeJobs.awake": "計算中のため眠りを止めています",
   "computeJobs.resume": "再開",
   "computeJobs.cancelBatch": "一括を中止",
