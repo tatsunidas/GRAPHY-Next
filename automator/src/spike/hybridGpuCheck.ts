@@ -28,6 +28,14 @@ import { createChecker } from "./computeSpikeShared.js";
 const { check, summary } = createChecker();
 const OUT_DIR = path.join(AUTOMATOR_ROOT, ".results", "hybrid-gpu-check");
 const PREFS = path.join(AUTOMATOR_ROOT, "..", "desktop", "render-prefs.json");
+const STATE = path.join(AUTOMATOR_ROOT, "..", "desktop", "render-gpu-state.json");
+const readState = (): { status?: string; reason?: string } | null => {
+  try {
+    return JSON.parse(fs.readFileSync(STATE, "utf8"));
+  } catch {
+    return null;
+  }
+};
 
 /** scripts/dev-desktop.sh が Electron の起動前に足すのと同じ環境変数（renderPrefsEnv.js の出力）。 */
 const devScriptEnv = (): Record<string, string> => {
@@ -83,8 +91,8 @@ async function openRenderEnv(page: Page): Promise<void> {
   await page.getByTestId("renderenv-panel").waitFor({ state: "visible", timeout: 15_000 });
 }
 
-async function launch(label: string, run: (d: DesktopDriver, page: Page, electronPid: number) => Promise<void>): Promise<void> {
-  const driver = new DesktopDriver({}, { extraEnv: devScriptEnv() });
+async function launch(label: string, run: (d: DesktopDriver, page: Page, electronPid: number) => Promise<void>, marker?: string): Promise<void> {
+  const driver = new DesktopDriver({}, { extraEnv: devScriptEnv(), ...(marker ? { extraElectronArgs: [`--graphy-spike-marker=${marker}`] } : {}) });
   try {
     await driver.start();
     const page = driver.page;
@@ -107,6 +115,7 @@ const pick = (page: Page) => page.getByTestId("renderenv-gpupick");
 async function main(): Promise<void> {
   fs.mkdirSync(OUT_DIR, { recursive: true });
   fs.rmSync(PREFS, { force: true });
+  fs.rmSync(STATE, { force: true });
   const smi = execFileSync("nvidia-smi", ["--query-gpu=name", "--format=csv,noheader"], { encoding: "utf8" }).trim();
   console.log(`  （前提）nvidia-smi: ${smi}`);
   let baselineNvidiaFree = false;
@@ -228,8 +237,81 @@ async function main(): Promise<void> {
       check((await pick(page).getAttribute("data-selected")) === "auto", "起動でき、「OS の既定」として扱う");
       check(!/NVIDIA/i.test((await gpuName(page)) ?? ""), "GPU は変わらない");
     });
+
+    // ── [6] フェイルセーフ: GPU プロセスが落ちたら、failed を残して OS の既定で起動し直す ──
+    console.log("\n[6] 高性能 GPU で起動 → GPU プロセスを落とす（SEGV）→ failed が残り、次は OS の既定");
+    fs.writeFileSync(PREFS, JSON.stringify({ gpu: "high" }), "utf8");
+    fs.rmSync(STATE, { force: true });
+    const m6 = `hgc-crash-${Date.now()}`;
+    await launch(
+      "6-crash",
+      async (_d, page, pid) => {
+        check(readState()?.status === "trying", "起動中は trying が書かれている（確定前）", readState());
+        const gpus = allPids().filter((p) => isDescendant(p, pid) && /--type=gpu-process/.test(argsOf(p)));
+        check(gpus.length > 0, "（前提）GPU プロセスがある", gpus);
+        check(smiPids().some((p) => gpus.includes(p)), "（前提）落とす前は nvidia-smi に出ている");
+        for (const g of gpus) process.kill(g, "SIGSEGV"); // 自分が起動したアプリの子孫だけ
+        for (let i = 0; i < 40 && readState()?.status !== "failed"; i++) await sleep(500);
+        check(readState()?.status === "failed", "🔴 GPU プロセスが落ちたら failed が残る", readState());
+        check(["crashed", "abnormal-exit"].includes(readState()?.reason ?? ""), "原因が記録される", readState()?.reason);
+      },
+      m6,
+    );
+    await sleep(3000);
+    check(pidsByMarker(m6).length > 0, "🔴 GPU が落ちたあと、アプリが自動で起動し直された（印の付いた別のプロセスが動いている）", pidsByMarker(m6).length);
+    // 自動で起動し直された側（駆動していない孤児）を片付ける。印の付いた自分のものだけ
+    for (const p of pidsByMarker(m6)) {
+      try {
+        process.kill(p, "SIGTERM");
+      } catch {
+        /* もう無い */
+      }
+    }
+    await sleep(3000);
+
+    console.log("\n[7] failed が残っている間は付けない・画面に理由・［もう一度試す］で戻る");
+    await launch("7-failed", async (_d, page, pid) => {
+      const fb = page.getByTestId("renderenv-gpupick-fallback");
+      check((await fb.count()) === 1 && (await fb.getAttribute("data-kind")) === "failed", "🔴 画面に「GPU が使えなかった」と出る", await fb.count());
+      await fb.scrollIntoViewIfNeeded();
+      await page.screenshot({ path: path.join(OUT_DIR, "7-failed-notice.png") });
+      check((await pick(page).getAttribute("data-selected")) === "high", "選択は高性能のまま（書き換えない）");
+      check(!/NVIDIA/i.test((await gpuName(page)) ?? ""), "🔴 failed の間は OS の既定で起動している", await gpuName(page));
+      check(smiPids().filter((p) => isDescendant(p, pid)).length === 0, "GPU プロセスは nvidia-smi に出ない（負例）");
+      check((await page.getByTestId("renderenv-gpupick-retry").count()) === 1, "［もう一度試す］が出る");
+      await page.getByTestId("renderenv-gpupick-retry").click();
+      await fb.waitFor({ state: "detached", timeout: 10_000 });
+      check(readState() === null, "もう一度試すで failed が消える", readState());
+      check((await pick(page).getAttribute("data-pending")) === "true", "再起動待ちが出る");
+    });
+    console.log("\n[7b] もう一度試す → 再起動で GPU に戻る・確定すると trying が消える（次回起動でも維持）");
+    await launch("7b-retried", async (_d, page, pid) => {
+      check((await page.getByTestId("renderenv-gpupick-fallback").count()) === 0, "通知が出ない");
+      check(/NVIDIA/i.test((await gpuName(page)) ?? ""), "🔴 GPU に戻る", await gpuName(page));
+      check(smiPids().some((p) => isDescendant(p, pid)), "GPU プロセスが nvidia-smi に出る");
+      check(readState()?.status === "trying", "確定前は trying", readState());
+    });
+    check(readState() === null, "🔴 正常終了で trying が消える（次の起動を未確定と見なさない）", readState());
+    await launch("7c-persist", async (_d, page) => {
+      check(/NVIDIA/i.test((await gpuName(page)) ?? ""), "🔴 閉じて開き直しても GPU のまま", await gpuName(page));
+      check((await page.getByTestId("renderenv-gpupick-fallback").count()) === 0, "通知なし");
+    });
+
+    console.log("\n[8] 強制終了・フリーズを模す（trying が残っている）→ 未確定として OS の既定で起動");
+    fs.writeFileSync(STATE, JSON.stringify({ status: "trying" }), "utf8");
+    await launch("8-unconfirmed", async (_d, page, pid) => {
+      const fb = page.getByTestId("renderenv-gpupick-fallback");
+      check((await fb.count()) === 1 && (await fb.getAttribute("data-kind")) === "unconfirmed", "🔴 「前回の起動が完了しなかった」と出る");
+      await fb.scrollIntoViewIfNeeded();
+      await page.screenshot({ path: path.join(OUT_DIR, "8-unconfirmed-notice.png") });
+      check(!/NVIDIA/i.test((await gpuName(page)) ?? ""), "🔴 OS の既定で起動している", await gpuName(page));
+      check(smiPids().filter((p) => isDescendant(p, pid)).length === 0, "GPU プロセスは nvidia-smi に出ない（負例）");
+      check(readState()?.status === "failed" && readState()?.reason === "unconfirmed", "failed(unconfirmed) に倒れて残る", readState());
+    });
+    check(readState()?.status === "failed", "未確定の起動を正常終了しても failed は消えない", readState());
   } finally {
     fs.rmSync(PREFS, { force: true });
+    fs.rmSync(STATE, { force: true });
   }
   if (summary() > 0) process.exitCode = 1;
 }

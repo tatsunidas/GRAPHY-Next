@@ -6,16 +6,20 @@ export function needsRestart(selected: RenderGpuChoice, appliedHigh: boolean): b
   return (selected === "high") !== appliedHigh;
 }
 
-/** 選択肢の「高性能 GPU」の文言のキー。Linux は NVIDIA 限定の仕組みなのでそう書く。 */
-export function highLabelKey(platform: string): "renderenv.gpuPick.highLinux" | "renderenv.gpuPick.high" {
-  return platform === "linux" ? "renderenv.gpuPick.highLinux" : "renderenv.gpuPick.high";
+/** 実機で効くことを確かめていない経路（Windows・macOS・Linux の AMD）では、検証中の注記を出す。 */
+export function showsUnverifiedNote(state: RenderPrefsState): boolean {
+  return state.unverified;
 }
 
-/** Windows・macOS は実機で効くか未確認なので、効果は環境によると添える。 */
-export function showsUnverifiedNote(platform: string): boolean {
-  return platform === "win32" || platform === "darwin";
-}
-
+/** GPU が見つからない起動でも、選択が高性能なら（理由を伝えるために）節を出す。 */
 export function visible(state: RenderPrefsState | null): state is RenderPrefsState {
-  return !!state && state.supported;
+  return !!state && (state.supported || state.prefs.gpu === "high" || state.fallback !== null);
+}
+
+/** 付けなかった理由の文言キー。［もう一度試す］が意味を持つのは、GPU が見つからないとき以外。 */
+export function fallbackKey(f: RenderPrefsState["fallback"]): "renderenv.gpuPick.fallback.missing" | "renderenv.gpuPick.fallback.unconfirmed" | "renderenv.gpuPick.fallback.failed" | null {
+  return f === null ? null : (`renderenv.gpuPick.fallback.${f}` as const);
+}
+export function canRetry(f: RenderPrefsState["fallback"]): boolean {
+  return f === "unconfirmed" || f === "failed";
 }

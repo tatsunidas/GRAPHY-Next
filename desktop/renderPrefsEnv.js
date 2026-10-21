@@ -4,9 +4,14 @@
 try {
   const rp = require("./renderPrefs");
   const { resolveDevDataDir } = require("./devDataDir");
-  const plan = rp.applyPlan(rp.load(resolveDevDataDir(process.env, false, process.cwd())), {
+  const dir = resolveDevDataDir(process.env, false, process.cwd());
+  // 前回 GPU が使えなかった（failed）間、前回の起動が確定しなかった（trying の残り）ときは付けない（main.js も同じ判断で OS の既定で起動する）
+  const { plan } = rp.decideStartup({
+    prefs: rp.load(dir),
+    state: rp.loadState(dir),
     platform: process.platform,
     nvidiaPresent: rp.nvidiaGpuCount() > 0,
+    amdPresent: rp.amdGpuPresent(),
   });
   for (const [k, v] of Object.entries(plan.env)) console.log(`export ${k}=${v}`);
 } catch {

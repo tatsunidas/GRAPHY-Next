@@ -7,7 +7,7 @@
 import { useEffect, useState } from "react";
 import { desktop, type RenderGpuChoice, type RenderPrefsState } from "../desktopBridge";
 import { useI18n } from "../i18n/i18n";
-import { highLabelKey, needsRestart, showsUnverifiedNote, visible } from "./renderGpuPickView";
+import { canRetry, fallbackKey, needsRestart, showsUnverifiedNote, visible } from "./renderGpuPickView";
 
 export function RenderGpuPick() {
   const { t } = useI18n();
@@ -32,14 +32,23 @@ export function RenderGpuPick() {
   const choose = async (gpu: RenderGpuChoice) => {
     setError(false);
     const r = await desktop()?.setRenderPrefs?.({ gpu });
-    if (r?.ok) setState({ ...state, prefs: { gpu } });
+    // 選択を変えると、前回の失敗・未確定の記録は main 側で消える。画面の通知も外す
+    if (r?.ok) setState({ ...state, prefs: { gpu }, fallback: null, fallbackReason: null });
     else setError(true);
   };
 
-  const pending = needsRestart(state.prefs.gpu, state.appliedHigh);
+  const retry = async () => {
+    setError(false);
+    const r = await desktop()?.retryRenderPrefs?.();
+    if (r?.ok) setState({ ...state, fallback: null, fallbackReason: null });
+    else setError(true);
+  };
+
+  // 付けなかった理由が出ている間は、再起動しても同じなので再起動待ちを出さない（［もう一度試す］で理由を消すと出る）
+  const pending = state.fallback === null && needsRestart(state.prefs.gpu, state.appliedHigh);
   const options: { value: RenderGpuChoice; label: string }[] = [
     { value: "auto", label: t("renderenv.gpuPick.auto") },
-    { value: "high", label: t(highLabelKey(state.platform)) },
+    { value: "high", label: t("renderenv.gpuPick.high") },
   ];
 
   return (
@@ -58,7 +67,18 @@ export function RenderGpuPick() {
           {o.label}
         </label>
       ))}
-      {showsUnverifiedNote(state.platform) && <p style={muted}>{t("renderenv.gpuPick.unverified")}</p>}
+      {fallbackKey(state.fallback) && (
+        <p style={{ ...muted, color: "#b00020" }} data-testid="renderenv-gpupick-fallback" data-kind={state.fallback ?? ""}>
+          {t(fallbackKey(state.fallback)!)}
+          {state.fallback === "failed" && state.fallbackReason ? ` (${state.fallbackReason})` : ""}{" "}
+          {canRetry(state.fallback) && (
+            <button style={btn} onClick={() => void retry()} data-testid="renderenv-gpupick-retry">
+              {t("renderenv.gpuPick.retry")}
+            </button>
+          )}
+        </p>
+      )}
+      {showsUnverifiedNote(state) && <p style={muted}>{t("renderenv.gpuPick.unverified")}</p>}
       {error && (
         <p style={{ ...muted, color: "#b00020" }} data-testid="renderenv-gpupick-error">
           {t("renderenv.gpuPick.saveFailed")}

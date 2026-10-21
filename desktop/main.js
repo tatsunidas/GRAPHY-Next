@@ -202,6 +202,8 @@ function resolveDataDir() {
 }
 
 let renderPrefsApplied = { env: {}, switches: [] };
+// 選択が high でも付けなかった理由（{kind: missing|unconfirmed|failed, reason}）。画面に伝える
+let renderGpuFallback = null;
 
 /** 同梱の公式プラグインの置き場を backend に渡す引数（無ければ空）。開発では GRAPHY_BUNDLED_PLUGINS_DIR で試せる。 */
 function bundledPluginsArgs() {
@@ -827,7 +829,15 @@ ipcMain.handle("graphy:render-prefs-get", async () => {
   return {
     platform: process.platform,
     prefs: renderPrefs.load(resolveDataDir()),
-    supported: renderPrefs.supported({ platform: process.platform, devices, nvidiaGpuCount: renderPrefs.nvidiaGpuCount() }),
+    supported: renderPrefs.supported({
+      platform: process.platform,
+      devices,
+      nvidiaGpuCount: renderPrefs.nvidiaGpuCount(),
+      amdPresent: renderPrefs.amdGpuPresent(),
+    }),
+    fallback: renderGpuFallback ? renderGpuFallback.kind : null,
+    fallbackReason: renderGpuFallback ? renderGpuFallback.reason : null,
+    unverified: renderPrefs.unverifiedGpu({ platform: process.platform, nvidiaPresent: renderPrefs.nvidiaGpuCount() > 0 }),
     appliedHigh: Object.keys(renderPrefsApplied.env).length > 0 || renderPrefsApplied.switches.length > 0,
   };
 });
@@ -835,8 +845,14 @@ ipcMain.handle("graphy:render-prefs-get", async () => {
 ipcMain.handle("graphy:render-prefs-set", (_e, payload) => {
   const gpu = payload && payload.gpu;
   if (!renderPrefs.VALUES.includes(gpu)) return { ok: false, reason: "bad-value" };
-  return { ok: renderPrefs.save(resolveDataDir(), { gpu }) };
+  // 選択を変えたら、前回の失敗・未確定の記録は引き継がない（auto にすれば GPU に関する記録を消す）
+  const ok = renderPrefs.save(resolveDataDir(), { gpu });
+  if (ok) renderPrefs.saveState(resolveDataDir(), null);
+  return { ok };
 });
+
+// 前回 GPU が使えなかった（または未確定だった）あとに、もう一度 GPU で試す。記録を消すだけで、反映は再起動
+ipcMain.handle("graphy:render-prefs-retry", () => ({ ok: renderPrefs.saveState(resolveDataDir(), null) }));
 
 // 外部 URL / mailto を OS の既定アプリ（ブラウザ・メーラ）で開く（Help メニューのリンク等）。
 // URL スキームは http(s) / mailto のみ許可（任意コマンド実行を避ける）。
@@ -2179,18 +2195,28 @@ function relaunchApp() {
 // 付けた環境変数は子プロセス（backend・Jupyter）にも引き継がれるが、描画（GL・Vulkan）にしか効かない。
 function applyRenderPrefsAtStartup() {
   try {
-    const plan = renderPrefs.applyPlan(renderPrefs.load(resolveDataDir()), {
+    const dir = resolveDataDir();
+    const decision = renderPrefs.decideStartup({
+      prefs: renderPrefs.load(dir),
+      state: renderPrefs.loadState(dir),
       platform: process.platform,
       nvidiaPresent: renderPrefs.nvidiaGpuCount() > 0,
+      amdPresent: renderPrefs.amdGpuPresent(),
+      continuing: process.env.GRAPHY_RENDER_REEXEC === "1",
     });
+    renderGpuFallback = decision.fallback ? { kind: decision.fallback, reason: decision.reason || null } : null;
+    if (decision.nextState !== "keep") renderPrefs.saveState(dir, decision.nextState);
+    if (decision.fallback) console.warn(`[render-prefs] GPU を付けずに OS の既定で起動します（${decision.fallback}${decision.reason ? `: ${decision.reason}` : ""}）`);
+    const plan = decision.plan;
     for (const s of plan.switches) app.commandLine.appendSwitch(s);
     const missing = Object.entries(plan.env).filter(([k, v]) => process.env[k] !== v);
     for (const [k, v] of missing) process.env[k] = v;
     renderPrefsApplied = { env: plan.env, switches: plan.switches };
     if (missing.length === 0) return;
     if (DEV_RELAUNCH_EXIT > 0 || process.env.GRAPHY_RENDER_REEXEC === "1") {
-      // 効いていない起動。「高性能 GPU を使っている」と画面に出さない
+      // 効いていない起動。「高性能 GPU を使っている」と画面に出さない。確定待ちの印も残さない
       renderPrefsApplied = { env: {}, switches: plan.switches };
+      renderPrefs.saveState(dir, null);
       console.warn("[render-prefs] 環境変数が起動前に付いていないため、この起動では高性能 GPU になりません（開発は make dev-desktop 経由で起動してください）");
       return;
     }
@@ -2202,6 +2228,45 @@ function applyRenderPrefsAtStartup() {
   }
 }
 applyRenderPrefsAtStartup();
+
+// GPU を付けて起動したあとの見張り（フェイルセーフ）。軽い処理だけ行う（状態ファイルを書いて起動し直すだけ）。
+//   - GPU プロセスが使えなくなったら、failed を書いて 1 回だけ OS の既定で起動し直す（起動し直した側は failed を見て付けない）
+//   - 15 秒、GPU プロセスの異常が無ければ「確定」として trying を消す。正常終了でも消す（強制終了・フリーズでは残り、次の起動が未確定と判断する）
+const RENDER_GPU_CONFIRM_MS = 15000;
+let renderGpuFailureHandled = false;
+const renderGpuIsHigh = () => Object.keys(renderPrefsApplied.env).length > 0 || renderPrefsApplied.switches.length > 0;
+function clearRenderTrying() {
+  try {
+    const dir = resolveDataDir();
+    const st = renderPrefs.loadState(dir);
+    if (st && st.status === "trying") renderPrefs.saveState(dir, null);
+  } catch {
+    /* 消せなければ次の起動が未確定と見なして OS の既定で起動する（安全側） */
+  }
+}
+app.on("child-process-gone", (_e, details) => {
+  if (!details || details.type !== "GPU" || !renderPrefs.isGpuFailure(details.reason)) return;
+  if (!renderGpuIsHigh() || renderGpuFailureHandled) return;
+  renderGpuFailureHandled = true;
+  console.warn(`[render-prefs] GPU プロセスが使えなくなりました（${details.reason}）。OS の既定で起動し直します`);
+  try {
+    renderPrefs.saveState(resolveDataDir(), { status: "failed", reason: details.reason });
+  } catch {
+    /* 書けなくても起動し直す。次の起動は trying の残りから未確定と判断する */
+  }
+  // app.relaunch は今の環境変数を引き継ぐので、付けた GPU の指定を外してから起動し直す
+  for (const k of [...Object.keys(renderPrefs.LINUX_ENV), ...Object.keys(renderPrefs.LINUX_ENV_AMD), "GRAPHY_RENDER_REEXEC"]) delete process.env[k];
+  relaunchApp();
+});
+app.whenReady().then(() => {
+  if (!renderGpuIsHigh()) return;
+  setTimeout(() => {
+    if (!renderGpuFailureHandled) clearRenderTrying();
+  }, RENDER_GPU_CONFIRM_MS).unref();
+});
+app.on("before-quit", () => {
+  if (!renderGpuFailureHandled) clearRenderTrying();
+});
 
 // before-quit の後始末（Colab の解放・backend の停止）が済んだあとに、終了コードを付けて終える
 app.on("will-quit", (event) => {
