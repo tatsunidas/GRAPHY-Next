@@ -12,7 +12,7 @@
  * 設計: `fw/roi-manager-design.md` / `fw/roi-mask-model.md` §10。
  */
 import { toggleRoiSelection } from "../viewer/roiInteriorGrab";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { eventTarget, getRenderingEngine, Enums as csEnums } from "@cornerstonejs/core";
 import {
   annotation as csAnnotation,
@@ -36,7 +36,8 @@ import { emitDbChanged } from "../dbEvents";
 import { combineRois, splitMask, roiToMask, withTempMask, isAreaRoi, resolveRoiStack, type BoolOp, type RoiOperand, type SplitConnectivity } from "../viewer/roiBooleanOps";
 import { buildRoiPanelModel, type MeasureRow, type PaintedRoiRow, type RoiPanelModel, type RoiRowEnv, type ShapeRoiRow } from "../viewer/roiRows";
 import { sphereFromCircleRoi, createSphere3DFromCircleRoi, bakeSolid3D, splitMaskToSlices, maskVolumeStats, type MaskVolumeStats } from "../viewer/roi3d";
-import { listRoi3d, updateRoi3d, removeRoi3d, subscribeRoi3d } from "../viewer/roiLedger";
+import { listRoi3d, updateRoi3d, removeRoi3d, subscribeRoi3d, selectRoi3d, selectedRoi3dId } from "../viewer/roiLedger";
+import { SolidRoiHeader, SolidRoiInfo } from "../viewer/solidRoiRows";
 import { solidRadius, withSize, type Roi3dBox } from "../viewer/roi3dBox";
 import { annotationsToImageJDtos } from "../viewer/imagejExport";
 import { importImageJDtos } from "../viewer/imagejImport";
@@ -125,6 +126,7 @@ export function RoiManagerPanel({
   const [segImportProgress, setSegImportProgress] = useState<number | null>(null);
   const [stats, setStats] = useState<Record<string, MaskVolumeStats>>({});
   const [spheres, setSpheres] = useState<Roi3dBox[]>([]);
+  const selectedSolidId = useSyncExternalStore(subscribeRoi3d, selectedRoi3dId);
   // Split の 3D 連結性（6=面/18=面+辺/26=全て）。既定 26＝斜め接続もつなぎ過分割を抑える。
   const [splitConn, setSplitConn] = useState<SplitConnectivity>(26);
   // マスク行の初期値（環境設定 viewer.maskFillOpacity / maskOutlineWidth に追従）。
@@ -822,15 +824,13 @@ export function RoiManagerPanel({
   const renderSphereRow = (id: string) => {
     const s = spheres.find((x) => x.id === id);
     if (!s) return null;
-    const color = s.color ?? "#00e5ff";
     const radius = solidRadius(s);
     const upd = (patch: Partial<Roi3dBox>) => updateRoi3d({ ...s, ...patch });
+    const open = s.id === selectedSolidId;
     return (
       <div key={s.id} style={row} data-testid="roi-row" data-kind="sphere" data-roi-key={s.id}>
-        <button onClick={() => upd({ visible: s.visible === false })} style={eyeBtn} title={t("roiMgr.visible")} data-testid="roi-row-visible">{s.visible !== false ? "👁" : "🚫"}</button>
-        <span title={t("roiMgr.iconSphere")} style={{ color }}>{s.shape === "box" ? "▣" : "◍"}</span>
-        <input type="text" style={name} defaultValue={s.label ?? "Sphere"} onChange={(e) => upd({ label: e.target.value })} />
-        <input type="color" defaultValue={color} onChange={(e) => upd({ color: e.target.value })} title={t("roiMgr.color")} style={colorInput} />
+        <SolidRoiHeader solid={s} onChange={updateRoi3d} defaultName="Sphere" iconTitle={t("roiMgr.iconSphere")} nameStyle={nameInRow} />
+        <button onClick={() => selectRoi3d(open ? null : s.id)} style={eyeBtn} title={t("roiMgr.solidDetail")} data-testid="solid-expand">{open ? "▾" : "▸"}</button>
         {radius !== null ? (
           <input type="number" min={0.1} step={0.5} defaultValue={Number(radius.toFixed(1))} onChange={(e) => { const v = Number(e.target.value); if (v > 0) upd({ size: [2 * v, 2 * v, 2 * v] }); }} title={t("roiMgr.radiusMm")} style={numInput} data-testid="sphere-radius" />
         ) : (
@@ -861,6 +861,7 @@ export function RoiManagerPanel({
         ))}
         <button onClick={() => runBakeSphere(s.id)} disabled={busy || !s.refImageId} style={editBtn} title={s.refImageId ? t("roiMgr.bakeSphere") : t("roiMgr.bakeNoRef")} data-testid="sphere-bake">{t("roiMgr.bakeSphereShort")}</button>
         <button onClick={() => removeRoi3d(s.id)} style={delBtn} title={t("common.delete")} data-testid="roi-row-delete">🗑</button>
+        {open && <div style={{ flexBasis: "100%", fontSize: 11, color: "#33404d" }}><SolidRoiInfo solid={s} bounds={null} /></div>}
       </div>
     );
   };

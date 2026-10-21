@@ -7,11 +7,10 @@
  * 2D の ROI 計測ダイアログ（`viewer2d/RoiStatsDialog.tsx`）とは別物で、そちらは変更しない。
  */
 import { useI18n } from "../i18n/i18n";
+import { SolidRoiHeader, SolidRoiInfo } from "../viewer/solidRoiRows";
 import {
   AXIS_NAMES,
   formatMl,
-  formulaText,
-  outOfBounds,
   volumeMl,
   withCenter,
   withSize,
@@ -67,6 +66,9 @@ export function MprRoiDialog({ boxes, selectedId, bounds, onSelect, onChange, on
                       {open && (
                         <tr>
                           <td colSpan={3} style={detail} data-testid="mpr-roi3d-detail">
+                            <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
+                              <SolidRoiHeader solid={b} onChange={onChange} defaultName={t(`mpr.roi3d.${b.shape}`)} iconTitle={t(`mpr.roi3d.${b.shape}`)} />
+                            </div>
                             <div style={grid}>
                               <span style={dim}>{t("mpr.roi3d.center")}</span>
                               {AXES.map((a) => (
@@ -80,12 +82,8 @@ export function MprRoiDialog({ boxes, selectedId, bounds, onSelect, onChange, on
                               ))}
                             </div>
                             <div style={{ marginTop: 6 }}>
-                              <span style={dim}>{t("mpr.roi3d.formula")}: </span>
-                              <span data-testid="mpr-roi3d-formula">{formulaText(b)}</span>
+                              <SolidRoiInfo solid={b} bounds={bounds} compact />
                             </div>
-                            {bounds && outOfBounds(b, bounds) && (
-                              <div style={warn} data-testid="mpr-roi3d-warn">{t("mpr.roi3d.outOfVolume")}</div>
-                            )}
                             <div style={{ marginTop: 6 }}>
                               <button style={btn} onClick={() => onRemove(b.id)}>{t("mpr.roi3d.delete")}</button>
                             </div>
@@ -148,5 +146,4 @@ const tdNum: React.CSSProperties = { ...td, textAlign: "right", fontFamily: "ui-
 const detail: React.CSSProperties = { padding: "8px 12px", background: "#10151a", borderBottom: "1px solid #23292f" };
 const grid: React.CSSProperties = { display: "grid", gridTemplateColumns: "110px repeat(3, auto)", gap: "4px 10px", alignItems: "center", justifyContent: "start" };
 const dim: React.CSSProperties = { color: "#7f8b96" };
-const warn: React.CSSProperties = { marginTop: 6, color: "#ffb454" };
 const input: React.CSSProperties = { width: 72, background: "#1b2126", color: "#e6eaee", border: "1px solid #2c343b", borderRadius: 4, fontSize: 12, padding: "1px 4px" };

@@ -1293,6 +1293,7 @@ export const ja: Record<string, string> = {
   "roiMgr.activeMask": "この ROI（塗り）を編集対象にする（Brush/Wand の塗り先）",
   "roiMgr.needSegViewport": "先に対象タイルで Brush/3D Wand などのセグメンテーションツールを選択してください。",
   "roiMgr.empty": "なし",
+  "roiMgr.solidDetail": "詳細",
   "roiMgr.visible": "表示",
   "roiMgr.lock": "ロック",
   "roiMgr.unlock": "ロック解除",

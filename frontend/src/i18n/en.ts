@@ -1291,6 +1291,7 @@ export const en: Record<string, string> = {
   "roiMgr.activeMask": "Make this painted ROI the edit target (Brush/Wand paints here)",
   "roiMgr.needSegViewport": "Select a segmentation tool (Brush/3D Wand) on a tile first.",
   "roiMgr.empty": "None",
+  "roiMgr.solidDetail": "Details",
   "roiMgr.visible": "Visible",
   "roiMgr.lock": "Lock",
   "roiMgr.unlock": "Unlock",
