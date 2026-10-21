@@ -43,6 +43,8 @@ interface BundleSpec {
   orient?: { label: number; expect: string };
   /** 報告された指標（出典は fw/monai-verification/<bundle>.md）。比較は人が見る。 */
   reported: { metric: string; value: number; note: string };
+  /** ラベル番号・点を渡すモデル。labels は画面のラベル選択で足す番号、points は --points のとき基準ラベルから選んだ点を入力欄へ入れる */
+  prompt?: { labels: number[]; pointValue: number };
   /** 複数チャネル入力: チャネルごとに 1 シリーズ（同じ検査）として取り込み、タイルを開いて選ぶ。 */
   multi?: {
     /** Bundle のチャネル順。取り込むシリーズの説明にもなる */
@@ -69,6 +71,22 @@ const BUNDLES: Record<string, BundleSpec> = {
     orient: { label: 1, expect: "x=+1,y=+1" }, // 脾臓: 患者の左（x 大）・体の重心より後ろ（y 大）
     reported: { metric: "mean Dice", value: 0.961, note: "検証 9 例の平均（学習中の検証に使用。独立性は限定的）" },
   },
+  // vista3d: ラベル 3 = 脾臓（metadata の channel_def）。基準は MSD の脾臓（値 1）。学習データに MSD が入るので独立ではない（スパイク）
+  vista3d: {
+    dataset: path.join(DATA_ROOT, "msd", "x", "Task09_Spleen"),
+    cases: (files) => [...files].sort().slice(-9),
+    labelMap: { spleen: 1 },
+    reported: { metric: "（スパイク）", value: NaN, note: "動作の確認だけ。報告値との比較は段 4" },
+    prompt: { labels: [3], pointValue: 1 },
+  },
+  // DeepEdit: 陽性・陰性の点だけを渡す（ラベル番号は無い）
+  spleen_deepedit_annotation: {
+    dataset: path.join(DATA_ROOT, "msd", "x", "Task09_Spleen"),
+    cases: (files) => [...files].sort().slice(-9),
+    labelMap: { spleen: 1 },
+    reported: { metric: "（スパイク）", value: NaN, note: "動作の確認だけ。Bundle の README は点の数による Dice 0.97 を報告（独立ではない）" },
+    prompt: { labels: [], pointValue: 1 },
+  },
   brats_mri_segmentation: {
     dataset: path.join(DATA_ROOT, "msd", "x", "Task01_BrainTumour_ex", "Task01_BrainTumour"),
     cases: (files) => [...files].sort(),
@@ -88,6 +106,8 @@ const BUNDLES: Record<string, BundleSpec> = {
     },
   },
 };
+
+const POINT_PY = path.join(AUTOMATOR_ROOT, "tools", "monai_point_pick.py");
 
 const numArg = (flag: string): string | undefined => {
   const i = process.argv.indexOf(flag);
@@ -133,7 +153,8 @@ async function main(): Promise<void> {
   console.log(`[${bundle}] 症例 ${cases.length} 件: ${cases.join(", ")}`);
 
   const OUT_DIR = path.join(AUTOMATOR_ROOT, ".results", "compute-monai-verify", bundle);
-  const RES_DIR = path.join(DATA_ROOT, "results", process.argv.includes("--swap-channels") ? `${bundle}-swap` : bundle);
+  const runTag = ["--swap-channels:swap", "--points-swap-roles:roleswap", "--points:points", "--points-positive-only:posonly", "--no-labels:nolabel"].filter((f) => process.argv.includes(f.split(":")[0])).map((f) => f.split(":")[1]).join("-");
+  const RES_DIR = path.join(DATA_ROOT, "results", runTag ? `${bundle}-${runTag}` : bundle);
   fs.mkdirSync(OUT_DIR, { recursive: true });
   fs.mkdirSync(RES_DIR, { recursive: true });
   installOfficialPlugin();
@@ -223,6 +244,27 @@ async function main(): Promise<void> {
       console.log(`\n[${bundle}] ${id}`);
       const v: Page = await openViewer(driver, page, s.studyUid, s.seriesUid);
       await v.getByTestId("monai-bundle").selectOption(bundle);
+      if (spec.prompt) {
+        const note = v.getByTestId("monai-prompt-note");
+        if (!process.argv.includes("--no-labels")) {
+          for (const l of spec.prompt.labels) {
+            await v.getByTestId("monai-prompt-label").selectOption(String(l));
+            await v.getByTestId("monai-prompt-add").click();
+          }
+        }
+        if (process.argv.includes("--points")) {
+          const r = spawnSync(PY, ["-I", POINT_PY, "--image", path.join(imagesDir, `${id}.nii.gz`), "--label", path.join(spec.dataset, "labelsTr", `${id}.nii.gz`), "--value", String(spec.prompt.pointValue)], { encoding: "utf8" });
+          if (r.status !== 0) throw new Error(`点の選択に失敗: ${r.stderr || r.stdout}`);
+          const only = process.argv.includes("--points-positive-only");
+          // 負例（対照）: 役割を入れ替える。陽性が脾臓の外、陰性が脾臓の中になる
+          const roleSwap = process.argv.includes("--points-swap-roles");
+          const text = roleSwap ? r.stdout.replace(/positive/g, "TMP").replace(/negative/g, "positive").replace(/TMP/g, "negative") : r.stdout;
+          await v.getByTestId("monai-points").fill(only ? text.split("\n").filter((l) => l.includes("positive")).join("\n") : text);
+          console.log(`  点: ${r.stdout.trim().replace(/\n/g, " / ")}`);
+        }
+        console.log(`  入力の状態: ${await note.textContent()}`);
+        await v.screenshot({ path: path.join(OUT_DIR, `01b-prompt-${runTag || "plain"}.png`) });
+      }
       if (spec.multi) {
         // 残りのシリーズをタイルに足し、チャネルごとにシリーズを選ぶ
         for (let k = 1; k < spec.multi.channels.length; k++) {
@@ -273,7 +315,12 @@ async function main(): Promise<void> {
       const fg = Object.keys(st.summary?.labels ?? {}).filter((k) => k !== "0").length;
       const ok = !!st.summary && !st.error;
       check(ok, `${id}: 最後まで走る（${sec} 秒）`, st.error);
-      if (!ok) { rows.push({ id, ok, error: st.error }); await v.close(); continue; }
+      if (!ok) {
+        rows.push({ id, ok, error: st.error, traceback: st.traceback, stderr: String(st.stderr ?? "").slice(-6000) });
+        console.log(`  traceback: ${String(st.traceback ?? "").slice(-2500)}\n  stderr: ${String(st.stderr ?? "").slice(-2500)}`);
+        await v.close();
+        continue;
+      }
       check(/T4/.test(st.summary?.gpu?.name ?? ""), `${id}: GPU T4`, st.summary?.gpu);
       check(fg > 0, `${id}: 前景のあるラベルが返る（${fg}）`, st.summary?.labels);
       check(st.shown?.ok === true && st.shown.segmentCount === fg, `${id}: ROI マネージャに読み込まれる`, st.shown);
@@ -287,7 +334,7 @@ async function main(): Promise<void> {
       const saved = (await state(v)).saved;
       check(saved?.ok === true, `${id}: SEG が保存される`, saved);
       if (id === Object.keys(series)[0]) await v.screenshot({ path: path.join(OUT_DIR, "03-after-save.png") });
-      const row: Record<string, unknown> = { id, ok: true, seconds: sec, gpu: st.summary?.gpu, labels: fg };
+      const row: Record<string, unknown> = { id, ok: true, seconds: sec, gpu: st.summary?.gpu, labels: fg, prompt: st.summary?.prompt };
       if (saved?.ok) {
         const insts = (await (await fetch(`${base}/api/studies/${s.studyUid}/series/${saved.seriesInstanceUid}/instances`)).json()) as { sopInstanceUid: string }[];
         check(insts.length === 1, `${id}: 保存した SEG のインスタンスが 1 つ`, insts.length);
@@ -316,7 +363,10 @@ async function main(): Promise<void> {
           for (const [name, r] of Object.entries(sc.labels as Record<string, any>)) {
             check(r.dice !== null, `${id}: ${name} の Dice が出る（${r.dice}${r.reason ? `・${r.reason}` : ""}）`, r);
           }
-          check((sc.seg_names_not_in_map as string[]).length === 0, `${id}: SEG に基準の表にない名前が無い`, sc.seg_names_not_in_map);
+          const extra = sc.seg_names_not_in_map as string[];
+          // 全自動（vista3d のラベル指定なし）は基準に無い臓器も返すのが仕様。件数だけ記録し、検査にしない
+          if (spec.prompt && process.argv.includes("--no-labels")) console.log(`  基準に無いラベル ${extra.length} 個（全自動のため検査にしない）`);
+          else check(extra.length === 0, `${id}: SEG に基準の表にない名前が無い`, extra);
         }
       }
       rows.push(row);

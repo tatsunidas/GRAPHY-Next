@@ -145,6 +145,10 @@ public class ExportService {
             }
             Files.createDirectories(target.getParent());
             Files.copy(in, target);
+            String n = target.getFileName().toString();
+            if (n.endsWith(".sh") || n.endsWith(".command") || n.endsWith(".pl")) {
+                target.toFile().setExecutable(true, false); // Mac/Linux で直接実行できるように（ベストエフォート）
+            }
         }
 
         @Override
@@ -533,7 +537,35 @@ public class ExportService {
         if (copied == 0) {
             log.warn("export: portable viewer 成果物が classpath:/portable-viewer に見つかりません（VIEWER/ 同梱なし）");
         } else {
-            log.info("export: portable viewer を同梱しました（{} ファイル）", copied);
+            copyPortableLauncher(sink);
+            log.info("export: portable viewer を同梱しました（{} ファイル＋起動スクリプト）", copied);
+        }
+    }
+
+    /** 媒体のルートに置く起動ファイル（ダブルクリックでローカルサーバを起動し、ブラウザでビューアを開く）。 */
+    static final String[] LAUNCHER_ROOT_FILES = {"START-VIEWER.bat", "START-VIEWER.command", "START-VIEWER.sh"};
+    /** 起動ファイルが使うサーバ本体（VIEWER/ に置く）。 */
+    static final String[] LAUNCHER_VIEWER_FILES = {"serve.ps1", "serve.pl"};
+
+    /**
+     * 起動スクリプト（{@code portable-launcher/}。ソースに入っていて frontend のビルドに依らない）を書き出す。
+     * 無いのはパッケージングの不具合なので、黙らずに失敗させる。
+     */
+    static void copyPortableLauncher(Sink sink) throws IOException {
+        for (String name : LAUNCHER_ROOT_FILES) {
+            putLauncherResource(sink, name, name);
+        }
+        for (String name : LAUNCHER_VIEWER_FILES) {
+            putLauncherResource(sink, "VIEWER/" + name, name);
+        }
+    }
+
+    private static void putLauncherResource(Sink sink, String target, String resourceName) throws IOException {
+        try (java.io.InputStream in = ExportService.class.getResourceAsStream("/portable-launcher/" + resourceName)) {
+            if (in == null) {
+                throw new IOException("起動スクリプトが同梱されていません: portable-launcher/" + resourceName);
+            }
+            sink.put(target, in);
         }
     }
 
@@ -558,14 +590,22 @@ public class ExportService {
         }
         if (opts.includePortableViewer()) {
             sb.append("Portable 2D Viewer (VIEWER/):\n");
-            sb.append("  A standalone GRAPHY 2D Viewer is bundled under VIEWER/.\n");
-            sb.append("  1) Open VIEWER/index.html in a Chromium-based browser (Chrome/Edge).\n");
-            sb.append("  2) Click 'Select folder' and choose the root folder of this media\n");
-            sb.append("     (the folder that contains DICOMDIR and DICOM/).\n");
-            sb.append("  3) Pick a series from the list to view it (window/level, scroll, zoom).\n");
-            sb.append("  No installation or server is required.\n");
-            sb.append("  付属の 2D Viewer は VIEWER/index.html を Chromium 系ブラウザで開き、\n");
-            sb.append("  「フォルダを選択」でこのメディアのルート（DICOMDIR を含む）を選ぶと表示できます。\n");
+            sb.append("  A standalone GRAPHY 2D Viewer is bundled under VIEWER/. No installation is required.\n");
+            sb.append("  1) Run the launcher in this folder (the one that contains DICOMDIR):\n");
+            sb.append("       Windows : double-click START-VIEWER.bat\n");
+            sb.append("       Mac     : double-click START-VIEWER.command\n");
+            sb.append("                 (if it does not open: right-click > Open, or run 'sh START-VIEWER.command')\n");
+            sb.append("       Linux   : run 'sh START-VIEWER.sh'\n");
+            sb.append("  2) The viewer opens in your browser and loads this media automatically.\n");
+            sb.append("  3) Close the black launcher window (or the browser) to stop. Nothing is sent outside\n");
+            sb.append("     this computer: the launcher only serves this folder to your own browser (127.0.0.1).\n");
+            sb.append("  Opening VIEWER/index.html directly does not work (browser security restriction).\n");
+            sb.append("  付属の 2D Viewer は、このフォルダ（DICOMDIR のある場所）の起動ファイルで開きます。\n");
+            sb.append("    Windows: START-VIEWER.bat をダブルクリック／Mac: START-VIEWER.command をダブルクリック\n");
+            sb.append("    （開けないときは右クリック →「開く」、または 'sh START-VIEWER.command'）／Linux: 'sh START-VIEWER.sh'\n");
+            sb.append("  ブラウザでビューアが開き、この媒体を自動で読み込みます。終了は黒い画面（またはブラウザ）を閉じます。\n");
+            sb.append("  画像データはこの PC の外へは送られません（起動ファイルは、この PC のブラウザにだけ 127.0.0.1 で配信します）。\n");
+            sb.append("  VIEWER/index.html を直接開いても動きません（ブラウザの安全のための制限です）。\n");
             sb.append("  Videos (if any) are also bundled as playable MP4 under VIDEO/<SOPInstanceUID>.mp4,\n");
             sb.append("  because DICOM encapsulated video cannot be drawn as a 2D image.\n");
             sb.append("  動画がある場合は VIDEO/<SOPInstanceUID>.mp4 として再生可能な MP4 も同梱しています。\n\n");

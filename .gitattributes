@@ -1,1 +1,8 @@
 *.sh text eol=lf
+
+# Export の起動スクリプト（OS ごとの改行が要る。CRLF の .sh/.pl は起動しない・LF の .bat は壊れる）
+backend/src/main/resources/portable-launcher/*.bat text eol=crlf
+backend/src/main/resources/portable-launcher/*.ps1 text eol=crlf
+backend/src/main/resources/portable-launcher/*.sh text eol=lf
+backend/src/main/resources/portable-launcher/*.command text eol=lf
+backend/src/main/resources/portable-launcher/*.pl text eol=lf
