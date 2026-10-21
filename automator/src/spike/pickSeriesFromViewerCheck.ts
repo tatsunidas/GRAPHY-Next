@@ -139,6 +139,21 @@ async function main(): Promise<void> {
     await waitFor("取り消しの結果", async () => (await state())?.picked != null, 20_000);
     check(JSON.stringify(((await state()) as Row).picked) === "[]", "🔴 Esc で取り消すと空配列（選んでいても返さない）");
     check((await dialogIn(viewer).count()) === 0, "窓は閉じる");
+
+    // ── [4] 回帰: main 画面から呼んでも窓は 1 枚だけで、2D ビューアには出ない ──
+    console.log("\n[4] main 画面から呼ぶ（回帰）");
+    await main.evaluate((i) => {
+      (window as unknown as Record<string, unknown>).__pickInput = i;
+      (window as unknown as Record<string, unknown>).__pickState = undefined;
+    }, { title: "CT を選ぶ（main から）", modalities: ["CT"] });
+    await main.getByTestId("mainscreen-menu-plugins").click();
+    await main.getByTestId(`plugin-item-${PLUGIN_ID}`).click();
+    await main.getByTestId("pickseries-dialog").first().waitFor({ state: "visible", timeout: 20_000 });
+    check((await dialogIn(main).count()) === 1, "🔴 main 画面の窓は 1 枚だけ", await dialogIn(main).count());
+    check((await dialogIn(viewer).count()) === 0, "main から呼んだ窓は 2D ビューアには出ない");
+    await main.keyboard.press("Escape");
+    await waitFor("main の取り消しの結果", async () => ((await main.evaluate(() => (window as unknown as { __pickState?: Row }).__pickState)) as Row | undefined)?.picked != null, 20_000);
+    check((await dialogIn(main).count()) === 0, "取り消すと main の窓は閉じる");
   } finally {
     await driver.stop().catch(() => undefined);
   }
