@@ -10,8 +10,8 @@
  * 出るがプラグインには渡らない。新しい権限・同意は作らない（外へ出すのは `runBatch` の同意が別に聞く）。
  *
  * <p>React の外から呼ばれるので、ストアを本体のツリーの中の {@link SeriesPickHost} が購読して `createPortal` で出す
- * （`createRoot` の別ルートは i18n コンテキストが効かない。`pluginAiApi.tsx` と同じ流儀）。2D ビューアとメイン画面は
- * 別ルートなので Host は両方に置く。同時に出すのは 1 つで、2 件目以降は順番を待つ。取り消しは空配列。例外は投げない。
+ * （`createRoot` の別ルートは i18n コンテキストが効かない。`pluginAiApi.tsx` と同じ流儀）。Host は `App.tsx` に 1 つだけ置く
+ * （2D ビューアなども同じツリーの中で描かれる。別の所にも置くと窓が重なる）。同時に出すのは 1 つで、2 件目以降は順番を待つ。取り消しは空配列。例外は投げない。
  */
 import { useSyncExternalStore, type ReactNode } from "react";
 import { SeriesPickDialog } from "./SeriesPickDialog";

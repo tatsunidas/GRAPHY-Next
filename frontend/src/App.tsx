@@ -268,7 +268,7 @@ export function App() {
       />
       {/* 外部 AI 送信の同意ダイアログ。2D ビューアは別ウィンドウ＝別ルートなので両方に要る。 */}
       <AiEgressConsentHost />
-      {/* シリーズ選択の窓（host.db.pickSeries）。同じ理由で両方に置く。 */}
+      {/* シリーズ選択の窓（host.db.pickSeries）。2D ビューアなどもこのツリーの中で描かれるので、ここ 1 つで足りる（2D 側にも置くと窓が 2 枚重なる）。 */}
       <SeriesPickHost />
       {/* DB 管理。編集成功で同一ウィンドウの一覧を再読込（dbVersion）＋他ウィンドウへ通知（dbEvents）。 */}
       <DbAdminDialog
