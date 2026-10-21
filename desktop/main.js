@@ -130,6 +130,7 @@ const VIEWER_DEFAULTS = {
   // GLAM 解析は図を横に並べるので、やや幅広を既定にする。
   glam: { width: 1250, height: 900 },
   "radiomics-features": { width: 1250, height: 900 },
+  computejobs: { width: 1150, height: 720 },
 };
 
 /** 同梱 / 開発時の backend jar のパスを解決する。 */

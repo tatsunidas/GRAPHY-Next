@@ -25,6 +25,7 @@ import { SlicerScreen } from "./slicer/SlicerScreen";
 import { CurvedMprScreen } from "./curvedmpr/CurvedMprScreen";
 import { QRScreen } from "./qr/QRScreen";
 import { MonitorQcScreen } from "./monitorqc/MonitorQcScreen";
+import { ComputeJobsScreen } from "./computejobs/ComputeJobsScreen";
 import { GlamAnalysisScreen } from "./radiomics/GlamAnalysisScreen";
 import { RoiFeatureScreen } from "./radiomics/RoiFeatureScreen";
 import { MobileScreen } from "./mobile/MobileScreen";
@@ -206,6 +207,11 @@ export function App() {
 
   if (screen === "monitorqc") {
     return <MonitorQcScreen />;
+  }
+
+  // 計算ジョブ（外部・自機の計算機で走るジョブの一覧）も別ウィンドウ（#computejobs）。standalone のみ。
+  if (screen === "computejobs") {
+    return <ComputeJobsScreen />;
   }
 
   // モバイルシェルは自前のヘッダ/ナビゲーションを持つ単画面 UI。
