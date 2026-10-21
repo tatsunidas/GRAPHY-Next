@@ -666,48 +666,97 @@ public class ExportService {
         }
     }
 
-    private static String readme(Options opts, Summary s) {
+    /**
+     * 媒体のルートに置く README.txt。受け取る人が読む文章なので、日本語を先、同じ内容の英語を後に置く。
+     * 起動方法・DICOM の場所・非診断の注意・署名の 4 点を、短く書く。
+     */
+    static String readme(Options opts, Summary s) {
+        boolean viewer = opts.includePortableViewer();
         StringBuilder sb = new StringBuilder();
-        sb.append("GRAPHY DICOM Export\n");
-        sb.append("===================\n\n");
-        sb.append("Contents / 内容:\n");
-        sb.append("  Patients/患者:   ").append(s.patients()).append('\n');
-        sb.append("  Studies/検査:    ").append(s.studies()).append('\n');
-        sb.append("  Series/シリーズ: ").append(s.series()).append('\n');
-        sb.append("  Images/画像:     ").append(s.instances()).append("\n\n");
-        sb.append("Layout / 構成:\n");
-        sb.append("  DICOM/<PatientID>/<StudyDate>/<SeriesDescription>/00000001.dcm ...\n");
-        sb.append("  例 DICOM/PID-0001/2026-06-30/CT Chest/00000001.dcm\n");
-        sb.append("  (Patient > Study > Series > Image hierarchy)\n\n");
+
+        sb.append("GRAPHY DICOM Export（画像の書き出し）\n");
+        sb.append("======================================\n\n");
+
+        // ---------------- 日本語 ----------------
+        sb.append("■ このフォルダの中身\n");
+        sb.append("  患者 ").append(s.patients()).append(" 名／検査 ").append(s.studies())
+                .append(" 件／シリーズ ").append(s.series()).append(" 件／画像 ").append(s.instances()).append(" 枚\n\n");
+
+        sb.append("■ DICOM ファイルの場所\n");
+        sb.append("  画像は「DICOM」フォルダの中にあります。\n");
+        sb.append("    DICOM/患者ID/検査日/シリーズ名/00000001.dcm …\n");
         if (opts.effectiveDicomDir()) {
-            sb.append("DICOMDIR:\n");
-            sb.append("  A DICOMDIR index is included at the root. Most DICOM viewers can\n");
-            sb.append("  open this media by selecting the DICOMDIR file.\n");
-            sb.append("  ルートの DICOMDIR を読み込むと一覧表示できます。\n\n");
+            sb.append("  いちばん上の「DICOMDIR」は、画像の一覧表です。他の DICOM ビューアで開くときは、このファイルを選びます。\n");
         }
-        if (opts.includePortableViewer()) {
-            sb.append("Portable 2D Viewer (VIEWER/):\n");
-            sb.append("  A standalone GRAPHY 2D Viewer is bundled under VIEWER/. No installation is required.\n");
-            sb.append("  1) Run the launcher in this folder (the one that contains DICOMDIR):\n");
+        sb.append('\n');
+
+        if (viewer) {
+            sb.append("■ 画像の見かた（付属のビューア・インストール不要）\n");
+            sb.append("  1. このフォルダにある起動ファイルを実行します。\n");
+            sb.append("       Windows … START-VIEWER.bat をダブルクリック\n");
+            sb.append("       Mac     … START-VIEWER.command をダブルクリック（開けないときは右クリック →「開く」）\n");
+            sb.append("       Linux   … ターミナルで sh START-VIEWER.sh\n");
+            sb.append("  2. ブラウザが開き、画像が自動で表示されます。\n");
+            sb.append("  3. 終わるときは、黒い画面（起動ファイルの窓）を閉じます。\n");
+            sb.append("  ・画像はこの PC の外へは送られません。\n");
+            sb.append("  ・VIEWER フォルダの index.html を直接開いても動きません。上の起動ファイルを使ってください。\n");
+            sb.append("  ・動画がある場合は、VIDEO フォルダに再生用の MP4 も入っています。\n\n");
+        }
+
+        sb.append("■ ご注意（非診断用）\n");
+        if (viewer) {
+            sb.append("  この付属ビューアは、診断や治療方針の決定を目的としたものではありません（非診断用）。\n");
+            sb.append("  画像の参照・共有のための表示です。診断には、承認・認証を受けた医療機器または診断用ビューアと、\n");
+            sb.append("  元の画像をお使いください。\n\n");
+        } else {
+            sb.append("  この書き出しは、画像の参照・共有を目的としたものであり、診断や治療方針の決定を目的としたものではありません\n");
+            sb.append("  （非診断用）。診断には、承認・認証を受けた医療機器または診断用ビューアと、元の画像をお使いください。\n\n");
+        }
+
+        // ---------------- English ----------------
+        sb.append("--------------------------------------\n");
+        sb.append("English\n");
+        sb.append("--------------------------------------\n\n");
+
+        sb.append("* Contents\n");
+        sb.append("  ").append(s.patients()).append(" patient(s), ").append(s.studies()).append(" study(ies), ")
+                .append(s.series()).append(" series, ").append(s.instances()).append(" image(s)\n\n");
+
+        sb.append("* Where the DICOM files are\n");
+        sb.append("  The images are in the \"DICOM\" folder:\n");
+        sb.append("    DICOM/<PatientID>/<StudyDate>/<SeriesDescription>/00000001.dcm ...\n");
+        if (opts.effectiveDicomDir()) {
+            sb.append("  \"DICOMDIR\" at the top is the index of the images. Select it when opening this media in another DICOM viewer.\n");
+        }
+        sb.append('\n');
+
+        if (viewer) {
+            sb.append("* How to view the images (bundled viewer, no installation needed)\n");
+            sb.append("  1. Run the launcher in this folder:\n");
             sb.append("       Windows : double-click START-VIEWER.bat\n");
-            sb.append("       Mac     : double-click START-VIEWER.command\n");
-            sb.append("                 (if it does not open: right-click > Open, or run 'sh START-VIEWER.command')\n");
-            sb.append("       Linux   : run 'sh START-VIEWER.sh'\n");
-            sb.append("  2) The viewer opens in your browser and loads this media automatically.\n");
-            sb.append("  3) Close the black launcher window (or the browser) to stop. Nothing is sent outside\n");
-            sb.append("     this computer: the launcher only serves this folder to your own browser (127.0.0.1).\n");
-            sb.append("  Opening VIEWER/index.html directly does not work (browser security restriction).\n");
-            sb.append("  付属の 2D Viewer は、このフォルダ（DICOMDIR のある場所）の起動ファイルで開きます。\n");
-            sb.append("    Windows: START-VIEWER.bat をダブルクリック／Mac: START-VIEWER.command をダブルクリック\n");
-            sb.append("    （開けないときは右クリック →「開く」、または 'sh START-VIEWER.command'）／Linux: 'sh START-VIEWER.sh'\n");
-            sb.append("  ブラウザでビューアが開き、この媒体を自動で読み込みます。終了は黒い画面（またはブラウザ）を閉じます。\n");
-            sb.append("  画像データはこの PC の外へは送られません（起動ファイルは、この PC のブラウザにだけ 127.0.0.1 で配信します）。\n");
-            sb.append("  VIEWER/index.html を直接開いても動きません（ブラウザの安全のための制限です）。\n");
-            sb.append("  Videos (if any) are also bundled as playable MP4 under VIDEO/<SOPInstanceUID>.mp4,\n");
-            sb.append("  because DICOM encapsulated video cannot be drawn as a 2D image.\n");
-            sb.append("  動画がある場合は VIDEO/<SOPInstanceUID>.mp4 として再生可能な MP4 も同梱しています。\n\n");
+            sb.append("       Mac     : double-click START-VIEWER.command (if it does not open: right-click > Open)\n");
+            sb.append("       Linux   : run \"sh START-VIEWER.sh\" in a terminal\n");
+            sb.append("  2. Your browser opens and shows the images automatically.\n");
+            sb.append("  3. To finish, close the black launcher window.\n");
+            sb.append("  - Images are never sent outside this computer.\n");
+            sb.append("  - Opening VIEWER/index.html directly does not work. Please use the launcher above.\n");
+            sb.append("  - Videos (if any) are also included as playable MP4 files in the VIDEO folder.\n\n");
         }
-        sb.append("Exported by GRAPHY (Visionary Imaging Services, Inc.)\n");
+
+        sb.append("* Notice (not for diagnostic use)\n");
+        if (viewer) {
+            sb.append("  This bundled viewer is not intended for diagnosis or for deciding treatment (not for diagnostic use).\n");
+            sb.append("  It is provided for reviewing and sharing images. For diagnosis, please use an approved or certified\n");
+            sb.append("  medical device or diagnostic viewer together with the original images.\n\n");
+        } else {
+            sb.append("  This export is provided for reviewing and sharing images. It is not intended for diagnosis or for deciding\n");
+            sb.append("  treatment (not for diagnostic use). For diagnosis, please use an approved or certified medical device or\n");
+            sb.append("  diagnostic viewer together with the original images.\n\n");
+        }
+
+        sb.append("======================================\n");
+        sb.append("Exported by GRAPHY\n");
+        sb.append("Visionary Imaging Services, Inc.\n");
         return sb.toString();
     }
 
