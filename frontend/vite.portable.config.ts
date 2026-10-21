@@ -1,69 +1,51 @@
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { cpSync } from "node:fs";
 import { defineConfig, type Plugin } from "vite";
+import react from "@vitejs/plugin-react";
+import { portableStubs } from "./portable/stubPlugin";
 
-// Portable 2D Viewer 専用ビルド（fw/export-portable-viewer.md 方式 A）。
-// - root = portable/ （独立 index.html・vanilla TS。React 本体アプリとは別バンドル）。
-// - 出力 = portable-dist/ （後で Export の VIEWER/ として ZIP 同梱する成果物）。
-// - base "./" で file:// 直開き・相対配置に対応。
-// - dicom-image-loader の worker/optimizeDeps 事情は本体 vite.config.ts と同一。
-
-// 本体 vite.config.ts と同じ: dev 配信時に UMD コーデックへ ESM default を付与。
-function cornerstoneCodecEsm(): Plugin {
-  const isCodec = (id: string) => /@cornerstonejs[\\/]codec-[^\\/]+[\\/]dist[\\/][^\\/]+\.js$/.test(id);
+// 本体の UI アイコン（相対 URL `icons/tools/...`）。段 2 では丸ごと入れ、使うものだけへの絞り込みは後で行う。
+function copyIcons(): Plugin {
   return {
-    name: "graphy-cs-codec-esm",
-    apply: "serve",
-    transform(code, id) {
-      const clean = id.split("?")[0];
-      if (!isCodec(clean) || /export\s+default/.test(code)) return null;
-      const m = code.match(/var\s+(\w+)\s*=\s*\(\(\)\s*=>/);
-      if (!m) return null;
-      return { code: `${code}\nexport default ${m[1]};\n`, map: null };
+    name: "graphy-portable-icons",
+    apply: "build",
+    closeBundle() {
+      cpSync(path.join(here, "public/icons/tools"), path.join(here, "portable-dist/icons/tools"), { recursive: true });
     },
   };
 }
 
-// file:// 直開きでも動くよう、厳格すぎない CSP を注入（本体は Electron 前提でより厳格）。
-// worker(blob:) と wasm-unsafe-eval を許可。connect-src は不要（サーバへ接続しない）。
+// 配信元（起動スクリプトのローカルサーバ）以外へは何も読みに行かせない。worker/wasm/blob だけ許可する。
 function cspPlugin(): Plugin {
   const csp = [
     "default-src 'self'",
     "script-src 'self' 'wasm-unsafe-eval'",
     "style-src 'self' 'unsafe-inline'",
     "img-src 'self' data: blob:",
-    // 同梱動画（VIDEO/*.mp4）は File → URL.createObjectURL で <video> に渡すため blob: が要る。
-    // これが無いと "Loading media from 'blob:…' violates … default-src 'self'" で**再生できない**
-    // （2026-07-31 の実機検証で判明。media-src 未指定だと default-src へフォールバックする）。
     "media-src 'self' blob:",
     "worker-src 'self' blob:",
+    "connect-src 'self'",
     "font-src 'self'",
     "object-src 'none'",
+    "base-uri 'none'",
+    "form-action 'none'",
   ].join("; ");
   return {
     name: "graphy-portable-csp",
     apply: "build",
-    transformIndexHtml(html) {
-      return html.replace(
-        "</head>",
-        `    <meta http-equiv="Content-Security-Policy" content="${csp}" />\n  </head>`,
-      );
-    },
+    transformIndexHtml: (html) => html.replace("</head>", `    <meta http-equiv="Content-Security-Policy" content="${csp}" />
+  </head>`),
   };
 }
+
+const here = path.dirname(fileURLToPath(import.meta.url));
 
 export default defineConfig({
   root: "portable",
   base: "./",
-  plugins: [cspPlugin(), cornerstoneCodecEsm()],
-  worker: {
-    format: "es",
-  },
-  optimizeDeps: {
-    exclude: ["@cornerstonejs/dicom-image-loader"],
-    include: ["dicom-parser"],
-  },
-  build: {
-    outDir: "../portable-dist",
-    emptyOutDir: true,
-    target: "esnext",
-  },
+  plugins: [portableStubs(path.join(here, "src"), path.join(here, "portable/src/shims")), react(), copyIcons(), cspPlugin()],
+  worker: { format: "es" },
+  optimizeDeps: { exclude: ["@cornerstonejs/dicom-image-loader"], include: ["dicom-parser"] },
+  build: { outDir: "../portable-dist", emptyOutDir: true, target: "esnext" },
 });

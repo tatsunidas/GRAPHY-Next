@@ -6,6 +6,7 @@ package com.vis.graphynext.export;
 
 import com.vis.graphynext.dicom.store.DicomInstance;
 import com.vis.graphynext.dicom.store.DicomInstanceRepository;
+import com.vis.graphynext.dicom.store.DicomStorageService;
 import com.vis.graphynext.dicom.store.StorageLayout;
 import com.vis.graphynext.dicom.video.VideoRenderService;
 import org.dcm4che3.data.Attributes;
@@ -83,11 +84,15 @@ public class ExportService {
     /** 動画の MP4 化（P5: portable viewer は backend 非同伴なので媒体に MP4 実体を同梱する）。 */
     private final VideoRenderService videoRender;
     private final StorageLayout layout;
+    /** シリーズの ZCT レイアウトの計算元（本体の 2D ビューアと同じ規則を、ポータブル版へそのまま渡すため）。 */
+    private final DicomStorageService storage;
 
-    public ExportService(DicomInstanceRepository repo, VideoRenderService videoRender, StorageLayout layout) {
+    public ExportService(DicomInstanceRepository repo, VideoRenderService videoRender, StorageLayout layout,
+            DicomStorageService storage) {
         this.repo = repo;
         this.videoRender = videoRender;
         this.layout = layout;
+        this.storage = storage;
     }
 
     /** 書き出し先（ZIP のエントリ、またはフォルダ配下のファイル）。 */
@@ -296,6 +301,7 @@ public class ExportService {
         java.util.Set<String> studyUidsExported = new java.util.LinkedHashSet<>();
         int seriesCount = 0;
         int instanceCount = 0;
+        List<String[]> exportedSeries = new java.util.ArrayList<>(); // {studyUid, seriesUid}
 
         try {
             for (Selection sel : selections) {
@@ -342,6 +348,7 @@ public class ExportService {
                             studyUidsExported.add(sel.studyUid());
                             serDir = layout.series(patDir, styDir, inst, ds.getString(Tag.ProtocolName));
                             seriesCount++;
+                            exportedSeries.add(new String[] {sel.studyUid(), seriesUid});
                         }
                         String imgName = ExportNaming.imageName(++img);
                         String[] fileIDs = {"DICOM", patDir, styDir, serDir, imgName};
@@ -372,6 +379,7 @@ public class ExportService {
 
             if (opts.includePortableViewer()) {
                 copyPortableViewer(sink);
+                writeLayouts(sink, exportedSeries);
             }
 
             Summary summary = new Summary(layout.patDir.size(), studyUidsExported.size(), seriesCount, instanceCount);
@@ -499,10 +507,15 @@ public class ExportService {
     }
 
     static void copyPortableViewer(Sink sink) throws IOException {
+        copyPortableViewer(sink, "classpath*:/portable-viewer/**");
+    }
+
+    /** @param pattern 成果物の探索パターン（本番は固定。成果物が無い場合の試験のために引数にしてある）。 */
+    static void copyPortableViewer(Sink sink, String pattern) throws IOException {
         var resolver = new org.springframework.core.io.support.PathMatchingResourcePatternResolver();
         org.springframework.core.io.Resource[] resources;
         try {
-            resources = resolver.getResources("classpath*:/portable-viewer/**");
+            resources = resolver.getResources(pattern);
         } catch (IOException e) {
             log.warn("export: portable viewer 成果物の列挙に失敗（同梱をスキップ）", e);
             return;
@@ -535,10 +548,94 @@ public class ExportService {
             copied++;
         }
         if (copied == 0) {
-            log.warn("export: portable viewer 成果物が classpath:/portable-viewer に見つかりません（VIEWER/ 同梱なし）");
+            // 黙って省くと、利用者は「同梱にチェックしたのにビューアが無い」媒体を受け取る（2026-10-21 の実機で発生）。
+            // 同梱を頼まれたのに作れないときは、Export ごと失敗させて理由を画面に出す。
+            log.error("export: portable viewer 成果物が classpath:/portable-viewer に見つかりません");
+            throw new IOException("2D Viewer (portable) の成果物がこのアプリに入っていません。"
+                    + "（ビューアの成果物を含まないビルドです。同梱のチェックを外して実行してください）"
+                    + " / The portable viewer bundle is not part of this build. Uncheck the option and retry.");
         } else {
             copyPortableLauncher(sink);
             log.info("export: portable viewer を同梱しました（{} ファイル＋起動スクリプト）", copied);
+        }
+    }
+
+    /**
+     * 各シリーズのレイアウト（Z/C/T の割当・軸・位置・間隔）を {@code VIEWER/layouts.json} へ書く。
+     * 本体の 2D ビューアが使う backend の計算結果そのもので、ポータブル版は同じ並び・軸で表示できる
+     * （ブラウザ側に同じ規則を二重に持たない）。失敗したシリーズは載せない（ビューアがヘッダから組み直す）。
+     */
+    void writeLayouts(Sink sink, List<String[]> series) throws IOException {
+        if (storage == null) {
+            return;
+        }
+        Map<String, Object> out = new LinkedHashMap<>();
+        // 穴（ある C/T が覆わない Z 位置）を埋める空白画像。本体は backend が都度作るが、ポータブル版には backend が
+        // 無いので、同じ生成（storage.blankDicom）の結果を媒体へ書いておく。{seriesUid: [{z, file}]}（z=null は位置なし）。
+        Map<String, List<Map<String, Object>>> blanks = new LinkedHashMap<>();
+        for (String[] s : series) {
+            try {
+                com.vis.graphynext.dicom.SeriesLayout lay = storage.seriesLayout(s[0], s[1]);
+                out.put(s[1], lay);
+                writeBlanks(sink, s[0], s[1], lay, blanks);
+            } catch (RuntimeException e) {
+                log.warn("export: レイアウトの計算に失敗（ビューア側で組み直す） series={}", s[1], e);
+            }
+        }
+        com.fasterxml.jackson.databind.ObjectMapper om = new com.fasterxml.jackson.databind.ObjectMapper();
+        sink.put("VIEWER/layouts.json", om.writeValueAsBytes(out));
+        sink.put("VIEWER/blanks.json", om.writeValueAsBytes(blanks));
+    }
+
+    /** Z 方向のスタックで欠けているスライス位置ごとに、空白の DICOM を {@code VIEWER/blank/<series>/<z>.dcm} へ書く。 */
+    private void writeBlanks(Sink sink, String studyUid, String seriesUid, com.vis.graphynext.dicom.SeriesLayout lay,
+            Map<String, List<Map<String, Object>>> blanks) throws IOException {
+        if (lay == null || lay.cells() == null || (lay.axes() != null && "t".equals(lay.axes().stackAxis()))) {
+            return; // 時間軸スタック（XA など）はブランクを挟まない
+        }
+        java.util.Set<String> have = new java.util.HashSet<>();
+        for (com.vis.graphynext.dicom.SeriesLayout.Cell c : lay.cells()) {
+            have.add(c.c() + "/" + c.t() + "/" + c.z());
+        }
+        java.util.Set<Integer> gapZ = new java.util.TreeSet<>();
+        for (int c = 0; c < lay.nC(); c++) {
+            for (int t = 0; t < lay.nT(); t++) {
+                for (int z = 0; z < lay.nZ(); z++) {
+                    if (!have.contains(c + "/" + t + "/" + z)) {
+                        gapZ.add(z);
+                    }
+                }
+            }
+        }
+        if (gapZ.isEmpty()) {
+            return;
+        }
+        List<Map<String, Object>> list = new java.util.ArrayList<>();
+        for (int z : gapZ) {
+            double[] ipp = null;
+            if (lay.zSpatial() != null) {
+                for (com.vis.graphynext.dicom.SeriesLayout.ZSpatial zs : lay.zSpatial()) {
+                    if (zs.z() == z) {
+                        ipp = zs.imagePositionPatient();
+                    }
+                }
+            }
+            byte[] bytes = storage.blankDicom(studyUid, seriesUid, ipp);
+            if (bytes == null) {
+                continue;
+            }
+            String file = "blank/" + seriesUid + "/" + z + ".dcm";
+            sink.put("VIEWER/" + file, bytes);
+            Map<String, Object> e = new LinkedHashMap<>();
+            e.put("z", ipp == null ? null : z);
+            e.put("file", file);
+            list.add(e);
+            if (ipp == null) {
+                break; // 位置なしの空白は 1 枚を共有する
+            }
+        }
+        if (!list.isEmpty()) {
+            blanks.put(seriesUid, list);
         }
     }
 
