@@ -29,6 +29,24 @@ class ExportReadmeTest {
         assertTrue(t.trim().endsWith("Visionary Imaging Services, Inc."), "署名が末尾にある");
     }
 
+    /** 補足行（案内ページ）は、手順 1〜3 の流れを切らないよう、手順 3 の後ろ・注記の前に置く。 */
+    @Test
+    void htmlHintComesAfterStepThreeAndBeforeTheNotes() {
+        String t = readme(true, true);
+        String[][] langs = {
+                {"  2. ブラウザが開き", "  3. 終わるときは", "START-VIEWER.html を開くと", "画像はこの PC の外へは"},
+                {"  2. Your browser opens", "  3. To finish", "Open START-VIEWER.html", "Images are never sent"}};
+        for (String[] k : langs) {
+            int s2 = t.indexOf(k[0]);
+            int s3 = t.indexOf(k[1]);
+            int hint = t.indexOf(k[2]);
+            int note = t.indexOf(k[3]);
+            assertTrue(s2 >= 0 && s3 >= 0 && hint >= 0 && note >= 0, "必要な行が無い: " + String.join(" / ", k));
+            assertTrue(s3 < hint && hint < note, "補足行が手順 3 の後ろ・注記の前にない: " + k[2]);
+            assertFalse(s2 < hint && hint < s3, "補足行が手順 2 と 3 の間に入っている: " + k[2]);
+        }
+    }
+
     @Test
     void withoutViewerDoesNotMentionTheLauncherButKeepsNoticeAndSignature() {
         String t = readme(true, false);
