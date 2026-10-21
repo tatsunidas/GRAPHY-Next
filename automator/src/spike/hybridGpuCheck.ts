@@ -119,6 +119,9 @@ async function main(): Promise<void> {
       check((await pick(page).getAttribute("data-pending")) === "false", "再起動待ちは出ない");
       const name = (await gpuName(page)) ?? "";
       check(name.length > 0 && !/NVIDIA/i.test(name), "（基準）描画の GPU は NVIDIA ではない", name);
+      const memText = (await page.getByTestId("renderenv-row-gpu-memory").innerText()) ?? "";
+      console.log(`  （参考）GPU メモリの行: ${memText.replace(/\s+/g, " ")}`);
+      check(/GB/.test(memText) && !/不明|Unknown/.test(memText), "GPU メモリが「不明」にならず、容量が出る", memText);
       const mine = smiPids().filter((p) => isDescendant(p, pid));
       baselineNvidiaFree = mine.length === 0;
       check(baselineNvidiaFree, "（基準）Electron の GPU プロセスは nvidia-smi に出ていない", mine);
