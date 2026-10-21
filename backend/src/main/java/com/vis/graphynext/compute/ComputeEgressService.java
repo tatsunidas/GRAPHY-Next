@@ -48,18 +48,45 @@ public class ComputeEgressService {
         }
     }
 
+    /** 一括の 1 組（同じコードを走らせる入力の組）。{@code key} はプラグインが付けた名前（患者名を入れない）。 */
+    public record Item(String key, List<DatasetSummary> datasets) {
+    }
+
     /**
      * 送る要求。{@code contentHash} は宛先・プラグイン・データセットのハッシュ・コードから作る。
      *
+     * @param datasets      <b>全組</b>のデータセットを平らに並べたもの（同意画面はこれを全部出す）
      * @param anonymization 匿名化の方法（同意画面に出す）
+     * @param items         一括の組。{@code null} は対話の 1 回（runJob＝組名なしの 1 組。{@link #itemsOrSingle}）
      */
     public record EgressRequest(String id, String pluginId, String pluginName, String endpointId,
                                 String endpointLabel, String endpointUrl, boolean plaintext,
                                 String endpointKind, List<DatasetSummary> datasets, String code, String codeSha256,
-                                String anonymization, String contentHash, Instant createdAt, Status status) {
+                                String anonymization, String contentHash, Instant createdAt, Status status,
+                                List<Item> items) {
+        /** 対話の 1 回（組なし）。 */
+        public EgressRequest(String id, String pluginId, String pluginName, String endpointId,
+                             String endpointLabel, String endpointUrl, boolean plaintext, String endpointKind,
+                             List<DatasetSummary> datasets, String code, String codeSha256, String anonymization,
+                             String contentHash, Instant createdAt, Status status) {
+            this(id, pluginId, pluginName, endpointId, endpointLabel, endpointUrl, plaintext, endpointKind, datasets,
+                    code, codeSha256, anonymization, contentHash, createdAt, status, null);
+        }
+
         EgressRequest with(Status s) {
             return new EgressRequest(id, pluginId, pluginName, endpointId, endpointLabel, endpointUrl, plaintext,
-                    endpointKind, datasets, code, codeSha256, anonymization, contentHash, createdAt, s);
+                    endpointKind, datasets, code, codeSha256, anonymization, contentHash, createdAt, s, items);
+        }
+
+        /** 組の一覧。対話の 1 回は「組名なしの 1 組」。 */
+        public List<Item> itemsOrSingle() {
+            return items != null ? items : List.of(new Item(null, datasets));
+        }
+
+        /** 1 組だけの見た目（同じ札の id・内容のハッシュ・宛先のまま、データセットだけをその組のものにする）。 */
+        EgressRequest forItem(Item it) {
+            return new EgressRequest(id, pluginId, pluginName, endpointId, endpointLabel, endpointUrl, plaintext,
+                    endpointKind, it.datasets(), code, codeSha256, anonymization, contentHash, createdAt, status, null);
         }
     }
 
@@ -123,6 +150,61 @@ public class ComputeEgressService {
         ObjectNode line = base("egress-requested", r);
         line.put("codeHead", ComputeAuditLog.codeHead(code)).put("codeChars", code.length());
         audit.append(line);
+        return r;
+    }
+
+    /** 一括の組名: 英数字・{@code . _ -} の 64 字まで。<b>患者名を入れないこと</b>（台帳・監査に残る）。 */
+    static final java.util.regex.Pattern ITEM_KEY = java.util.regex.Pattern.compile("[A-Za-z0-9._-]{1,64}");
+
+    /**
+     * 一括の要求を作る（同じコードを、組ごとの入力で走らせる）。<b>まだ何も送らない</b>。同意は全組で 1 回。
+     *
+     * @param itemHandles 組名 → その組のデータセットのハンドル（順序を保つ）
+     */
+    public EgressRequest createBatch(String pluginId, String pluginName, String endpointId,
+                                     java.util.LinkedHashMap<String, List<String>> itemHandles, String code,
+                                     int maxCodeChars) {
+        sweep();
+        if (itemHandles == null || itemHandles.isEmpty()) {
+            throw new EgressRefused("no-items");
+        }
+        for (String k : itemHandles.keySet()) {
+            if (k == null || !ITEM_KEY.matcher(k).matches()) {
+                throw new EgressRefused("bad-item-key");
+            }
+        }
+        ComputeEndpointRegistry.Entry ep = endpoints.get(endpointId)
+                .orElseThrow(() -> new EgressRefused("unknown-endpoint"));
+        String codeProblem = CodeInspector.inspect(code, maxCodeChars);
+        if (codeProblem != null) {
+            auditRefused(pluginId, endpointId, codeProblem, code);
+            throw new EgressRefused(codeProblem);
+        }
+        List<Item> items = new ArrayList<>();
+        List<DatasetSummary> flat = new ArrayList<>();
+        for (var e : itemHandles.entrySet()) {
+            List<DatasetSummary> ds = new ArrayList<>();
+            for (String h : e.getValue() == null ? List.<String>of() : e.getValue()) {
+                ds.add(DatasetSummary.of(datasets.get(h).orElseThrow(() -> new EgressRefused("unknown-dataset"))));
+            }
+            items.add(new Item(e.getKey(), List.copyOf(ds)));
+            flat.addAll(ds);
+        }
+        String codeSha = sha256(code);
+        String url = ep.endpoint().base().toString();
+        boolean plaintext = "http".equals(ep.endpoint().base().getScheme());
+        String id = "egr_" + UUID.randomUUID();
+        String hash = contentHashBatch(pluginId, endpointId, url, items, codeSha);
+        EgressRequest r = new EgressRequest(id, pluginId, pluginName == null ? pluginId : pluginName, endpointId,
+                ep.label(), url, plaintext, ep.kind(), List.copyOf(flat), code, codeSha, ANONYMIZATION, hash,
+                Instant.now(), Status.PENDING, List.copyOf(items));
+        requests.put(id, r);
+        ObjectNode line = base("egress-requested", r);
+        line.put("codeHead", ComputeAuditLog.codeHead(code)).put("codeChars", code.length());
+        audit.append(line);
+        audit.append(audit.event("compute-batch-requested").put("requestId", id).put("pluginId", pluginId)
+                .put("endpointId", endpointId).put("items", items.size()).put("datasets", flat.size())
+                .put("totalBytes", flat.stream().mapToLong(DatasetSummary::bytes).sum()));
         return r;
     }
 
@@ -284,6 +366,21 @@ public class ComputeEgressService {
         for (DatasetSummary d : ds) {
             sb.append(d.handle()).append(' ').append(d.format()).append(' ').append(d.sha256()).append(' ')
                     .append(d.bytes()).append('\n');
+        }
+        return sha256(sb.toString());
+    }
+
+    /** 一括の内容のハッシュ（v2）。<b>組の名前と境目</b>を含める——組の分け方を変えるとハッシュが変わる。 */
+    static String contentHashBatch(String pluginId, String endpointId, String url, List<Item> items,
+                                   String codeSha) {
+        StringBuilder sb = new StringBuilder("v2\n").append(pluginId).append('\n').append(endpointId).append('\n')
+                .append(url).append('\n').append(codeSha).append('\n');
+        for (Item it : items) {
+            sb.append("item ").append(it.key()).append(' ').append(it.datasets().size()).append('\n');
+            for (DatasetSummary d : it.datasets()) {
+                sb.append(d.handle()).append(' ').append(d.format()).append(' ').append(d.sha256()).append(' ')
+                        .append(d.bytes()).append('\n');
+            }
         }
         return sha256(sb.toString());
     }

@@ -256,10 +256,21 @@ public class PluginJobService {
         return enqueue(serialLanes.computeIfAbsent(laneKey, k -> new SerialLane(computePool)), pluginId, task);
     }
 
+    /**
+     * {@link #submitSerialTask} の低優先版（一括の 1 組）。同じ列で<b>待っている対話のジョブの後ろ</b>に並ぶ——
+     * 実行中のジョブは止めず、順番が来たときに対話のジョブを先に取る。
+     */
+    public Status submitSerialTaskLow(String laneKey, String pluginId, Task task) {
+        SerialLane lane = serialLanes.computeIfAbsent(laneKey, k -> new SerialLane(computePool));
+        return enqueue(lane::executeLow, pluginId, task);
+    }
+
     /** 1 本ずつ順に走らせる列。順番が来たときだけ土台のスレッドを借りる。 */
     private static final class SerialLane implements Executor {
         private final Executor base;
         private final java.util.ArrayDeque<Runnable> queue = new java.util.ArrayDeque<>();
+        /** 低優先（一括）。{@link #queue} が空のときだけ取る。 */
+        private final java.util.ArrayDeque<Runnable> lowQueue = new java.util.ArrayDeque<>();
         private boolean running;
 
         SerialLane(Executor base) {
@@ -268,8 +279,16 @@ public class PluginJobService {
 
         @Override
         public void execute(Runnable r) {
+            add(queue, r);
+        }
+
+        void executeLow(Runnable r) {
+            add(lowQueue, r);
+        }
+
+        private void add(java.util.ArrayDeque<Runnable> q, Runnable r) {
             synchronized (this) {
-                queue.add(r);
+                q.add(r);
                 if (running) return;
                 running = true;
             }
@@ -281,6 +300,7 @@ public class PluginJobService {
                 Runnable next;
                 synchronized (this) {
                     next = queue.poll();
+                    if (next == null) next = lowQueue.poll();
                     if (next == null) {
                         running = false;
                         return;

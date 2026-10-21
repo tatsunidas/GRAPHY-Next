@@ -25,6 +25,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
@@ -130,6 +131,142 @@ public class ComputeJobRunner {
         return jobs.cancel(j.pluginJobId).isPresent();
     }
 
+    // ── 一括（同じコードを組ごとの入力で走らせる。同意は 1 回） ──
+
+    /** 承認済みの一括の、メモリ上の持ち物（再起動で消える＝再開は新しい同意から）。 */
+    private static final class BatchCtx {
+        final String batchId;
+        final ComputeEgressService.EgressRequest request;
+        final Duration timeout;
+        /** 組（ジョブ id → 組）。作った順＝列に並べる順。 */
+        final Map<String, ComputeEgressService.Item> items = new LinkedHashMap<>();
+        /** ジョブごとの世代。列へ並べ直したとき古い待ちの実行を無効にする（二重に走らせない）。 */
+        final Map<String, java.util.concurrent.atomic.AtomicInteger> generation = new ConcurrentHashMap<>();
+
+        BatchCtx(String batchId, ComputeEgressService.EgressRequest request, Duration timeout) {
+            this.batchId = batchId;
+            this.request = request;
+            this.timeout = timeout;
+        }
+    }
+
+    private final Map<String, BatchCtx> batches = new ConcurrentHashMap<>();
+
+    /**
+     * 承認済みの一括を投入する。<b>札は全組でここで 1 回だけ使用済みになる。</b>
+     * 組ごとにジョブ（台帳の行）を作り、同じ計算機の列に（対話のジョブより後ろに）並べる。
+     *
+     * @return {@code batchId} と、組名 → ジョブ id
+     * @throws ComputeEgressService.EgressRefused 承認されていない・期限切れ・使用済み・別のプラグインの要求
+     */
+    public Map<String, Object> submitBatch(String pluginId, String requestId, Integer timeoutSec) {
+        ComputeEgressService.EgressRequest r = egress.consumeFor(pluginId, requestId)
+                .orElseThrow(() -> new ComputeEgressService.EgressRefused("not-approved"));
+        int timeout = timeoutSec == null ? DEFAULT_TIMEOUT_SEC : Math.max(10, Math.min(MAX_TIMEOUT_SEC, timeoutSec));
+        // 待ちの組のデータを期限（2 時間）で消さない。その組が終わるか一括が中止されるまで持つ
+        r.datasets().forEach(d -> datasets.hold(d.handle()));
+        String batchId = ledger.createBatch(r, timeout, false);
+        BatchCtx bc = new BatchCtx(batchId, r, Duration.ofSeconds(timeout));
+        List<Map<String, Object>> out = new ArrayList<>();
+        for (ComputeEgressService.Item it : r.itemsOrSingle()) {
+            List<ComputeJobLedger.InputRef> inputs = it.datasets().stream()
+                    .map(d -> datasets.get(d.handle())
+                            .map(ds -> new ComputeJobLedger.InputRef(ds.sourceStudyUid(), ds.sourceSeriesUid(), d.format()))
+                            .orElse(new ComputeJobLedger.InputRef("", "", d.format())))
+                    .toList();
+            String cj = ledger.createJob(batchId, r, it.key(), inputs);
+            bc.items.put(cj, it);
+            out.add(Map.of("key", it.key() == null ? "" : it.key(), "jobId", cj));
+        }
+        batches.put(batchId, bc);
+        bc.items.keySet().forEach(cj -> enqueueItem(bc, cj));
+        return Map.of("batchId", batchId, "items", out);
+    }
+
+    /** 1 組を計算機の列（低優先）へ並べる。世代を進めるので、前に並べた同じ組の待ちは何もせず終わる。 */
+    private void enqueueItem(BatchCtx bc, String cj) {
+        ComputeEgressService.EgressRequest ir = bc.request.forItem(bc.items.get(cj));
+        int gen = bc.generation.computeIfAbsent(cj, k -> new java.util.concurrent.atomic.AtomicInteger()).incrementAndGet();
+        PluginJobService.Status st = jobs.submitSerialTaskLow(ir.endpointId(), ir.pluginId(), new PluginJobService.Task() {
+            @Override
+            public Object run(PluginJobService.TaskContext ctx) throws Exception {
+                if (bc.generation.get(cj).get() != gen) {
+                    return Map.of("superseded", true); // 並べ直された（今の待ちが走る）
+                }
+                if (ledger.isPaused(bc.batchId)) {
+                    return Map.of("parked", true); // 一時停止中。台帳は待ちのまま・データは保持（再開で並べ直す）
+                }
+                return ComputeJobRunner.this.run(ir, cj, bc.timeout, ctx);
+            }
+
+            @Override
+            public void onCancelRequested() {
+                cancelQueued(cj, ir);
+            }
+        });
+        ledger.attachPluginJob(cj, st.jobId());
+    }
+
+    /**
+     * 一時停止中の一括を再開する。待ちのままの組を、元の順で列へ並べ直す。
+     *
+     * @return 並べ直した組の数。一括が見つからない（再起動で失われた）・一時停止でなければ -1
+     */
+    public int resumeBatch(String batchId) {
+        BatchCtx bc = batches.get(batchId);
+        if (bc == null || !ledger.isPaused(batchId)) {
+            return -1;
+        }
+        ledger.resumeBatch(batchId);
+        int n = 0;
+        for (String cj : bc.items.keySet()) {
+            ComputeJobRecord j = ledger.find(cj).orElse(null);
+            if (j != null && State.valueOf(j.state) == State.QUEUED) {
+                enqueueItem(bc, cj);
+                n++;
+            }
+        }
+        return n;
+    }
+
+    /**
+     * 一括を中止する。待ちの組は計算機へ何も送らずに中止、実行中の組は中断する。
+     *
+     * @return 中止を受け付けた組の数。一括が見つからなければ -1（再起動で失われた行は中断になっている）
+     */
+    public int cancelBatch(String batchId) {
+        BatchCtx bc = batches.get(batchId);
+        if (bc == null) {
+            return -1;
+        }
+        int n = 0;
+        for (Map.Entry<String, ComputeEgressService.Item> e : bc.items.entrySet()) {
+            ComputeJobRecord j = ledger.find(e.getKey()).orElse(null);
+            if (j == null || State.valueOf(j.state).ended()) {
+                continue;
+            }
+            if (cancel(e.getKey())) {
+                n++;
+            } else if (ledger.cancelIfQueued(e.getKey())) {
+                // 並べた待ちのジョブが一覧から消えている（一時停止が長引いた）。台帳とデータをここで片付ける
+                bc.request.forItem(e.getValue()).datasets().forEach(d -> datasets.discard(d.handle()));
+                audit.append(event("compute-job-cancelled", bc.request.forItem(e.getValue())).put("stage", "queued"));
+                n++;
+            }
+        }
+        ledger.resumeBatch(batchId); // 中止したので「一時停止」の表示は残さない
+        releaseIfDone(batchId);
+        return n;
+    }
+
+    /** 組が終わるたびに呼ぶ。全部終わったら、メモリの持ち物を手放す。 */
+    private void releaseIfDone(String batchId) {
+        BatchCtx bc = batches.get(batchId);
+        if (bc != null && ledger.jobsOfBatch(batchId).stream().allMatch(j -> State.valueOf(j.state).ended())) {
+            batches.remove(batchId);
+        }
+    }
+
     /** 待ちのままなら中止にして、送らずに終える（データは捨てる）。実行が始まっていれば何もしない。 */
     private void cancelQueued(String cj, ComputeEgressService.EgressRequest r) {
         if (ledger.cancelIfQueued(cj)) {
@@ -162,8 +299,25 @@ public class ComputeJobRunner {
         } catch (Exception e) {
             Reason reason = ComputeJobStateMachine.classify(e);
             ledger.finish(cj, State.FAILED, reason, e.getClass().getSimpleName(), e.getMessage(), 0);
+            pauseIfUnreachable(cj, reason, r);
             throw e;
+        } finally {
+            ledger.find(cj).ifPresent(j -> releaseIfDone(j.batchId));
         }
+    }
+
+    /**
+     * 🔑 障害と入力固有の失敗を分ける: 計算機に届かないのは入力のせいではないので、一括の残りを失敗にせず<b>一時停止</b>する。
+     * 対話の 1 回は対象外（1 本だけで、利用者がやり直す）。
+     */
+    private void pauseIfUnreachable(String cj, Reason reason, ComputeEgressService.EgressRequest r) {
+        if (reason != Reason.ENDPOINT_UNREACHABLE) {
+            return;
+        }
+        ledger.find(cj).flatMap(ledger::batchOf).filter(b -> !b.interactive).ifPresent(b -> {
+            ledger.pauseBatch(b.id, Reason.ENDPOINT_UNREACHABLE.code);
+            audit.append(event("compute-batch-paused", r).put("reason", Reason.ENDPOINT_UNREACHABLE.code));
+        });
     }
 
     /** コードの結果（正常終了・Python の例外）を台帳へ。例外でも H59 の戻り値は今のまま（status:"error"）。 */
