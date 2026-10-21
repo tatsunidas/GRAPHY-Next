@@ -97,6 +97,27 @@ class Positive(unittest.TestCase):
         self.assertTrue(why)
 
 
+class Regions(unittest.TestCase):
+    def test_region_is_the_union_of_labels(self):
+        seg = m.read_seg(SEG)
+        ref = make_reference(False)
+        names = list(NAME_TO_VALUE)
+        # 正例: 全ラベルの和は完全に一致する。1 ラベルだけの領域は、そのラベルの Dice と同じ
+        r = m.score_volumes(seg, ref, NAME_TO_VALUE, {
+            "all": {"seg": names, "ref": list(NAME_TO_VALUE.values())},
+            "one": {"seg": names[:1], "ref": [NAME_TO_VALUE[names[0]]]},
+        })
+        self.assertEqual(r["regions"]["all"]["dice"], 1.0)
+        self.assertEqual(r["regions"]["one"]["dice"], r["labels"][names[0]]["dice"])
+        # 負例: 基準側の和にラベルを 1 つ足すと、完全一致ではなくなる（和集合の組み方が効いている）
+        wrong = m.score_volumes(seg, ref, NAME_TO_VALUE, {"all": {"seg": names[:-1], "ref": list(NAME_TO_VALUE.values())}})
+        self.assertLess(wrong["regions"]["all"]["dice"], 1.0)
+        # SEG に無い名前は、0 や 1 で埋めず理由つきの None
+        none = m.score_volumes(seg, ref, NAME_TO_VALUE, {"x": {"seg": ["no such"], "ref": [1]}})
+        self.assertIsNone(none["regions"]["x"]["dice"])
+        self.assertIn("no such", none["regions"]["x"]["reason"])
+
+
 class Negative(unittest.TestCase):
     """採点が、壊れた入力で本当に落ちる（通ってしまわない）ことを確かめる。"""
 

@@ -31,7 +31,7 @@ const MR_DIR = path.join(FIXTURES_ROOT, "mr-monai");
 const { check, summary } = createChecker();
 
 /** Bundle → 使うシリーズ（ct = ct-basic の PRE LIVER）。 */
-const PLAN: { bundle: string; series: "ct" | "prostate" | "brain"; version?: string }[] = [
+const PLAN: { bundle: string; series: "ct" | "prostate" | "brain"; version?: string; sets?: string }[] = [
   { bundle: "spleen_ct_segmentation", series: "ct" },
   { bundle: "wholeBody_ct_segmentation", series: "ct" },
   { bundle: "swin_unetr_btcv_segmentation", series: "ct" },
@@ -46,13 +46,17 @@ const PLAN: { bundle: string; series: "ct" | "prostate" | "brain"; version?: str
 const EXTRA = new Set(["pediatric_abdominal_ct_segmentation"]);
 
 async function main(): Promise<void> {
-  // 引数は「名前」または「名前@版」（版を指定すると、画面の版の選択も使う）
-  const only = process.argv.slice(2).map((a) => a.split("@"));
+  // 引数は「名前」「名前@版」「名前:設定=値,設定=値」（版を指定すると画面の版の選択、設定を指定すると画面の設定の部品も使う）
+  const only = process.argv.slice(2).map((a) => {
+    const [head, sets] = a.split(":");
+    const [name, version] = head.split("@");
+    return [name, version, sets] as [string, string | undefined, string | undefined];
+  });
   const plan = only.length
-    ? only.map(([name, version]) => {
+    ? only.map(([name, version, sets]) => {
         const p = PLAN.find((x) => x.bundle === name);
         if (!p) throw new Error(`PLAN にない Bundle: ${name}`);
-        return { ...p, version };
+        return { ...p, version, sets };
       })
     : PLAN.filter((p) => !EXTRA.has(p.bundle));
   fs.mkdirSync(OUT_DIR, { recursive: true });
@@ -114,9 +118,18 @@ async function main(): Promise<void> {
       const v = viewer!;
       await v.getByTestId("monai-bundle").selectOption(p.bundle);
       if (p.version) await v.getByTestId("monai-version").selectOption(p.version);
+      for (const kv of (p.sets ?? "").split(",").filter(Boolean)) {
+        const [k, val] = kv.split("=");
+        const box = v.getByTestId(`monai-setting-${k}`);
+        if (val === "true" || val === "false") await box.setChecked(val === "true");
+        else await box.fill(val);
+      }
       const t0 = Date.now();
       await v.getByTestId("monai-run").click();
-      const w = await consentWindow(driver, 300_000);
+      const w = await consentWindow(driver, 300_000).catch(async (e) => {
+        console.log("STATUS:", await v.getByTestId("monai-status").textContent(), JSON.stringify(await state(v)).slice(0, 600));
+        throw e;
+      });
       await w.getByTestId("consent-ack").check();
       await w.getByTestId("consent-send").click();
       await v.waitForFunction(() => (window as unknown as { __monaiState?: { phase: string } }).__monaiState?.phase === "idle", null, { timeout: 3_600_000 });
@@ -125,7 +138,7 @@ async function main(): Promise<void> {
       const fg = Object.keys(s.summary?.labels ?? {}).filter((k) => k !== "0").length;
       const row = {
         bundle: p.bundle, series: p.series, requestedVersion: p.version ?? null, bundleVersion: s.summary?.version ?? null, ok: !!s.summary && !s.error, seconds: sec,
-        stages: s.summary?.stages, gpu: s.summary?.gpu, labels: fg, shown: s.shown, resampled: s.summary?.resampled, error: s.error,
+        overrides: s.summary?.overrides, effective: s.summary?.effective, effectiveError: s.summary?.effectiveError, outputSpacing: s.summary?.outputSpacing, labelCounts: s.summary?.labels, stages: s.summary?.stages, gpu: s.summary?.gpu, labels: fg, shown: s.shown, resampled: s.summary?.resampled, error: s.error,
       };
       rows.push(row);
       console.log(`    ${JSON.stringify(row)}`);
