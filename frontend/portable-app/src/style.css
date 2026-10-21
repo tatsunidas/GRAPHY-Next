@@ -1,0 +1,96 @@
+:root {
+  --bg: #0c0e11;
+  --panel: #12151a;
+  --card: #171b21;
+  --control: #1a1e24;
+  --line: #262b33;
+  --pressed: #2a3442;
+  --text: #e8ebef;
+  --muted: #9ba5b3;
+  --icon: #c4ccd6;
+  --accent: #5aaeff;
+  --on-accent: #06101c;
+  --mono: ui-monospace, Consolas, "SF Mono", monospace;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html, body, #root { height: 100%; margin: 0; }
+body { background: var(--bg); color: var(--text); font: 13px system-ui, "Segoe UI", "Yu Gothic UI", "Hiragino Sans", sans-serif; overflow: hidden; }
+button { font: inherit; color: inherit; cursor: pointer; }
+button:hover:not(:disabled) { filter: brightness(1.18); }
+button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+button:disabled { opacity: .45; cursor: default; }
+
+.pv-app { height: 100%; display: flex; flex-direction: column; }
+.pv-top { height: 52px; flex: none; display: flex; align-items: center; gap: 16px; padding: 0 16px; background: var(--panel); border-bottom: 1px solid var(--line); }
+.pv-brand { display: flex; align-items: center; gap: 10px; }
+.pv-brand b { font-weight: 650; letter-spacing: .02em; }
+.pv-brand span { color: var(--muted); }
+.pv-sep { width: 1px; height: 22px; background: var(--line); }
+.pv-patient { display: flex; flex-direction: column; gap: 1px; min-width: 0; flex: 1; }
+.pv-patient b { font-size: 14px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pv-patient span { color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pv-seg { display: flex; background: var(--control); border: 1px solid var(--line); border-radius: 8px; padding: 2px; gap: 2px; }
+.pv-seg button { min-width: 34px; height: 30px; padding: 0 8px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); display: grid; place-items: center; }
+.pv-seg button[aria-pressed="true"] { background: var(--pressed); color: var(--text); }
+.pv-chip { height: 34px; padding: 0 12px; display: flex; align-items: center; gap: 8px; background: var(--control); border: 1px solid var(--line); border-radius: 8px; }
+.pv-chip[aria-pressed="true"] { background: #1a2635; border-color: #2f4258; }
+.pv-iconbtn { width: 34px; height: 34px; border: 1px solid var(--line); border-radius: 8px; background: var(--control); display: grid; place-items: center; }
+
+.pv-body { flex: 1; min-height: 0; display: flex; }
+.pv-side { width: 288px; flex: none; display: flex; flex-direction: column; background: var(--panel); border-right: 1px solid var(--line); }
+.pv-side-head { display: flex; align-items: center; justify-content: space-between; padding: 14px 16px 8px; font-size: 12px; font-weight: 650; letter-spacing: .06em; color: var(--muted); }
+.pv-count { font-weight: 400; background: var(--control); border: 1px solid var(--line); border-radius: 10px; padding: 1px 8px; letter-spacing: 0; }
+.pv-list { padding: 0 12px 8px; display: flex; flex-direction: column; gap: 8px; flex: 1; overflow: auto; }
+.pv-study { display: flex; align-items: center; gap: 8px; padding: 6px 4px; color: var(--muted); font-size: 12px; }
+.pv-card { display: flex; gap: 12px; text-align: left; padding: 8px; border-radius: 10px; background: var(--card); border: 1px solid var(--line); width: 100%; flex: none; }
+.pv-card[aria-current="true"] { background: #1b2838; border-color: var(--accent); }
+.pv-thumb { width: 64px; height: 64px; flex: none; border-radius: 6px; background: #000; display: grid; place-items: center; overflow: hidden; }
+.pv-thumb canvas { max-width: 64px; max-height: 64px; }
+.pv-meta { display: flex; flex-direction: column; gap: 3px; min-width: 0; justify-content: center; }
+.pv-meta .row { display: flex; align-items: center; gap: 6px; }
+.pv-mod { font-size: 11px; font-weight: 700; padding: 1px 6px; border-radius: 4px; background: var(--pressed); }
+.pv-mod.pt { background: #3a2f45; }
+.pv-meta small { font-size: 11px; color: var(--muted); }
+.pv-meta strong { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pv-meta .sub { font-size: 12px; color: var(--muted); }
+.pv-hint { font-size: 12px; color: var(--muted); padding: 6px 4px; }
+.pv-privacy { padding: 12px 16px; border-top: 1px solid var(--line); display: flex; gap: 10px; align-items: flex-start; color: var(--muted); font-size: 12px; line-height: 1.5; }
+
+.pv-rail { width: 60px; flex: none; display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 10px 0; background: var(--panel); border-right: 1px solid var(--line); position: relative; }
+.pv-tool { width: 44px; height: 44px; border: 0; border-radius: 10px; background: transparent; display: grid; place-items: center; color: var(--icon); position: relative; }
+.pv-tool[aria-pressed="true"] { background: var(--accent); color: var(--on-accent); }
+.pv-rail hr { width: 28px; border: 0; height: 1px; background: var(--line); margin: 6px 0; }
+.pv-tip { position: absolute; left: 66px; z-index: 30; white-space: nowrap; background: #232a34; border: 1px solid #36404d; border-radius: 8px; padding: 6px 10px; box-shadow: 0 6px 18px rgba(0,0,0,.5); display: none; gap: 10px; align-items: center; pointer-events: none; color: var(--text); }
+.pv-tool:hover .pv-tip, .pv-tool:focus-visible .pv-tip { display: flex; top: 6px; }
+.pv-tip kbd { font: 12px var(--mono); color: var(--icon); background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 1px 6px; }
+.pv-pop { position: absolute; left: 66px; bottom: 6px; z-index: 40; background: #232a34; border: 1px solid #36404d; border-radius: 10px; padding: 8px; box-shadow: 0 8px 24px rgba(0,0,0,.55); display: flex; flex-direction: column; gap: 2px; min-width: 190px; }
+.pv-pop button { height: 34px; padding: 0 10px; border: 0; border-radius: 6px; background: transparent; text-align: left; display: flex; align-items: center; gap: 10px; }
+.pv-pop button[aria-pressed="true"] { background: var(--pressed); }
+.pv-pop .title { font-size: 11px; color: var(--muted); padding: 6px 10px 2px; letter-spacing: .06em; }
+
+.pv-stage { flex: 1; min-width: 0; display: grid; gap: 2px; background: #1b1f26; position: relative; }
+.pv-tile { position: relative; background: #000; min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; outline: 2px solid transparent; outline-offset: -2px; }
+.pv-tile[data-active="true"] { outline-color: var(--accent); }
+.pv-tile.drop { outline-color: var(--accent); outline-style: dashed; }
+.pv-empty { flex: 1; display: grid; place-items: center; color: var(--muted); text-align: center; padding: 24px; line-height: 1.6; }
+.pv-msg { flex: 1; display: grid; place-items: center; }
+.pv-card2 { width: 520px; max-width: calc(100% - 32px); padding: 28px 32px; border-radius: 14px; background: var(--panel); border: 1px solid var(--line); display: flex; flex-direction: column; gap: 16px; }
+.pv-card2 h2 { margin: 0; font-size: 17px; font-weight: 650; }
+.pv-card2 p { margin: 0; color: var(--muted); line-height: 1.5; }
+.pv-bar { height: 6px; border-radius: 3px; background: var(--line); overflow: hidden; }
+.pv-bar > i { display: block; height: 100%; background: var(--accent); transition: width .15s; }
+
+.pv-bottom { height: 60px; flex: none; display: flex; align-items: center; gap: 16px; padding: 0 16px; background: var(--panel); border-top: 1px solid var(--line); }
+.pv-play { width: 38px; height: 38px; border: 0; border-radius: 19px; background: var(--pressed); display: grid; place-items: center; }
+.pv-fps { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; }
+.pv-num { font: 13px var(--mono); color: var(--text); background: var(--control); border: 1px solid var(--line); border-radius: 6px; padding: 3px 6px; width: 56px; text-align: center; }
+.pv-slider { flex: 1; min-width: 80px; accent-color: var(--accent); height: 24px; }
+.pv-pos { font-family: var(--mono); min-width: 72px; text-align: right; }
+.pv-wl { display: flex; gap: 6px; align-items: center; }
+.pv-wl button.chip { height: 30px; padding: 0 10px; border: 1px solid var(--line); border-radius: 15px; background: var(--control); color: var(--icon); }
+.pv-wl button.chip[aria-pressed="true"] { border-color: var(--accent); color: var(--text); }
+.pv-wl label { color: var(--muted); font-size: 12px; display: flex; align-items: center; gap: 4px; }
+
+/* 本体の描画核（SeriesViewer）をタイルへ収める。 */
+.pv-tile > div { flex: 1; min-height: 0; }

@@ -147,6 +147,7 @@ export function SeriesViewer({
   onDimChange,
   renderFusionOverlay,
   acceptsTaskLaunch = false,
+  chrome = true,
 }: {
   instances: Instance[];
   mode: ViewerMode;
@@ -190,6 +191,8 @@ export function SeriesViewer({
    * 開いたばかりの 2D ビューアには何も起きない（実機検証で実際にこうなった）。
    */
   acceptsTaskLaunch?: boolean;
+  /** false で Viewer2D の状態バー・操作バーを隠す（ポータブル版が自前の UI を使う）。既定 true。 */
+  chrome?: boolean;
 }) {
   const { t } = useI18n();
   // ツールパネルの開閉。未制御のときは親の showControls を初期値・追従元にし（一括開閉は親が上書き）、
@@ -1415,10 +1418,10 @@ export function SeriesViewer({
           </div>
         </div>
       ) : (
-        <Viewer2D imageIds={displayImageIds} imageIndex={zc} overlays={overlays} fill={fillHeight} viewSyncEnabled={syncOn} referenceLinesEnabled={referenceLinesEnabled} referenceLabel={referenceLabel} commandKey={commandKey} roiContext={roiContext} renderOverlay={renderFusionOverlay} thickSlab={effectiveThick} refreshKey={calibVersion} pendingImages={!xaReady} frameStack={!spatialStack} />
+        <Viewer2D imageIds={displayImageIds} imageIndex={zc} overlays={overlays} fill={fillHeight} chrome={chrome} viewSyncEnabled={syncOn} referenceLinesEnabled={referenceLinesEnabled} referenceLabel={referenceLabel} commandKey={commandKey} roiContext={roiContext} renderOverlay={renderFusionOverlay} thickSlab={effectiveThick} refreshKey={calibVersion} pendingImages={!xaReady} frameStack={!spatialStack} />
       )}
 
-      {layoutReady && (
+      {layoutReady && chrome && (
         <button
           type="button"
           data-testid="series-controls-toggle"
