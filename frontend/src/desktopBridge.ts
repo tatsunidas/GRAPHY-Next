@@ -43,6 +43,32 @@ export interface GpuStatus {
   devices: { vendorId: number; deviceId: number; active: boolean }[];
 }
 
+/** 描画に使う GPU の選択。auto＝OS の既定、high＝高性能 GPU。 */
+export type RenderGpuChoice = "auto" | "high";
+
+/** GPU 1 つ分の搭載メモリ。 */
+export interface GpuMemoryEntry {
+  name: string;
+  totalBytes: number;
+}
+
+export type RenderGpuFallback = "missing" | "unconfirmed" | "failed";
+
+export interface RenderPrefsState {
+  platform: string;
+  prefs: { gpu: RenderGpuChoice };
+  /** 設定の節を出せるか（GPU が 2 つ以上。Linux は NVIDIA ドライバが GPU を持つか、表示を担っていない AMD の GPU があること）。 */
+  supported: boolean;
+  /** 選択は高性能 GPU なのに付けなかった理由（見つからない／前回の起動が確定しなかった／前回 GPU が使えなかった）。付けたなら null。 */
+  fallback: RenderGpuFallback | null;
+  /** fallback が failed のときの原因（GPU プロセスの終了理由）。 */
+  fallbackReason: string | null;
+  /** 実機で効くことを確かめていない経路か（Windows・macOS・Linux の AMD）。画面に「検証中」と出す。 */
+  unverified: boolean;
+  /** この起動で、高性能 GPU の指定を実際に付けたか。保存した値との食い違い＝再起動待ち。 */
+  appliedHigh: boolean;
+}
+
 /** 秘密情報の状態。**値そのものは決して返らない**（main プロセスから出さない設計）。 */
 export interface SecretStatus {
   /** 設定済みか。 */
@@ -277,6 +303,13 @@ export interface GraphyDesktop {
   getMemoryInfo?: () => Promise<MemoryInfo>;
   /** Chromium の GPU 機能状態と GPU 一覧（描画環境の自己診断用、デスクトップのみ）。 */
   getGpuStatus?: () => Promise<GpuStatus>;
+  /** GPU の搭載メモリ（設定＞描画環境、デスクトップのみ）。取れなければ null（Linux の NVIDIA 以外は未対応）。 */
+  getGpuMemory?: () => Promise<GpuMemoryEntry[] | null>;
+  /** 描画に使う GPU の選択（設定＞描画環境。ハイブリッド GPU の機械だけ。反映は再起動）。デスクトップのみ。 */
+  getRenderPrefs?: () => Promise<RenderPrefsState>;
+  setRenderPrefs?: (prefs: { gpu: RenderGpuChoice }) => Promise<{ ok: boolean; reason?: string }>;
+  /** 前回 GPU が使えなかった（未確定だった）記録を消して、もう一度 GPU で試す（反映は再起動）。 */
+  retryRenderPrefs?: () => Promise<{ ok: boolean }>;
   /** 外部 URL / mailto を OS の既定アプリ（ブラウザ・メーラ）で開く。 */
   openExternal?: (url: string) => void;
   /** GitHub Releases の最新リリース情報を取得（更新確認、デスクトップのみ）。失敗時 null。 */

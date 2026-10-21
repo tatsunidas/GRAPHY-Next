@@ -38,6 +38,12 @@ contextBridge.exposeInMainWorld("graphyDesktop", {
   getMemoryInfo: () => ipcRenderer.invoke("graphy:get-memory-info"),
   // Chromium の GPU 機能状態と GPU 一覧（描画環境の自己診断用）。
   getGpuStatus: () => ipcRenderer.invoke("graphy:gpu-status"),
+  // GPU の搭載メモリ（設定＞描画環境）。取れなければ null。
+  getGpuMemory: () => ipcRenderer.invoke("graphy:gpu-memory"),
+  // 描画に使う GPU の選択（設定＞描画環境。反映は再起動）。
+  getRenderPrefs: () => ipcRenderer.invoke("graphy:render-prefs-get"),
+  setRenderPrefs: (prefs) => ipcRenderer.invoke("graphy:render-prefs-set", prefs),
+  retryRenderPrefs: () => ipcRenderer.invoke("graphy:render-prefs-retry"),
   // 外部 URL / mailto を OS の既定アプリで開く。
   openExternal: (url) => ipcRenderer.send("graphy:open-external", url),
   // GitHub Releases の最新版情報を取得（更新確認）。失敗時 null。

@@ -66,7 +66,9 @@ cd desktop
 while true; do
   echo "[dev-desktop] launching Electron (standalone backend を spawn) ..."
   set +e
-  GRAPHY_DEV=1 GRAPHY_DEV_RELAUNCH_EXIT="$RELAUNCH_EXIT" npm start
+  # 設定＞描画環境で「高性能 GPU」を選んでいれば、その環境変数を Electron の起動前に足す（Linux。起動後では効かない）。
+  # サブシェルで足すので、利用者が自分で export したものは消えない。
+  ( eval "$(node renderPrefsEnv.js 2>/dev/null)"; GRAPHY_DEV=1 GRAPHY_DEV_RELAUNCH_EXIT="$RELAUNCH_EXIT" npm start )
   code=$?
   set -e
   if [ "$code" -ne "$RELAUNCH_EXIT" ]; then

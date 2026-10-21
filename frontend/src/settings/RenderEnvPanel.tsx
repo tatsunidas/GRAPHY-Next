@@ -13,6 +13,7 @@ import { loadRenderEnvSummary } from "../viewer/renderEnvReport";
 import type { SelfTestRun } from "../viewer/render3dSelfTest";
 import { fetchStatus } from "../api";
 import { SelfTestSection } from "./SelfTestSection";
+import { RenderGpuPick } from "./RenderGpuPick";
 
 const GB = 1024 * 1024 * 1024;
 
@@ -108,7 +109,16 @@ export function RenderEnvPanel() {
               volMax: String(s.volumeMaxMb),
             })}
           />
-          <Row id="gpu-memory" k={t("renderenv.row.gpuMemory")} value="" text={t("renderenv.gpuMemoryUnknown")} />
+          <Row
+            id="gpu-memory"
+            k={t("renderenv.row.gpuMemory")}
+            value={s.gpuMemory ? String(s.gpuMemory.reduce((n, g) => n + g.totalBytes, 0)) : ""}
+            text={
+              s.gpuMemory
+                ? s.gpuMemory.map((g) => `${g.name}: ${(g.totalBytes / GB).toFixed(1)} GB`).join(" / ")
+                : t("renderenv.gpuMemoryUnknown")
+            }
+          />
           <Row
             id="still3d"
             k={t("renderenv.row.still3d")}
@@ -139,6 +149,7 @@ export function RenderEnvPanel() {
           </span>
         )}
       </div>
+      <RenderGpuPick />
       <h4 style={sectionHead}>{t("selftest.title")}</h4>
       <p style={note}>{t("selftest.intro")}</p>
       <SelfTestSection kind={s.kind} onResult={setSelfTest} />
