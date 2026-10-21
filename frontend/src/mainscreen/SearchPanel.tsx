@@ -7,7 +7,7 @@ import { type StudyFilters } from "../api";
 import { useI18n } from "../i18n/i18n";
 
 /** チェックボックスグリッドに出すモダリティ候補（放射線でよく使うもの）。 */
-const MODALITY_OPTIONS = [
+export const MODALITY_OPTIONS = [
   "CT", "MR", "CR", "DX", "DR", "US", "XA", "RF",
   "MG", "NM", "PT", "OT", "SC", "ES", "SM", "PR",
 ];

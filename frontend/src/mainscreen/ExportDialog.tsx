@@ -19,6 +19,7 @@ import { useI18n } from "../i18n/i18n";
 import { desktop } from "../desktopBridge";
 import { selectionHasCfm } from "./cfmNotice";
 import { exportPercent, runExportJob } from "./exportJob";
+import { TriCheckbox } from "./TriCheckbox";
 
 /**
  * Export: MainScreen で選択中のスタディ<b>の患者</b>のスタディ/シリーズをツリー表示し、
@@ -402,15 +403,6 @@ export function ExportDialog({
       </div>
     </div>
   );
-}
-
-/** indeterminate を扱える 3 状態チェックボックス。 */
-function TriCheckbox({ state, onChange }: { state: "all" | "some" | "none"; onChange: () => void }) {
-  const ref = useRef<HTMLInputElement>(null);
-  useEffect(() => {
-    if (ref.current) ref.current.indeterminate = state === "some";
-  }, [state]);
-  return <input ref={ref} type="checkbox" checked={state === "all"} onChange={onChange} />;
 }
 
 const overlay: React.CSSProperties = {

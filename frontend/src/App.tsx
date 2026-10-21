@@ -9,6 +9,7 @@ import { parseIidLaunch } from "./iid";
 import { SettingsDialog } from "./settings/SettingsDialog";
 import { onOpenSettingsRequest } from "./settings/settingsOpenEvents";
 import { AiEgressConsentHost } from "./plugins/pluginAiApi";
+import { SeriesPickHost } from "./plugins/pluginSeriesPickApi";
 import { DbAdminDialog } from "./dbadmin/DbAdminDialog";
 import { KeyboardHelp } from "./shortcuts/KeyboardHelp";
 import { useGlobalShortcuts } from "./shortcuts/useGlobalShortcuts";
@@ -267,6 +268,8 @@ export function App() {
       />
       {/* 外部 AI 送信の同意ダイアログ。2D ビューアは別ウィンドウ＝別ルートなので両方に要る。 */}
       <AiEgressConsentHost />
+      {/* シリーズ選択の窓（host.db.pickSeries）。同じ理由で両方に置く。 */}
+      <SeriesPickHost />
       {/* DB 管理。編集成功で同一ウィンドウの一覧を再読込（dbVersion）＋他ウィンドウへ通知（dbEvents）。 */}
       <DbAdminDialog
         open={dbOpen}

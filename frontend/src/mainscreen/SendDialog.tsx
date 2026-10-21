@@ -16,6 +16,7 @@ import {
 } from "../api";
 import { useI18n } from "../i18n/i18n";
 import { selectionHasCfm } from "./cfmNotice";
+import { TriCheckbox } from "./TriCheckbox";
 
 /**
  * DICOM Send: MainScreen で選択中のスタディ<b>の患者</b>のスタディ/シリーズをツリー表示し、
@@ -376,15 +377,6 @@ export function SendDialog({
       </div>
     </div>
   );
-}
-
-/** indeterminate を扱える 3 状態チェックボックス。 */
-function TriCheckbox({ state, onChange }: { state: "all" | "some" | "none"; onChange: () => void }) {
-  const ref = useRef<HTMLInputElement>(null);
-  useEffect(() => {
-    if (ref.current) ref.current.indeterminate = state === "some";
-  }, [state]);
-  return <input ref={ref} type="checkbox" checked={state === "all"} onChange={onChange} />;
 }
 
 const overlay: React.CSSProperties = {

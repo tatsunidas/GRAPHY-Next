@@ -26,6 +26,7 @@ const out = await host.compute.runBatch(
 // out.refused は、送れずに外した組（焼き込み・格子など）と理由。
 ```
 
+- 投げるシリーズは `host.db.pickSeries({ title, modalities: ["CT"] })` で本体の窓から選んでもらえます（返るのは選んだ順の `[{studyUid, seriesUid}]` だけ。取り消しは空配列）。そのまま `items` に使えます。
 - 組の名前（`key`）は英数字と `. _ -` の 64 字まで。**患者名を入れないでください**（台帳・監査に残ります）。
 - 1 組が落ちても残りは続きます。実行は本体の台帳が持つので、画面を閉じても計算は続き、開き直して `host.compute.attach(batchId, { onItem })` で受け取っていない結果を受け取れます。
 - `host.compute.listJobs()` は自分のプラグインの行の一覧です。

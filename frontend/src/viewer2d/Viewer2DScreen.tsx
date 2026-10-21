@@ -118,6 +118,7 @@ import { desktop } from "../desktopBridge";
 import { closeAllPluginWindows } from "../plugins/pluginWindowApi";
 import { mountSeriesPanel, closeAllSeriesPanels, PluginSeriesPanels } from "../plugins/pluginSeriesPanelApi";
 import { AiEgressConsentHost } from "../plugins/pluginAiApi";
+import { SeriesPickHost } from "../plugins/pluginSeriesPickApi";
 
 // ── 型定義 ────────────────────────────────────────────────────
 
@@ -1833,6 +1834,7 @@ function TileGrid({
       <PluginSeriesPanels />
       {/* 外部 AI 送信の同意ダイアログ。本体のツリー内に置かないと i18n が効かない。 */}
       <AiEgressConsentHost />
+      <SeriesPickHost />
       <Viewer2DMenuBar
         actions={actions}
         refLines={refLines}
