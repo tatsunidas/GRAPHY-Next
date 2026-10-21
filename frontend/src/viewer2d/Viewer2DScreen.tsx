@@ -58,6 +58,7 @@ import { collectRoisForPatient, sopOfImageId } from "../viewer/roiRestore";
 import { emitRoiReveal } from "../viewer/roiReveal";
 import { frameOfImageId, sopFromImageId } from "../viewer/imageId";
 import { derivePatientKey } from "../viewer/patientKey";
+import { readRois3d, subscribeRois3d } from "../viewer/roiRead3d";
 import { getFocusedTile } from "../viewer/focusedTile";
 import { hasClipboardRoi } from "../viewer/roiClipboard";
 import { annotationRoiKind } from "../viewer/roiKind";
@@ -1239,6 +1240,8 @@ function TileGrid({
         });
       },
       // ROI メタはタイルに依存しない（annotation は本体でグローバル）。登録済みタイルのどれかで解決できればよい。
+      getRois3d: () => readRois3d(),
+      subscribeRois3d: (listener) => subscribeRois3d(listener),
       getRoiMeta: (roiUid, pluginId) => {
         for (const id of resolveTargets()) {
           const m = queryViewerCommand(id, (c) => c.getRoiMeta(roiUid, pluginId));

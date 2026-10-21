@@ -719,6 +719,36 @@ export interface ViewerRoiMeasurements {
   unit?: string;
 }
 
+/** `host.getRois3d()` の要素。座標はすべて患者 LPS の mm。 */
+export type PluginRoi3d = PluginSolidRoi3d | PluginRulerRoi3d;
+
+interface PluginRoi3dBase {
+  id: string;
+  label: string | null;
+  visible: boolean;
+  studyUid: string | null;
+  seriesUid: string | null;
+  patientKey: string | null;
+}
+
+export interface PluginSolidRoi3d extends PluginRoi3dBase {
+  kind: "solid";
+  shape: "box" | "ellipsoid";
+  /** 中心 [x,y,z] mm。 */
+  center: [number, number, number];
+  /** X,Y,Z の全長 mm（半径ではない）。 */
+  size: [number, number, number];
+  volumeMl: number;
+}
+
+export interface PluginRulerRoi3d extends PluginRoi3dBase {
+  kind: "ruler3d";
+  a: [number, number, number];
+  b: [number, number, number];
+  /** 端点から導いた値（保存値ではない）。 */
+  distanceMm: number;
+}
+
 /**
  * ユーザーが描いた ROI（計測・幾何注釈）1 件。`host.getRois()` の要素。**0.1.9 以降**。
  *
@@ -2009,6 +2039,16 @@ export interface Viewer2DPluginHost extends PluginHostBase {
    * スナップショットを持ち回らないこと。
    */
   getRois: (tileId?: string) => ViewerRoi[];
+  /**
+   * ユーザーが置いた **3D ROI（箱・楕円体・球と 3D の 2 点定規）を読む**。座標は**患者 LPS の mm**
+   * （画素座標ではない）。`getRois()`（2D 注釈）とは別系統で、`id` は `roiUid` と別物。
+   * 読めるのは本体がそのウィンドウで読み込んだシリーズ分。読み取り専用。
+   * 本体が持っていない `label` / `patientKey` / `studyUid` / `seriesUid` は null（推測で埋めない）。
+   * **版数は未定（次の本体リリース以降）**。呼ぶたびに現在値を読む。
+   */
+  getRois3d: () => PluginRoi3d[];
+  /** 3D ROI の追加・変更・削除を購読する。差分は渡さない（受けたら `getRois3d()` を読み直す）。返り値で解除。 */
+  subscribeRois3d: (listener: () => void) => () => void;
   /**
    * **シリーズ 1 本をボリュームとして読む**。校正済みの値と**患者 LPS の幾何**が付く。
    * **0.2.0 以降**。
