@@ -54,7 +54,9 @@ export function Viewer3DMeasureOverlay({
   active: boolean;
 }) {
   const { t } = useI18n();
-  const measures = useMeasurements();
+  const all = useMeasurements();
+  // 管理画面で非表示にした定規は描かず、掴めない（台帳には残る）。
+  const measures = all.filter((m) => m.visible !== false);
   const selected = useMeasureSelected();
   const svgRef = useRef<SVGSVGElement>(null);
   const [pending, setPending] = useState<V3 | null>(null);
@@ -248,13 +250,13 @@ export function Viewer3DMeasureOverlay({
                 y1={pa[1]}
                 x2={pb[0]}
                 y2={pb[1]}
-                stroke={isSel ? "#ffffff" : "#ffd24a"}
+                stroke={isSel ? "#ffffff" : m.color ?? "#ffd24a"}
                 strokeWidth={isSel ? 2.5 : 1.5}
               />
-              <circle cx={pa[0]} cy={pa[1]} r={isSel ? 5 : 3} fill="#ffd24a" stroke={isSel ? "#0b2230" : "none"} strokeWidth={1} />
-              <circle cx={pb[0]} cy={pb[1]} r={isSel ? 5 : 3} fill="#ffd24a" stroke={isSel ? "#0b2230" : "none"} strokeWidth={1} />
+              <circle cx={pa[0]} cy={pa[1]} r={isSel ? 5 : 3} fill={m.color ?? "#ffd24a"} stroke={isSel ? "#0b2230" : "none"} strokeWidth={1} />
+              <circle cx={pb[0]} cy={pb[1]} r={isSel ? 5 : 3} fill={m.color ?? "#ffd24a"} stroke={isSel ? "#0b2230" : "none"} strokeWidth={1} />
               <text x={mid[0] + 6} y={mid[1] - 6} style={labelText}>
-                {m.distMm.toFixed(1)} mm
+                {m.label ? `${m.label}: ` : ""}{m.distMm.toFixed(1)} mm
               </text>
             </g>
           );

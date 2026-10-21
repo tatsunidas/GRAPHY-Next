@@ -9,73 +9,54 @@
  * （このストア自体は記録しない）。オーバーレイ（`Viewer3DMeasureOverlay`）が購読して線/端点/距離ラベルを再投影する。
  */
 import { useSyncExternalStore } from "react";
+import { addMeasure3d, clearMeasure3d, getMeasure3d, listMeasure3d, newRoi3dId, removeMeasure3d, subscribeMeasure3d, updateMeasure3d } from "../viewer/roiLedger";
+import { measureDistanceMm, type Measure3d } from "../viewer/roiMeasure3d";
 
 type V3 = [number, number, number];
 
-/** 3D 計測ライン（患者 LPS mm）。 */
-export interface Measurement3D {
-  id: string;
-  a: V3;
-  b: V3;
-  distMm: number;
-}
+/** 3D 計測ライン（患者 LPS mm）。台帳（`viewer/roiLedger`）の定規に、端点から導いた距離を添えたもの。 */
+export type Measurement3D = Measure3d & { distMm: number };
 
-let measures: Measurement3D[] = [];
 let selected: string | null = null;
-const listeners = new Set<() => void>();
 const selListeners = new Set<() => void>();
-let seq = 0;
 
-function notify(): void {
-  measures = measures.slice();
-  for (const l of [...listeners]) {
-    try {
-      l();
-    } catch {
-      /* ignore */
-    }
-  }
-}
+// 台帳の配列が同じ間は同じ配列を返す（useSyncExternalStore が毎回再描画しないように）。
+let cacheSrc: Measure3d[] | null = null;
+let cacheOut: Measurement3D[] = [];
 
 export function nextMeasureId(): string {
-  return `measure-${++seq}`;
+  return newRoi3dId();
 }
 
 export function getMeasurements(): Measurement3D[] {
-  return measures;
+  const src = listMeasure3d();
+  if (src !== cacheSrc) {
+    cacheSrc = src;
+    cacheOut = src.map((m) => ({ ...m, distMm: measureDistanceMm(m) }));
+  }
+  return cacheOut;
 }
 
 /** 追加（記録なし。undo 調停は scene3d 側）。 */
-export function addMeasurement(m: Measurement3D): void {
-  measures = [...measures, m];
-  notify();
+export function addMeasurement(m: Measure3d): void {
+  addMeasure3d({ id: m.id, a: m.a, b: m.b, ...(m.label ? { label: m.label } : {}), ...(m.color ? { color: m.color } : {}), ...(m.visible === false ? { visible: false } : {}) });
 }
 
 /** 削除（記録なし）。 */
 export function removeMeasurement(id: string): void {
-  const next = measures.filter((m) => m.id !== id);
-  if (next.length !== measures.length) {
-    measures = next;
-    notify();
-    if (selected === id) setMeasureSelected(null);
-  }
+  removeMeasure3d(id);
+  if (selected === id) setMeasureSelected(null);
 }
 
-/** 端点を差し替えて距離を再計算（記録なし。ドラッグ中のライブ更新は scene3d 側で record する）。 */
+/** 端点を差し替える（記録なし。ドラッグ中のライブ更新は scene3d 側で record する）。距離は端点から導く。 */
 export function updateMeasurement(id: string, a: V3, b: V3): void {
-  const idx = measures.findIndex((m) => m.id === id);
-  if (idx < 0) return;
-  const distMm = Math.hypot(b[0] - a[0], b[1] - a[1], b[2] - a[2]);
-  const next = measures.slice();
-  next[idx] = { ...next[idx], a, b, distMm };
-  measures = next;
-  notify();
+  const cur = getMeasure3d(id);
+  if (cur) updateMeasure3d({ ...cur, a, b });
 }
 
+/** シーンの再読込で手放す。**削除ではない**（保存・墓標を起こさない。開き直せば保存済みが戻る）。 */
 export function clearMeasurements(): void {
-  if (!measures.length) return;
-  measures = [];
-  notify();
+  clearMeasure3d();
   setMeasureSelected(null);
 }
 
@@ -96,12 +77,7 @@ export function setMeasureSelected(id: string | null): void {
   }
 }
 
-function subscribe(l: () => void): () => void {
-  listeners.add(l);
-  return () => {
-    listeners.delete(l);
-  };
-}
+const subscribe = subscribeMeasure3d;
 
 function subscribeSel(l: () => void): () => void {
   selListeners.add(l);

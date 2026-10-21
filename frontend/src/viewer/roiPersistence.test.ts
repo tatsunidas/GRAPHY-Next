@@ -188,7 +188,7 @@ describe("parseSaveFile — 壊れた入力で全部を失わない", () => {
   });
 
   it("JSON として壊れていれば空配列（例外にしない）", () => {
-    const empty: ParsedRoiFile = { rois: [], deleted: [], analyses: [], solids: [] };
+    const empty: ParsedRoiFile = { rois: [], deleted: [], analyses: [], solids: [], measures3d: [] };
     expect(parseSaveFile("{not json")).toEqual(empty);
     expect(parseSaveFile("")).toEqual(empty);
     expect(parseSaveFile(null)).toEqual(empty);
@@ -202,7 +202,7 @@ describe("parseSaveFile — 壊れた入力で全部を失わない", () => {
       schema: ROI_SCHEMA_VERSION + 1,
       rois: [{ roiUid: "x", tool: "Length", sopInstanceUid: SOP, points: [[0, 0, 0], [1, 1, 1]] }],
     });
-    expect(parseSaveFile(json)).toEqual({ rois: [], deleted: [], analyses: [], solids: [] });
+    expect(parseSaveFile(json)).toEqual({ rois: [], deleted: [], analyses: [], solids: [], measures3d: [] });
   });
 
   it("scope の z/c/t は数値か \"all\" だけ通す", () => {
@@ -333,6 +333,7 @@ describe("mergeSaveFiles — 別ウィンドウの計測を失わず、削除は
     deleted: deleted.map((roiUid) => ({ roiUid, at })),
     analyses: [],
     solids: [],
+    measures3d: [],
   });
 
   it("双方の ROI が残る（和を取る）", () => {
@@ -383,7 +384,7 @@ describe("mergeSaveFiles — 別ウィンドウの計測を失わず、削除は
   it("片方が空でも成立する", () => {
     expect(mergeSaveFiles(file([]), file([roi("a")])).rois.map((r) => r.roiUid)).toEqual(["a"]);
     expect(mergeSaveFiles(file([roi("a")]), file([])).rois.map((r) => r.roiUid)).toEqual(["a"]);
-    expect(mergeSaveFiles(file([]), file([]))).toEqual({ rois: [], deleted: [], analyses: [], solids: [] });
+    expect(mergeSaveFiles(file([]), file([]))).toEqual({ rois: [], deleted: [], analyses: [], solids: [], measures3d: [] });
   });
 });
 
@@ -549,10 +550,32 @@ describe("solids（パラメトリック 3D ROI）の保存形式", () => {
     expect(parseSaveFile(raw).solids).toEqual([]);
   });
   it("競合のマージ: 双方の solid が残り、新しい編集が勝ち、相手の削除が伝わる", () => {
-    const mk = (solids: typeof solid[], deleted: string[] = []): ParsedRoiFile => ({ rois: [], deleted: deleted.map((roiUid) => ({ roiUid, at: "t" })), analyses: [], solids });
+    const mk = (solids: typeof solid[], deleted: string[] = []): ParsedRoiFile => ({ rois: [], deleted: deleted.map((roiUid) => ({ roiUid, at: "t" })), analyses: [], solids, measures3d: [] });
     const newer = { ...solid, size: [40, 10, 10] as [number, number, number], updatedAt: "2026-10-21T01:00:00.000Z" };
     expect(mergeSaveFiles(mk([newer]), mk([solid])).solids[0].size[0]).toBe(40);
     expect(mergeSaveFiles(mk([solid]), mk([{ ...solid, id: "u2" }])).solids.map((x) => x.id)).toEqual(["u1", "u2"]);
     expect(mergeSaveFiles(mk([], ["u1"]), mk([solid])).solids).toEqual([]);
+  });
+});
+
+describe("3D 定規（measures3d）の保存形式", () => {
+  const m = (id: string) => ({ id, a: [0, 0, 0] as [number, number, number], b: [3, 4, 0] as [number, number, number], seriesUid: "S1" });
+  it("往復で保たれ、墓標に載った id は書かれず読まれもしない／壊れた要素は個別に落ちる", () => {
+    const file = buildSaveFile([], [{ roiUid: "dead", at: "t" }], "w", [], [], [m("a"), m("dead")]);
+    expect(file.measures3d?.map((x) => x.id)).toEqual(["a"]);
+    const raw = JSON.stringify({ ...file, measures3d: [m("a"), m("dead"), { id: "bad", a: [0, 0] }] });
+    expect(parseSaveFile(raw).measures3d.map((x) => x.id)).toEqual(["a"]);
+  });
+  it("measures3d の無い旧ドキュメントは空で読める（schema は 1 のまま）", () => {
+    const parsed = parseSaveFile(JSON.stringify({ schema: 1, rois: [], deleted: [] }));
+    expect(parsed.measures3d).toEqual([]);
+    expect(ROI_SCHEMA_VERSION).toBe(1);
+  });
+  it("競合マージで両窓の定規が残り、墓標で消える", () => {
+    const f = (ms: ReturnType<typeof m>[], deleted: string[] = []): ParsedRoiFile => ({
+      rois: [], deleted: deleted.map((roiUid) => ({ roiUid, at: "t" })), analyses: [], solids: [], measures3d: ms,
+    });
+    expect(mergeSaveFiles(f([m("a"), m("b")]), f([m("c")])).measures3d.map((x) => x.id)).toEqual(["a", "b", "c"]);
+    expect(mergeSaveFiles(f([m("a")]), f([m("c")], ["a"])).measures3d.map((x) => x.id)).toEqual(["c"]);
   });
 });

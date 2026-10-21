@@ -1292,6 +1292,7 @@ export const en: Record<string, string> = {
   "roiMgr.needSegViewport": "Select a segmentation tool (Brush/3D Wand) on a tile first.",
   "roiMgr.empty": "None",
   "roiMgr.solidDetail": "Details",
+  "roiMgr.ruler3d": "3D ruler",
   "roiMgr.visible": "Visible",
   "roiMgr.lock": "Lock",
   "roiMgr.unlock": "Unlock",

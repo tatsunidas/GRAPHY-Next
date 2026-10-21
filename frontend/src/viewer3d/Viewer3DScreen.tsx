@@ -69,6 +69,9 @@ import { SlabPanel } from "./SlabPanel";
 import { RepresentationStateDialog } from "./RepresentationStateDialog";
 import { ViewInfoOverlay } from "./ViewInfoOverlay";
 import { fetchLutData } from "../api";
+import { derivePatientKey } from "../viewer/patientKey";
+import { setRoi3dContext } from "../viewer/roiLedger";
+import { forgetMeasureSync, hydrateMeasuresForSeries, startMeasureAutosave } from "../viewer/roiMeasureSync";
 import { attachSceneRenderer, resetScene, setClipContext, updateClip, setOrthoSlice, setVolumeDepth } from "./scene3d";
 import { geomFromImageData, type VolumeGeom } from "../viewer/labelVolume";
 import { useI18n } from "../i18n/i18n";
@@ -168,6 +171,19 @@ export function Viewer3DScreen({ status }: { status: AppStatus | null }) {
   const modalityRef = useRef<string | null>(null);
   // 派生シリーズ保存（CPR/ストレート化）用の study/series 識別子。
   const seriesRef = useRef<{ studyUid: string; seriesUid: string; seriesDesc: string; c: number; t: number } | null>(null);
+  /** 3D 定規の保存を担う同期（患者・シリーズ・解除）。シーンを破棄する前に {@link releaseMeasures} で閉じる。 */
+  const measureSyncRef = useRef<{ pk: string; seriesUid: string; stop: () => void } | null>(null);
+  /**
+   * 定規の保存を流し切って手放す。**`resetScene`（定規を台帳から外す）より前に呼ぶ**——先に外すと
+   * 保留中の保存が「全部消えた」と読んで墓標を立てる。
+   */
+  const releaseMeasures = useCallback(() => {
+    const m = measureSyncRef.current;
+    if (!m) return;
+    measureSyncRef.current = null;
+    m.stop();
+    forgetMeasureSync(m.pk, m.seriesUid);
+  }, []);
   // 起動時に読んだコンテキスト。別シリーズ/C/T で 2D から再起動されたかの判定に使う。
   const ctxRef = useRef<Viewer3DContext | null>(null);
   const [volumeId, setVolumeId] = useState<string>("");
@@ -256,6 +272,12 @@ export function Viewer3DScreen({ status }: { status: AppStatus | null }) {
         c: ctx.c ?? 0,
         t: ctx.t ?? 0,
       };
+      // 3D 定規は主ボリュームのシリーズに紐づけて、患者単位ドキュメントへ保存・他窓と共有する。
+      releaseMeasures();
+      const pk = derivePatientKey(ctx.study);
+      setRoi3dContext({ studyUid: ctx.study.studyInstanceUid, seriesUid: series.seriesInstanceUid });
+      await hydrateMeasuresForSeries(pk, series.seriesInstanceUid);
+      measureSyncRef.current = { pk, seriesUid: series.seriesInstanceUid, stop: startMeasureAutosave(pk) };
 
       // 起動元タイルで表示中だった C/T のスタックのみをボリューム化する（マルチチャンネル/
       // マルチタイムフレームのシリーズで異なる C/T の画像が混在するのを防ぐ）。
@@ -425,7 +447,7 @@ export function Viewer3DScreen({ status }: { status: AppStatus | null }) {
               : `${t("viewer3d.error")}: ${String(e)}`,
       );
     }
-  }, [mode2, t]);
+  }, [mode2, t, releaseMeasures]);
 
   // 3D ウィンドウが開いたまま 2D から別のシリーズ/C/T で再起動されたら、新しいコンテキストで読み込み直す。
   // 状態（ボリューム・シーンオブジェクト・各種オーバーレイ）が多いので、個別に初期化せず画面ごと再読込する。
@@ -448,6 +470,7 @@ export function Viewer3DScreen({ status }: { status: AppStatus | null }) {
   // アンマウント時に vtk を破棄。
   useEffect(() => {
     return () => {
+      releaseMeasures();
       try {
         resetScene();
       } catch {
@@ -464,6 +487,7 @@ export function Viewer3DScreen({ status }: { status: AppStatus | null }) {
 
   // 現在のビューを破棄して 3D 表示を作り直す（コンテキスト喪失やビルド失敗からの復帰）。
   const retry = useCallback(() => {
+    releaseMeasures();
     try {
       resetScene();
     } catch {
@@ -492,6 +516,7 @@ export function Viewer3DScreen({ status }: { status: AppStatus | null }) {
     const onLost = () => {
       setPhase("error");
       setMessage(t("viewer3d.glLost"));
+      releaseMeasures();
       try {
         resetScene();
       } catch {

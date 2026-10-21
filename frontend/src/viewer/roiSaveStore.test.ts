@@ -67,7 +67,7 @@ describe("loadRois", () => {
 
   it("読めなくても例外にせず空を返す", async () => {
     fetchRoiDocument.mockRejectedValue(new Error("network error"));
-    expect(await loadRois(PK)).toEqual({ rois: [], deleted: [], analyses: [], solids: [] });
+    expect(await loadRois(PK)).toEqual({ rois: [], deleted: [], analyses: [], solids: [], measures3d: [] });
   });
 });
 

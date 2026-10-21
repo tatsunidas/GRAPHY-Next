@@ -11,6 +11,7 @@
  * 形の計算は `roi3dBox.ts`。購読の流儀は `sphere3dStore.ts` に合わせる。
  */
 import type { Roi3dBox } from "./roi3dBox";
+import type { Measure3d } from "./roiMeasure3d";
 
 let boxes: Roi3dBox[] = [];
 let selectedId: string | null = null;
@@ -97,5 +98,63 @@ export function subscribeRoi3dEdits(l: () => void): () => void {
   editListeners.add(l);
   return () => {
     editListeners.delete(l);
+  };
+}
+
+// ── 3D の 2 点定規（solid と同じ規律: 窓内レプリカ・編集だけ通知・読み込みは通知しない）──
+let measures: Measure3d[] = [];
+const measureListeners = new Set<() => void>();
+const measureEditListeners = new Set<() => void>();
+const stampM = (m: Measure3d): Measure3d => ({ ...m, updatedAt: new Date().toISOString() });
+
+export function listMeasure3d(seriesUid?: string): Measure3d[] {
+  return seriesUid === undefined ? measures : measures.filter((m) => m.seriesUid === seriesUid);
+}
+export function getMeasure3d(id: string): Measure3d | undefined {
+  return measures.find((m) => m.id === id);
+}
+export function addMeasure3d(m: Measure3d): void {
+  measures = [...measures, stampM({ ...seriesCtx, ...m })];
+  emit(measureListeners);
+  emit(measureEditListeners);
+}
+export function updateMeasure3d(m: Measure3d): void {
+  if (!measures.some((x) => x.id === m.id)) return;
+  measures = measures.map((x) => (x.id === m.id ? stampM(m) : x));
+  emit(measureListeners);
+  emit(measureEditListeners);
+}
+export function removeMeasure3d(id: string): void {
+  if (!measures.some((x) => x.id === id)) return;
+  measures = measures.filter((x) => x.id !== id);
+  emit(measureListeners);
+  emit(measureEditListeners);
+}
+/** 保存済みの定規のうち、このシリーズ分だけを置き換える（編集通知なし）。 */
+export function hydrateMeasure3dSeries(seriesUid: string, items: Measure3d[]): void {
+  measures = [...measures.filter((m) => m.seriesUid !== seriesUid), ...items];
+  emit(measureListeners);
+}
+/** この窓が手放すシリーズの定規を捨てる。**編集ではない**（保存・墓標を起こさない）。 */
+export function dropMeasure3dSeries(seriesUid: string): void {
+  if (!measures.some((m) => m.seriesUid === seriesUid)) return;
+  measures = measures.filter((m) => m.seriesUid !== seriesUid);
+  emit(measureListeners);
+}
+export function clearMeasure3d(): void {
+  if (!measures.length) return;
+  measures = [];
+  emit(measureListeners);
+}
+export function subscribeMeasure3d(l: () => void): () => void {
+  measureListeners.add(l);
+  return () => {
+    measureListeners.delete(l);
+  };
+}
+export function subscribeMeasure3dEdits(l: () => void): () => void {
+  measureEditListeners.add(l);
+  return () => {
+    measureEditListeners.delete(l);
   };
 }

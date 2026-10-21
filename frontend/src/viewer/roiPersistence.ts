@@ -20,6 +20,7 @@
 import type { DimScope, RoiScope } from "./roiMaskStore";
 import { isContourTool } from "./roiContourTools";
 import { mergeSolids, sanitizeSolid, type Roi3dBox } from "./roi3dBox";
+import { mergeMeasures, sanitizeMeasure3d, type Measure3d } from "./roiMeasure3d";
 import { dropAnalysesFor, mergeAnalyses, sanitizeAnalysis, type SavedQcaAnalysis } from "./qcaAnalysisState";
 
 /** 保存フォーマットの版。互換性を壊す変更をしたら上げ、読み込み側で分岐する。 */
@@ -116,6 +117,8 @@ export interface RoiSaveFile {
    * 削除は `deleted` の墓標に solid の id を載せて伝える（id は uuid で再利用されない）。
    */
   solids?: Roi3dBox[];
+  /** 3D の 2 点定規（`roiMeasure3d.ts`）。`solids` と同じ理由・作法（`schema` は上げない、削除は墓標）。 */
+  measures3d?: Measure3d[];
 }
 
 /** 読み込み結果。 */
@@ -126,6 +129,8 @@ export interface ParsedRoiFile {
   analyses: SavedQcaAnalysis[];
   /** パラメトリック 3D ROI（無ければ空配列）。 */
   solids: Roi3dBox[];
+  /** 3D の 2 点定規（無ければ空配列）。 */
+  measures3d: Measure3d[];
 }
 
 /**
@@ -239,6 +244,7 @@ export function buildSaveFile(
   writer?: string,
   analyses: SavedQcaAnalysis[] = [],
   solids: Roi3dBox[] = [],
+  measures3d: Measure3d[] = [],
 ): RoiSaveFile {
   const trimmed = [...deleted]
     .sort((a, b) => (a.at < b.at ? 1 : a.at > b.at ? -1 : 0))
@@ -252,6 +258,7 @@ export function buildSaveFile(
     deleted: trimmed,
     analyses: dropAnalysesFor(analyses, buried),
     solids: solids.filter((x) => !buried.has(x.id)),
+    measures3d: measures3d.filter((x) => !buried.has(x.id)),
   };
 }
 
@@ -260,7 +267,7 @@ export function buildSaveFile(
  * （1 件の破損で患者の全 ROI を失わないため）。読めなければ空配列。
  */
 export function parseSaveFile(json: string | null | undefined): ParsedRoiFile {
-  const empty: ParsedRoiFile = { rois: [], deleted: [], analyses: [], solids: [] };
+  const empty: ParsedRoiFile = { rois: [], deleted: [], analyses: [], solids: [], measures3d: [] };
   if (!json) return empty;
   let root: unknown;
   try {
@@ -332,7 +339,14 @@ export function parseSaveFile(json: string | null | undefined): ParsedRoiFile {
       if (s && !buried.has(s.id)) solids.push(s);
     }
   }
-  return { rois: out, deleted, analyses, solids };
+  const measures3d: Measure3d[] = [];
+  if (Array.isArray(file.measures3d)) {
+    for (const x of file.measures3d as unknown[]) {
+      const m = sanitizeMeasure3d(x);
+      if (m && !buried.has(m.id)) measures3d.push(m);
+    }
+  }
+  return { rois: out, deleted, analyses, solids, measures3d };
 }
 
 const dim = (v: unknown): DimScope | undefined => {
@@ -483,6 +497,7 @@ export function mergeSaveFiles(remote: ParsedRoiFile, local: ParsedRoiFile): Par
     deleted: [...tombs.values()].sort((a, b) => cmp(a.roiUid, b.roiUid)),
     analyses,
     solids: mergeSolids(remote.solids, local.solids, new Set(tombs.keys())),
+    measures3d: mergeMeasures(remote.measures3d, local.measures3d, new Set(tombs.keys())),
   };
 }
 

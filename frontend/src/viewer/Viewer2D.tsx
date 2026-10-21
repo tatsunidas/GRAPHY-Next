@@ -48,6 +48,7 @@ import { loadRoisCached, scheduleRoiSave } from "./roiSaveStore";
 import { restoreRoisIntoStack } from "./roiRestore";
 import { listRoi3d, subscribeRoi3d } from "./roiLedger";
 import { hydrateSolidsForSeries } from "./roiSolidSync";
+import { hydrateMeasuresForSeries } from "./roiMeasureSync";
 import { solidCanvasOutline, type SolidCanvasOutline } from "./solidPreview";
 import { ensureCornerstoneInitialized } from "./cornerstoneSetup";
 import { applyTransform, isPanned, readTransform, type ViewTransform, FIT_TRANSFORM } from "./transform";
@@ -2730,7 +2731,10 @@ export function Viewer2D({
     if (!patientKey || !imageIds.length) return;
     let cancelled = false;
     const seriesUid = roiContext?.seriesUid;
-    if (seriesUid) void hydrateSolidsForSeries(patientKey, seriesUid);
+    if (seriesUid) {
+      void hydrateSolidsForSeries(patientKey, seriesUid);
+      void hydrateMeasuresForSeries(patientKey, seriesUid);
+    }
     void loadRoisCached(patientKey).then((parsed) => {
       if (cancelled || !parsed.rois.length) return;
       const v = vp();

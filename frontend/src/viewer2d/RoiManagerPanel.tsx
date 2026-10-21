@@ -37,7 +37,9 @@ import { combineRois, splitMask, roiToMask, withTempMask, isAreaRoi, resolveRoiS
 import { buildRoiPanelModel, type MeasureRow, type PaintedRoiRow, type RoiPanelModel, type RoiRowEnv, type ShapeRoiRow } from "../viewer/roiRows";
 import { sphereFromCircleRoi, createSphere3DFromCircleRoi, bakeSolid3D, splitMaskToSlices, maskVolumeStats, type MaskVolumeStats } from "../viewer/roi3d";
 import { listRoi3d, updateRoi3d, removeRoi3d, subscribeRoi3d, selectRoi3d, selectedRoi3dId } from "../viewer/roiLedger";
-import { SolidRoiHeader, SolidRoiInfo } from "../viewer/solidRoiRows";
+import { RoiItemHeader, SolidRoiHeader, SolidRoiInfo } from "../viewer/solidRoiRows";
+import { listMeasure3d, removeMeasure3d, subscribeMeasure3d, updateMeasure3d } from "../viewer/roiLedger";
+import { measureDistanceMm, type Measure3d } from "../viewer/roiMeasure3d";
 import { solidRadius, withSize, type Roi3dBox } from "../viewer/roi3dBox";
 import { annotationsToImageJDtos } from "../viewer/imagejExport";
 import { importImageJDtos } from "../viewer/imagejImport";
@@ -126,6 +128,7 @@ export function RoiManagerPanel({
   const [segImportProgress, setSegImportProgress] = useState<number | null>(null);
   const [stats, setStats] = useState<Record<string, MaskVolumeStats>>({});
   const [spheres, setSpheres] = useState<Roi3dBox[]>([]);
+  const [rulers, setRulers] = useState<Measure3d[]>([]);
   const selectedSolidId = useSyncExternalStore(subscribeRoi3d, selectedRoi3dId);
   // Split の 3D 連結性（6=面/18=面+辺/26=全て）。既定 26＝斜め接続もつなぎ過分割を抑える。
   const [splitConn, setSplitConn] = useState<SplitConnectivity>(26);
@@ -199,6 +202,7 @@ export function RoiManagerPanel({
       setModel({ rois: [], measures: [] });
     }
     setSpheres(allSpheres.filter((s) => !s.patientKey || s.patientKey === activePatientKey));
+    setRulers(listMeasure3d().filter((m) => !m.patientKey || m.patientKey === activePatientKey));
   }, [activePatientKey]);
 
   useEffect(() => {
@@ -217,8 +221,10 @@ export function RoiManagerPanel({
     for (const n of names) eventTarget.addEventListener(n, refresh);
     const unsub = subscribeRoiMaskStore(refresh);
     const unsubSphere = subscribeRoi3d(refresh);
+    const unsubRuler = subscribeMeasure3d(refresh);
     return () => {
       unsubSphere();
+      unsubRuler();
       for (const n of names) eventTarget.removeEventListener(n, refresh);
       unsub();
     };
@@ -721,6 +727,15 @@ export function RoiManagerPanel({
     </div>
   );
 
+  // 3D の定規（3D 窓で測った 2 点間の距離。台帳に載り、窓をまたいで共有される）。距離は端点から導く。
+  const renderRulerRow = (m: Measure3d) => (
+    <div key={m.id} style={row} data-testid="ruler-row" data-roi-key={m.id}>
+      <RoiItemHeader item={m} onChange={updateMeasure3d} defaultName="Ruler 3D" icon="📏" iconTitle={t("roiMgr.ruler3d")} defaultColor="#ffd24a" nameStyle={nameInRow} />
+      <span style={{ color: "#33404d", fontSize: 12 }} data-testid="ruler-distance">{measureDistanceMm(m).toFixed(1)} mm</span>
+      <button onClick={() => removeMeasure3d(m.id)} style={delBtn} title={t("common.delete")} data-testid="ruler-delete">🗑</button>
+    </div>
+  );
+
   // 塗りの ROI（labelmap の segment 1 つ）。行を押す＝この segment を塗り先（Brush/Wand の編集対象）にする。
   const renderPaintedRow = (r: PaintedRoiRow) => {
     const target = getSegEditTarget();
@@ -941,9 +956,10 @@ export function RoiManagerPanel({
         </div>
       )}
 
-      <div style={section} title={t("roiMgr.measuresNote")}>{t("roiMgr.measures")} ({model.measures.length})</div>
-      {model.measures.length === 0 && <div style={empty}>{t("roiMgr.empty")}</div>}
+      <div style={section} title={t("roiMgr.measuresNote")}>{t("roiMgr.measures")} ({model.measures.length + rulers.length})</div>
+      {model.measures.length + rulers.length === 0 && <div style={empty}>{t("roiMgr.empty")}</div>}
       {model.measures.map((m) => renderMeasureRow(m))}
+      {rulers.map((m) => renderRulerRow(m))}
 
       <div style={note}>{t("roiMgr.m1note")}</div>
       {editId && <RoiMetaEditDialog itemId={editId} onClose={() => { setEditId(null); refresh(); }} />}

@@ -20,40 +20,58 @@ export function solidInfo(s: Roi3dBox, bounds: Bounds6 | null): SolidInfo {
   return { volumeText: `${formatMl(volumeMl(s))} mL`, formula: formulaText(s), outside: bounds ? outOfBounds(s, bounds) : false };
 }
 
-interface HeaderProps {
-  solid: Roi3dBox;
-  onChange: (s: Roi3dBox) => void;
+interface ItemHeaderProps<T extends { label?: string; color?: string; visible?: boolean }> {
+  item: T;
+  onChange: (item: T) => void;
   defaultName: string;
-  /** 形アイコンのツールチップ。 */
+  /** 種別アイコン（▣ ◍ 📏 など）とそのツールチップ。 */
+  icon: string;
   iconTitle: string;
+  /** アイコンの既定色。 */
+  defaultColor?: string;
   /** 名前欄の見た目（窓の配色・幅に合わせる）。 */
   nameStyle?: React.CSSProperties;
 }
 
-/** 表示切替・形アイコン・名前・色。2D の行と MPR の行で同じ。 */
-export function SolidRoiHeader({ solid: s, onChange, defaultName, iconTitle, nameStyle }: HeaderProps) {
+/** 表示切替・種別アイコン・名前・色。solid・3D 定規・2D の行で同じ（台帳の項目に共通の 4 つ）。 */
+export function RoiItemHeader<T extends { label?: string; color?: string; visible?: boolean }>({
+  item: s, onChange, defaultName, icon, iconTitle, defaultColor = "#00e5ff", nameStyle,
+}: ItemHeaderProps<T>) {
   const { t } = useI18n();
-  const color = s.color ?? "#00e5ff";
-  const upd = (patch: Partial<Roi3dBox>) => onChange({ ...s, ...patch });
+  const color = s.color ?? defaultColor;
+  const upd = (patch: Partial<T>) => onChange({ ...s, ...patch });
   return (
     <>
       <button
-        onClick={() => upd({ visible: s.visible === false })}
+        onClick={() => upd({ visible: s.visible === false } as Partial<T>)}
         style={eyeBtn}
         title={t("roiMgr.visible")}
         data-testid="roi-row-visible"
       >{s.visible !== false ? "👁" : "🚫"}</button>
-      <span title={iconTitle} style={{ color }}>{s.shape === "box" ? "▣" : "◍"}</span>
+      <span title={iconTitle} style={{ color }}>{icon}</span>
       <input
         type="text"
         style={nameStyle ?? nameInput}
         defaultValue={s.label ?? defaultName}
-        onChange={(e) => upd({ label: e.target.value })}
+        onChange={(e) => upd({ label: e.target.value } as Partial<T>)}
         data-testid="solid-name"
       />
-      <input type="color" defaultValue={color} onChange={(e) => upd({ color: e.target.value })} title={t("roiMgr.color")} style={colorInput} />
+      <input type="color" defaultValue={color} onChange={(e) => upd({ color: e.target.value } as Partial<T>)} title={t("roiMgr.color")} style={colorInput} />
     </>
   );
+}
+
+interface HeaderProps {
+  solid: Roi3dBox;
+  onChange: (s: Roi3dBox) => void;
+  defaultName: string;
+  iconTitle: string;
+  nameStyle?: React.CSSProperties;
+}
+
+/** solid 用（形アイコン）。 */
+export function SolidRoiHeader({ solid, onChange, defaultName, iconTitle, nameStyle }: HeaderProps) {
+  return <RoiItemHeader item={solid} onChange={onChange} defaultName={defaultName} icon={solid.shape === "box" ? "▣" : "◍"} iconTitle={iconTitle} nameStyle={nameStyle} />;
 }
 
 /** 容積・式・範囲外警告。`compact` は容積と注記を出さない（一覧が容積列と注記を既に持つ窓向け）。 */
