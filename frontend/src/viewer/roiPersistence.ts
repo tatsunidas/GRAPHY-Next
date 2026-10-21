@@ -19,6 +19,7 @@
  */
 import type { DimScope, RoiScope } from "./roiMaskStore";
 import { isContourTool } from "./roiContourTools";
+import { mergeSolids, sanitizeSolid, type Roi3dBox } from "./roi3dBox";
 import { dropAnalysesFor, mergeAnalyses, sanitizeAnalysis, type SavedQcaAnalysis } from "./qcaAnalysisState";
 
 /** 保存フォーマットの版。互換性を壊す変更をしたら上げ、読み込み側で分岐する。 */
@@ -107,6 +108,14 @@ export interface RoiSaveFile {
    * 形に留めてある。古いアプリが上書き保存すると解析状態だけは失われるが、ROI は無傷。
    */
   analyses?: SavedQcaAnalysis[];
+  /**
+   * パラメトリック 3D ROI（`roi3dBox.ts`。`fw/roi-global-manager.md`）。
+   *
+   * <p>🔴 **`analyses` と同じ理由で `schema` を上げていない。** 古いアプリはこのキーを無視して
+   * ROI を従来どおり読む（古いアプリが上書き保存すると solid だけは失われるが、ROI は無傷）。
+   * 削除は `deleted` の墓標に solid の id を載せて伝える（id は uuid で再利用されない）。
+   */
+  solids?: Roi3dBox[];
 }
 
 /** 読み込み結果。 */
@@ -115,6 +124,8 @@ export interface ParsedRoiFile {
   deleted: RoiTombstone[];
   /** 解析状態（無ければ空配列）。 */
   analyses: SavedQcaAnalysis[];
+  /** パラメトリック 3D ROI（無ければ空配列）。 */
+  solids: Roi3dBox[];
 }
 
 /**
@@ -227,13 +238,21 @@ export function buildSaveFile(
   deleted: RoiTombstone[] = [],
   writer?: string,
   analyses: SavedQcaAnalysis[] = [],
+  solids: Roi3dBox[] = [],
 ): RoiSaveFile {
   const trimmed = [...deleted]
     .sort((a, b) => (a.at < b.at ? 1 : a.at > b.at ? -1 : 0))
     .slice(0, MAX_TOMBSTONES);
   // 元の計測が消えた解析は道連れにする（残しても復元先が無い）。
   const buried = new Set(trimmed.map((t) => t.roiUid));
-  return { schema: ROI_SCHEMA_VERSION, writer, rois, deleted: trimmed, analyses: dropAnalysesFor(analyses, buried) };
+  return {
+    schema: ROI_SCHEMA_VERSION,
+    writer,
+    rois,
+    deleted: trimmed,
+    analyses: dropAnalysesFor(analyses, buried),
+    solids: solids.filter((x) => !buried.has(x.id)),
+  };
 }
 
 /**
@@ -241,7 +260,7 @@ export function buildSaveFile(
  * （1 件の破損で患者の全 ROI を失わないため）。読めなければ空配列。
  */
 export function parseSaveFile(json: string | null | undefined): ParsedRoiFile {
-  const empty: ParsedRoiFile = { rois: [], deleted: [], analyses: [] };
+  const empty: ParsedRoiFile = { rois: [], deleted: [], analyses: [], solids: [] };
   if (!json) return empty;
   let root: unknown;
   try {
@@ -305,7 +324,15 @@ export function parseSaveFile(json: string | null | undefined): ParsedRoiFile {
       if (parsed && !buried.has(parsed.pickUid)) analyses.push(parsed);
     }
   }
-  return { rois: out, deleted, analyses };
+  // 3D ROI。壊れた要素は個別に落とし、墓標に載った id は復元しない（多重防御）。
+  const solids: Roi3dBox[] = [];
+  if (Array.isArray(file.solids)) {
+    for (const x of file.solids as unknown[]) {
+      const s = sanitizeSolid(x);
+      if (s && !buried.has(s.id)) solids.push(s);
+    }
+  }
+  return { rois: out, deleted, analyses, solids };
 }
 
 const dim = (v: unknown): DimScope | undefined => {
@@ -455,6 +482,7 @@ export function mergeSaveFiles(remote: ParsedRoiFile, local: ParsedRoiFile): Par
     rois: [...byUid.values()].sort((a, b) => cmp(a.roiUid, b.roiUid)),
     deleted: [...tombs.values()].sort((a, b) => cmp(a.roiUid, b.roiUid)),
     analyses,
+    solids: mergeSolids(remote.solids, local.solids, new Set(tombs.keys())),
   };
 }
 

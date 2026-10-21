@@ -15,7 +15,7 @@ vi.mock("./roiPersistenceApi", () => ({
 }));
 vi.mock("../log", () => ({ log: { warn: vi.fn(), error: vi.fn(), info: vi.fn(), debug: vi.fn() } }));
 
-const { loadRois, registerRoiCollector, resetRoiSaveState, saveRoiNow, scheduleRoiSave, subscribeRoiSave } =
+const { loadRois, registerRoiCollector, resetRoiSaveState, saveRoiNow, scheduleRoiSave, setSolidsForSeries, subscribeRoiSave } =
   await import("./roiSaveStore");
 
 const PK = "PAT-1";
@@ -67,7 +67,7 @@ describe("loadRois", () => {
 
   it("読めなくても例外にせず空を返す", async () => {
     fetchRoiDocument.mockRejectedValue(new Error("network error"));
-    expect(await loadRois(PK)).toEqual({ rois: [], deleted: [], analyses: [] });
+    expect(await loadRois(PK)).toEqual({ rois: [], deleted: [], analyses: [], solids: [] });
   });
 });
 
@@ -278,5 +278,67 @@ describe("購読", () => {
     const res = await saveRoiNow(PK);
     unsub();
     expect(res.ok).toBe(true);
+  });
+});
+
+describe("solid（MPR 窓＝収集関数なし）", () => {
+  const solid = (id: string, seriesUid = "S1") => ({
+    id,
+    shape: "ellipsoid" as const,
+    center: [0, 0, 0] as [number, number, number],
+    size: [20, 10, 10] as [number, number, number],
+    seriesUid,
+    updatedAt: "2026-10-21T00:00:00.000Z",
+  });
+  const withDoc = (extra: Record<string, unknown>, rois: SavedRoi[] = [roi("a")]) => ({
+    patientKey: PK,
+    json: JSON.stringify({ schema: 1, rois, deleted: [], ...extra }),
+    roiCount: rois.length,
+    updatedAt: "x",
+    version: 3,
+  });
+  const saved = () => lastSaved() as unknown as { rois: SavedRoi[]; analyses?: unknown[]; solids: { id: string }[]; deleted: { roiUid: string }[]; schema: number };
+
+  it("収集関数が無くても solid は保存でき、既存の ROI・解析を欠かさない", async () => {
+    fetchRoiDocument.mockResolvedValue(withDoc({ analyses: [{ pickUid: "a", id: "q1" }] }));
+    await loadRois(PK);
+    const res = await setSolidsForSeries(PK, "S1", [solid("u1")]);
+    expect(res.ok).toBe(true);
+    const f = saved();
+    expect(f.schema).toBe(1);
+    expect(f.rois.map((r) => r.roiUid)).toEqual(["a"]);
+    expect(f.solids.map((x) => x.id)).toEqual(["u1"]);
+  });
+  it("負例: solid の編集が無ければ、収集関数の無い窓は ROI を保存しない（従来どおり）", async () => {
+    const res = await saveRoiNow(PK);
+    expect(res).toMatchObject({ ok: false, error: "no collector" });
+    expect(saveRoiDocument).not.toHaveBeenCalled();
+  });
+  it("消した solid は墓標になり、別シリーズの solid は触らない", async () => {
+    fetchRoiDocument.mockResolvedValue(withDoc({ solids: [solid("u1"), solid("u2"), solid("o1", "S2")] }));
+    await loadRois(PK);
+    await setSolidsForSeries(PK, "S1", [solid("u1")]);
+    const f = saved();
+    expect(f.solids.map((x) => x.id).sort()).toEqual(["o1", "u1"]);
+    expect(f.deleted.map((d) => d.roiUid)).toContain("u2");
+  });
+  it("409 では相手の ROI をそのまま採り（古い loaded で巻き戻さない）、solid だけ混ぜる", async () => {
+    fetchRoiDocument.mockResolvedValueOnce(withDoc({}, [{ ...roi("a"), label: "stale" }]));
+    await loadRois(PK);
+    saveRoiDocument.mockRejectedValueOnce(new Error("HTTP 409"));
+    fetchRoiDocument.mockResolvedValueOnce({ ...withDoc({ solids: [solid("r1")] }, [{ ...roi("a"), label: "fresh" }, roi("newer")]), version: 4 });
+    const res = await setSolidsForSeries(PK, "S1", [solid("u1")]);
+    expect(res).toMatchObject({ ok: true, merged: true });
+    const f = saved();
+    expect(f.rois.map((r) => r.roiUid).sort()).toEqual(["a", "newer"]);
+    expect(f.rois.find((r) => r.roiUid === "a")?.label).toBe("fresh");
+    expect(f.solids.map((x) => x.id).sort()).toEqual(["r1", "u1"]);
+  });
+  it("2D の窓の保存は、知らない solid を持ち越して書き戻す", async () => {
+    fetchRoiDocument.mockResolvedValue(withDoc({ solids: [solid("u1")] }));
+    await loadRois(PK);
+    registerRoiCollector(PK, () => [roi("a")]);
+    await saveRoiNow(PK);
+    expect(saved().solids.map((x) => x.id)).toEqual(["u1"]);
   });
 });

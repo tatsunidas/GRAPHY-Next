@@ -24,6 +24,16 @@ export interface Roi3dBox {
   center: Vec3;
   /** X, Y, Z の全長（mm）。常に有限で正。 */
   size: Vec3;
+  /** 台帳のメタ（保存される）。 */
+  label?: string;
+  color?: string;
+  visible?: boolean;
+  locked?: boolean;
+  /** どのシリーズの上に描いたか（このシリーズを開いたときに復元する）。 */
+  studyUid?: string;
+  seriesUid?: string;
+  /** 最後に編集した時刻（ISO-8601）。窓をまたぐ保存の競合で新しい方を採る鍵。 */
+  updatedAt?: string;
 }
 
 /** 各断面の法線軸と、画面の横(u)・縦(v)に当たる世界軸（`viewer/orthoMpr.ts` のフレームと同じ対応）。 */
@@ -151,4 +161,42 @@ export function outOfBounds(b: Roi3dBox, bounds: Bounds6): boolean {
     if (b.center[a] - half < bounds[a * 2] || b.center[a] + half > bounds[a * 2 + 1]) return true;
   }
   return false;
+}
+
+const isVec3 = (v: unknown): v is Vec3 => Array.isArray(v) && v.length === 3 && v.every((x) => typeof x === "number" && Number.isFinite(x));
+
+/**
+ * 保存されていた solid を読む。壊れた要素（形が未知・中心が欠ける・径が 0 以下や非有限）は null にして
+ * 呼び出し側が**その 1 件だけ**落とせるようにする（1 件の破損で他を失わない）。
+ */
+export function sanitizeSolid(v: unknown): Roi3dBox | null {
+  const s = v as Partial<Roi3dBox> | null;
+  if (!s || typeof s.id !== "string" || !s.id) return null;
+  if (s.shape !== "box" && s.shape !== "ellipsoid") return null;
+  if (!isVec3(s.center) || !isVec3(s.size) || !s.size.every((x) => x > 0)) return null;
+  const out: Roi3dBox = { id: s.id, shape: s.shape, center: [...s.center], size: [...s.size] };
+  if (typeof s.label === "string") out.label = s.label;
+  if (typeof s.color === "string") out.color = s.color;
+  if (typeof s.visible === "boolean") out.visible = s.visible;
+  if (typeof s.locked === "boolean") out.locked = s.locked;
+  if (typeof s.studyUid === "string") out.studyUid = s.studyUid;
+  if (typeof s.seriesUid === "string") out.seriesUid = s.seriesUid;
+  if (typeof s.updatedAt === "string") out.updatedAt = s.updatedAt;
+  return out;
+}
+
+/**
+ * 保存の競合で solid を混ぜる。id で和を取り、**同じ id は `updatedAt` の新しい方**を採る
+ * （ローカル優先にすると、古い窓の保存が別の窓の新しい編集を潰す）。同時刻・未記録ならローカル。
+ * 墓標に載った id は除く。順序は id で決定的。
+ */
+export function mergeSolids(remote: Roi3dBox[], local: Roi3dBox[], buried: Set<string>): Roi3dBox[] {
+  const byId = new Map<string, Roi3dBox>();
+  for (const r of remote) byId.set(r.id, r);
+  for (const l of local) {
+    const r = byId.get(l.id);
+    byId.set(l.id, r && (r.updatedAt ?? "") > (l.updatedAt ?? "") ? r : l);
+  }
+  for (const id of buried) byId.delete(id);
+  return [...byId.values()].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
 }
