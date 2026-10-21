@@ -103,6 +103,9 @@ public class SegExportService {
                 Tag.ReferringPhysicianName, Tag.StudyDescription }) {
             copyTag(tmpl, a, tag);
         }
+        // copyTag は参照側の文字集合で読んだ文字列を渡すので、書き出しは UTF-8 に固定する
+        // （未指定だと日本語のセグメント名・患者名が "?" になる）。
+        a.setString(Tag.SpecificCharacterSet, VR.CS, "ISO_IR 192");
         // SEG 本体属性。
         a.setString(Tag.SOPClassUID, VR.UI, UID.SegmentationStorage);
         a.setString(Tag.SOPInstanceUID, VR.UI, newSopUid);

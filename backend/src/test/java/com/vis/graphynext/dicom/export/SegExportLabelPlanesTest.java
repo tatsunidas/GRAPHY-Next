@@ -46,12 +46,16 @@ class SegExportLabelPlanesTest {
     private static final int COLS = 3;
 
     private Attributes exportAndRead(SegExportRequest req) throws Exception {
-        Path header = dir.resolve("src.dcm");
         Attributes src = new Attributes();
         src.setString(Tag.SOPClassUID, VR.UI, UID.CTImageStorage);
         src.setString(Tag.SOPInstanceUID, VR.UI, "1.2.3.9");
         src.setString(Tag.PatientID, VR.LO, "P");
         src.setString(Tag.StudyInstanceUID, VR.UI, "1.2.3");
+        return exportAndRead(req, src);
+    }
+
+    private Attributes exportAndRead(SegExportRequest req, Attributes src) throws Exception {
+        Path header = dir.resolve("src.dcm");
         try (DicomOutputStream out = new DicomOutputStream(header.toFile())) {
             out.writeDataset(src.createFileMetaInformation(UID.ExplicitVRLittleEndian), src);
         }
@@ -124,6 +128,33 @@ class SegExportLabelPlanesTest {
                     .getNestedDataset(Tag.SourceImageSequence).getString(Tag.ReferencedSOPInstanceUID));
         }
         assertEquals(List.of("1.2.3.4.1", "1.2.3.4.2", "1.2.3.4.1", "1.2.3.4.2"), refs);
+    }
+
+    @Test
+    void keepsNonAsciiSegmentLabels() throws Exception {
+        SegExportRequest.LabelPlanes lp = new SegExportRequest.LabelPlanes(1,
+                List.of(new SegExportRequest.Label(1, "腫瘍コア（BraTS の 1）", null, null)),
+                List.of(new SegExportRequest.Plane("1.2.3.4.1", new double[]{0, 0, 0}, plane(1, 0, 0, 0, 0, 0))));
+        Attributes seg = exportAndRead(request(lp));
+        assertEquals("ISO_IR 192", seg.getString(Tag.SpecificCharacterSet));
+        assertEquals("腫瘍コア（BraTS の 1）", seg.getSequence(Tag.SegmentSequence).get(0).getString(Tag.SegmentLabel));
+    }
+
+    @Test
+    void keepsLegacyCharsetPatientNameFromSource() throws Exception {
+        // 参照側が ISO_IR 100 でも、継承した患者名を UTF-8 へ載せ替えて壊さない
+        Attributes src = new Attributes();
+        src.setString(Tag.SpecificCharacterSet, VR.CS, "ISO_IR 100");
+        src.setString(Tag.SOPClassUID, VR.UI, UID.CTImageStorage);
+        src.setString(Tag.SOPInstanceUID, VR.UI, "1.2.3.9");
+        src.setString(Tag.PatientID, VR.LO, "P");
+        src.setString(Tag.PatientName, VR.PN, "Müller^Jörg");
+        src.setString(Tag.StudyInstanceUID, VR.UI, "1.2.3");
+        SegExportRequest.LabelPlanes lp = new SegExportRequest.LabelPlanes(1,
+                List.of(new SegExportRequest.Label(1, "a", null, null)),
+                List.of(new SegExportRequest.Plane("1.2.3.4.1", new double[]{0, 0, 0}, plane(1, 0, 0, 0, 0, 0))));
+        Attributes seg = exportAndRead(request(lp), src);
+        assertEquals("Müller^Jörg", seg.getString(Tag.PatientName));
     }
 
     @Test

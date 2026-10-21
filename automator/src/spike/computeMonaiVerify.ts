@@ -133,7 +133,7 @@ async function main(): Promise<void> {
   console.log(`[${bundle}] 症例 ${cases.length} 件: ${cases.join(", ")}`);
 
   const OUT_DIR = path.join(AUTOMATOR_ROOT, ".results", "compute-monai-verify", bundle);
-  const RES_DIR = path.join(DATA_ROOT, "results", bundle);
+  const RES_DIR = path.join(DATA_ROOT, "results", process.argv.includes("--swap-channels") ? `${bundle}-swap` : bundle);
   fs.mkdirSync(OUT_DIR, { recursive: true });
   fs.mkdirSync(RES_DIR, { recursive: true });
   installOfficialPlugin();
@@ -239,7 +239,10 @@ async function main(): Promise<void> {
         await v.waitForTimeout(2_000);
         const nOpt = await v.getByTestId("monai-channel-0").evaluate((sel) => (sel as HTMLSelectElement).options.length);
         check(nOpt === spec.multi.channels.length + 1, `${id}: チャネルの選択肢に 4 シリーズが出る`, nOpt);
-        for (const [k, ch] of spec.multi.channels.entries()) {
+        // 負例: --swap-channels はチャネル 0 と 1 のシリーズを入れ替えて渡す（順序の取り違えを採点が見分けられるかを見る）
+        const swap = process.argv.includes("--swap-channels");
+        for (const [k, ch0] of spec.multi.channels.entries()) {
+          const ch = swap && k < 2 ? spec.multi.channels[1 - k] : ch0;
           const val = await v.getByTestId(`monai-channel-${k}`).evaluate((sel, re) => {
             const o = Array.from((sel as HTMLSelectElement).options).find((x) => x.value && new RegExp(re).test(x.textContent ?? ""));
             return o?.value ?? null;
