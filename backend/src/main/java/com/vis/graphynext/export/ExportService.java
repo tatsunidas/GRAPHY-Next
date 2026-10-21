@@ -640,7 +640,7 @@ public class ExportService {
     }
 
     /** 媒体のルートに置く起動ファイル（ダブルクリックでローカルサーバを起動し、ブラウザでビューアを開く）。 */
-    static final String[] LAUNCHER_ROOT_FILES = {"START-VIEWER.bat", "START-VIEWER.command", "START-VIEWER.sh"};
+    static final String[] LAUNCHER_ROOT_FILES = {"START-VIEWER.bat", "START-VIEWER.command", "START-VIEWER.sh", "START-VIEWER.html"};
     /** 起動ファイルが使うサーバ本体（VIEWER/ に置く）。 */
     static final String[] LAUNCHER_VIEWER_FILES = {"serve.ps1", "serve.pl"};
 
@@ -697,6 +697,7 @@ public class ExportService {
             sb.append("       Mac     … START-VIEWER.command をダブルクリック（開けないときは右クリック →「開く」）\n");
             sb.append("       Linux   … ターミナルで sh START-VIEWER.sh\n");
             sb.append("  2. ブラウザが開き、画像が自動で表示されます。\n");
+            sb.append("  （START-VIEWER.html を開くと、お使いの PC に合った手順が表示されます。）\n");
             sb.append("  3. 終わるときは、黒い画面（起動ファイルの窓）を閉じます。\n");
             sb.append("  ・画像はこの PC の外へは送られません。\n");
             sb.append("  ・VIEWER フォルダの index.html を直接開いても動きません。上の起動ファイルを使ってください。\n");
@@ -737,6 +738,7 @@ public class ExportService {
             sb.append("       Mac     : double-click START-VIEWER.command (if it does not open: right-click > Open)\n");
             sb.append("       Linux   : run \"sh START-VIEWER.sh\" in a terminal\n");
             sb.append("  2. Your browser opens and shows the images automatically.\n");
+            sb.append("  (Open START-VIEWER.html to see the steps that fit your computer.)\n");
             sb.append("  3. To finish, close the black launcher window.\n");
             sb.append("  - Images are never sent outside this computer.\n");
             sb.append("  - Opening VIEWER/index.html directly does not work. Please use the launcher above.\n");
