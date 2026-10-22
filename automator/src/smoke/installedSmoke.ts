@@ -38,6 +38,7 @@ import { _electron as electron, type ElectronApplication, type Page } from "@pla
 import { importNonDicomPaths } from "../fixtures/importFixtures.js";
 import { AUTOMATOR_ROOT } from "../fixtures/manifest.js";
 import { waitForMainScreenReady } from "../checklist/items/shared/helpers.js";
+import { seedViewerSettings } from "../backend/seedSettings.js";
 import { dismissStartupDialogs } from "../common/dismissDialogs.js";
 import { killProcessTree } from "../common/processUtils.js";
 
@@ -277,6 +278,9 @@ async function main(): Promise<void> {
     const listed = await fetch(`http://127.0.0.1:${PORT}/api/studies`).then((r) => r.json() as Promise<unknown[]>, () => null);
     check(Array.isArray(listed) && listed.length >= 2, "[5] backend の /api/studies に取り込んだ 2 スタディがある", { count: Array.isArray(listed) ? listed.length : listed });
 
+    // 起動時の利用条件の同意ダイアログ（#354）は全操作を塞ぐ。他の検査と同じく同意済みにして読み直す。
+    await seedViewerSettings(PORT);
+    await main.reload();
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().forEach((w: { maximize(): void }) => w.maximize())).catch(() => {});
     await dismissStartupDialogs(main);
     // 日付の絞り込みは「All」ボタンで外す（利用者と同じ操作。入力欄を空にするだけだと、状態が反映される前に
