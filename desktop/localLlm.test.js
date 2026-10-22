@@ -122,7 +122,7 @@ test("status: 未導入", () => {
   assert.equal(s.registered, false);
 });
 
-test("install → ensure → 会話宛の endpoint が実ポートへ → stop で予約ポートへ戻る", async () => {
+test("install → ensure → 会話宛の endpoint が実ポートへ → stop で予約ポートへ戻る", { skip: process.platform === "win32" && "偽の実行ファイル(shebang スクリプト)を Windows では直接起動できない。起動は実 OS で別途確認する" }, async () => {
   const { ai, calls, events } = setup();
   const r = await ai.install({ modelId: "m1" });
   assert.deepEqual(r, { ok: true });
@@ -150,7 +150,7 @@ test("install → ensure → 会話宛の endpoint が実ポートへ → stop �
   await assert.rejects(fetch(`http://127.0.0.1:${e.port}/health`)); // 本当に止まっている
 });
 
-test("ensure: 同時に呼んでも起動は 1 回・モデル読み込み中(503)は待つ", async () => {
+test("ensure: 同時に呼んでも起動は 1 回・モデル読み込み中(503)は待つ", { skip: process.platform === "win32" && "偽の実行ファイル(shebang スクリプト)を Windows では直接起動できない。起動は実 OS で別途確認する" }, async () => {
   const { ai } = setup({ env: { ...process.env, FAKE_LOAD_MS: "400" } });
   await ai.install({ modelId: "m1" });
   const [a, b] = await Promise.all([ai.ensure(), ai.ensure()]);
@@ -159,7 +159,7 @@ test("ensure: 同時に呼んでも起動は 1 回・モデル読み込み中(50
   await ai.stop();
 });
 
-test("ensure: プロセスがすぐ落ちたら server-exited（成功と言わない）", async () => {
+test("ensure: プロセスがすぐ落ちたら server-exited（成功と言わない）", { skip: process.platform === "win32" && "偽の実行ファイル(shebang スクリプト)を Windows では直接起動できない。起動は実 OS で別途確認する" }, async () => {
   const { ai } = setup({ env: { ...process.env, FAKE_EXIT: "1" } });
   await ai.install({ modelId: "m1" });
   const e = await ai.ensure();
@@ -173,7 +173,7 @@ test("ensure: 未導入なら not-installed", async () => {
   assert.equal((await ai.ensure()).error, "not-installed");
 });
 
-test("prepare: local-llm 以外は何もしない／local-llm なら起動する", async () => {
+test("prepare: local-llm 以外は何もしない／local-llm なら起動する", { skip: process.platform === "win32" && "偽の実行ファイル(shebang スクリプト)を Windows では直接起動できない。起動は実 OS で別途確認する" }, async () => {
   const { ai } = setup();
   await ai.install({ modelId: "m1" });
   assert.deepEqual(await ai.prepare({ id: "gemini" }), { ok: true });
@@ -215,7 +215,7 @@ test("setRole: 縮退先・既定の切り替えと元の既定への復帰", as
   assert.equal((aiProviders.get().fallbacks || {})["text-to-text"], undefined);
 });
 
-test("remove: 停止・登録解除・ファイル削除。他の提供元と既定は残る", async () => {
+test("remove: 停止・登録解除・ファイル削除。他の提供元と既定は残る", { skip: process.platform === "win32" && "偽の実行ファイル(shebang スクリプト)を Windows では直接起動できない。起動は実 OS で別途確認する" }, async () => {
   const { ai, dataDir } = setup();
   await ai.install({ modelId: "m1" });
   ai.setRole({ fallback: true, makeDefault: true });
