@@ -2019,6 +2019,15 @@ export interface RoiFeatureRequest {
   recompute: boolean;
   /** 計算の単位。省略は 3D だけ（3D は常に計算する）。 */
   roiModes?: RoiMode[];
+  /**
+   * LoG で強調する構造の半径 r（mm）の並び。0 はフィルタなし。省略は従来（スケールなし）。
+   * 設定の DOUBLEARRAY_logSigmaMm とは併用できない。
+   */
+  scalesMm?: number[];
+  /** r → σ の換算。省略は SQRT_D（σ = r/√d、d は LoG の次元）。 */
+  scaleConversion?: "SQRT_D" | "IDENTITY" | "COEFFICIENT";
+  /** COEFFICIENT の k（σ = k·r）。 */
+  scaleCoefficient?: number;
 }
 
 export type RoiMode = "WHOLE_3D" | "MAX_SECTION_2D" | "SLICES_2D";
@@ -2066,6 +2075,18 @@ export interface RoiFeatureResult {
   section?: RoiFeatureSection | null;
   /** スライス別 2D。単位に SLICES_2D を選んだときだけ。 */
   slices?: RoiFeatureSlices | null;
+  /** 空間スケールごとの結果（scalesMm を指定したときだけ）。この結果自体は先頭のスケールのもの。 */
+  scales?: RoiFeatureScaleEntry[] | null;
+}
+
+/** 空間スケール 1 つぶん（backend: RoiFeatureResult.ScaleEntry）。σ は換算後（mm）。r=0 は σ が null。 */
+export interface RoiFeatureScaleEntry {
+  scaleMm: number;
+  sigma3dMm: number | null;
+  sigma2dMm: number | null;
+  conversion: string;
+  coefficient: number | null;
+  result: RoiFeatureResult;
 }
 
 /** 2D の計算の記録（実際に使った設定 BOOL_force2D=1 を含む。3D とはハッシュが違う）。 */
@@ -2153,6 +2174,10 @@ export interface RoiFeatureJobStatus {
   /** スライス別 2D の進み（その単位を選ばなかったときは 0 / 0）。 */
   sliceDone?: number;
   sliceTotal?: number;
+  /** 空間スケールの進み（スケールを選ばなかったときは 0 / 0）。scaleDone は終えた数、scaleMm は今の半径。 */
+  scaleDone?: number;
+  scaleTotal?: number;
+  scaleMm?: number;
 }
 
 export const submitRoiFeatureJob = (req: RoiFeatureRequest) =>
