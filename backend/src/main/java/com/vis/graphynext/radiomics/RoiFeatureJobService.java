@@ -36,7 +36,7 @@ public class RoiFeatureJobService {
 
     /** sliceDone / sliceTotal はスライス別 2D の進み（その単位を選ばなかったときは 0 / 0）。 */
     public record Status(String jobId, State state, long elapsedMs, RoiFeatureResult result, String error,
-                         int sliceDone, int sliceTotal) {}
+                         int sliceDone, int sliceTotal, int scaleDone, int scaleTotal, double scaleMm) {}
 
     private static final class Job {
         final String id;
@@ -48,6 +48,10 @@ public class RoiFeatureJobService {
         volatile String error;
         volatile int sliceDone;
         volatile int sliceTotal;
+        /** 空間スケールの進み（スケールを選ばなかったときは 0 / 0）。scaleDone は終えた数、scaleMm は今の半径。 */
+        volatile int scaleDone;
+        volatile int scaleTotal;
+        volatile double scaleMm;
 
         Job(String id) {
             this.id = id;
@@ -61,9 +65,9 @@ public class RoiFeatureJobService {
         Status toStatus() {
             // 取り消した後に計算が終わっても、結果は見せない
             if (cancelled) {
-                return new Status(id, State.CANCELLED, elapsedMs(), null, null, sliceDone, sliceTotal);
+                return new Status(id, State.CANCELLED, elapsedMs(), null, null, sliceDone, sliceTotal, scaleDone, scaleTotal, scaleMm);
             }
-            return new Status(id, state, elapsedMs(), result, error, sliceDone, sliceTotal);
+            return new Status(id, state, elapsedMs(), result, error, sliceDone, sliceTotal, scaleDone, scaleTotal, scaleMm);
         }
     }
 
@@ -114,7 +118,11 @@ public class RoiFeatureJobService {
                     (done, total) -> {
                         job.sliceDone = done;
                         job.sliceTotal = total;
-                    }, () -> job.cancelled);
+                    }, () -> job.cancelled, (done, total, rMm) -> {
+                        job.scaleDone = done;
+                        job.scaleTotal = total;
+                        job.scaleMm = rMm;
+                    });
             job.state = State.DONE;
             log.info("[roi-features] job {} done in {} ms (cache={})", job.id, job.elapsedMs(),
                     job.result.fromCache());
