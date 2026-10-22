@@ -81,8 +81,88 @@ function post(target, pathname, headers, body) {
   return request("POST", target, pathname, headers, body);
 }
 
+/**
+ * SSE で返る応答を POST で受ける。**イベントごとに `onData(data)` を呼ぶ**（`data:` 行の本文）。
+ *
+ * <p>200 以外は本文を溜めて `post` と同じ形で返す（呼び出し側が同じ分類を使えるように）。
+ * 上限・タイムアウト（無通信）・リダイレクト不追従は `post` と同じ。`signal` で中断できる。
+ *
+ * @param {{signal?: AbortSignal, onData: (data: string) => void}} opts
+ * @returns {Promise<{statusCode: number, json: any, text: string}>} 200 のときは本文を溜めない（text は空）
+ */
+function postStream(target, pathname, headers, body, opts) {
+  const { signal, onData } = opts;
+  return new Promise((resolve, reject) => {
+    if (signal && signal.aborted) { reject(new Error("canceled")); return; }
+    const transport = target.plaintext ? http : https;
+    const req = transport.request(
+      {
+        hostname: target.hostname,
+        port: target.port,
+        path: pathname,
+        method: "POST",
+        headers: { "User-Agent": "GRAPHY-Next", ...headers, ...(body ? { "Content-Length": body.length } : {}) },
+        timeout: TIMEOUT_MS,
+      },
+      (res) => {
+        let size = 0;
+        const fail = (err) => { res.destroy(); reject(err); };
+        if (res.statusCode !== 200) {
+          const chunks = [];
+          res.on("data", (c) => {
+            size += c.length;
+            if (size > MAX_RESPONSE_BYTES) return fail(new Error(`レスポンスが上限(${MAX_RESPONSE_BYTES} バイト)を超えました`));
+            chunks.push(c);
+          });
+          res.on("end", () => {
+            const text = Buffer.concat(chunks).toString("utf8");
+            let json = null;
+            try { json = JSON.parse(text); } catch { /* statusCode とともに扱う */ }
+            resolve({ statusCode: res.statusCode, json, text });
+          });
+          res.on("error", reject);
+          return;
+        }
+        // UTF-8 の途中で切れても壊れないよう、文字列デコーダに任せる。
+        const decoder = new (require("node:string_decoder").StringDecoder)("utf8");
+        let buf = "";
+        const flush = (block) => {
+          const data = block
+            .split(/\r?\n/)
+            .filter((l) => l.startsWith("data:"))
+            .map((l) => l.slice(5).replace(/^ /, ""))
+            .join("\n");
+          if (data) onData(data);
+        };
+        res.on("data", (c) => {
+          size += c.length;
+          if (size > MAX_RESPONSE_BYTES) return fail(new Error(`レスポンスが上限(${MAX_RESPONSE_BYTES} バイト)を超えました`));
+          buf += decoder.write(c);
+          let m;
+          while ((m = /\r?\n\r?\n/.exec(buf))) {
+            const block = buf.slice(0, m.index);
+            buf = buf.slice(m.index + m[0].length);
+            try { flush(block); } catch (e) { return fail(e); }
+          }
+        });
+        res.on("end", () => {
+          buf += decoder.end();
+          try { if (buf.trim()) flush(buf); } catch (e) { reject(e); return; }
+          resolve({ statusCode: 200, json: null, text: "" });
+        });
+        res.on("error", reject);
+      },
+    );
+    const onAbort = () => req.destroy(new Error("canceled"));
+    if (signal) signal.addEventListener("abort", onAbort, { once: true });
+    req.on("error", reject);
+    req.on("timeout", () => req.destroy(new Error(`タイムアウト(${TIMEOUT_MS} ms)`)));
+    req.end(body);
+  });
+}
+
 /** 一覧の取得など、本文の無い GET。上限・タイムアウト・リダイレクトを追わない点は `post` と同じ。 */
 function get(target, pathname, headers) {
   return request("GET", target, pathname, headers, null);
 }
-module.exports = { post, get, TIMEOUT_MS, MAX_RESPONSE_BYTES };
+module.exports = { post, postStream, get, TIMEOUT_MS, MAX_RESPONSE_BYTES };

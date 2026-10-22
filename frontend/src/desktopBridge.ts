@@ -88,7 +88,7 @@ export interface SecretSetResult extends SecretStatus {
 
 /** Gemini 中継の要求。解釈は一切せず、生 JSON がそのまま返る。 */
 /** 用途。**提供元ではなくこれで頼む**（設計: fw/ai-routing-design.md §2）。 */
-export type AiCapability = "image-to-image" | "image-to-text";
+export type AiCapability = "image-to-image" | "image-to-text" | "text-to-text";
 
 export interface AiGenerateRequest {
   /** 用途。main 側が応答の種類を決める。 */
@@ -117,6 +117,10 @@ export type AiResolveResult =
       model: string;
       endpointHost: string;
       hasApiKey: boolean;
+      /** 会話でツールを送るか（`none` ならテキスト中の JSON で代替する）。 */
+      toolMode?: "native" | "none";
+      /** この PC・院内の宛先か（自動フォールバックの対象になり得る）。 */
+      local?: boolean;
       /**
        * 平文 http で送る宛先か（院内に自分で立てたサーバだけ起こりうる）。
        *
@@ -141,6 +145,10 @@ export interface AiProviderEntry {
   plaintext?: boolean;
   /** 認証の載せ方。未指定ならアダプタの既定。旧い形の文字列も来る。 */
   auth?: { header?: string; prefix?: string } | string;
+  /** 会話でのツール呼び出し。`none` ならツールを送らない（関数呼び出しを持たないローカルモデル向け）。 */
+  toolMode?: string;
+  /** 鍵が要らない提供元（ループバックのローカルモデル）。鍵の欄・未設定の警告を出さない。 */
+  keyless?: boolean;
   /** パスの組み方（`kind` の既定を上書きしたいときだけ）。 */
   pathStyle?: string;
   /** API バージョン（Azure は必須・Gemini は `v1beta` 等）。 */
@@ -190,6 +198,8 @@ export interface AiProvidersConfig {
   providers: AiProviderEntry[];
   /** 用途 → 提供元 id。 */
   defaults: Record<string, string>;
+  /** 用途 → 自動フォールバック先（ローカルだけ）。画面からはまだ編集しない。 */
+  fallbacks?: Record<string, string[]>;
   /** 読み込み時に捨てた設定の理由。**黙って捨てない。** */
   problems: string[];
   capabilities: string[];
@@ -203,6 +213,8 @@ export interface AiProvenance {
   endpointHost: string;
   /** 平文 http で送った（院内ホストのみ）。作品の由来として残す。 */
   plaintext?: boolean;
+  /** 自動フォールバックで落ちた先のときだけ入る。元の（落ちた）提供元の id。 */
+  fallbackFrom?: string;
 }
 
 /**
@@ -222,6 +234,62 @@ export type AiGenerateResult =
       data?: unknown;
     }
   | { ok: false; error: string; status?: number; kind?: string };
+
+/** 会話 1 件。画像は `user` だけが持てる。ツール結果は `tool`（`toolCallId` と `toolName` を付ける）。 */
+export interface AiChatMessage {
+  role: "system" | "user" | "assistant" | "tool";
+  text?: string;
+  images?: { base64: string; mimeType?: string }[];
+  toolCalls?: AiToolCall[];
+  toolCallId?: string;
+  toolName?: string;
+}
+
+/** モデルが求めたツール呼び出し。`argsError` があれば引数が壊れている＝実行してはいけない。 */
+export interface AiToolCall {
+  id: string;
+  name: string;
+  args: Record<string, unknown>;
+  argsError?: string;
+  /** 提供元の不透明な値。**そのまま次のターンへ返すこと**（Gemini の思考署名など）。 */
+  providerState?: Record<string, unknown>;
+}
+
+export interface AiChatRequest {
+  /** 同時に走らせるのは 1 セッション 1 本。`^[A-Za-z0-9_-]{1,64}$`。 */
+  sessionId: string;
+  messages: AiChatMessage[];
+  tools?: { name: string; description?: string; parameters?: Record<string, unknown> }[];
+  temperature?: number;
+  /** true なら差分を `onAiChatEvent` へ流す。結果は最後にまとめて返る。 */
+  stream?: boolean;
+}
+
+/**
+ * 会話 1 ターンの結果。**1 呼び出し＝1 ターン**（ツール結果を返して次を呼ぶループは呼び出し側）。
+ *
+ * <p>`degraded` は自動フォールバックでローカルへ落ちたとき。**画面に必ず出す**（精度が落ちている）。
+ * `droppedImages` は送れずに落とした画像の数（黙って欠損させない）。
+ */
+export type AiChatResult =
+  | {
+      ok: true;
+      text?: string;
+      toolCalls?: AiToolCall[];
+      finishReason?: string;
+      blockReason?: string;
+      droppedImages?: number;
+      degraded?: boolean;
+      provenance: AiProvenance;
+    }
+  | { ok: false; error: string; status?: number; kind?: string };
+
+/** ストリームの差分。 */
+export interface AiChatEvent {
+  sessionId: string;
+  type: "delta";
+  text: string;
+}
 
 /** 名前を付けて保存の結果。`canceled` はユーザーが取り消しただけで、失敗ではない。 */
 export type SaveFileResult =
@@ -379,6 +447,14 @@ export interface GraphyDesktop {
    * 同意画面に出す宛先と実際の宛先がずれる余地ができる）。
    */
   aiResolve?: (capability: AiCapability) => Promise<AiResolveResult>;
+  /**
+   * 会話（text-to-text・ツール・ストリーミング）。**アシスタント窓（`#assistant`）以外から呼ぶと
+   * main が `forbidden` を返す**——プラグインが同じ realm からこの口を使えないようにするため。
+   */
+  aiChat?: (req: AiChatRequest) => Promise<AiChatResult>;
+  aiChatCancel?: (sessionId: string) => Promise<{ ok: boolean; error?: string }>;
+  /** ストリームの差分を受ける。購読解除の関数を返す。 */
+  onAiChatEvent?: (cb: (ev: AiChatEvent) => void) => () => void;
   /** 提供元の一覧と用途ごとの既定。**鍵の値は返らない**（有無だけ）。 */
   aiProvidersGet?: () => Promise<AiProvidersConfig>;
   /** 検査だけ（書かない）。入力中に叩く。 */

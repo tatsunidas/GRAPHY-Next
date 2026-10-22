@@ -46,6 +46,7 @@ function modelInPath() {
 const RESPONSE_MODALITIES = {
   "image-to-image": ["TEXT", "IMAGE"],
   "image-to-text": ["TEXT"],
+  "text-to-text": ["TEXT"],
 };
 
 /** この用途を扱えるか。扱えない用途は呼び出し元が手前で断る。 */
@@ -62,6 +63,10 @@ function supports(capability) {
  * @returns {{path: string, headers: object, body: Buffer}}
  */
 function buildRequest(req) {
+  // 会話の用途は画像を持たない 1 往復（接続テスト用）。本番の会話は buildChatRequest。
+  if (req.capability === "text-to-text") {
+    return buildChatRequest({ ...req, messages: [{ role: "user", text: req.prompt }] });
+  }
   const apiVersion = req.apiVersion || DEFAULT_API_VERSION;
   // 🔴 用途が来ていればそれを使う。来ていなければ**従来どおり** responseModalities を尊重する
   //    ——既存プラグイン（0.3.0 で配ったもの）を壊さないため。
@@ -163,6 +168,214 @@ function normalize(json) {
   return out;
 }
 
+
+// ── 会話（text-to-text・ツール・ストリーミング） ───────────────────────────
+
+/** Gemini の関数宣言が受ける Schema のキー。ここに無いものは落とす（`additionalProperties` など）。 */
+const SCHEMA_KEYS = new Set([
+  "type", "format", "description", "nullable", "enum", "properties", "required", "items",
+  "minItems", "maxItems", "minimum", "maximum", "minLength", "maxLength", "pattern", "anyOf",
+]);
+
+/**
+ * JSON Schema → Gemini の Schema。**受けないキーを落とし、`type: [X,"null"]` を `nullable` に直す。**
+ * 落とした制約は検査されなくなる——呼び出し側（アクション層）が引数を自分で検証する前提。
+ */
+function toGeminiSchema(schema) {
+  const src = asRecord(schema);
+  if (!src) return { type: "object", properties: {} };
+  const out = {};
+  for (const [k, v] of Object.entries(src)) {
+    if (k === "oneOf" && Array.isArray(v)) { out.anyOf = v.map(toGeminiSchema); continue; }
+    if (!SCHEMA_KEYS.has(k)) continue;
+    if (k === "type" && Array.isArray(v)) {
+      const types = v.filter((t) => t !== "null");
+      out.type = types[0] || "string";
+      if (v.includes("null")) out.nullable = true;
+    } else if (k === "properties" && asRecord(v)) {
+      out.properties = Object.fromEntries(Object.entries(v).map(([n, sub]) => [n, toGeminiSchema(sub)]));
+    } else if (k === "items") {
+      out.items = toGeminiSchema(v);
+    } else if (k === "anyOf" && Array.isArray(v)) {
+      out.anyOf = v.map(toGeminiSchema);
+    } else {
+      out[k] = v;
+    }
+  }
+  return out;
+}
+
+/** 会話 → `contents` と `systemInstruction`。連続する tool 結果は 1 つの user にまとめる。 */
+function toContents(messages) {
+  const system = [];
+  const contents = [];
+  for (const m of messages) {
+    const text = wire.messageText(m);
+    if (m.role === "system") { if (text) system.push(text); continue; }
+    if (m.role === "tool") {
+      const part = { functionResponse: { name: String(m.toolName || ""), response: { result: text } } };
+      const last = contents[contents.length - 1];
+      if (last && last.role === "user" && last.parts.every((p) => p.functionResponse)) last.parts.push(part);
+      else contents.push({ role: "user", parts: [part] });
+      continue;
+    }
+    if (m.role === "assistant") {
+      const parts = [];
+      if (text) parts.push({ text });
+      for (const c of Array.isArray(m.toolCalls) ? m.toolCalls : []) {
+        const sig = c.providerState && c.providerState.thoughtSignature;
+        parts.push({
+          functionCall: { name: String(c.name), args: c.args || {} },
+          // 思考署名は不透明な値。**そのまま返さないと次のターンが 400 になる**ことがある。
+          ...(typeof sig === "string" && sig ? { thoughtSignature: sig } : {}),
+        });
+      }
+      if (parts.length > 0) contents.push({ role: "model", parts });
+      continue;
+    }
+    const parts = [];
+    if (text) parts.push({ text });
+    for (const im of Array.isArray(m.images) ? m.images : []) {
+      parts.push({ inline_data: { mime_type: im.mimeType || "image/png", data: im.base64 } });
+    }
+    if (parts.length > 0) contents.push({ role: "user", parts });
+  }
+  return { system, contents };
+}
+
+/**
+ * 会話の要求を組む。**1 呼び出し＝1 ターン**。
+ *
+ * <p>`paths` で上書きされたパスは `:streamGenerateContent` へ切り替えられないので、
+ * その場合は非ストリーミングで送る（`streaming:false` を返す）。
+ */
+function buildChatRequest(req) {
+  const apiVersion = req.apiVersion || DEFAULT_API_VERSION;
+  const provider = req.provider || {};
+  const { system, contents } = toContents(req.messages);
+  const tools = provider.toolMode === "none" ? [] : req.tools || [];
+  const body = {
+    contents,
+    ...(system.length > 0 ? { systemInstruction: { parts: [{ text: system.join("\n\n") }] } } : {}),
+    ...(tools.length > 0
+      ? { tools: [{ functionDeclarations: tools.map((t) => ({ name: t.name, description: t.description || "", parameters: toGeminiSchema(t.parameters) })) }] }
+      : {}),
+    ...(typeof req.temperature === "number" ? { generationConfig: { temperature: req.temperature } } : {}),
+  };
+  if (req.providerOptions && typeof req.providerOptions === "object" && body.generationConfig) {
+    Object.assign(body.generationConfig, req.providerOptions);
+  } else if (req.providerOptions && typeof req.providerOptions === "object") {
+    body.generationConfig = { ...req.providerOptions };
+  }
+  const own = { "Content-Type": "application/json", ...wire.authHeaders(provider, req.apiKey, DEFAULT_AUTH) };
+  const overridden = !!(provider.paths && typeof provider.paths["text-to-text"] === "string");
+  const streaming = !!req.stream && !overridden;
+  const defaultPath = streaming
+    ? `/${apiVersion}/models/${req.model}:streamGenerateContent?alt=sse`
+    : `/${apiVersion}/models/${req.model}:generateContent`;
+  return {
+    path: wire.pathFor(provider, "text-to-text", defaultPath),
+    headers: wire.mergeHeaders(own, provider.headers),
+    body: Buffer.from(JSON.stringify(body), "utf8"),
+    streaming,
+  };
+}
+
+/** 1 つの応答（またはストリームの 1 チャンク）の `parts` を読む。ID はここで採番する。 */
+function readChatParts(json, makeId) {
+  const root = asRecord(json);
+  const candidates = Array.isArray(root && root.candidates) ? root.candidates : [];
+  const first = asRecord(candidates[0]);
+  const content = asRecord(first && first.content);
+  const parts = Array.isArray(content && content.parts) ? content.parts : [];
+  const texts = [];
+  const toolCalls = [];
+  for (const p of parts) {
+    const part = asRecord(p);
+    if (!part) continue;
+    if (part.thought === true) continue; // 思考の要約は会話に出さない
+    if (typeof part.text === "string" && part.text.length > 0) texts.push(part.text);
+    const fc = asRecord(part.functionCall);
+    if (fc && typeof fc.name === "string" && fc.name) {
+      const parsed = wire.parseToolArgs(fc.args);
+      const sig = part.thoughtSignature || part.thought_signature;
+      toolCalls.push({
+        id: makeId(),
+        name: fc.name,
+        args: parsed.args,
+        ...(parsed.argsError ? { argsError: parsed.argsError } : {}),
+        ...(typeof sig === "string" && sig ? { providerState: { thoughtSignature: sig } } : {}),
+      });
+    }
+  }
+  const reason =
+    (first && typeof first.finishReason === "string" ? first.finishReason : null);
+  const blocked = asRecord(root && root.promptFeedback) && typeof root.promptFeedback.blockReason === "string"
+    ? root.promptFeedback.blockReason
+    : null;
+  return { texts, toolCalls, reason, blocked };
+}
+
+let idCounter = 0;
+function defaultMakeId() {
+  idCounter += 1;
+  return `call-${Date.now().toString(36)}-${idCounter}`;
+}
+
+/** 会話の応答（非ストリーミング）→ 提供元非依存の形。 */
+function normalizeChat(json, opts) {
+  const { texts, toolCalls, reason, blocked } = readChatParts(json, (opts && opts.makeId) || defaultMakeId);
+  const out = {};
+  const text = texts.join("").trim();
+  if (text) out.text = text;
+  if (toolCalls.length > 0) out.toolCalls = toolCalls;
+  if (reason) out.finishReason = reason;
+  if (!out.text && !out.toolCalls) {
+    const why = blocked || (reason && reason !== "STOP" ? reason : null);
+    if (why) out.blockReason = why;
+  }
+  return out;
+}
+
+/** ストリームは 1 チャンクごとに完全な応答の形。テキストは連結し、関数呼び出しは順に集める。 */
+function createStreamParser(opts) {
+  const makeId = (opts && opts.makeId) || defaultMakeId;
+  let text = "";
+  const toolCalls = [];
+  let reason = null;
+  let blocked = null;
+  return {
+    push(data) {
+      let json;
+      try {
+        json = JSON.parse(data);
+      } catch {
+        return [];
+      }
+      const r = readChatParts(json, makeId);
+      toolCalls.push(...r.toolCalls);
+      if (r.reason) reason = r.reason;
+      if (r.blocked) blocked = r.blocked;
+      const chunk = r.texts.join("");
+      if (!chunk) return [];
+      text += chunk;
+      return [{ type: "delta", text: chunk }];
+    },
+    result() {
+      const out = {};
+      const t = text.trim();
+      if (t) out.text = t;
+      if (toolCalls.length > 0) out.toolCalls = toolCalls;
+      if (reason) out.finishReason = reason;
+      if (!out.text && !out.toolCalls) {
+        const why = blocked || (reason && reason !== "STOP" ? reason : null);
+        if (why) out.blockReason = why;
+      }
+      return out;
+    },
+  };
+}
+
 /**
  * モデル一覧の要求（`GET /<版>/models`）。ページ送りは `pageToken`。
  *
@@ -213,6 +426,10 @@ module.exports = {
   acceptsLegacyRequest: true,
   supports,
   buildRequest,
+  buildChatRequest,
+  normalizeChat,
+  createStreamParser,
+  toGeminiSchema,
   buildListRequest,
   parseModelList,
   normalize,

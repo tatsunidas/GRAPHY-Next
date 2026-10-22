@@ -108,12 +108,14 @@ async function generate(req) {
 
   // 🔴 **宛先とモデルは本体が決める。** プラグインが名指ししてきても、用途が来ていれば
   //    レジストリの解決を優先する——宛先を呼び出し側に決めさせない（設計 §3.1）。
+  // 会話は `chat()` の仕事（画像 1 枚の単発とは経路も錠も別）。
+  if (req.capability === "text-to-text") return { ok: false, error: "unsupported-capability", kind: "capability" };
   const plan = resolvePlan(req);
   if (!plan.ok) return plan;
   const { provider, adapter, model } = plan;
 
   const apiKey = secretForProvider(provider.id);
-  if (!apiKey) return { ok: false, error: "no-api-key" };
+  if (!apiKey && provider.auth !== "none") return { ok: false, error: "no-api-key" };
   if (!validModel(model, adapter.modelInPath(provider))) return { ok: false, error: "invalid-model" };
   const apiVersion = resolveApiVersion(provider, adapter, req);
   if (!validApiVersion(apiVersion)) return { ok: false, error: "invalid-api-version" };
@@ -273,7 +275,11 @@ function resolveCapability(capability) {
     endpointHost: targetOf(r.provider).display,
     // 🔑 画面（同意ダイアログ）が「平文で出ます」と言えるようにする。
     ...(r.provider.plaintext ? { plaintext: true } : {}),
-    hasApiKey: !!secretForProvider(r.provider.id),
+    // 鍵なし（ループバックのローカルモデル）は鍵が要らない＝送れる状態として扱う。
+    hasApiKey: r.provider.auth === "none" || !!secretForProvider(r.provider.id),
+    // 会話の呼び出し側が、ツールを送るか／テキスト中の JSON で代替するかを決めるのに要る。
+    toolMode: r.provider.toolMode || "native",
+    local: aiProviders.isLocalProvider(r.provider),
   };
 }
 
@@ -340,7 +346,7 @@ async function testConnection(args) {
     return { ok: false, verdict: "config", error: "unsupported-capability" };
   }
   const apiKey = secretForProvider(provider.id);
-  if (!apiKey) return { ok: false, verdict: "no-api-key", error: "no-api-key" };
+  if (!apiKey && provider.auth !== "none") return { ok: false, verdict: "no-api-key", error: "no-api-key" };
   if (!validModel(model, adapter.modelInPath(provider))) {
     return { ok: false, verdict: "config", error: "invalid-model" };
   }
@@ -407,6 +413,192 @@ async function testConnection(args) {
   }
 }
 
+
+// ── 会話（text-to-text・ツール・ストリーミング） ───────────────────────────
+//
+// 🔑 **1 呼び出し＝1 ターン。** ツール結果を受けて次を呼ぶループは呼び出し側（アシスタント）が持つ。
+//    gateway にループを置くと、課金の上限と中断の責任が見えなくなる。
+// 🔴 **錠は `sessionId` ごとで、画像生成・接続テストの `inFlight` とは別。** 会話が長く走っても
+//    画像生成を止めず、その逆も同じ（1 つの提供元で全機能を止めない）。
+// 🔴 **gateway はツールを実行しない。** 引数を JSON として読むだけ（壊れていれば `argsError`）。
+
+/** セッションごとの実行中の会話。値は中断用。 */
+const chatSessions = new Map();
+
+const SESSION_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
+const TOOL_NAME_RE = /^[A-Za-z0-9_-]{1,64}$/;
+const CHAT_ROLES = new Set(["system", "user", "assistant", "tool"]);
+/**
+ * 1 要求の本文の上限。**調整値ではなく暴走防止の上限**——応答側の上限（`aiHttp.MAX_RESPONSE_BYTES`）に
+ * 揃えた。画像 1 枚の上限（`MAX_IMAGE_BYTES`）は別に効く。実測で見直す（S1 以降）。
+ */
+const MAX_CHAT_BODY_BYTES = 20 * 1024 * 1024;
+
+/** 会話の要求を検査する。通れば null、落ちればエラーコード。 */
+function validateChatRequest(req) {
+  if (typeof req.sessionId !== "string" || !SESSION_ID_RE.test(req.sessionId)) return "invalid-session";
+  if (!Array.isArray(req.messages) || req.messages.length === 0) return "empty-messages";
+  for (const m of req.messages) {
+    if (!m || typeof m !== "object" || !CHAT_ROLES.has(m.role)) return "invalid-message";
+    if (m.text != null && typeof m.text !== "string") return "invalid-message";
+    if (m.images != null) {
+      if (!Array.isArray(m.images) || m.role !== "user") return "invalid-message";
+      for (const im of m.images) {
+        if (!im || typeof im.base64 !== "string" || im.base64.length === 0) return "empty-image";
+        if (im.base64.length > MAX_IMAGE_BYTES) return "image-too-large";
+      }
+    }
+    if (m.toolCalls != null && (!Array.isArray(m.toolCalls) || m.role !== "assistant")) return "invalid-message";
+  }
+  if (req.tools != null) {
+    if (!Array.isArray(req.tools)) return "invalid-tools";
+    const seen = new Set();
+    for (const t of req.tools) {
+      if (!t || typeof t.name !== "string" || !TOOL_NAME_RE.test(t.name) || seen.has(t.name)) return "invalid-tools";
+      seen.add(t.name);
+    }
+  }
+  return null;
+}
+
+/** 別の宛先を試してよい失敗か。ネットワーク断・タイムアウト・5xx だけ。認証・要求の誤り・429 では切り替えない。 */
+function isRetriable(outcome) {
+  if (outcome.status) return outcome.status >= 500;
+  return outcome.verdict === "network" || outcome.verdict === "timeout";
+}
+
+/**
+ * 会話 1 ターンを送る。
+ *
+ * @param {object} req {sessionId, messages, tools?, temperature?, stream?}
+ * @param {{onEvent?: (e: {type: "delta", text: string}) => void}} [opts] ストリーミングの差分の受け口
+ * @returns {Promise<object>} **例外を投げず結果で返す**（鍵入りのスタックトレースを境界の外へ出さない）。
+ */
+async function chat(req, opts) {
+  if (!req) return { ok: false, error: "empty-request" };
+  const invalid = validateChatRequest(req);
+  if (invalid) return { ok: false, error: invalid };
+  const resolved = aiProviders.resolveChain("text-to-text");
+  if (!resolved.ok) return { ok: false, error: resolved.error, kind: "capability" };
+  if (chatSessions.has(req.sessionId)) return { ok: false, error: "busy" };
+  const controller = new AbortController();
+  chatSessions.set(req.sessionId, controller);
+
+  const onEvent = (opts && opts.onEvent) || (() => {});
+  const primary = resolved.chain[0].provider;
+  let lastFailure = null;
+  try {
+    for (let i = 0; i < resolved.chain.length; i++) {
+      const { provider } = resolved.chain[i];
+      const attempt = await chatOnce(req, provider, controller.signal, onEvent);
+      if (attempt.ok) {
+        if (i > 0) {
+          attempt.degraded = true;
+          attempt.provenance.fallbackFrom = primary.id;
+        }
+        return attempt;
+      }
+      lastFailure = attempt;
+      // 差分を既に画面へ流したあとの切り替えは、同じ文が二重に出るので行わない。
+      if (attempt.streamed || controller.signal.aborted || !isRetriable(attempt)) break;
+    }
+    const { streamed, verdict, ...failure } = lastFailure;
+    return failure;
+  } finally {
+    chatSessions.delete(req.sessionId);
+  }
+}
+
+/** 1 つの宛先へ送る。失敗は `{ok:false, …, verdict, status?, streamed}`（呼び出し元が切り替えを判断する）。 */
+async function chatOnce(req, provider, signal, onEvent) {
+  const adapter = ADAPTERS[provider.kind];
+  if (!adapter || !adapter.supports("text-to-text") || !adapter.buildChatRequest) {
+    return { ok: false, error: "unsupported-capability", kind: "capability", verdict: "config" };
+  }
+  const apiKey = secretForProvider(provider.id);
+  if (!apiKey && provider.auth !== "none") return { ok: false, error: "no-api-key", verdict: "no-api-key" };
+
+  // 画像は、同じ提供元の image-to-text のモデル（画像を扱えると宣言済み）で送る。無ければ落として数える。
+  const wantsImages = req.messages.some((m) => Array.isArray(m.images) && m.images.length > 0);
+  const useImageModel = wantsImages && !!provider.models["image-to-text"];
+  const model = useImageModel ? provider.models["image-to-text"] : provider.models["text-to-text"];
+  let droppedImages = 0;
+  const messages = useImageModel
+    ? req.messages
+    : req.messages.map((m) => {
+        if (!Array.isArray(m.images) || m.images.length === 0) return m;
+        droppedImages += m.images.length;
+        const { images, ...rest } = m;
+        return rest;
+      });
+
+  if (!validModel(model, adapter.modelInPath(provider))) return { ok: false, error: "invalid-model", verdict: "config" };
+  const apiVersion = resolveApiVersion(provider, adapter, {});
+  if (!validApiVersion(apiVersion)) return { ok: false, error: "invalid-api-version", verdict: "config" };
+
+  const target = targetOf(provider);
+  const built = adapter.buildChatRequest({
+    model, apiVersion, apiKey, provider, messages, tools: req.tools,
+    stream: !!req.stream, temperature: req.temperature, providerOptions: req.providerOptions,
+  });
+  if (built.error) return { ok: false, error: built.error, kind: "capability", verdict: "config" };
+  if (built.body.length > MAX_CHAT_BODY_BYTES) return { ok: false, error: "request-too-large", verdict: "config" };
+
+  const provenance = {
+    providerId: provider.id, kind: provider.kind, model, endpointHost: target.display,
+    ...(target.plaintext ? { plaintext: true } : {}),
+  };
+  const extra = droppedImages > 0 ? { droppedImages } : {};
+  let streamed = false;
+  try {
+    let norm;
+    if (built.streaming) {
+      const parser = adapter.createStreamParser();
+      const res = await aiHttp.postStream(target, built.path, built.headers, built.body, {
+        signal,
+        onData: (data) => {
+          for (const ev of parser.push(data)) {
+            streamed = true;
+            onEvent(ev);
+          }
+        },
+      });
+      if (res.statusCode !== 200) return httpFailure(res, apiKey, streamed);
+      norm = parser.result();
+    } else {
+      const res = await aiHttp.post(target, built.path, built.headers, built.body);
+      if (res.statusCode !== 200) return httpFailure(res, apiKey, streamed);
+      if (!res.json) return { ok: false, error: "invalid-json", status: 200, verdict: "unreadable-response" };
+      norm = adapter.normalizeChat(res.json);
+    }
+    // 🔴 何も取れていないのに成功を返さない（設定の誤りが成功として報告される）。
+    if (!norm.text && !norm.toolCalls && !norm.blockReason) {
+      console.error(`[ai] ${provider.id}: 会話の応答から文章もツール呼び出しも取れませんでした`);
+      return { ok: false, error: "empty-response", status: 200, verdict: "unreadable-response", streamed };
+    }
+    return { ok: true, ...norm, ...extra, provenance };
+  } catch (e) {
+    if (signal.aborted) return { ok: false, error: "canceled", verdict: "canceled", streamed };
+    const message = mask(e && e.message, apiKey);
+    console.error(`[ai] ${provider.id} 会話の送信に失敗:`, message);
+    return { ok: false, error: message, verdict: verdictForError(message), streamed };
+  }
+}
+
+function httpFailure(res, apiKey, streamed) {
+  const msg = (res.json && res.json.error && res.json.error.message) || res.text || `HTTP ${res.statusCode}`;
+  console.error(`[ai] 会話のエラー ${res.statusCode}:`, mask(msg, apiKey));
+  return { ok: false, error: mask(msg, apiKey), status: res.statusCode, verdict: verdictForStatus(res.statusCode), streamed };
+}
+
+/** 実行中の会話を中断する。無ければ何もしない。 */
+function cancelChat(sessionId) {
+  const c = chatSessions.get(String(sessionId || ""));
+  if (!c) return { ok: false, error: "not-running" };
+  c.abort();
+  return { ok: true };
+}
+
 /** 一覧を取得してよい「組み込みの」宛先。未保存の候補（追加フォーム）はここにだけ送れる。 */
 const LIST_PRESET_HOSTS = {
   [openai.KIND]: "api.openai.com",
@@ -448,7 +640,7 @@ async function listModels(args) {
   }
   const adapter = ADAPTERS[provider.kind];
   if (!adapter || !adapter.buildListRequest) return { ok: false, verdict: "manual", error: "list-unsupported" };
-  if (!apiKey) return { ok: false, verdict: "no-api-key", error: "no-api-key" };
+  if (!apiKey && provider.auth !== "none") return { ok: false, verdict: "no-api-key", error: "no-api-key" };
   const first = adapter.buildListRequest({ provider, apiKey, apiVersion: resolveApiVersion(provider, adapter, {}) });
   if (first.error) return { ok: false, verdict: "manual", error: first.error };
   if (listInFlight) return { ok: false, verdict: "busy", error: "busy" };
@@ -490,6 +682,9 @@ async function listModels(args) {
 
 module.exports = {
   generate,
+  chat,
+  cancelChat,
+  MAX_CHAT_BODY_BYTES,
   resolveCapability,
   testConnection,
   listModels,

@@ -13,7 +13,7 @@ import { describe, expect, it } from "vitest";
 import { emptyDraft, fromDraft, toDraft, describeProblem, presetDraft, modelCandidates } from "./AiProviderForm";
 import { ja } from "../i18n/ja";
 
-const CAPS = ["image-to-image", "image-to-text"];
+const CAPS = ["image-to-image", "image-to-text", "text-to-text"];
 
 /** i18n の実物を使う（キーが無ければキー名がそのまま返る）。 */
 const t = (k: string, v?: Record<string, string | number>) => {
@@ -156,5 +156,30 @@ describe("用途ごとのモデル候補", () => {
   });
   it("知らない用途は全件", () => {
     expect(modelCandidates(REAL, "other")).toEqual(REAL);
+  });
+});
+
+describe("会話・鍵なしの持ち回り（画面から編集しない項目を、保存で黙って落とさない）", () => {
+  const local = {
+    id: "local", label: "ローカル", kind: "openai", endpoint: "http://127.0.0.1:8080",
+    auth: "none", toolMode: "none", models: { "text-to-text": "tiny" },
+  } as const;
+
+  it("auth:none と toolMode が往復で残る", () => {
+    const e = fromDraft(toDraft({ ...local }, CAPS));
+    expect(e.auth).toBe("none");
+    expect(e.toolMode).toBe("none");
+    expect(e.models).toEqual({ "text-to-text": "tiny" });
+  });
+
+  it("負例: ヘッダ名を書いた下書きは none にならず、auth は {header,prefix}", () => {
+    const d = { ...toDraft({ ...local }, CAPS), authHeader: "x-api-key", authPrefix: "" };
+    expect(fromDraft(d).auth).toEqual({ header: "x-api-key", prefix: "" });
+  });
+
+  it("負例: 普通の提供元に auth / toolMode は生えない", () => {
+    const e = fromDraft({ ...emptyDraft(CAPS), id: "x", endpoint: "https://a.test", models: { "text-to-text": "m" } });
+    expect("auth" in e).toBe(false);
+    expect("toolMode" in e).toBe(false);
   });
 });

@@ -25,7 +25,7 @@ const FILE_NAME = "ai-providers.json";
 const SCHEMA_VERSION = 1;
 
 /** 扱える用途。増やすときはアダプタ側の対応と対で足す。 */
-const CAPABILITIES = ["image-to-image", "image-to-text"];
+const CAPABILITIES = ["image-to-image", "image-to-text", "text-to-text"];
 
 /**
  * 提供元 id の形。
@@ -65,10 +65,11 @@ const BUILT_IN = {
       models: {
         "image-to-image": "gemini-3.1-flash-image",
         "image-to-text": "gemini-2.5-flash",
+        "text-to-text": "gemini-2.5-flash",
       },
     },
   ],
-  defaults: { "image-to-image": "gemini-public", "image-to-text": "gemini-public" },
+  defaults: { "image-to-image": "gemini-public", "image-to-text": "gemini-public", "text-to-text": "gemini-public" },
 };
 
 /** 旧版（0.3.0 まで）が使っていた鍵の名前。 */
@@ -79,8 +80,15 @@ const LEGACY_PROVIDER_ID = "gemini-public";
 /** 提供元 1 件で認める項目。ここに無いものは「無視した」と problems に出す。 */
 const KNOWN_PROVIDER_FIELDS = new Set([
   "id", "label", "kind", "endpoint", "auth", "models",
-  "pathStyle", "apiVersion", "paths", "headers",
+  "pathStyle", "apiVersion", "paths", "headers", "toolMode",
 ]);
+
+/**
+ * 会話でのツール呼び出しの扱い。`native` は提供元の関数呼び出しを使う（既定）。
+ * `none` はツールを送らない——関数呼び出しを持たないローカルモデル向けで、
+ * 呼び出し側（アシスタント）がテキスト中の JSON で代替する。
+ */
+const TOOL_MODES = new Set(["native", "none"]);
 
 let filePath = null;
 /** 読み込み済みの構成（未読なら null）。 */
@@ -146,6 +154,30 @@ function allowsPlainHttp(hostname) {
   if (/^[0-9a-f:]+$/.test(h)) return false; // その他の IPv6 リテラルは許さない
   if (!h.includes(".")) return true; // 単一ラベル＝社内名
   return /\.(local|internal|lan|home\.arpa)$/.test(h);
+}
+
+/**
+ * ループバックか。**鍵なし（`auth: "none"`）を許す範囲はここだけ**（設計 §14.4・利用者の判断 2026-10-22）。
+ * 院内アドレスまで広げると、宛先の入力ミスで認証の無い別サーバーへ患者画素が出る。
+ */
+function isLoopback(hostname) {
+  const h = String(hostname || "").toLowerCase().replace(/^\[(.*)\]$/, "$1");
+  if (!h) return false;
+  if (h === "localhost" || h === "::1" || h.endsWith(".localhost")) return true;
+  const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(h);
+  return !!m && Number(m[1]) === 127;
+}
+
+/**
+ * 自動フォールバックの宛先にしてよい「ローカル」か。**endpoint から毎回計算する**——
+ * 利用者が自己申告できる項目にすると、クラウドを local と書いて自動切替の対象にできてしまう。
+ */
+function isLocalProvider(provider) {
+  try {
+    return allowsPlainHttp(new URL(provider.endpoint).hostname);
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -227,7 +259,9 @@ function validateAuth(raw) {
   if (raw == null) return { ok: true, auth: undefined };
   if (typeof raw === "string") {
     // 旧形式。意味は持たない（認証はアダプタの既定）ので、そのまま保持して先へ通す。
-    return raw === "api-key" ? { ok: true, auth: "api-key" } : { ok: false, reason: "auth-unknown" };
+    // `none` は鍵なし。ループバックかの検査は endpoint を見られる validateProvider で行う。
+    if (raw === "api-key" || raw === "none") return { ok: true, auth: raw };
+    return { ok: false, reason: "auth-unknown" };
   }
   if (!isPlainObject(raw)) return { ok: false, reason: "auth-not-an-object" };
   const out = {};
@@ -341,6 +375,12 @@ function validateProvider(p) {
 
   const auth = validateAuth(p.auth);
   if (!auth.ok) return { ok: false, reason: auth.reason };
+  // 🔴 鍵なしはループバックだけ。鍵の入れ忘れが公開ホストで「送れてしまう」形にならないように。
+  if (auth.auth === "none" && !isLoopback(ep.hostname)) return { ok: false, reason: "auth-none-needs-loopback" };
+
+  if (p.toolMode != null && !TOOL_MODES.has(p.toolMode)) {
+    return { ok: false, reason: `unknown-tool-mode:${p.toolMode}` };
+  }
 
   if (p.pathStyle != null && !PATH_STYLES.has(p.pathStyle)) {
     return { ok: false, reason: `unknown-path-style:${p.pathStyle}` };
@@ -368,6 +408,7 @@ function validateProvider(p) {
   };
   if (auth.auth !== undefined) provider.auth = auth.auth;
   if (p.pathStyle != null) provider.pathStyle = p.pathStyle;
+  if (p.toolMode != null) provider.toolMode = p.toolMode;
   if (p.apiVersion != null) provider.apiVersion = p.apiVersion;
   if (pa.paths) provider.paths = pa.paths;
   if (h.headers) provider.headers = h.headers;
@@ -427,7 +468,27 @@ function normalize(raw) {
     const chosen = hit || fallback;
     if (chosen) defaults[cap] = chosen.id;
   }
-  return { providers, defaults, problems };
+
+  // 🔴 自動フォールバックは「ローカルと判定できる宛先」だけ。クラウド→クラウドの自動切替は作らない
+  //    （同意していない別会社へ黙って送らない）。設定で緩められないよう、ここで落とす。
+  const fallbacks = {};
+  const rawFallbacks = isPlainObject(raw) && isPlainObject(raw.fallbacks) ? raw.fallbacks : {};
+  for (const cap of CAPABILITIES) {
+    const list = Array.isArray(rawFallbacks[cap]) ? rawFallbacks[cap] : [];
+    const kept = [];
+    for (const id of list) {
+      const p = providers.find((x) => x.id === id);
+      if (!p) { problems.push(`fallback:${cap}:unknown-provider:${String(id).slice(0, 32)}`); continue; }
+      if (!p.models[cap]) { problems.push(`fallback:${cap}:capability-not-supported:${id}`); continue; }
+      if (!isLocalProvider(p)) { problems.push(`fallback:${cap}:not-local:${id}`); continue; }
+      // 既定と同じ提供元も残す（既定を一時的にローカルへ変えても、利用者が並べた鎖を失わない）。
+      // 実際に試す段（resolveChain）で既定自身は飛ばす。
+      if (kept.includes(id)) continue;
+      kept.push(id);
+    }
+    if (kept.length) fallbacks[cap] = kept;
+  }
+  return { providers, defaults, fallbacks, problems };
 }
 
 /** 現在の構成（未読なら読む）。ファイルが無ければ出荷時の構成。 */
@@ -472,7 +533,13 @@ function save(raw) {
     fs.writeFileSync(
       filePath,
       JSON.stringify(
-        { schemaVersion: SCHEMA_VERSION, providers: next.providers.map(toStored), defaults: next.defaults },
+        {
+          schemaVersion: SCHEMA_VERSION,
+          providers: next.providers.map(toStored),
+          defaults: next.defaults,
+          // 空なら書かない（既存のファイルの形を増やさない）。
+          ...(Object.keys(next.fallbacks).length ? { fallbacks: next.fallbacks } : {}),
+        },
         null,
         2,
       ),
@@ -497,6 +564,7 @@ function validate(raw) {
     ok: next.providers.length > 0,
     providers: next.providers,
     defaults: next.defaults,
+    fallbacks: next.fallbacks,
     problems: next.problems,
   };
 }
@@ -514,6 +582,30 @@ function resolve(capability) {
   // 🔴 「この用途を扱える提供元が無い」と「用途そのものが無い」は案内が違う。
   if (!provider) return { ok: false, error: "no-provider-for-capability" };
   return { ok: true, provider, model: provider.models[capability] };
+}
+
+/**
+ * 用途 → 試す順の宛先（先頭が既定、続きが自動フォールバック）。
+ *
+ * <p>🔴 **既定がローカルなら鎖は 1 件だけ**（ローカル→クラウドは自動にしない）。続きは `normalize` が
+ * 既にローカルだけに絞っているが、ここでも `isLocalProvider` を確かめる（二重に守る）。
+ *
+ * @returns {{ok: true, chain: {provider: object, model: string}[]} | {ok: false, error: string}}
+ */
+function resolveChain(capability) {
+  const first = resolve(capability);
+  if (!first.ok) return first;
+  const chain = [{ provider: first.provider, model: first.model }];
+  if (!isLocalProvider(first.provider)) {
+    const c = get();
+    for (const id of (c.fallbacks && c.fallbacks[capability]) || []) {
+      const p = c.providers.find((x) => x.id === id);
+      if (p && p.models[capability] && isLocalProvider(p) && p.id !== first.provider.id) {
+        chain.push({ provider: p, model: p.models[capability] });
+      }
+    }
+  }
+  return { ok: true, chain };
 }
 
 /**
@@ -538,7 +630,11 @@ module.exports = {
   save,
   validate,
   resolve,
+  resolveChain,
   byId,
+  TOOL_MODES,
+  isLoopback,
+  isLocalProvider,
   normalize,
   secretKeyFor,
   secretKeyCandidates,

@@ -33,6 +33,12 @@ export interface ProviderDraft {
   apiVersion: string;
   authHeader: string;
   authPrefix: string;
+  /**
+   * 鍵なし（`auth: "none"`）を保つ。**画面からは変えられない**（手で書いた設定を黙って落とさないための持ち回り）。
+   */
+  authNone: boolean;
+  /** 会話のツール呼び出しの扱い。画面からは変えられない（持ち回りだけ）。 */
+  toolMode: string;
   models: Record<string, string>;
   paths: Record<string, string>;
 }
@@ -87,7 +93,7 @@ export function emptyDraft(capabilities: string[]): ProviderDraft {
     models[c] = "";
     paths[c] = "";
   }
-  return { id: "", label: "", kind: "openai", endpoint: "", pathStyle: "", apiVersion: "", authHeader: "", authPrefix: "", models, paths };
+  return { id: "", label: "", kind: "openai", endpoint: "", pathStyle: "", apiVersion: "", authHeader: "", authPrefix: "", authNone: false, toolMode: "", models, paths };
 }
 
 /** 追加時に選べる提供元。`endpoint` が空のものは利用者ごとに違う（Azure）か自由入力（その他）。 */
@@ -123,6 +129,8 @@ export function toDraft(p: AiProviderEntry, capabilities: string[]): ProviderDra
     apiVersion: p.apiVersion ?? "",
     authHeader: auth.header ?? "",
     authPrefix: auth.prefix ?? "",
+    authNone: p.auth === "none",
+    toolMode: p.toolMode ?? "",
     models: { ...d.models, ...p.models },
     paths: { ...d.paths, ...(p.paths ?? {}) },
   };
@@ -142,6 +150,8 @@ export function fromDraft(d: ProviderDraft): AiProviderEntry {
     models,
   };
   if (d.authHeader.trim() || d.authPrefix) out.auth = { header: d.authHeader.trim(), prefix: d.authPrefix };
+  else if (d.authNone) out.auth = "none";
+  if (d.toolMode) out.toolMode = d.toolMode;
   if (d.pathStyle) out.pathStyle = d.pathStyle;
   if (d.apiVersion.trim()) out.apiVersion = d.apiVersion.trim();
   if (Object.keys(paths).length) out.paths = paths;
