@@ -1214,6 +1214,57 @@ export const getTextureJob = (jobId: string) =>
 export const cancelTextureJob = (jobId: string) =>
   httpSend<TextureJobStatus>(`/api/series/texture/jobs/${encodeURIComponent(jobId)}`, "DELETE");
 
+// ── フィルタ画像（LoG の派生シリーズ） ─────────────────────────────
+
+/** フィルタ画像の作成要求（backend: FilteredSeriesRequest）。画像全体に掛け、元の格子のまま作る。 */
+export interface FilteredSeriesRequest {
+  studyInstanceUid: string;
+  sourceSeriesUid: string;
+  channel: number;
+  timePoint: number;
+  /** スケールの値の並び（単位は scaleNotation）。0 はフィルタなしなので指定できない。 */
+  scales: number[];
+  scaleNotation?: "RADIUS_MM" | "WIDTH_PX";
+  scaleConversion?: "SQRT_D" | "IDENTITY" | "COEFFICIENT";
+  scaleCoefficient?: number;
+  /** 2D（面内、既定）か 3D。 */
+  dimension?: "2D" | "3D";
+  truncate?: number;
+  padding?: "MIRROR" | "NEAREST" | "CONSTANT" | "PERIODIC";
+}
+
+/** 作れた 1 本（backend: FilteredSeriesService.Created）。scaleMm は換算後の半径 r、sigmaMm は LoG の σ。 */
+export interface FilteredSeriesCreated {
+  scaleMm: number;
+  sigmaMm: number;
+  seriesInstanceUid: string;
+  sopInstanceUids: string[];
+}
+
+export interface FilteredSeriesJobStatus {
+  jobId: string;
+  state: "QUEUED" | "RUNNING" | "DONE" | "FAILED" | "CANCELLED";
+  elapsedMs: number;
+  result?: { series: FilteredSeriesCreated[]; lossyCompressed: boolean } | null;
+  error?: string | null;
+  /** 作り終えた数 / 全数と、今の半径 r（mm）。 */
+  scaleDone: number;
+  scaleTotal: number;
+  scaleMm: number;
+  /** 作り終えたシリーズ（取り消し・失敗のときも、保管庫に入ったものが入る）。 */
+  created: FilteredSeriesCreated[];
+}
+
+export const submitFilteredSeriesJob = (req: FilteredSeriesRequest) =>
+  httpSend<FilteredSeriesJobStatus>("/api/series/filtered/jobs", "POST", req);
+
+export const getFilteredSeriesJob = (jobId: string) =>
+  httpGet<FilteredSeriesJobStatus>(`/api/series/filtered/jobs/${encodeURIComponent(jobId)}`);
+
+/** 取り消す。止まるのは今のスケールを書き終えたところ（作り終えたシリーズは残る）。 */
+export const cancelFilteredSeriesJob = (jobId: string) =>
+  httpSend<FilteredSeriesJobStatus>(`/api/series/filtered/jobs/${encodeURIComponent(jobId)}`, "DELETE");
+
 // ── Anonymizer（PS3.15 匿名化） ────────────────────────────────
 
 /** 匿名化オプション（backend AnonymizeConfig.Option 名と一致）。 */

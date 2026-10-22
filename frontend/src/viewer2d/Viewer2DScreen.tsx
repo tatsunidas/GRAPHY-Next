@@ -94,6 +94,7 @@ import { ReportEditorDialog } from "../report/ReportEditorDialog";
 import { buildPluginAnalysisRecord } from "../report/analysisResults";
 import { publishAnalysisResult } from "../report/analysisResultStore";
 import { TextureDialog } from "../viewer/TextureDialog";
+import { FilterImageDialog } from "../viewer/FilterImageDialog";
 import { WwWlAdjustDialog, type WlTarget } from "./WwWlAdjustDialog";
 import { WlPresetDialog } from "./WlPresetDialog";
 import { fetchSettings } from "../settings/settingsApi";
@@ -822,6 +823,7 @@ function TileGrid({
   const [reportTarget, setReportTarget] = useState<Tile | null>(null);
   const [maxSectionTarget, setMaxSectionTarget] = useState<Tile | null>(null);
   const [textureTarget, setTextureTarget] = useState<Tile | null>(null);
+  const [filterImageTarget, setFilterImageTarget] = useState<Tile | null>(null);
   // コントラスト調整（W/L）ダイアログの対象（開いている時のみ non-null）。
   const [wlAdjust, setWlAdjust] = useState<WlTarget | null>(null);
 
@@ -1737,6 +1739,13 @@ function TileGrid({
         if (!tile) { comingSoon(t("texture.menu")); return; }
         setTextureTarget(tile);
       },
+      // フィルタ画像（LoG）: 対象タイルのシリーズ全体に LoG を掛け、スケールごとに派生シリーズを作る。
+      openFilterImage: () => {
+        const tid = resolveTargets()[0];
+        const tile = patient.tiles.find((tl) => tl.id === tid);
+        if (!tile) { comingSoon(t("filterImg.menu")); return; }
+        setFilterImageTarget(tile);
+      },
       // GLAM 解析: 別ウィンドウ（#glam）で開く。対象は localStorage 経由で渡す
       // （ウィンドウを跨ぐため。2D ビューアの graphy-viewer-ctx とは別キーにして取り合わない）。
       openGlamAnalysis: () => {
@@ -2159,6 +2168,26 @@ function TileGrid({
               .catch(() => setToast(t("texture.saved")));
           }}
           onClose={() => setTextureTarget(null)}
+        />
+      )}
+      {filterImageTarget && (
+        <FilterImageDialog
+          key={filterImageTarget.id}
+          study={filterImageTarget.study}
+          series={filterImageTarget.series}
+          onCreated={(seriesUids) => {
+            // 作れたフィルタ画像のうち 1 本目を、対象タイルの隣に新しいタイルで開く（残りは一覧から開ける）。
+            const study = filterImageTarget.study;
+            const tid = filterImageTarget.id;
+            setToast(t("filterImg.saved", { n: seriesUids.length }));
+            void fetchSeries(study.studyInstanceUid)
+              .then((list) => {
+                const first = list.find((s) => s.seriesInstanceUid === seriesUids[0]);
+                if (first) onInsertAdjacent(patient.patientKey, tid, false, study, first);
+              })
+              .catch(() => {});
+          }}
+          onClose={() => setFilterImageTarget(null)}
         />
       )}
       {wlAdjust && (

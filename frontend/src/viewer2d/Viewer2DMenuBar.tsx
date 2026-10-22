@@ -449,6 +449,7 @@ export function Viewer2DMenuBar({
         { label: t("vi.menu"), onClick: () => actions.openValueInspector(), testId: "menu-value-inspector" },
         { label: `${t("fourier.menu")}…`, onClick: () => actions.openFourier(), testId: "menu-fourier" },
         { label: `${t("texture.menu")}…`, onClick: () => actions.openTexture() },
+        { label: `${t("filterImg.menu")}…`, onClick: () => actions.openFilterImage(), testId: "menu-filter-image" },
         { label: `${t("glam.menu")}…`, onClick: () => actions.openGlamAnalysis() },
         { label: `${t("roiFeat.menu")}…`, onClick: () => actions.openRoiFeatures(), testId: "menu-roi-features" },
         { label: `${t("roiFeat.maxSection.menu")}…`, onClick: () => actions.openMaxSection(), testId: "menu-max-section" },
