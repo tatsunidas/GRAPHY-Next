@@ -97,7 +97,7 @@ public class ComputeBatchController {
 
         ComputeBatchBuilder.Prepared prepared;
         try {
-            prepared = builder.prepare(body.items());
+            prepared = builder.prepare(body.items(), egress.isLocalEndpoint(endpointId));
         } catch (ComputeBatchBuilder.Failure f) {
             return ResponseEntity.status(f.status).body(f.body);
         }

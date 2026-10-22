@@ -82,7 +82,13 @@ public class ComputeDatasetService {
      */
     public record Dataset(String handle, Format format, Path file, long bytes, String sha256, int instances,
                           int burnedInstances, String sourceStudyUid, String sourceSeriesUid, String modality,
-                          Instant createdAt) {
+                          Instant createdAt, boolean localOnly) {
+        public Dataset(String handle, Format format, Path file, long bytes, String sha256, int instances,
+                       int burnedInstances, String sourceStudyUid, String sourceSeriesUid, String modality,
+                       Instant createdAt) {
+            this(handle, format, file, bytes, sha256, instances, burnedInstances, sourceStudyUid, sourceSeriesUid,
+                    modality, createdAt, false);
+        }
     }
 
     /** 作らなかった（送ってはいけない・形が合わない）。{@link #reason()} は画面で訳すコード。 */
@@ -125,12 +131,20 @@ public class ComputeDatasetService {
      * @throws DatasetRefused 焼き込みの規則で送れない／匿名化に失敗したインスタンスがある／npz にできない形
      */
     public Dataset create(String studyUid, String seriesUid, Format format) {
+        return create(studyUid, seriesUid, format, false);
+    }
+
+    /**
+     * @param localDestination 送り先が kind=local の計算機か。true のときだけ、単純X線（CR/DX/MG）をマスク無しで通す。
+     *                         通したデータセットは {@code localOnly} になり、local 以外の宛先には送れない
+     */
+    public Dataset create(String studyUid, String seriesUid, Format format, boolean localDestination) {
         sweep();
         if (anonymizer.isWeb()) {
             throw new DatasetRefused("web-mode", null);
         }
         AnonymizeService.SeriesBurnFacts facts = anonymizer.seriesBurnFacts(studyUid, seriesUid);
-        RemoteBurnPolicy.Decision decision = RemoteBurnPolicy.decide(facts);
+        RemoteBurnPolicy.Decision decision = RemoteBurnPolicy.decide(facts, localDestination);
         if (!decision.allowed()) {
             log.info("[compute] dataset refused: series={} reason={} modalities={}", seriesUid, decision.reason(),
                     facts.modalities());
@@ -173,7 +187,7 @@ public class ComputeDatasetService {
                 }
             }
             Dataset d = new Dataset(handle, format, file, Files.size(file), HexFormat.of().formatHex(sha.digest()),
-                    r.instances(), r.burnedInstances(), studyUid, seriesUid, modality, Instant.now());
+                    r.instances(), r.burnedInstances(), studyUid, seriesUid, modality, Instant.now(), decision.localOnly());
             datasets.put(handle, d);
             log.info("[compute] dataset {} {} instances={} burned={} bytes={}", handle, format.code, d.instances(),
                     d.burnedInstances(), d.bytes());

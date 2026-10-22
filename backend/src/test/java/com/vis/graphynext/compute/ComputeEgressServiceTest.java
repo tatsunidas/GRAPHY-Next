@@ -52,6 +52,10 @@ class ComputeEgressServiceTest {
     /** 作り済みのデータセットを登録簿へ直接置く（匿名化は ComputeDatasetServiceTest で見ている）。 */
     @SuppressWarnings("unchecked")
     private String putDataset(String name) throws Exception {
+        return putDataset(name, false);
+    }
+
+    private String putDataset(String name, boolean localOnly) throws Exception {
         Path d = Files.createDirectories(dir.resolve(name));
         Path f = Files.writeString(d.resolve("dataset.npz"), "fake");
         String handle = "dsh_" + name;
@@ -59,7 +63,7 @@ class ComputeEgressServiceTest {
         field.setAccessible(true);
         ((Map<String, ComputeDatasetService.Dataset>) field.get(datasets)).put(handle,
                 new ComputeDatasetService.Dataset(handle, ComputeDatasetService.Format.NPZ, f, 4, "ab".repeat(32),
-                        3, 0, "1.2.3", "1.2.3.4", "CT", Instant.now()));
+                        3, 0, "1.2.3", "1.2.3.4", "CT", Instant.now(), localOnly));
         return handle;
     }
 
@@ -76,6 +80,24 @@ class ComputeEgressServiceTest {
                 throw new RuntimeException(e);
             }
         }).toList();
+    }
+
+    @Test
+    void localOnlyDatasetGoesOnlyToALocalEndpoint() throws Exception {
+        endpoints.replaceAll(List.of(
+                new ComputeEndpointRegistry.Incoming("lab", "Lab GPU", "https://gpu.example.org/", "SECRET-TOKEN"),
+                new ComputeEndpointRegistry.Incoming("local", "This PC", "http://127.0.0.1:8899/", "T", "local")));
+        String h = putDataset("cr", true);
+        ComputeEgressService.EgressRefused e = org.junit.jupiter.api.Assertions.assertThrows(
+                ComputeEgressService.EgressRefused.class,
+                () -> svc.create("cxr", "CXR", "lab", List.of(h), CODE, CodeInspector.MAX_JOB_CHARS));
+        assertEquals("dataset-local-only", e.reason());
+        ComputeEgressService.EgressRequest ok = svc.create("cxr", "CXR", "local", List.of(h), CODE,
+                CodeInspector.MAX_JOB_CHARS);
+        assertTrue(ok.datasets().get(0).localOnly(), "同意画面が注意書きを出せるよう、要求に載せる");
+        assertTrue(svc.isLocalEndpoint("local"));
+        assertFalse(svc.isLocalEndpoint("lab"));
+        assertFalse(svc.isLocalEndpoint(null));
     }
 
     @Test

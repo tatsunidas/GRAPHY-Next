@@ -83,4 +83,45 @@ class RemoteBurnPolicyTest {
         assertEquals("series-not-found", decide(facts(0, 0, 0, 0, "CT", CT)).reason());
         assertEquals("burnin-unknown-modality", decide(facts(0, 0, 2, 0, null, CT)).reason());
     }
+
+    // ── local（データが PC の外へ出ない計算機）に限る緩和。単純X線だけ ──
+
+    @Test
+    void localDestinationPassesPlainRadiographyWithoutMaskAndMarksItLocalOnly() {
+        for (String m : List.of("CR", "DX", "MG")) {
+            RemoteBurnPolicy.Decision d = RemoteBurnPolicy.decide(facts(0, 0, 1, 0, m, CT), true);
+            assertTrue(d.allowed(), m);
+            assertTrue(d.localOnly(), m);
+            assertFalse(d.burnIn(), m);
+        }
+    }
+
+    @Test
+    void externalDestinationStillRefusesPlainRadiography() {
+        for (String m : List.of("CR", "DX", "MG")) {
+            assertEquals("burnin-risky-modality", RemoteBurnPolicy.decide(facts(0, 0, 1, 0, m, CT), false).reason(), m);
+            assertEquals("burnin-risky-modality", decide(facts(0, 0, 1, 0, m, CT)).reason(), m);
+        }
+    }
+
+    @Test
+    void localDestinationDoesNotRelaxOtherRiskyKinds() {
+        for (String m : List.of("US", "XA", "RF", "ES", "SC", "OT", "XC")) {
+            assertEquals("burnin-risky-modality", RemoteBurnPolicy.decide(facts(0, 0, 1, 0, m, CT), true).reason(), m);
+        }
+        assertEquals("burnin-declared", RemoteBurnPolicy.decide(facts(0, 0, 1, 1, "CR", CT), true).reason());
+        assertEquals("burnin-risky-sop-class", RemoteBurnPolicy.decide(facts(0, 0, 1, 0, "CR", SC), true).reason());
+        assertEquals("burnin-risky-sop-class", RemoteBurnPolicy.decide(facts(0, 0, 1, 0, "CR", VL_PHOTO), true).reason());
+    }
+
+    @Test
+    void localDestinationLeavesOrdinaryAndMaskedSeriesUnchanged() {
+        RemoteBurnPolicy.Decision ct = RemoteBurnPolicy.decide(facts(0, 0, 10, 0, "CT", CT), true);
+        assertTrue(ct.allowed());
+        assertFalse(ct.localOnly(), "緩和を使っていないものは local 限定にしない");
+        RemoteBurnPolicy.Decision masked = RemoteBurnPolicy.decide(facts(3, 0, 0, 0, "CR", CT), true);
+        assertTrue(masked.allowed());
+        assertTrue(masked.burnIn(), "マスクがあれば local でも塗る");
+        assertFalse(masked.localOnly());
+    }
 }

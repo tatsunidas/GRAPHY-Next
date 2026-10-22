@@ -79,7 +79,7 @@ public class ComputeEgressController {
             for (Input in : body.inputs()) {
                 ComputeDatasetService.Format f = ComputeDatasetService.Format.of(in.format() == null ? "npz" : in.format())
                         .orElseThrow(() -> new ComputeDatasetService.DatasetRefused("bad-format", in.format()));
-                handles.add(datasets.create(in.studyUid(), in.seriesUid(), f).handle());
+                handles.add(datasets.create(in.studyUid(), in.seriesUid(), f, egress.isLocalEndpoint(endpointId)).handle());
             }
             ComputeEgressService.EgressRequest r = egress.create(m.id(), m.name(), body.endpointId(), handles,
                     body.code(), CodeInspector.MAX_JOB_CHARS);

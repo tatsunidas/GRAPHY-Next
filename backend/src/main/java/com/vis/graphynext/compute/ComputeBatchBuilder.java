@@ -41,6 +41,11 @@ final class ComputeBatchBuilder {
     }
 
     Prepared prepare(List<ComputeBatchController.BatchItem> items) {
+        return prepare(items, false);
+    }
+
+    /** @param localDestination 送り先が kind=local の計算機か（単純X線をマスク無しで通してよいか） */
+    Prepared prepare(List<ComputeBatchController.BatchItem> items, boolean localDestination) {
         LinkedHashMap<String, List<String>> kept = new LinkedHashMap<>();
         List<Map<String, Object>> refused = new ArrayList<>();
         List<String> all = new ArrayList<>();
@@ -55,7 +60,7 @@ final class ComputeBatchBuilder {
                         ComputeDatasetService.Format f = ComputeDatasetService.Format
                                 .of(in.format() == null ? "npz" : in.format())
                                 .orElseThrow(() -> new ComputeDatasetService.DatasetRefused("bad-format", in.format()));
-                        ComputeDatasetService.Dataset d = datasets.create(in.studyUid(), in.seriesUid(), f);
+                        ComputeDatasetService.Dataset d = datasets.create(in.studyUid(), in.seriesUid(), f, localDestination);
                         hs.add(d.handle());
                         all.add(d.handle());
                         createdBytes += d.bytes();

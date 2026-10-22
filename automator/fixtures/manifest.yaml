@@ -87,3 +87,11 @@ categories:
     dir: single-slice-localizer
     minFiles: 1
     description: 単一スライス/localizer/scoutシリーズ。3D不可ガード・GridView無効化条件の検証用。
+
+  - id: cxr-dx
+    dir: cxr-dx
+    minFiles: 1
+    description: >
+      胸部X線（DX・PA・1024x1024・8bit・マスク無し）。NIH ChestX-ray14 の公開画像を DICOM に包んだもの
+      （出典は fixtures/cxr-dx/README.md）。local の計算機にだけ渡せる焼き込み規則（§3.2）と、
+      胸部X線レポート生成プラグインの実機確認用。

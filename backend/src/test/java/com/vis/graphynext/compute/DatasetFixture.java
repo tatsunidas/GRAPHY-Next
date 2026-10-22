@@ -144,6 +144,12 @@ final class DatasetFixture {
      * {@code windowCenter}/{@code windowWidth} は DS の文字列（多値は {@code \\} 区切り）。
      */
     void writeDx(String photometric, String windowCenter, String windowWidth, String voiLutFunction) throws IOException {
+        writeDx(photometric, windowCenter, windowWidth, voiLutFunction, true);
+    }
+
+    /** @param withMask false ならマスクを登録しない（マスク無しの単純X線。local 限定の緩和の確認用） */
+    void writeDx(String photometric, String windowCenter, String windowWidth, String voiLutFunction,
+                 boolean withMask) throws IOException {
         Attributes ds = new Attributes();
         ds.setString(Tag.SOPClassUID, VR.UI, UID.DigitalXRayImageStorageForPresentation);
         ds.setString(Tag.SOPInstanceUID, VR.UI, DX_SERIES + ".1");
@@ -182,6 +188,9 @@ final class DatasetFixture {
             out.writeDataset(ds.createFileMetaInformation(UID.ExplicitVRLittleEndian), ds);
         }
         index(DX_SERIES, DX_SERIES + ".1", f, "DX", UID.DigitalXRayImageStorageForPresentation);
+        if (!withMask) {
+            return;
+        }
         // DX は焼き込みの規則でマスクが無いと送れない（本番どおり）。左上 2×2 を塗る
         masks.put(new AnonymizeMaskStore.SeriesMask(DX_SERIES, List.of(), List.of(), List.of(
                 new AnonymizeMaskStore.MaskPolygon(new double[]{0, 2, 2, 0}, new double[]{0, 0, 2, 2},

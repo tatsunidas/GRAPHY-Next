@@ -11,7 +11,8 @@ window.graphyConsent.onShow(({ detail, strings: s }) => {
   $("dest-label").textContent = local ? s.thisPc : detail.endpointLabel;
   $("dest-url").textContent = detail.endpointUrl;
   // 127.0.0.1 の http は暗号化の話ではない（外へ出ない）。代わりに「コードはこの PC で動く」を言い切らずに出す
-  if (local) { $("plaintext").hidden = false; $("plaintext").textContent = s.localNote; }
+  const localOnly = (detail.datasets || []).concat((detail.items || []).flatMap((it) => it.datasets || [])).some((d) => d.localOnly);
+  if (local) { $("plaintext").hidden = false; $("plaintext").textContent = localOnly ? s.localNote + " " + s.localBurnNote : s.localNote; }
   else if (detail.plaintext) { $("plaintext").hidden = false; $("plaintext").textContent = s.plaintext; }
   // 再実行: 毎回の同意に加えて、記録の版と今の版を見せる（違えば記録のコードで走ることを言う）
   const note = window.graphyConsentRows.rerunNotice(detail);

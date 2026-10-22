@@ -41,10 +41,15 @@ public class ComputeEgressService {
 
     /** 同意画面と監査に出すデータセットの要約（ファイルの場所は出さない）。 */
     public record DatasetSummary(String handle, String format, long bytes, String sha256, int instances,
-                                 int burnedInstances, String modality) {
+                                 int burnedInstances, String modality, boolean localOnly) {
+        public DatasetSummary(String handle, String format, long bytes, String sha256, int instances,
+                              int burnedInstances, String modality) {
+            this(handle, format, bytes, sha256, instances, burnedInstances, modality, false);
+        }
+
         static DatasetSummary of(ComputeDatasetService.Dataset d) {
             return new DatasetSummary(d.handle(), d.format().code(), d.bytes(), d.sha256(), d.instances(),
-                    d.burnedInstances(), d.modality());
+                    d.burnedInstances(), d.modality(), d.localOnly());
         }
     }
 
@@ -164,7 +169,11 @@ public class ComputeEgressService {
         }
         List<DatasetSummary> ds = new ArrayList<>();
         for (String h : handles == null ? List.<String>of() : handles) {
-            ds.add(DatasetSummary.of(datasets.get(h).orElseThrow(() -> new EgressRefused("unknown-dataset"))));
+            DatasetSummary s = DatasetSummary.of(datasets.get(h).orElseThrow(() -> new EgressRefused("unknown-dataset")));
+            if (s.localOnly() && !"local".equals(ep.kind())) {
+                throw new EgressRefused("dataset-local-only"); // local 限定で通したデータは外の計算機へ送らない
+            }
+            ds.add(s);
         }
         String codeSha = sha256(code);
         String url = ep.endpoint().base().toString();
@@ -228,7 +237,11 @@ public class ComputeEgressService {
         for (var e : itemHandles.entrySet()) {
             List<DatasetSummary> ds = new ArrayList<>();
             for (String h : e.getValue() == null ? List.<String>of() : e.getValue()) {
-                ds.add(DatasetSummary.of(datasets.get(h).orElseThrow(() -> new EgressRefused("unknown-dataset"))));
+                DatasetSummary s = DatasetSummary.of(datasets.get(h).orElseThrow(() -> new EgressRefused("unknown-dataset")));
+                if (s.localOnly() && !"local".equals(ep.kind())) {
+                    throw new EgressRefused("dataset-local-only"); // local 限定で通したデータは外の計算機へ送らない
+                }
+                ds.add(s);
             }
             items.add(new Item(e.getKey(), List.copyOf(ds)));
             flat.addAll(ds);
@@ -258,6 +271,11 @@ public class ComputeEgressService {
      *
      * @return 拒否の理由。問題なければ null
      */
+    /** 宛先が kind=local（この PC の外へデータを出さない計算機）か。未登録なら false。 */
+    public boolean isLocalEndpoint(String endpointId) {
+        return endpointId != null && endpoints.get(endpointId).map(e -> "local".equals(e.kind())).orElse(false);
+    }
+
     public String precheck(String pluginId, String endpointId, String code, int maxCodeChars) {
         String reason = endpointId == null || endpoints.get(endpointId).isEmpty() ? "unknown-endpoint"
                 : CodeInspector.inspect(code, maxCodeChars);

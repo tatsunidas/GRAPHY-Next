@@ -145,7 +145,7 @@ public class ComputeRerunController {
         }
         ComputeBatchBuilder.Prepared prepared;
         try {
-            prepared = builder.prepare(items);
+            prepared = builder.prepare(items, egress.isLocalEndpoint(endpointId));
         } catch (ComputeBatchBuilder.Failure f) {
             return ResponseEntity.status(f.status).body(f.body);
         }
