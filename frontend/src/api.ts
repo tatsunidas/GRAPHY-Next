@@ -1452,7 +1452,10 @@ export const clearAnonMask = (seriesUid?: string) =>
 
 // ── SeriesExtractor（条件一致シリーズをフォルダ抽出/ZIP） ───────
 
-/** シリーズ抽出の 1 条件。op: EQUALS | CONTAINS | GE | LE | RANGE。 */
+/**
+ * シリーズ抽出の 1 条件。op は数値・日時が EQUALS | GT | LT | GE | LE | RANGE、
+ * 文字が EQUALS | CONTAINS | STARTS_WITH | ENDS_WITH。label はデータシートの列名（任意）。
+ */
 export interface SeriesCondition {
   segments: TagPathSegment[];
   vr: string;
@@ -1460,6 +1463,7 @@ export interface SeriesCondition {
   op: string;
   value1: string;
   value2: string;
+  label?: string;
 }
 
 /** 条件に一致した 1 シリーズ。 */
@@ -1472,6 +1476,11 @@ export interface SeriesMatch {
   modality: string;
   instances: number;
   folderName: string;
+  seriesNumber: string;
+  /** IOP から判定した撮像断面（AXIAL/SAGITTAL/CORONAL。判定不能は ""）。 */
+  plane: string;
+  /** 条件の並びに対応する実測値。 */
+  conditionValues: string[];
 }
 
 export interface SeriesVerifyResult {
@@ -1497,6 +1506,40 @@ export interface SeriesExtractRequest {
   destination?: string;
   sequentialRename?: boolean;
 }
+
+/** 進捗付きの探索／コピーのジョブ状態（ExportJobStatus と同じく jobId/state/total/processed を持つ）。 */
+export interface SeriesExtractJobStatus {
+  jobId: string;
+  kind: "VERIFY" | "COPY";
+  state: "QUEUED" | "RUNNING" | "DONE" | "FAILED" | "CANCELLED";
+  total: number;
+  processed: number;
+  verify: SeriesVerifyResult | null;
+  copy: SeriesCopyResult | null;
+  error: string | null;
+}
+
+export const seriesExtractSubmitVerify = (req: SeriesExtractRequest) =>
+  httpSend<SeriesExtractJobStatus>("/api/series-extract/jobs", "POST", req);
+export const seriesExtractSubmitCopy = (req: SeriesExtractRequest) =>
+  httpSend<SeriesExtractJobStatus>("/api/series-extract/jobs/copy", "POST", req);
+export const seriesExtractJob = (jobId: string) =>
+  httpGet<SeriesExtractJobStatus>(`/api/series-extract/jobs/${encodeURIComponent(jobId)}`);
+export const seriesExtractCancel = (jobId: string) =>
+  httpSend<SeriesExtractJobStatus>(`/api/series-extract/jobs/${encodeURIComponent(jobId)}/cancel`, "POST");
+
+/** データシート CSV（患者 ID・Study 日付・StudyUID・SeriesUID ＋ 条件タグの実測値）。 */
+export const seriesExtractDatasheet = async (req: SeriesExtractRequest): Promise<Blob> => {
+  const res = await fetch(`${apiBase()}/api/series-extract/datasheet`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(req),
+  });
+  if (!res.ok) {
+    throw new Error(`HTTP ${res.status}`);
+  }
+  return res.blob();
+};
 
 /** 条件に一致するシリーズを検証（プレビュー）。 */
 export const seriesExtractVerify = (req: SeriesExtractRequest) =>

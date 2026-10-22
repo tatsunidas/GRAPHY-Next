@@ -2,7 +2,7 @@
  * Copyright (c) Visionary Imaging Services, Inc. All rights reserved.
  * Author: Tatsuaki Kobayashi
  */
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { TagDictEntry, TagPath, TagPathSegment } from "../api";
 import { useI18n } from "../i18n/i18n";
 import { ggggeeee, isPrivateGroup, isSQ, normHex, pathLabel } from "./tagPathUtil";
@@ -18,10 +18,13 @@ export function NestedTagBuilder({
   open,
   dict,
   dictMapByTag,
+  initialTag,
   onClose,
   onConfirm,
 }: {
   open: boolean;
+  /** 開いたときに最初のセグメントとして積んでおく tag（辞書の SQ 行から開いたとき）。 */
+  initialTag?: string;
   dict: TagDictEntry[];
   dictMapByTag: Map<string, TagDictEntry>;
   onClose: () => void;
@@ -34,6 +37,14 @@ export function NestedTagBuilder({
   const [pvName, setPvName] = useState("");
   const [pvCreator, setPvCreator] = useState("");
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const e = initialTag ? dictMapByTag.get(initialTag) : undefined;
+    setSegs(e ? [{ tag: e.tag, keyword: e.keyword, vr: e.vr }] : []);
+    setError(null);
+    // 開くたびに初期化する。辞書や初期 tag が変わったときも合わせる。
+  }, [open, initialTag, dictMapByTag]);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();

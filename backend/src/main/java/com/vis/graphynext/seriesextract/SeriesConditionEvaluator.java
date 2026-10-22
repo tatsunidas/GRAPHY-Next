@@ -16,6 +16,7 @@ import java.util.Set;
  * <p>評価順: ① 平面フィルタ（指定時、面が不一致なら不採用） ② Exclude（どれか一致で不採用）
  * ③ Include（全て一致必須）。値抽出は {@link TagExtractService#resolvePath}。複数値（{@code \} を含む）は
  * 評価不能として不一致扱い（GRAPHY 準拠）。
+ * 演算子: 数値・日時=EQUALS/GT/LT/GE/LE/RANGE、文字=EQUALS/CONTAINS/STARTS_WITH/ENDS_WITH。
  */
 public final class SeriesConditionEvaluator {
 
@@ -78,6 +79,10 @@ public final class SeriesConditionEvaluator {
             switch (c.op()) {
                 case "EQUALS":
                     return t == v1;
+                case "GT":
+                    return t > v1;
+                case "LT":
+                    return t < v1;
                 case "GE":
                     return t >= v1;
                 case "LE":
@@ -100,6 +105,10 @@ public final class SeriesConditionEvaluator {
         switch (c.op()) {
             case "EQUALS":
                 return t.equals(v1);
+            case "GT":
+                return t.compareTo(v1) > 0;
+            case "LT":
+                return t.compareTo(v1) < 0;
             case "GE":
                 return t.compareTo(v1) >= 0;
             case "LE":
@@ -126,7 +135,15 @@ public final class SeriesConditionEvaluator {
         if ("EQUALS".equals(c.op())) {
             return target.equalsIgnoreCase(query.trim());
         }
-        return false; // GE/LE/RANGE は文字列 VR には非対応
+        String target0 = target.toLowerCase();
+        String q = query.trim().toLowerCase();
+        if ("STARTS_WITH".equals(c.op())) {
+            return !q.isEmpty() && target0.startsWith(q);
+        }
+        if ("ENDS_WITH".equals(c.op())) {
+            return !q.isEmpty() && target0.endsWith(q);
+        }
+        return false; // 大小・範囲は文字列 VR には非対応
     }
 
     private static String safe(String s) {
