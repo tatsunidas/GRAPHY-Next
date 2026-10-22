@@ -42,9 +42,16 @@ import {
   roiFeatureFileBase,
 } from "./roiFeatureCsv";
 import {
+  roiFeatureScaledDataCsv, roiFeatureScaledDefinitionsCsv, scale2dFiles, scaleSettingsFiles,
+} from "./roiFeatureScales";
+import {
   ROI_FEATURE_FAMILIES,
   LOG_PADDINGS,
+  SCALE_CONVERSIONS,
   anyFamilyOn,
+  parseScaleList,
+  roiFeatureScaleRequest,
+  type ScaleConversion,
   defaultRoiFeatureForm,
   parseSigmaList,
   roiFeatureSettings,
@@ -113,7 +120,13 @@ export function RoiFeatureScreen() {
   const [job, setJob] = useState<RoiFeatureJobStatus | null>(null);
   const jobIdRef = useRef<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [result, setResult] = useState<RoiFeatureResult | null>(null);
+  const [fullResult, setResult] = useState<RoiFeatureResult | null>(null);
+  const [scaleIndex, setScaleIndex] = useState(0);
+  // 空間スケールを選んだときは、選んだタブのスケールの結果を表示する（表・CSV の元・要約は既存のまま result を読む）
+  const result = useMemo(() => {
+    const sc = fullResult?.scales;
+    return sc && sc.length > 0 ? sc[Math.min(scaleIndex, sc.length - 1)].result : fullResult;
+  }, [fullResult, scaleIndex]);
   /** 結果を出したときの対象（CSV のファイル名に使う。欄を選び直しても取り違えない）。 */
   const [resultFor, setResultFor] = useState<{ seriesNumber?: number | string | null; maskChannel: number } | null>(null);
   const [query, setQuery] = useState("");
@@ -249,7 +262,11 @@ export function RoiFeatureScreen() {
     setError(null);
     if (!maskSeriesUid) return setError(t("roiFeat.err.needMask"));
     if (!anyFamilyOn(form)) return setError(t("roiFeat.err.noFamily"));
-    if (form.logOn && !parseSigmaList(form.logSigmaMm)) return setError(t("roiFeat.err.sigma"));
+    if (form.logOn && !form.logByRadius && !parseSigmaList(form.logSigmaMm)) return setError(t("roiFeat.err.sigma"));
+    if (form.logOn && form.logByRadius && !parseScaleList(form.scalesText)) return setError(t("roiFeat.err.scales"));
+    if (form.logOn && form.logByRadius && form.scaleConversion === "COEFFICIENT" && !(form.scaleK > 0)) {
+      return setError(t("roiFeat.err.scales"));
+    }
     try {
       const status = await submitRoiFeatureJob({
         studyInstanceUid: studyUid,
@@ -260,6 +277,7 @@ export function RoiFeatureScreen() {
         timePoint,
         settings: roiFeatureSettings(form),
         recompute,
+        ...roiFeatureScaleRequest(form),
         roiModes: [
           "WHOLE_3D",
           ...(sectionOn ? ["MAX_SECTION_2D" as RoiMode] : []),
@@ -268,6 +286,7 @@ export function RoiFeatureScreen() {
       });
       jobIdRef.current = status.jobId;
       setResult(null);
+      setScaleIndex(0);
       setResultFor({
         seriesNumber: allSeries.find((s) => s.seriesInstanceUid === sourceSeriesUid)?.seriesNumber,
         maskChannel,
@@ -294,6 +313,12 @@ export function RoiFeatureScreen() {
   const onCsv = () => {
     if (!result) return;
     const base = fileBase();
+    if (fullResult?.scales && fullResult.scales.length > 0) {
+      download(roiFeatureScaledDataCsv(fullResult, caseLabel.trim()), `${base}.csv`);
+      download(roiFeatureScaledDefinitionsCsv(fullResult), `${base}_definitions.csv`);
+      for (const f of scale2dFiles(fullResult, caseLabel.trim())) download(f.text, `${base}${f.suffix}`, f.mime);
+      return;
+    }
     download(roiFeatureDataCsv(result, caseLabel.trim()), `${base}.csv`);
     download(roiFeatureDefinitionsCsv(result), `${base}_definitions.csv`);
     for (const f of roiFeature2dFiles(result, caseLabel.trim())) download(f.text, `${base}${f.suffix}`, f.mime);
@@ -302,6 +327,11 @@ export function RoiFeatureScreen() {
   /** 設定ファイルは backend が正規化した本文を一字も変えずに保存する（CSV のハッシュと一致させる）。 */
   const onSettingsFile = () => {
     if (!result) return;
+    // 空間スケールのときは、スケールごとの設定ファイルをすべて保存する
+    if (fullResult?.scales && fullResult.scales.length > 0) {
+      for (const f of scaleSettingsFiles(fullResult)) download(f.text, `${fileBase()}${f.suffix}`, f.mime);
+      return;
+    }
     download(result.settingsProperties, `${fileBase()}_radiomicsj.properties`, "text/plain;charset=utf-8");
   };
 
@@ -503,17 +533,44 @@ export function RoiFeatureScreen() {
                 onChange={() => setForm((f) => ({ ...f, logOn: false }))} /> {t("roiFeat.filter.none")}
             </label>
             <label>
-              <input type="radio" checked={form.logOn} disabled={busy} data-testid="roifeat-filter-log"
-                onChange={() => setForm((f) => ({ ...f, logOn: true }))} /> {t("roiFeat.filter.log")}
+              <input type="radio" checked={form.logOn && !form.logByRadius} disabled={busy} data-testid="roifeat-filter-log"
+                onChange={() => setForm((f) => ({ ...f, logOn: true, logByRadius: false }))} /> {t("roiFeat.filter.log")}
+            </label>
+            <label>
+              <input type="radio" checked={form.logOn && form.logByRadius} disabled={busy} data-testid="roifeat-filter-radius"
+                onChange={() => setForm((f) => ({ ...f, logOn: true, logByRadius: true }))} /> {t("roiFeat.filter.logRadius")}
             </label>
           </span>
         </Field>
         {form.logOn && (
           <>
-            <Field label={t("roiFeat.filter.sigma")}>
-              <input value={form.logSigmaMm} disabled={busy} style={{ ...input, width: 120 }} data-testid="roifeat-log-sigma"
-                onChange={(e) => setForm((f) => ({ ...f, logSigmaMm: e.target.value }))} />
-            </Field>
+            {form.logByRadius ? (
+              <>
+                <Field label={t("roiFeat.scale.radii")}>
+                  <input value={form.scalesText} disabled={busy} style={{ ...input, width: 160 }} data-testid="roifeat-scales"
+                    onChange={(e) => setForm((f) => ({ ...f, scalesText: e.target.value }))} />
+                </Field>
+                <Field label={t("roiFeat.scale.conversion")}>
+                  <select value={form.scaleConversion} disabled={busy} style={{ ...input, width: 260 }}
+                    data-testid="roifeat-scale-conversion"
+                    onChange={(e) => setForm((f) => ({ ...f, scaleConversion: e.target.value as ScaleConversion }))}>
+                    {SCALE_CONVERSIONS.map((c) => <option key={c} value={c}>{t(`roiFeat.scale.conv.${c}`)}</option>)}
+                  </select>
+                </Field>
+                {form.scaleConversion === "COEFFICIENT" && (
+                  <Field label={t("roiFeat.scale.k")}>
+                    <NumberField value={form.scaleK} onChange={(v) => setForm((f) => ({ ...f, scaleK: v }))}
+                      min={0.1} max={10} step={0.1} disabled={busy} style={{ ...input, width: 64 }} />
+                  </Field>
+                )}
+                <div style={note} data-testid="roifeat-scale-note">{t("roiFeat.scale.note")}</div>
+              </>
+            ) : (
+              <Field label={t("roiFeat.filter.sigma")}>
+                <input value={form.logSigmaMm} disabled={busy} style={{ ...input, width: 120 }} data-testid="roifeat-log-sigma"
+                  onChange={(e) => setForm((f) => ({ ...f, logSigmaMm: e.target.value }))} />
+              </Field>
+            )}
             <Field label={t("roiFeat.filter.truncate")}>
               <NumberField value={form.logTruncate} onChange={(v) => setForm((f) => ({ ...f, logTruncate: v }))}
                 min={1} max={10} step={0.5} disabled={busy} style={{ ...input, width: 64 }} />
@@ -555,6 +612,15 @@ export function RoiFeatureScreen() {
               <span>{t(job.state === "EXTRACTING" ? "roiFeat.state.extracting" : "roiFeat.state.loading", {
                 seconds: Math.round(job.elapsedMs / 1000),
               })}</span>
+              {(job.scaleTotal ?? 0) > 0 && (
+                <span data-testid="roifeat-scale-progress">
+                  {t("roiFeat.scale.progress", {
+                    done: Math.min((job.scaleDone ?? 0) + 1, job.scaleTotal ?? 0),
+                    total: job.scaleTotal ?? 0,
+                    r: job.scaleMm ?? 0,
+                  })}
+                </span>
+              )}
               {(job.sliceTotal ?? 0) > 0 && (
                 <span data-testid="roifeat-slice-progress">
                   {t("roiFeat.sliceProgress", { done: job.sliceDone ?? 0, total: job.sliceTotal ?? 0 })}
@@ -571,6 +637,32 @@ export function RoiFeatureScreen() {
 
       {result && (
         <div style={{ marginTop: 16 }}>
+          {fullResult?.scales && fullResult.scales.length > 0 && (
+            <div data-testid="roifeat-scale-tabs" style={{ marginBottom: 8 }}>
+              <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+                {fullResult.scales.map((s, i) => (
+                  <button key={s.scaleMm} onClick={() => setScaleIndex(i)} data-testid={`roifeat-scale-tab-${i}`}
+                    style={{ ...miniBtn, fontWeight: i === scaleIndex ? 700 : 400, borderWidth: i === scaleIndex ? 2 : 1 }}>
+                    {t("roiFeat.scale.tab", { r: s.scaleMm })}
+                  </button>
+                ))}
+              </div>
+              {(() => {
+                const s = fullResult.scales[Math.min(scaleIndex, fullResult.scales.length - 1)];
+                return (
+                  <div style={note} data-testid="roifeat-scale-info">
+                    {s.sigma3dMm == null
+                      ? t("roiFeat.scale.infoNone", { r: s.scaleMm })
+                      : t("roiFeat.scale.infoLog", {
+                        r: s.scaleMm, s3: s.sigma3dMm, s2: s.sigma2dMm ?? "?",
+                        conv: s.conversion === "COEFFICIENT" ? `σ = ${s.coefficient}·r` : t(`roiFeat.scale.conv.${s.conversion}`),
+                      })}
+                    {" "}{t("roiFeat.scale.csvNote")}
+                  </div>
+                );
+              })()}
+            </div>
+          )}
           <div style={summaryRow} data-testid="roifeat-summary">
             <span style={result.fromCache ? cachePill : infoPill}>
               {result.fromCache
