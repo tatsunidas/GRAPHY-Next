@@ -34,7 +34,24 @@ public record RoiFeatureResult(
         RoiSize roiSize,
         boolean lossyCompressed,
         Section section,
-        Slices slices) {
+        Slices slices,
+        List<ScaleEntry> scales) {
+
+    /** 3D と 2D の単位まで（スケールなし）。 */
+    public RoiFeatureResult(String radiomicsjVersion, Instant computedAt, boolean fromCache, int label,
+                            List<Row> rows, Discretisation discretisation, Provenance provenance,
+                            String settingsProperties, RoiSize roiSize, boolean lossyCompressed,
+                            Section section, Slices slices) {
+        this(radiomicsjVersion, computedAt, fromCache, label, rows, discretisation, provenance,
+                settingsProperties, roiSize, lossyCompressed, section, slices, null);
+    }
+
+    /**
+     * 空間スケール 1 つぶんの結果。{@code sigma3dMm}（3D の単位）・{@code sigma2dMm}（2D の単位）は換算後の σ で、
+     * r=0（フィルタなし）なら null。{@code result} は通常の結果（入れ子には {@code scales} が無い）。
+     */
+    public record ScaleEntry(double scaleMm, Double sigma3dMm, Double sigma2dMm, String conversion,
+                             Double coefficient, RoiFeatureResult result) {}
 
     /** 3D だけの結果（2D の単位を選ばなかったとき）。 */
     public RoiFeatureResult(String radiomicsjVersion, Instant computedAt, boolean fromCache, int label,
@@ -115,17 +132,22 @@ public record RoiFeatureResult(
 
     RoiFeatureResult asCached() {
         return new RoiFeatureResult(radiomicsjVersion, computedAt, true, label, rows, discretisation,
-                provenance, settingsProperties, roiSize, lossyCompressed, section, slices);
+                provenance, settingsProperties, roiSize, lossyCompressed, section, slices, scales);
+    }
+
+    RoiFeatureResult withScales(List<ScaleEntry> list) {
+        return new RoiFeatureResult(radiomicsjVersion, computedAt, fromCache, label, rows, discretisation,
+                provenance, settingsProperties, roiSize, lossyCompressed, section, slices, list);
     }
 
     RoiFeatureResult withModes(Section sec, Slices sl) {
         return new RoiFeatureResult(radiomicsjVersion, computedAt, fromCache, label, rows, discretisation,
-                provenance, settingsProperties, roiSize, lossyCompressed, sec, sl);
+                provenance, settingsProperties, roiSize, lossyCompressed, sec, sl, scales);
     }
 
     /** 返すたびに付け直す欄（キャッシュに無い・古いかもしれない値）。 */
     RoiFeatureResult withPerRequest(RoiSize size, boolean lossy) {
         return new RoiFeatureResult(radiomicsjVersion, computedAt, fromCache, label, rows, discretisation,
-                provenance, settingsProperties, size, lossy, section, slices);
+                provenance, settingsProperties, size, lossy, section, slices, scales);
     }
 }

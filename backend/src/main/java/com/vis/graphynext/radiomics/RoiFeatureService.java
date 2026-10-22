@@ -223,26 +223,109 @@ public class RoiFeatureService {
      */
     public RoiFeatureResult compute(RoiFeatureRequest req, java.util.function.Consumer<Phase> phase,
                                     Progress progress, BooleanSupplier cancelled) throws IOException {
+        return compute(req, phase, progress, cancelled, (done, total, rMm) -> { });
+    }
+
+    /** 進み具合の受け口（空間スケールの i / N と、今のスケールの r）。 */
+    @FunctionalInterface
+    public interface ScaleProgress {
+        void scale(int done, int total, double scaleMm);
+    }
+
+    /**
+     * 空間スケール（{@code scalesMm}）を指定したときは、スケールごとに独立した抽出を回して並べる。
+     * 取り消しは「今のスケールを最後まで計算し（キャッシュに入る）、残りは始めない」。
+     */
+    public RoiFeatureResult compute(RoiFeatureRequest req, java.util.function.Consumer<Phase> phase,
+                                    Progress progress, BooleanSupplier cancelled, ScaleProgress scaleProgress)
+            throws IOException {
         check(req);
         int label = labelOf(req.settings());
         Map<String, String> settings = effectiveSettings(req.settings(), label);
+
+        FilterScale.Conversion conversion = FilterScale.parse(req.scaleConversion());
+        List<Double> scales = req.hasScales() ? distinctScales(req.scalesMm()) : null;
+        if (scales != null) {
+            if (settings.containsKey("DOUBLEARRAY_logSigmaMm")) {
+                throw new IllegalArgumentException(
+                        "構造の半径（scalesMm）と σ（DOUBLEARRAY_logSigmaMm）は同時に指定できません。どちらか一方にしてください。");
+            }
+            // 不正な半径・係数は、体積を読む前に断る
+            for (double r : scales) {
+                FilterScale.sigmaMm(r, 3, conversion, req.scaleCoefficient());
+                FilterScale.sigmaMm(r, 2, conversion, req.scaleCoefficient());
+            }
+        }
 
         phase.accept(Phase.LOADING);
         // Next のテクスチャ設定は渡さない（Next 側のリサンプリングを掛けない。RadiomicsJ の設定に一本化）。
         RadiomicsMapEngine.LoadedVolume vol = engine.load(req.studyInstanceUid(), req.sourceSeriesUid(),
                 req.channel(), req.timePoint(), req.maskSeriesUid(), req.maskChannel(), label, new HashMap<>());
 
-        checkLogGrid(settings, vol, req.has(RoiFeatureRequest.RoiMode.MAX_SECTION_2D)
-                || req.has(RoiFeatureRequest.RoiMode.SLICES_2D));
-        RoiFeatureResult whole = compute3d(req, vol, label, settings, phase);
-        if (!req.has(RoiFeatureRequest.RoiMode.MAX_SECTION_2D) && !req.has(RoiFeatureRequest.RoiMode.SLICES_2D)) {
+        if (scales == null) {
+            return computeUnits(req, vol, label, settings, settings, phase, progress, cancelled);
+        }
+        List<RoiFeatureResult.ScaleEntry> entries = new ArrayList<>();
+        for (int i = 0; i < scales.size(); i++) {
+            if (cancelled.getAsBoolean()) {
+                throw new java.util.concurrent.CancellationException("スケールの境界で取り消しました");
+            }
+            double r = scales.get(i);
+            scaleProgress.scale(i, scales.size(), r);
+            Double s3 = FilterScale.sigmaMm(r, 3, conversion, req.scaleCoefficient());
+            Double s2 = FilterScale.sigmaMm(r, 2, conversion, req.scaleCoefficient());
+            RoiFeatureResult res = computeUnits(req, vol, label, withSigma(settings, s3), withSigma(settings, s2),
+                    phase, progress, cancelled);
+            entries.add(new RoiFeatureResult.ScaleEntry(r, s3, s2, conversion.name(), req.scaleCoefficient(), res));
+        }
+        scaleProgress.scale(scales.size(), scales.size(), scales.get(scales.size() - 1));
+        // 先頭のスケールの結果をトップレベルに置く（スケールを知らない呼び手はそれを読む）
+        return entries.get(0).result().withScales(entries);
+    }
+
+    private static List<Double> distinctScales(List<Double> in) {
+        List<Double> out = new ArrayList<>();
+        for (Double r : in) {
+            if (r == null) {
+                throw new IllegalArgumentException("構造の半径に空の値があります。");
+            }
+            if (!out.contains(r)) {
+                out.add(r);
+            }
+        }
+        return out;
+    }
+
+    /** σ があれば LoG のキーを足した設定（σ が null＝フィルタなしは設定のまま）。 */
+    private static Map<String, String> withSigma(Map<String, String> settings, Double sigmaMm) {
+        if (sigmaMm == null) {
+            return settings;
+        }
+        Map<String, String> out = new TreeMap<>(settings);
+        out.put("DOUBLEARRAY_logSigmaMm", FilterScale.settingValue(sigmaMm));
+        return out;
+    }
+
+    /**
+     * 読み込み済みの体積で、3D（設定 {@code s3}）に選ばれた 2D の単位（設定 {@code s2}）を足して返す。
+     * スケールなしでは {@code s3 == s2}。
+     */
+    private RoiFeatureResult computeUnits(RoiFeatureRequest req, RadiomicsMapEngine.LoadedVolume vol, int label,
+                                          Map<String, String> s3, Map<String, String> s2,
+                                          java.util.function.Consumer<Phase> phase, Progress progress,
+                                          BooleanSupplier cancelled) throws IOException {
+        boolean with2d = req.has(RoiFeatureRequest.RoiMode.MAX_SECTION_2D)
+                || req.has(RoiFeatureRequest.RoiMode.SLICES_2D);
+        checkLogGrid(s3, vol, with2d);
+        RoiFeatureResult whole = compute3d(req, vol, label, s3, phase);
+        if (!with2d) {
             return whole;
         }
         phase.accept(Phase.EXTRACTING);
         RoiFeatureResult.Section section = req.has(RoiFeatureRequest.RoiMode.MAX_SECTION_2D)
-                ? computeSection(req, vol, label, settings) : null;
+                ? computeSection(req, vol, label, s2) : null;
         RoiFeatureResult.Slices slices = req.has(RoiFeatureRequest.RoiMode.SLICES_2D)
-                ? computeSlices(req, vol, label, settings, progress, cancelled) : null;
+                ? computeSlices(req, vol, label, s2, progress, cancelled) : null;
         return whole.withModes(section, slices);
     }
 

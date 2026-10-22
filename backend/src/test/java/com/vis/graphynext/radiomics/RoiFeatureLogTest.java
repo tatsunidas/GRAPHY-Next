@@ -40,7 +40,7 @@ class RoiFeatureLogTest {
     }
 
     /** spacing は (xy, z) mm。ROI は中央寄りの箱（端から LoG の半径より離れている必要は無い。ミラー境界）。 */
-    private static RadiomicsMapEngine.LoadedVolume volume(double xy, double z) {
+    static RadiomicsMapEngine.LoadedVolume volume(double xy, double z) {
         ImageStack is = new ImageStack(W, H);
         ImageStack ms = new ImageStack(W, H);
         long s = 4242L;
@@ -74,7 +74,7 @@ class RoiFeatureLogTest {
                 new double[] {1, 0, 0, 0, 1, 0}, xy, xy, ipp, sops, null, null, false);
     }
 
-    private static final class FixedEngine extends RadiomicsMapEngine {
+    static final class FixedEngine extends RadiomicsMapEngine {
         final LoadedVolume vol;
 
         FixedEngine(LoadedVolume vol) {
@@ -89,7 +89,7 @@ class RoiFeatureLogTest {
         }
     }
 
-    private static RoiFeatureService service(RadiomicsMapEngine.LoadedVolume vol, Path dir) {
+    static RoiFeatureService service(RadiomicsMapEngine.LoadedVolume vol, Path dir) {
         MockEnvironment env = new MockEnvironment();
         env.setActiveProfiles("standalone");
         return new RoiFeatureService(new FixedEngine(vol), new MapCheckpointStore(new CacheStore(dir, 0), "t"),
@@ -102,13 +102,13 @@ class RoiFeatureLogTest {
         return new RoiFeatureRequest("1.2", "1.2.9", "1.2.8", 0, 0, 0, settings, false, modes);
     }
 
-    private static Map<String, String> s(String... kv) {
+    static Map<String, String> s(String... kv) {
         Map<String, String> m = new LinkedHashMap<>();
         for (int i = 0; i < kv.length; i += 2) m.put(kv[i], kv[i + 1]);
         return m;
     }
 
-    private static Map<String, Double> values(List<RoiFeatureResult.Row> rows) {
+    static Map<String, Double> values(List<RoiFeatureResult.Row> rows) {
         Map<String, Double> m = new LinkedHashMap<>();
         for (RoiFeatureResult.Row r : rows) m.put(r.column(), r.value());
         return m;
