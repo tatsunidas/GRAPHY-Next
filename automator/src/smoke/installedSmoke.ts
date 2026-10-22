@@ -30,7 +30,9 @@
  *    macOS は HOME を変えるとキーチェーンが絡むので向けない。CI 以外（CI=true 無し）では実行を断る。
  */
 import { execFileSync, spawnSync } from "node:child_process";
+import crypto from "node:crypto";
 import fs from "node:fs";
+import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { _electron as electron, type ElectronApplication, type Page } from "@playwright/test";
@@ -206,7 +208,7 @@ type Bridge = Record<string, (...a: unknown[]) => Promise<any>>; // eslint-disab
  * アプリ本体は変えない。確認ダイアログ（showMessageBoxSync）だけ、利用者が「ダウンロードする」を押した扱いに差し替える。
  * 返り値は、後で終了を確かめる llama-server の PID（記録が無ければ null）。
  */
-async function localAiSection(app: ElectronApplication, main: Page): Promise<{ pid: number | null; dataDir: string }> {
+async function localAiSection(app: ElectronApplication, main: Page): Promise<{ pid: number | null; sttPid: number | null; dataDir: string }> {
   const call = <T,>(expr: string): Promise<T> => main.evaluate(expr) as Promise<T>;
   const dataDir = await app.evaluate(({ app: a }) => a.getPath("appData") + "/GRAPHY-Next");
   await app.evaluate(({ dialog }) => {
@@ -216,7 +218,7 @@ async function localAiSection(app: ElectronApplication, main: Page): Promise<{ p
   const st0 = await call<Record<string, any>>(`window.graphyDesktop.aiLocalStatus()`); // eslint-disable-line @typescript-eslint/no-explicit-any
   check(st0.supported === true, "[7] この OS・CPU でローカル AI が対応している", { platform: st0.platform });
   check(st0.runtime.installed === false && st0.model.installed === false, "[7] 導入前は runtime もモデルも未導入（前提）", { runtime: st0.runtime.installed, model: st0.model.installed });
-  if (!st0.supported) return { pid: null, dataDir };
+  if (!st0.supported) return { pid: null, sttPid: null, dataDir };
 
   // 負例: 確認ダイアログで「取り消す」(1) を返したら、何も取得しない。
   await app.evaluate(({ dialog }) => {
@@ -234,7 +236,7 @@ async function localAiSection(app: ElectronApplication, main: Page): Promise<{ p
   const inst = await call<{ ok: boolean; error?: string }>(`window.graphyDesktop.aiLocalInstall(${JSON.stringify(st0.defaultModelId)})`);
   console.log(`  [情報] 導入に ${Math.round((Date.now() - t0) / 1000)} 秒: ${JSON.stringify(inst)}`);
   check(inst.ok === true, "[7] ★ローカル AI を取得・検証・展開できる（sha256 一致）", inst);
-  if (!inst.ok) return { pid: null, dataDir };
+  if (!inst.ok) return { pid: null, sttPid: null, dataDir };
   const st2 = await call<Record<string, any>>(`window.graphyDesktop.aiLocalStatus()`); // eslint-disable-line @typescript-eslint/no-explicit-any
   check(st2.runtime.installed === true && st2.model.installed === true && st2.model.verified === true, "[7] runtime とモデルが導入済み（モデルは検証済み）", { runtime: st2.runtime.installed, model: st2.model });
   check(st2.registered === true, "[7] 提供元 local-llm が登録された", { registered: st2.registered });
@@ -268,7 +270,57 @@ async function localAiSection(app: ElectronApplication, main: Page): Promise<{ p
     pid = (JSON.parse(fs.readFileSync(path.join(dataDir, "local-ai", "server.json"), "utf8")) as { pid: number }).pid;
   } catch { /* 記録が無ければ下の検査で失敗になる */ }
   check(pid !== null && pidAlive(pid), "[7] 会話中は llama-server のプロセスが生きている（記録した PID）", { pid });
-  return { pid, dataDir };
+
+  // [7b] 音声入力（任意で導入するローカルの文字起こし）。実モデル(Qwen3-ASR)に実音声を通す。
+  const sttPid = await localSttSection(main, st2, dataDir);
+  return { pid, sttPid, dataDir };
+}
+
+/**
+ * 実音声の固定サンプル（ジョン・F・ケネディの演説の一部 11 秒。米国政府の著作物でパブリックドメイン。whisper.cpp の samples/jfk.wav）。
+ * 取得元は commit で固定し、sha256 を確かめる。同梱はしない（バイナリをリポジトリに置かない）。
+ */
+const JFK_URL = "https://raw.githubusercontent.com/ggml-org/whisper.cpp/b0a11594aec50892a02cd8d129eee2dfe93a8bb8/samples/jfk.wav";
+const JFK_SHA256 = "59dfb9a4acb36fe2a2affc14bacbee2920ff435cb13cc314a08c13f66ba7860e";
+
+/** [7b] ローカル音声入力: 導入 → 起動 → 実音声の文字起こし。返り値は stt の llama-server の PID（記録が無ければ null）。 */
+async function localSttSection(main: Page, st: Record<string, any>, dataDir: string): Promise<number | null> { // eslint-disable-line @typescript-eslint/no-explicit-any
+  const call = <T,>(expr: string): Promise<T> => main.evaluate(expr) as Promise<T>;
+  const sttId = st.stt?.defaultModelId as string | undefined;
+  check(!!sttId && st.stt.installed === false, "[7b] 音声入力のモデルが一覧にあり、導入前は未導入（前提）", { sttId, installed: st.stt?.installed });
+  if (!sttId) return null;
+  const t0 = Date.now();
+  const inst = await call<{ ok: boolean; error?: string }>(`window.graphyDesktop.aiLocalInstall(${JSON.stringify(sttId)})`);
+  console.log(`  [情報] 音声入力の導入に ${Math.round((Date.now() - t0) / 1000)} 秒: ${JSON.stringify(inst)}`);
+  check(inst.ok === true, "[7b] ★音声入力のモデル(本体＋mmproj)を取得・検証できる（sha256 一致）", inst);
+  if (!inst.ok) return null;
+  const st2 = await call<Record<string, any>>(`window.graphyDesktop.aiLocalStatus()`); // eslint-disable-line @typescript-eslint/no-explicit-any
+  check(st2.stt.installed === true && st2.stt.registered === true, "[7b] 音声入力が導入済み・提供元 local-stt が登録された", st2.stt);
+  check(st2.model.installed === true, "[7b] 会話のローカルモデルは残っている（音声入力の導入で壊れない）", st2.model);
+  const chk = await call<{ ok: boolean; error?: string; log?: string }>(`window.graphyDesktop.aiLocalCheck("stt")`);
+  check(chk.ok === true, "[7b] ★音声入力の llama-server が起動して /health が 200 を返す", { ok: chk.ok, error: chk.error, log: (chk.log ?? "").slice(-600) });
+  const cfg = await call<{ providers: { id: string; endpoint?: string }[] }>(`window.graphyDesktop.aiProvidersGet()`);
+  const prov = cfg.providers.find((x) => x.id === "local-stt");
+  check(!!prov && /^http:\/\/127\.0\.0\.1:\d+$/.test(String(prov.endpoint)), "[7b] local-stt の宛先は 127.0.0.1 だけ", prov?.endpoint);
+
+  const wav = Buffer.from(await (await fetch(JFK_URL)).arrayBuffer());
+  const digest = crypto.createHash("sha256").update(wav).digest("hex");
+  check(digest === JFK_SHA256, "[7b] 検査用の音声サンプルが固定した版と一致する（sha256）", { digest });
+  const t1 = Date.now();
+  const r = await main.evaluate(
+    (req) => (window as unknown as { graphyDesktop: Bridge }).graphyDesktop.aiTranscribe(req),
+    { audio: { base64: wav.toString("base64"), mimeType: "audio/wav" } },
+  ) as { ok: boolean; text?: string; error?: string; provenance?: { providerId?: string; local?: boolean } };
+  const text = (r.text ?? "").toLowerCase();
+  console.log(`  [情報] 文字起こし ${Date.now() - t1} ms: ${JSON.stringify({ ok: r.ok, text: r.text, error: r.error })}`);
+  check(r.ok === true && text.includes("fellow americans") && text.includes("country"), "[7b] ★実モデルが実音声を文字にできる（'fellow Americans' と 'country' を含む）", { ok: r.ok, text: r.text, error: r.error });
+  check(r.provenance?.providerId === "local-stt" && r.provenance?.local === true, "[7b] 由来が local-stt（この PC の中）", r.provenance);
+  let sttPid: number | null = null;
+  try {
+    sttPid = (JSON.parse(fs.readFileSync(path.join(dataDir, "local-ai", "server-stt.json"), "utf8")) as { pid: number }).pid;
+  } catch { /* 記録が無ければ下の検査で失敗になる */ }
+  check(sttPid !== null && pidAlive(sttPid), "[7b] 文字起こし中は音声入力の llama-server が生きている（会話用とは別プロセス）", { sttPid });
+  return sttPid;
 }
 
 /**
@@ -317,6 +369,95 @@ async function attachmentSection(app: ElectronApplication, main: Page): Promise<
     await win.screenshot({ path: path.join(OUT, "5-assistant-pdf.png") }).catch(() => undefined);
   } finally {
     await win?.close().catch(() => undefined);
+    await main.evaluate((c) => (window as unknown as { graphyDesktop: B }).graphyDesktop.aiProvidersSet(c), { providers: orig.providers, defaults: orig.defaults, fallbacks: orig.fallbacks })
+      .catch((e) => console.log(`  [情報] 提供元の設定を元に戻せなかった: ${String(e).slice(0, 120)}`));
+  }
+}
+
+/** 偽マイクに流す 440 Hz の音（48 kHz mono 16 bit WAV）。Chromium の --use-file-for-fake-audio-capture 用。 */
+function writeToneWav(file: string, seconds: number): void {
+  const rate = 48000;
+  const n = rate * seconds;
+  const b = Buffer.alloc(44 + n * 2);
+  b.write("RIFF", 0); b.writeUInt32LE(36 + n * 2, 4); b.write("WAVEfmt ", 8);
+  b.writeUInt32LE(16, 16); b.writeUInt16LE(1, 20); b.writeUInt16LE(1, 22);
+  b.writeUInt32LE(rate, 24); b.writeUInt32LE(rate * 2, 28); b.writeUInt16LE(2, 32); b.writeUInt16LE(16, 34);
+  b.write("data", 36); b.writeUInt32LE(n * 2, 40);
+  for (let i = 0; i < n; i++) b.writeInt16LE(Math.round(12000 * Math.sin((2 * Math.PI * 440 * i) / rate)), 44 + i * 2);
+  fs.writeFileSync(file, b);
+}
+
+/**
+ * [9] アシスタントの音声入力: 配布物の中で マイク(getUserMedia) → MediaRecorder → decodeAudioData → 16 kHz WAV → main → 文字起こしの要求 が通るか。
+ * 偽マイク(Chromium の --use-fake-device-for-media-stream)と、loopback の偽の音声認識サーバーを使う。実マイク・実モデルは検査しない。
+ * 権限: アシスタント窓の音声だけ許され、映像は拒否される（mediaPermission.js が配布物でも効いている）。
+ * macOS は OS の許可ダイアログに答える人が CI にいないので、許可済みの扱いに差し替える（OS の許可の挙動自体は人が確かめる）。
+ */
+async function voiceSection(app: ElectronApplication, main: Page): Promise<void> {
+  type B = {
+    aiProvidersGet: () => Promise<{ providers: unknown[]; defaults: Record<string, string>; fallbacks?: Record<string, string[]> }>;
+    aiProvidersSet: (c: unknown) => Promise<{ ok: boolean }>;
+  };
+  await app.evaluate(({ dialog, systemPreferences }) => {
+    dialog.showMessageBoxSync = (() => 0) as typeof dialog.showMessageBoxSync;
+    systemPreferences.getMediaAccessStatus = (() => "granted") as typeof systemPreferences.getMediaAccessStatus;
+  });
+  const received: Buffer[] = [];
+  const srv = http.createServer((req, res) => {
+    const chunks: Buffer[] = [];
+    req.on("data", (c) => chunks.push(c));
+    req.on("end", () => {
+      const body = Buffer.concat(chunks).toString("utf8");
+      if (body.includes('"input_audio"')) {
+        received.push(Buffer.from(JSON.parse(body).messages[0].content[0].input_audio.data, "base64"));
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ choices: [{ message: { content: "language Japanese<asr_text>スモーク音声" } }] }));
+      } else { res.writeHead(200); res.end("{}"); }
+    });
+  });
+  await new Promise<void>((r) => srv.listen(0, "127.0.0.1", r));
+  const port = (srv.address() as { port: number }).port;
+  const orig = await main.evaluate(() => (window as unknown as { graphyDesktop: B }).graphyDesktop.aiProvidersGet());
+  const chat = { id: "smoke-chat", label: "smoke", kind: "openai", endpoint: `http://127.0.0.1:${port}`, auth: "none", toolMode: "none", models: { "text-to-text": "x" } };
+  const stt = { id: "smoke-stt", label: "smoke-stt", kind: "openai", endpoint: `http://127.0.0.1:${port}`, auth: "none", toolMode: "none", models: { "speech-to-text": "asr" }, paths: { "speech-to-text": "/v1/chat/completions" } };
+  const set = await main.evaluate((c) => (window as unknown as { graphyDesktop: B }).graphyDesktop.aiProvidersSet(c), { providers: [chat, stt], defaults: { "text-to-text": "smoke-chat", "speech-to-text": "smoke-stt" } });
+  check(set.ok === true, "[9] 音声入力検査用の提供元を保存できる", set);
+  let win: Page | null = null;
+  try {
+    const domClick = (tid: string) => main.waitForSelector(`[data-testid="${tid}"]`, { timeout: 20_000 }).then((h) => h.evaluate((el) => (el as HTMLElement).click()));
+    await domClick("mainscreen-menu-system");
+    await domClick("menu-item-assistant");
+    win = await findWindow(app, (u) => u.includes("#assistant"), 30_000);
+    check(!!win, "[9] アシスタント窓が開く");
+    if (!win) return;
+    await win.getByTestId("assistant-input").waitFor({ state: "visible", timeout: 20_000 });
+    const mic = win.getByTestId("assistant-voice");
+    await mic.waitFor({ state: "visible", timeout: 20_000 });
+    await win.getByTestId("assistant-voice-dest").waitFor({ state: "visible", timeout: 20_000 });
+    check(await mic.isEnabled(), "[9] マイクボタンが使える（音声入力の提供元が解決できている）");
+    await mic.evaluate((el) => (el as HTMLElement).click());
+    const rec = await win.getByTestId("assistant-voice-recording").waitFor({ state: "visible", timeout: 20_000 }).then(() => true, () => false);
+    check(rec, "[9] ★配布物でマイクの録音が始まる（getUserMedia と許可ハンドラが通る）");
+    if (rec) {
+      await new Promise((r) => setTimeout(r, 2000));
+      await win.getByTestId("assistant-voice-stop").evaluate((el) => (el as HTMLElement).click());
+      const input = win.getByTestId("assistant-input");
+      const got = await win.waitForFunction(() => (document.querySelector('[data-testid="assistant-input"]') as HTMLTextAreaElement | null)?.value.includes("スモーク音声"), undefined, { timeout: 30_000 }).then(() => true, () => false);
+      check(got, "[9] ★録音 → 16 kHz WAV → 文字起こしの要求 → 入力欄に文字が入る（配布物）", (await input.inputValue().catch(() => "")).slice(0, 80));
+      const w = received[0];
+      const ok = !!w && w.subarray(0, 4).toString() === "RIFF" && w.readUInt32LE(24) === 16000 && w.readUInt16LE(22) === 1 && w.readUInt16LE(34) === 16;
+      let peak = 0;
+      if (w) for (let i = 44; i + 1 < w.length; i += 2) peak = Math.max(peak, Math.abs(w.readInt16LE(i)));
+      check(ok && peak > 2000, "[9] 送られた音声は 16 kHz・mono・16 bit の WAV で、無音ではない", { bytes: w?.length, peak });
+    }
+    const perm = await win.evaluate(async () => {
+      try { (await navigator.mediaDevices.getUserMedia({ video: true })).getTracks().forEach((t) => t.stop()); return "granted"; } catch (e) { return (e as Error).name; }
+    });
+    check(perm === "NotAllowedError", "[9] 🔴 映像の要求は配布物でも拒否される（mediaPermission.js）", perm);
+    await win.screenshot({ path: path.join(OUT, "6-assistant-voice.png") }).catch(() => undefined);
+  } finally {
+    await win?.close().catch(() => undefined);
+    srv.close();
     await main.evaluate((c) => (window as unknown as { graphyDesktop: B }).graphyDesktop.aiProvidersSet(c), { providers: orig.providers, defaults: orig.defaults, fallbacks: orig.fallbacks })
       .catch((e) => console.log(`  [情報] 提供元の設定を元に戻せなかった: ${String(e).slice(0, 120)}`));
   }
@@ -377,14 +518,18 @@ async function main(): Promise<void> {
   delete env.GRAPHY_BACKEND_EXTERNAL;
 
   console.log(`[launch] ${inst.exe}`);
-  const app = await electron.launch({ executablePath: inst.exe, args: inst.args, env, timeout: 120_000 });
+  // 偽マイク（[9]）。マイクの無い runner でも getUserMedia が通るように。本体の挙動は変えない（Chromium のフラグ）。
+  const toneFile = path.join(OUT, "tone.wav");
+  writeToneWav(toneFile, 30);
+  const mediaArgs = ["--use-fake-device-for-media-stream", `--use-file-for-fake-audio-capture=${toneFile}`];
+  const app = await electron.launch({ executablePath: inst.exe, args: [...inst.args, ...mediaArgs], env, timeout: 120_000 });
   const proc = app.process();
   // main の console.log と backend の出力（"[backend] ..."）は main の stdout/stderr に出る。失敗の原因調査用に残す。
   const appLog = fs.createWriteStream(path.join(OUT, "app-output.log"));
   proc.stdout?.on("data", (d) => appLog.write(d));
   proc.stderr?.on("data", (d) => appLog.write(d));
   app.on("window", (w) => watchPage(w, "window"));
-  let localAi: { pid: number | null; dataDir: string } | null = null;
+  let localAi: { pid: number | null; sttPid: number | null; dataDir: string } | null = null;
   try {
     const main = await findWindow(app, (u) => /renderer[\\/]index\.html/.test(u) && !u.includes("2dviewer"), 120_000);
     check(!!main, "[2] ★製品版のメイン画面が開く（splash のまま・起動直後の落下ではない）", {
@@ -402,6 +547,7 @@ async function main(): Promise<void> {
     check(st instanceof Response && st.ok, "[2] 同梱 backend が /api/status に 200 を返す", st instanceof Response ? st.status : String(st));
     // メニューの操作はメイン画面が出ている今のうちに行う（後の節で設定画面などへ遷移する）。
     await attachmentSection(app, main).catch((e) => check(false, "[8] PDF 添付の検査が完走しなかった", String(e).slice(0, 300)));
+    await voiceSection(app, main).catch((e) => check(false, "[9] 音声入力の検査が完走しなかった", String(e).slice(0, 300)));
     await main.screenshot({ path: path.join(OUT, "1-main.png") }).catch(() => {});
 
     // ── 5. 動画を取り込んで開く ─────────────────────────────
@@ -549,6 +695,12 @@ async function main(): Promise<void> {
     for (let i = 0; i < 40 && pidAlive(pid); i++) await new Promise((r) => setTimeout(r, 500));
     check(!pidAlive(pid), "[7] ★アプリを閉じると llama-server も終了している（孤児が残らない）", { pid });
     if (pidAlive(pid)) process.kill(pid); // 検査は失敗として記録済み。runner に残さない
+    if (localAi.sttPid !== null) {
+      const sp = localAi.sttPid;
+      for (let i = 0; i < 40 && pidAlive(sp); i++) await new Promise((r) => setTimeout(r, 500));
+      check(!pidAlive(sp), "[7b] ★アプリを閉じると音声入力の llama-server も終了している（孤児が残らない）", { sp });
+      if (pidAlive(sp)) process.kill(sp);
+    }
 
     // 初回導入の提案フラグは、起動時に消費される（ダイアログ自体は導入済みなので出ない）。
     const flag = path.join(localAi.dataDir, "first-run-local-llm.flag");
