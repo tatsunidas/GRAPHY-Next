@@ -13,7 +13,7 @@
 //   GRAPHY_BACKEND_PROFILE     … backend プロファイル（既定 config.backend.profile）
 //   GRAPHY_DEV_SERVER_URL      … Vite dev サーバの URL（既定 config.devServerUrl の 5173）
 
-const { app, BrowserWindow, shell, dialog, ipcMain, nativeImage, screen, clipboard, powerSaveBlocker } = require("electron");
+const { app, BrowserWindow, shell, dialog, ipcMain, nativeImage, screen, clipboard, powerSaveBlocker, session, systemPreferences } = require("electron");
 const { spawn } = require("node:child_process");
 const path = require("node:path");
 const os = require("node:os");
@@ -1236,6 +1236,22 @@ ipcMain.handle("graphy:ai-chat", async (e, req) => {
     e.sender.removeListener("destroyed", onGone);
   }
 });
+// マイクの利用可否。macOS は OS の許可ダイアログ(TCC)を出す必要がある(askForMediaAccess)。他の OS は常に true で、
+// 拒否されていれば getUserMedia 側が NotAllowedError で教える。署名を入れる時は entitlement device.audio-input も要る。
+ipcMain.handle("graphy:assistant-mic-access", async (e) => {
+  if (!isAssistantSender(e)) return { ok: false, error: "forbidden" };
+  if (process.platform !== "darwin") return { ok: true, status: "unknown" };
+  const before = systemPreferences.getMediaAccessStatus("microphone");
+  if (before === "granted") return { ok: true, status: before };
+  if (before === "denied" || before === "restricted") return { ok: false, status: before };
+  const granted = await systemPreferences.askForMediaAccess("microphone");
+  return { ok: granted, status: granted ? "granted" : "denied" };
+});
+// 音声の文字起こし。会話と同じくアシスタント窓だけが呼べる。録音は main に保存しない（aiGateway.transcribe）。
+ipcMain.handle("graphy:ai-transcribe", async (e, req) => {
+  if (!isAssistantSender(e)) return { ok: false, error: "forbidden" };
+  return aiGateway.transcribe(req || {});
+});
 ipcMain.handle("graphy:ai-chat-cancel", (e, sessionId) => {
   if (!isAssistantSender(e)) return { ok: false, error: "forbidden" };
   return aiGateway.cancelChat(String(sessionId || ""));
@@ -1459,17 +1475,21 @@ async function runLocalAiInstall(win, modelId) {
   const ai = localLlm.get();
   if (!ai || !localAiManifest) return { ok: false, error: "unavailable" };
   const st = ai.status();
-  const md = localAiManifest.models.find((m) => m.id === modelId);
+  const llm = localAiManifest.models.find((m) => m.id === modelId);
+  const stt = llm ? null : (localAiManifest.sttModels || []).find((m) => m.id === modelId);
+  const md = llm || stt;
   if (!md) return { ok: false, error: "unknown-model" };
   const rtAsset = localAiManifest.runtime.assets[st.platform];
   if (!rtAsset) return { ok: false, error: "unsupported-platform" };
-  const total = (st.runtime.installed ? 0 : rtAsset.size) + (st.model.installed && st.model.id === md.id ? 0 : md.size);
+  const modelSize = stt ? md.size + md.mmproj.size : md.size;
+  const have = stt ? st.stt.installed && st.stt.id === md.id : st.model.installed && st.model.id === md.id;
+  const total = (st.runtime.installed ? 0 : rtAsset.size) + (have ? 0 : modelSize);
   const choice = dialog.showMessageBoxSync(win, {
     type: "question",
     buttons: ["ダウンロードする", "取り消す"],
     defaultId: 1,
     cancelId: 1,
-    title: "ローカル AI をダウンロードします",
+    title: stt ? "ローカルの音声入力をダウンロードします" : "ローカル AI をダウンロードします",
     message: `${formatBytes(total)} をダウンロードして、この PC に保存します。`,
     detail: `実行ファイル: llama.cpp ${localAiManifest.runtime.build} (MIT)\nモデル: ${md.label} (${md.license})\n取得元: github.com / huggingface.co\n\n取得したファイルは SHA-256 を確かめてから使います。`,
   });
@@ -1486,9 +1506,20 @@ ipcMain.handle("graphy:ai-local-install", (e, payload) => {
   return runLocalAiInstall(win, payload && typeof payload.modelId === "string" ? payload.modelId : undefined);
 });
 ipcMain.handle("graphy:ai-local-cancel", () => { const ai = localLlm.get(); if (ai) ai.cancelInstall(); return { ok: true }; });
-ipcMain.handle("graphy:ai-local-check", async () => {
+ipcMain.handle("graphy:ai-local-check", async (_e, role) => {
   const ai = localLlm.get();
-  return ai ? ai.check() : { ok: false, error: "unavailable" };
+  return ai ? ai.check(role === "stt" ? "stt" : "llm") : { ok: false, error: "unavailable" };
+});
+ipcMain.handle("graphy:ai-local-remove-stt", async (e) => {
+  const ai = localLlm.get();
+  if (!ai) return { ok: false, error: "unavailable" };
+  const win = BrowserWindow.fromWebContents(e.sender) || BrowserWindow.getFocusedWindow();
+  const c = dialog.showMessageBoxSync(win, {
+    type: "warning", buttons: ["削除する", "取り消す"], defaultId: 1, cancelId: 1,
+    title: "ローカルの音声入力を削除します", message: "ダウンロードした音声認識のモデルを削除します(会話用のモデルは残ります)。",
+  });
+  if (c !== 0) return { ok: false, error: "canceled" };
+  return ai.removeStt();
 });
 ipcMain.handle("graphy:ai-local-role", (_e, p) => {
   const ai = localLlm.get();
@@ -2267,6 +2298,8 @@ function offerDefaultDbAfterFailure(e) {
 }
 
 app.whenReady().then(async () => {
+  // マイクを許すのはアシスタント窓のメインフレームの音声だけ（プラグインに録音させない）。mediaPermission.js
+  require("./mediaPermission").install(session.defaultSession);
   // 秘密情報の置き場は backend の CWD（H2・DICOM 保管庫と同じ場所）に揃える。
   secretStore.init(resolveDataDir());
   aiProviders.init(resolveDataDir());

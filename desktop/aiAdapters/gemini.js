@@ -47,6 +47,8 @@ const RESPONSE_MODALITIES = {
   "image-to-image": ["TEXT", "IMAGE"],
   "image-to-text": ["TEXT"],
   "text-to-text": ["TEXT"],
+  // 音声は buildTranscribeRequest が組む（画像の buildRequest は通らない）
+  "speech-to-text": ["TEXT"],
 };
 
 /** この用途を扱えるか。扱えない用途は呼び出し元が手前で断る。 */
@@ -131,6 +133,45 @@ function readInlineData(part) {
  *
  * @returns {{image?: {base64: string, mimeType: string}, text?: string, blockReason?: string}}
  */
+/**
+ * 音声 → 文字（generateContent に音声を載せる）。
+ *
+ * <p>🔑 専用の文字起こし API ではなく、音声を理解できる汎用モデルへ「そのまま書き起こす」と頼む形。
+ * 要約や整形をさせない（患者の発話を勝手に言い換えない）ため、指示で縛り temperature 0 にする。
+ *
+ * @param {{model: string, apiVersion?: string, apiKey?: string, provider?: object,
+ *          audio: {base64: string, mimeType: string}, language?: string}} req
+ */
+function buildTranscribeRequest(req) {
+  const apiVersion = req.apiVersion || DEFAULT_API_VERSION;
+  const provider = req.provider || {};
+  const lang = req.language ? ` The speaker's language is ${req.language}.` : "";
+  const body = {
+    contents: [
+      {
+        role: "user",
+        parts: [
+          { text: `Transcribe this audio verbatim. Output only the transcript text, without summarizing, translating or adding comments.${lang}` },
+          { inline_data: { mime_type: req.audio.mimeType, data: req.audio.base64 } },
+        ],
+      },
+    ],
+    generationConfig: { responseModalities: ["TEXT"], temperature: 0 },
+  };
+  const own = { "Content-Type": "application/json", ...wire.authHeaders(provider, req.apiKey, DEFAULT_AUTH) };
+  return {
+    path: wire.pathFor(provider, "speech-to-text", `/${apiVersion}/models/${req.model}:generateContent`),
+    headers: wire.mergeHeaders(own, provider.headers),
+    body: Buffer.from(JSON.stringify(body), "utf8"),
+  };
+}
+
+/** 文字起こしの応答 → `{text}` / `{blockReason}`。読めなければ空。 */
+function parseTranscript(json) {
+  const n = normalize(json);
+  return n.text ? { text: n.text } : n.blockReason ? { blockReason: n.blockReason } : {};
+}
+
 function normalize(json) {
   const root = asRecord(json);
   if (!root) return {};
@@ -427,6 +468,8 @@ module.exports = {
   supports,
   buildRequest,
   buildChatRequest,
+  buildTranscribeRequest,
+  parseTranscript,
   normalizeChat,
   createStreamParser,
   toGeminiSchema,

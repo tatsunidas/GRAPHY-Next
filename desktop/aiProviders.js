@@ -25,7 +25,7 @@ const FILE_NAME = "ai-providers.json";
 const SCHEMA_VERSION = 1;
 
 /** 扱える用途。増やすときはアダプタ側の対応と対で足す。 */
-const CAPABILITIES = ["image-to-image", "image-to-text", "text-to-text"];
+const CAPABILITIES = ["image-to-image", "image-to-text", "text-to-text", "speech-to-text"];
 
 /**
  * 提供元 id の形。

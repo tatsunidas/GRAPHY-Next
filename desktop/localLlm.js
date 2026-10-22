@@ -22,6 +22,13 @@ const { defaultReadCmdline } = require("./localJupyter");
 const PROVIDER_ID = "local-llm";
 const PROVIDER_LABEL = "Local LLM (this PC)";
 const MARK_PREFIX = "graphy-local-llm:";
+// 音声入力（文字起こし）。同じ llama-server を、音声を読める GGUF（本体＋mmproj）で別プロセスとして起動する。
+// 🔴 提供元は固定 id `local-stt`・auth:"none"・loopback（local-llm と同じ扱い。renderer からは endpoint を変えさせない）。
+const STT_PROVIDER_ID = "local-stt";
+const STT_PROVIDER_LABEL = "Local speech-to-text (this PC)";
+const STT_MARK_PREFIX = "graphy-local-stt:";
+/** 文字起こしの文脈長。60 秒の音声で約 750 トークン(実測 11 秒=約 140)。余裕を見て暫定。 */
+const STT_CONTEXT_TOKENS = 4096;
 /** 未起動のときの endpoint。何も待ち受けない予約ポート(tcpmux)——古いポートが別のものに当たらないように。 */
 const PARKED_ENDPOINT = "http://127.0.0.1:1";
 /** 文脈長。暫定（モデルと RAM に依存する。実測で見直す）。 */
@@ -39,8 +46,8 @@ function newMark() {
   return crypto.randomBytes(8).toString("hex");
 }
 
-function cmdlineHasMark(cmdline, mark) {
-  return typeof cmdline === "string" && /^[0-9a-f]{16}$/.test(String(mark)) && cmdline.includes(MARK_PREFIX + mark);
+function cmdlineHasMark(cmdline, mark, prefix = MARK_PREFIX) {
+  return typeof cmdline === "string" && /^[0-9a-f]{16}$/.test(String(mark)) && cmdline.includes(prefix + mark);
 }
 
 function parseRecord(text) {
@@ -65,13 +72,14 @@ function defaultThreads(logicalCpus) {
 }
 
 /** llama-server の引数。host は 127.0.0.1 固定。 */
-function serverArgs({ modelPath, port, mark, ctx = CONTEXT_TOKENS, jinja = false, reasoning = null, threads = null }) {
+function serverArgs({ modelPath, port, mark, ctx = CONTEXT_TOKENS, jinja = false, reasoning = null, threads = null, mmproj = null, markPrefix = MARK_PREFIX }) {
   return [
     "-m", modelPath,
+    ...(mmproj ? ["--mmproj", mmproj] : []),
     "--host", "127.0.0.1",
     "--port", String(port),
     "-c", String(ctx),
-    "--alias", MARK_PREFIX + mark,
+    "--alias", markPrefix + mark,
     ...(Number.isInteger(threads) && threads > 0 ? ["-t", String(threads)] : []),
     "--no-webui", // 同じ loopback に別のアプリ・ページから触られる面を減らす（API だけ使う）
     ...(jinja ? ["--jinja"] : []),
@@ -94,9 +102,9 @@ function toRaw(cfg) {
  * 🔴 endpoint を renderer（＝プラグインも同じ realm）に変えさせない。無ければ（未導入）要求側の `local-llm` は捨てる。
  */
 function pinManaged(incomingProviders, currentProviders) {
-  const cur = currentProviders.find((p) => p.id === PROVIDER_ID);
-  const rest = incomingProviders.filter((p) => !(p && p.id === PROVIDER_ID));
-  return cur ? [...rest, (({ plaintext, ...r }) => r)(cur)] : rest;
+  const managed = new Set([PROVIDER_ID, STT_PROVIDER_ID]);
+  const keep = currentProviders.filter((p) => managed.has(p.id)).map(({ plaintext, ...r }) => r);
+  return [...incomingProviders.filter((p) => !(p && managed.has(p.id))), ...keep];
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -160,10 +168,14 @@ function createLocalAi(deps) {
   const key = installer.platformKey(platform, arch);
   const asset = manifest.runtime.assets[key] || null;
 
-  let current = null; // { child, port, mark, exited, log }
-  let starting = null;
   let installing = null; // { abort }
-  let idleTimer = null;
+  // 枠(slot)ごとに 1 プロセス。llm は会話、stt は文字起こし。runtime（実行ファイル）と download は共有。
+  // 状態: current={child,port,mark,exited,log} / starting=起動中の Promise / idleTimer
+  const slotOf = (id, extra) => ({ current: null, starting: null, idleTimer: null, ...extra, id });
+  const LLM = slotOf("llm", { providerId: PROVIDER_ID, label: PROVIDER_LABEL, cap: "text-to-text", prefix: MARK_PREFIX, stateKey: "model", recordFile });
+  const STT = slotOf("stt", { providerId: STT_PROVIDER_ID, label: STT_PROVIDER_LABEL, cap: "speech-to-text", prefix: STT_MARK_PREFIX, stateKey: "stt", recordFile: path.join(root, "server-stt.json") });
+  const slots = [LLM, STT];
+  const slotByProvider = (id) => slots.find((x) => x.providerId === id) || null;
 
   // ── 状態 ──
   function readState() {
@@ -194,6 +206,18 @@ function createLocalAi(deps) {
   function manifestModel(id) {
     return manifest.models.find((m) => m.id === id) || null;
   }
+  const sttList = () => manifest.sttModels || [];
+  function manifestSttModel(id) {
+    return sttList().find((m) => m.id === id) || null;
+  }
+  /** 音声入力の GGUF 2 つ（本体・mmproj）の実在する絶対パス。どちらかが無ければ null。 */
+  function sttPaths(s = readState()) {
+    if (!s.stt || !s.stt.file || !s.stt.mmproj) return null;
+    if (!archive.safeJoin(modelsDir, s.stt.file) || !archive.safeJoin(modelsDir, s.stt.mmproj)) return null;
+    const model = path.join(modelsDir, s.stt.file);
+    const mmproj = path.join(modelsDir, s.stt.mmproj);
+    return fs.existsSync(model) && fs.existsSync(mmproj) ? { model, mmproj } : null;
+  }
 
   function status() {
     const s = readState();
@@ -207,39 +231,55 @@ function createLocalAi(deps) {
       models: manifest.models.map(({ id, label, size, license, licenseUrl, note }) => ({ id, label, size, license, licenseUrl, note })),
       runtime: { installed: !!exe, build: s.runtime ? s.runtime.build : null, size: asset ? asset.size : null },
       model: { installed: !!mp, id: s.model ? s.model.id : null, verified: s.model ? !!s.model.verified : false, file: s.model ? s.model.file : null },
-      running: !!(current && !current.exited),
+      running: !!(LLM.current && !LLM.current.exited),
       busy: !!installing,
       registered: !!prov,
       isDefault: cfg.defaults["text-to-text"] === PROVIDER_ID,
       isFallback: ((cfg.fallbacks || {})["text-to-text"] || []).includes(PROVIDER_ID),
+      // 音声入力（任意）。入れていなければ installed:false。
+      stt: {
+        models: sttList().map(({ id, label, size, mmproj, license, licenseUrl, note }) => ({ id, label, size: size + mmproj.size, license, licenseUrl, note })),
+        defaultModelId: manifest.defaultSttModelId || null,
+        installed: !!sttPaths(s),
+        id: s.stt ? s.stt.id : null,
+        running: !!(STT.current && !STT.current.exited),
+        registered: cfg.providers.some((p) => p.id === STT_PROVIDER_ID),
+        isDefault: cfg.defaults["speech-to-text"] === STT_PROVIDER_ID,
+      },
     };
   }
 
   // ── 提供元の登録 ──
-  function registerProvider({ endpoint, model, toolMode }) {
+  function registerProvider({ endpoint, model, toolMode }, slot = LLM) {
     const cfg = ai.get();
     const raw = toRaw(cfg);
-    const entry = {
-      id: PROVIDER_ID, label: PROVIDER_LABEL, kind: "openai", endpoint, auth: "none",
-      models: { "text-to-text": model }, toolMode: toolMode === "native" ? "native" : "none",
-    };
-    const i = raw.providers.findIndex((p) => p.id === PROVIDER_ID);
+    const entry = slot === STT
+      ? {
+          // 音声は chat completions の input_audio で送る（パスの上書きで openai アダプタがその形に組む）
+          id: STT_PROVIDER_ID, label: STT_PROVIDER_LABEL, kind: "openai", endpoint, auth: "none",
+          models: { "speech-to-text": model }, paths: { "speech-to-text": "/v1/chat/completions" }, toolMode: "none",
+        }
+      : {
+          id: PROVIDER_ID, label: PROVIDER_LABEL, kind: "openai", endpoint, auth: "none",
+          models: { "text-to-text": model }, toolMode: toolMode === "native" ? "native" : "none",
+        };
+    const i = raw.providers.findIndex((p) => p.id === slot.providerId);
     if (i >= 0) raw.providers[i] = entry;
     else raw.providers.push(entry);
     return ai.save(raw);
   }
-  function unregisterProvider() {
+  function unregisterProvider(slot = LLM) {
     const cfg = ai.get();
-    if (!cfg.providers.some((p) => p.id === PROVIDER_ID)) return { ok: true, problems: [] };
+    if (!cfg.providers.some((p) => p.id === slot.providerId)) return { ok: true, problems: [] };
     const raw = toRaw(cfg);
-    raw.providers = raw.providers.filter((p) => p.id !== PROVIDER_ID);
-    for (const cap of Object.keys(raw.fallbacks)) raw.fallbacks[cap] = raw.fallbacks[cap].filter((id) => id !== PROVIDER_ID);
+    raw.providers = raw.providers.filter((p) => p.id !== slot.providerId);
+    for (const cap of Object.keys(raw.fallbacks)) raw.fallbacks[cap] = raw.fallbacks[cap].filter((id) => id !== slot.providerId);
     const s = readState();
     for (const cap of Object.keys(raw.defaults)) {
-      if (raw.defaults[cap] === PROVIDER_ID) delete raw.defaults[cap];
+      if (raw.defaults[cap] === slot.providerId) delete raw.defaults[cap];
     }
-    // 既定だった用途は、元の既定へ戻す（残っていれば）
-    if (s.previousDefault && raw.providers.some((p) => p.id === s.previousDefault)) raw.defaults["text-to-text"] = s.previousDefault;
+    // 既定だった用途は、元の既定へ戻す（残っていれば）。音声入力は戻す先を持たない（無ければ既定なし）
+    if (slot === LLM && s.previousDefault && raw.providers.some((p) => p.id === s.previousDefault)) raw.defaults["text-to-text"] = s.previousDefault;
     if (raw.providers.length === 0) return { ok: false, problems: ["config:no-usable-provider"] };
     return ai.save(raw);
   }
@@ -303,7 +343,8 @@ function createLocalAi(deps) {
   async function install({ modelId } = {}) {
     if (!asset) return { ok: false, error: "unsupported-platform" };
     const md = manifestModel(modelId);
-    if (!md) return { ok: false, error: "unknown-model" };
+    const sm = md ? null : manifestSttModel(modelId);
+    if (!md && !sm) return { ok: false, error: "unknown-model" };
     if (installing) return { ok: false, error: "busy" };
     const ac = new AbortController();
     installing = { abort: ac };
@@ -321,6 +362,24 @@ function createLocalAi(deps) {
         const x = installRuntimeFrom(arc);
         fs.rmSync(arc, { force: true });
         if (!x.ok) return x;
+      }
+      if (sm) {
+        // 音声入力: 本体と mmproj の 2 ファイル。存在するものは検証済み（download は sha256 一致で rename する）
+        for (const f of [sm, sm.mmproj]) {
+          const to = path.join(modelsDir, f.file);
+          if (fs.existsSync(to)) continue;
+          progress("model-download", { received: 0, total: f.size });
+          const r = await download({ url: f.url, dest: to, sha256: f.sha256, size: f.size, signal: ac.signal,
+            onProgress: (p) => progress("model-download", p) });
+          if (!r.ok) return r;
+        }
+        const st = readState();
+        st.stt = { id: sm.id, file: sm.file, mmproj: sm.mmproj.file, verified: true };
+        writeState(st);
+        const reg = registerProvider({ endpoint: PARKED_ENDPOINT, model: sm.id }, STT);
+        if (!reg.ok) return { ok: false, error: `register-failed:${reg.problems[0] || ""}` };
+        progress("done");
+        return { ok: true };
       }
       const dest = path.join(modelsDir, md.file);
       if (!fs.existsSync(dest)) {
@@ -366,6 +425,19 @@ function createLocalAi(deps) {
       }
       const md = manifest.models.find((m) => m.sha256 === digest && m.size === st.size);
       fs.mkdirSync(modelsDir, { recursive: true });
+      // 音声入力の GGUF（本体・mmproj のどちらか 1 つずつ選ぶ。2 つ揃ったところで登録する）
+      const sttHit = md ? null : sttList().find((m) => (m.sha256 === digest && m.size === st.size) || (m.mmproj.sha256 === digest && m.mmproj.size === st.size));
+      if (sttHit) {
+        const isMain = sttHit.sha256 === digest && sttHit.size === st.size;
+        fs.copyFileSync(file, path.join(modelsDir, isMain ? sttHit.file : sttHit.mmproj.file));
+        const both = fs.existsSync(path.join(modelsDir, sttHit.file)) && fs.existsSync(path.join(modelsDir, sttHit.mmproj.file));
+        if (!both) return { ok: true, kind: "stt-part", id: sttHit.id, complete: false };
+        const sx = readState();
+        sx.stt = { id: sttHit.id, file: sttHit.file, mmproj: sttHit.mmproj.file, verified: true };
+        writeState(sx);
+        const reg = registerProvider({ endpoint: PARKED_ENDPOINT, model: sttHit.id }, STT);
+        return reg.ok ? { ok: true, kind: "stt-model", id: sttHit.id, complete: true } : { ok: false, error: `register-failed:${reg.problems[0] || ""}` };
+      }
       if (md) {
         const dest = path.join(modelsDir, md.file);
         fs.copyFileSync(file, dest);
@@ -395,12 +467,12 @@ function createLocalAi(deps) {
   }
 
   // ── 起動・停止 ──
-  function writeRecord(r) {
+  function writeRecord(r, slot = LLM) {
     fs.mkdirSync(root, { recursive: true });
-    fs.writeFileSync(recordFile, JSON.stringify(r), { mode: 0o600 });
+    fs.writeFileSync(slot.recordFile, JSON.stringify(r), { mode: 0o600 });
   }
-  function removeRecord() {
-    try { fs.unlinkSync(recordFile); } catch { /* 無ければよい */ }
+  function removeRecord(slot = LLM) {
+    try { fs.unlinkSync(slot.recordFile); } catch { /* 無ければよい */ }
   }
 
   async function health(port, signal) {
@@ -422,22 +494,26 @@ function createLocalAi(deps) {
     while (!st.exited && Date.now() - t1 < 2000) await sleep(50);
   }
 
-  function armIdle() {
-    clearTimeout(idleTimer);
+  function armIdle(slot) {
+    clearTimeout(slot.idleTimer);
     if (idleMs > 0) {
-      idleTimer = setTimeout(() => { stop().catch(() => undefined); }, idleMs);
-      if (idleTimer.unref) idleTimer.unref();
+      slot.idleTimer = setTimeout(() => { stop(slot).catch(() => undefined); }, idleMs);
+      if (slot.idleTimer.unref) slot.idleTimer.unref();
     }
   }
 
-  async function startServer(signal) {
+  async function startServer(slot, signal) {
     const s = readState();
     const exe = runtimeExe(s);
-    const mp = modelPath(s);
+    const stt = slot === STT ? sttPaths(s) : null;
+    const mp = slot === STT ? (stt && stt.model) : modelPath(s);
     if (!exe || !mp) return { ok: false, error: "not-installed" };
     const port = await pickPort();
     const mark = newMark();
-    const child = spawn(exe, serverArgs({ modelPath: mp, port, mark, jinja: !!(s.model && s.model.toolMode === "native"), reasoning: (manifestModel(s.model && s.model.id) || {}).reasoning, threads: defaultThreads(deps.cpuCount ?? os.availableParallelism()) }), {
+    const args = slot === STT
+      ? serverArgs({ modelPath: mp, mmproj: stt.mmproj, port, mark, ctx: STT_CONTEXT_TOKENS, markPrefix: STT_MARK_PREFIX, threads: defaultThreads(deps.cpuCount ?? os.availableParallelism()) })
+      : serverArgs({ modelPath: mp, port, mark, jinja: !!(s.model && s.model.toolMode === "native"), reasoning: (manifestModel(s.model && s.model.id) || {}).reasoning, threads: defaultThreads(deps.cpuCount ?? os.availableParallelism()) });
+    const child = spawn(exe, args, {
       env: childEnv(env), cwd: path.dirname(exe), stdio: ["ignore", "pipe", "pipe"], shell: false, windowsHide: true, detached: false,
     });
     const st = { child, port, mark, exited: false, log: "" };
@@ -446,78 +522,89 @@ function createLocalAi(deps) {
     child.stderr && child.stderr.on("data", onData);
     let spawnError = null;
     child.once("error", (e) => { spawnError = e; st.exited = true; });
-    child.once("exit", () => { st.exited = true; if (current === st) { current = null; removeRecord(); emit({ type: "state" }); } });
-    if (child.pid) writeRecord({ pid: child.pid, port, mark });
+    child.once("exit", () => { st.exited = true; if (slot.current === st) { slot.current = null; removeRecord(slot); emit({ type: "state" }); } });
+    if (child.pid) writeRecord({ pid: child.pid, port, mark }, slot);
     const t0 = Date.now();
     for (;;) {
-      if (signal && signal.aborted) { await terminate(st); removeRecord(); return { ok: false, error: "canceled" }; }
+      if (signal && signal.aborted) { await terminate(st); removeRecord(slot); return { ok: false, error: "canceled" }; }
       if (st.exited) break;
-      if ((await health(port, signal)) === 200) { current = st; return { ok: true, st }; }
-      if (Date.now() - t0 > healthWaitMs) { await terminate(st); removeRecord(); return { ok: false, error: "start-timeout", log: st.log }; }
+      if ((await health(port, signal)) === 200) { slot.current = st; return { ok: true, st }; }
+      if (Date.now() - t0 > healthWaitMs) { await terminate(st); removeRecord(slot); return { ok: false, error: "start-timeout", log: st.log }; }
       await sleep(deps.pollMs ?? POLL_MS);
     }
-    removeRecord();
+    removeRecord(slot);
     return { ok: false, error: spawnError ? `spawn-failed:${spawnError.code || spawnError.message}` : "server-exited", log: st.log };
   }
 
   /** 動いていなければ起動し、提供元の endpoint を実ポートに更新する。同時に呼ばれても起動は 1 回。 */
-  function ensure(signal) {
-    if (current && !current.exited) { armIdle(); return Promise.resolve({ ok: true, port: current.port }); }
-    if (starting) return starting;
-    starting = (async () => {
+  function ensure(signal, slot = LLM) {
+    if (slot.current && !slot.current.exited) { armIdle(slot); return Promise.resolve({ ok: true, port: slot.current.port }); }
+    if (slot.starting) return slot.starting;
+    slot.starting = (async () => {
       emit({ type: "starting" });
-      const r = await startServer(signal);
+      const r = await startServer(slot, signal);
       if (!r.ok) { emit({ type: "state" }); return r; }
       const s = readState();
-      const reg = registerProvider({ endpoint: `http://127.0.0.1:${r.st.port}`, model: (s.model && s.model.id) || "local", toolMode: s.model && s.model.toolMode });
+      const m = s[slot.stateKey];
+      const reg = registerProvider({ endpoint: `http://127.0.0.1:${r.st.port}`, model: (m && m.id) || "local", toolMode: m && m.toolMode }, slot);
       if (!reg.ok) { await terminate(r.st); return { ok: false, error: `register-failed:${reg.problems[0] || ""}` }; }
-      armIdle();
+      armIdle(slot);
       emit({ type: "state" });
       return { ok: true, port: r.st.port };
-    })().finally(() => { starting = null; });
-    return starting;
+    })().finally(() => { slot.starting = null; });
+    return slot.starting;
   }
 
-  /** ゲートウェイが送る直前に呼ぶ。local-llm 以外は何もしない。 */
+  /** ゲートウェイが送る直前に呼ぶ。local-llm / local-stt 以外は何もしない。 */
   async function prepare(provider, signal) {
-    if (!provider || provider.id !== PROVIDER_ID) return { ok: true };
-    const r = await ensure(signal);
-    return r.ok ? { ok: true } : { ok: false, error: `local-llm:${r.error}` };
+    const slot = provider ? slotByProvider(provider.id) : null;
+    if (!slot) return { ok: true };
+    const r = await ensure(signal, slot);
+    return r.ok ? { ok: true } : { ok: false, error: `${slot.providerId}:${r.error}` };
   }
 
-  async function stop() {
-    clearTimeout(idleTimer);
-    if (starting) await starting.catch(() => undefined);
-    const st = current;
-    current = null;
-    await terminate(st);
-    removeRecord();
-    // 止めたら、古いポートが残らないように予約ポートへ戻す
-    const prov = ai.get().providers.find((p) => p.id === PROVIDER_ID);
-    if (prov && prov.endpoint !== PARKED_ENDPOINT) {
-      const s = readState();
-      registerProvider({ endpoint: PARKED_ENDPOINT, model: (s.model && s.model.id) || "local", toolMode: s.model && s.model.toolMode });
+  /** 止める。枠を指定しなければ全部。 */
+  async function stop(only) {
+    for (const slot of only ? [only] : slots) {
+      clearTimeout(slot.idleTimer);
+      if (slot.starting) await slot.starting.catch(() => undefined);
+      const st = slot.current;
+      slot.current = null;
+      await terminate(st);
+      removeRecord(slot);
+      // 止めたら、古いポートが残らないように予約ポートへ戻す
+      const prov = ai.get().providers.find((p) => p.id === slot.providerId);
+      if (prov && prov.endpoint !== PARKED_ENDPOINT) {
+        const m = readState()[slot.stateKey];
+        registerProvider({ endpoint: PARKED_ENDPOINT, model: (m && m.id) || "local", toolMode: m && m.toolMode }, slot);
+      }
     }
     emit({ type: "state" });
   }
 
   function sweepStale() {
-    let text;
-    try { text = fs.readFileSync(recordFile, "utf8"); } catch { return { swept: false, reason: "no-record" }; }
-    const rec = parseRecord(text);
-    if (!rec) { removeRecord(); return { swept: false, reason: "bad-record" }; }
-    if (!alive(rec.pid)) { removeRecord(); return { swept: false, reason: "not-running" }; }
-    if (!cmdlineHasMark(readCmdline(rec.pid), rec.mark)) { removeRecord(); return { swept: false, reason: "not-ours" }; }
-    kill(rec.pid, { force: false });
-    removeRecord();
-    return { swept: true, pid: rec.pid };
+    const out = [];
+    for (const slot of slots) {
+      let text;
+      try { text = fs.readFileSync(slot.recordFile, "utf8"); } catch { out.push({ swept: false, reason: "no-record" }); continue; }
+      const rec = parseRecord(text);
+      if (!rec) { removeRecord(slot); out.push({ swept: false, reason: "bad-record" }); continue; }
+      if (!alive(rec.pid)) { removeRecord(slot); out.push({ swept: false, reason: "not-running" }); continue; }
+      if (!cmdlineHasMark(readCmdline(rec.pid), rec.mark, slot.prefix)) { removeRecord(slot); out.push({ swept: false, reason: "not-ours" }); continue; }
+      kill(rec.pid, { force: false });
+      removeRecord(slot);
+      out.push({ swept: true, pid: rec.pid });
+    }
+    // 戻り値は従来どおり llm 枠の結果（音声入力の残骸も同じ手順で止めるが、報告は会話側だけ）
+    return out[0];
   }
 
   /** 起動して /health を確かめる（設定画面の「起動テスト」）。起動に掛かった時間も返す。 */
-  async function check() {
+  async function check(role) {
+    const slot = role === "stt" ? STT : LLM;
     const t0 = Date.now();
-    const wasRunning = !!(current && !current.exited);
-    const r = await ensure();
+    const wasRunning = !!(slot.current && !slot.current.exited);
+    const r = await ensure(undefined, slot);
     if (!r.ok) return { ok: false, error: r.error, log: r.log };
     const code = await health(r.port);
     return code === 200 ? { ok: true, startedMs: wasRunning ? 0 : Date.now() - t0 } : { ok: false, error: `health-${code}` };
@@ -526,13 +613,30 @@ function createLocalAi(deps) {
   async function remove() {
     if (installing) { cancelInstall(); return { ok: false, error: "busy" }; }
     await stop();
-    const r = unregisterProvider();
+    const r = unregisterProvider(LLM);
+    const rs = unregisterProvider(STT);
     fs.rmSync(root, { recursive: true, force: true });
+    emit({ type: "state" });
+    const bad = !r.ok ? r : !rs.ok ? rs : null;
+    return bad ? { ok: false, error: bad.problems[0] || "save-failed" } : { ok: true };
+  }
+
+  /** 音声入力だけを外す（会話のモデルと runtime は残す）。 */
+  async function removeStt() {
+    if (installing) { cancelInstall(); return { ok: false, error: "busy" }; }
+    await stop(STT);
+    const r = unregisterProvider(STT);
+    const s = readState();
+    const files = new Set(s.stt ? [s.stt.file, s.stt.mmproj] : []);
+    for (const m of sttList()) { files.add(m.file); files.add(m.mmproj.file); }
+    for (const f of files) if (f && archive.safeJoin(modelsDir, f)) fs.rmSync(path.join(modelsDir, f), { force: true });
+    delete s.stt;
+    writeState(s);
     emit({ type: "state" });
     return r.ok ? { ok: true } : { ok: false, error: r.problems[0] || "save-failed" };
   }
 
-  return { status, install, cancelInstall, importFile, ensure, check, prepare, stop, sweepStale, remove, setRole };
+  return { status, install, cancelInstall, importFile, ensure, check, prepare, stop, sweepStale, remove, removeStt, setRole };
 }
 
 let instance = null;
@@ -543,6 +647,8 @@ function init(deps) {
 }
 
 module.exports = {
+  STT_PROVIDER_ID,
+  STT_MARK_PREFIX,
   PROVIDER_ID,
   PROVIDER_LABEL,
   MARK_PREFIX,
