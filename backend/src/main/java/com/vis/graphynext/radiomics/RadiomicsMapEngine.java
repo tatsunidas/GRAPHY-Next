@@ -43,6 +43,9 @@ import java.util.Set;
 @Service
 public class RadiomicsMapEngine {
 
+    /** マスクを IOP/IPP で整列できたら "1"、スライス順の対応に落ちたら "0"（マスクの ImagePlus の属性）。 */
+    static final String PROP_GEOMETRY_ALIGNED = "geometry-aligned";
+
     private static final Logger log = LoggerFactory.getLogger(RadiomicsMapEngine.class);
 
     private final DicomStorageService storage;
@@ -558,7 +561,9 @@ public class RadiomicsMapEngine {
             int mz = mapZ[z];
             ms.addSlice((mz >= 0 && maskSlices[mz] != null) ? maskSlices[mz] : emptyMask(w, h));
         }
-        return new ImagePlus("texture-mask", ms);
+        ImagePlus out = new ImagePlus("texture-mask", ms);
+        out.setProp(PROP_GEOMETRY_ALIGNED, geomOk ? "1" : "0");
+        return out;
     }
 
     /** ImageProcessor を w×h に（必要なら nearest 補間）合わせ、値 ≥ 0.5 を label に二値化した ByteProcessor。 */
@@ -584,7 +589,7 @@ public class RadiomicsMapEngine {
     }
 
     /** IOP(6) → 面法線（row×col）。無効なら null。 */
-    private static double[] normalOf(double[] iop) {
+    static double[] normalOf(double[] iop) {
         if (iop == null || iop.length != 6) return null;
         double[] r = {iop[0], iop[1], iop[2]};
         double[] c = {iop[3], iop[4], iop[5]};

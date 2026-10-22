@@ -2103,6 +2103,33 @@ export const submitRoiFeatureJob = (req: RoiFeatureRequest) =>
 export const getRoiFeatureJob = (jobId: string) =>
   httpGet<RoiFeatureJobStatus>(`/api/radiomics/features/jobs/${encodeURIComponent(jobId)}`);
 
+/** ROI の最大断面（backend: MaxSectionService）。位置は患者座標の法線方向 mm。frame は非モザイクで -1。 */
+export interface MaxSectionSlice {
+  sopInstanceUid: string;
+  frame: number;
+  positionMm: number;
+  pixels: number;
+  areaMm2: number;
+}
+export interface MaxSectionResult {
+  best: MaxSectionSlice;
+  /** 最大と同面積のスライスすべて（best を含む）。 */
+  ties: MaxSectionSlice[];
+  totalSlices: number;
+  pixelAreaMm2: number;
+}
+export interface MaxSectionRequest {
+  studyInstanceUid: string;
+  sourceSeriesUid: string;
+  maskSeriesUid: string;
+  maskChannel: number;
+  channel: number;
+  timePoint: number;
+  label: number;
+}
+export const fetchMaxSection = (req: MaxSectionRequest) =>
+  httpSend<MaxSectionResult>("/api/radiomics/features/max-section", "POST", req);
+
 /** 取り消しは結果を返さなくするだけ。計算は最後まで走り、結果はキャッシュに入る。 */
 export const cancelRoiFeatureJob = (jobId: string) =>
   httpSend<RoiFeatureJobStatus>(`/api/radiomics/features/jobs/${encodeURIComponent(jobId)}`, "DELETE");
