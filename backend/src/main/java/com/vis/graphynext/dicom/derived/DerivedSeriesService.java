@@ -86,19 +86,25 @@ public class DerivedSeriesService {
         String newSeriesUid = UIDUtils.createUID();
         int seriesNumber = req.seriesNumber() != null ? req.seriesNumber()
                 : tmpl.getInt(Tag.SeriesNumber, 0) + 1000;
-        String modality = tmpl.getString(Tag.Modality, "OT");
+        // Parametric Map 出力は元のモダリティの量ではない（HU×SUV など）ので Modality=OT にし、
+        // 元の定量属性（PET の Units 等）は引き継がない。
+        boolean parametric = req.parametricMap() != null;
+        String modality = parametric ? "OT" : tmpl.getString(Tag.Modality, "OT");
 
-        int expectedBytes = req.rows() * req.columns() * 2;
+        int expectedBytes = req.rows() * req.columns() * (parametric ? 4 : 2);
         List<String> sops = new ArrayList<>(req.frames().size());
         // web は STOW-RS 送信用に Attributes をまとめて 1 リクエストで書き戻す。standalone は逐次 ingest。
         List<Attributes> stowBatch = web != null ? new ArrayList<>(req.frames().size()) : null;
         for (DerivedSeriesRequest.Frame f : req.frames()) {
             byte[] px = Base64.getDecoder().decode(f.pixels());
             if (px.length != expectedBytes) {
-                throw new IllegalArgumentException("画素バイト長が rows*columns*2 と一致しません (instance="
-                        + f.instanceNumber() + ", got=" + px.length + ", expected=" + expectedBytes + ")");
+                throw new IllegalArgumentException("画素バイト長が rows*columns*" + (parametric ? 4 : 2)
+                        + " と一致しません (instance=" + f.instanceNumber() + ", got=" + px.length
+                        + ", expected=" + expectedBytes + ")");
             }
-            Attributes a = buildInstance(tmpl, req, newSeriesUid, seriesNumber, modality, f, px);
+            Attributes a = parametric
+                    ? buildParametricMapInstance(tmpl, req, newSeriesUid, seriesNumber, f, px)
+                    : buildInstance(tmpl, req, newSeriesUid, seriesNumber, modality, f, px);
             if (sops.isEmpty()) {
                 // 先頭インスタンスで 1 度だけ検査する（全フレームで同じ属性なので）。
                 // ★ 定量に必要なタグが欠けたまま保存しない（設計 §8.3）。
@@ -146,6 +152,18 @@ public class DerivedSeriesService {
         }
         if (req.pixelSpacing() == null || req.pixelSpacing().length != 2) {
             throw new IllegalArgumentException("pixelSpacing は 2 要素が必要です");
+        }
+        if (req.parametricMap() != null) {
+            // Parametric Map は幾何を Functional Groups に置くので、幾何なし（Curved MPR 等）は作れない。
+            if (iop == null || iop.length != 6) {
+                throw new IllegalArgumentException("Parametric Map には imageOrientationPatient（6 要素）が必要です");
+            }
+            for (DerivedSeriesRequest.Frame f : req.frames()) {
+                if (f.imagePositionPatient() == null || f.imagePositionPatient().length != 3) {
+                    throw new IllegalArgumentException("Parametric Map には各フレームの imagePositionPatient が必要です"
+                            + " (instance=" + f.instanceNumber() + ")");
+                }
+            }
         }
     }
 
@@ -317,6 +335,98 @@ public class DerivedSeriesService {
         // 画素データ（16bit → VR.OW, リトルエンディアン）。
         a.setBytes(Tag.PixelData, VR.OW, px);
         return a;
+    }
+
+    /**
+     * 1 スライスを Parametric Map（Float Pixel Data、1 インスタンス 1 フレーム）として構築する。
+     *
+     * <p>患者・検査・FrameOfReference は {@link #buildInstance} が引き継ぐ（Modality=OT なので定量属性は付かない）。
+     * そこから 16 bit の画素モジュールと Rescale を外し、幾何を Functional Groups へ移し、値の説明を
+     * RealWorldValueMapping（傾き 1・切片 0）に書く。形は NIfTI 取り込み（{@code NiftiToDicom}）と揃えてあり、
+     * 読み込み側（{@link ParametricMapFrameExpander}）がそのまま扱える。
+     * NaN（データ無し）は NaN のまま保存する（背景値で埋めない）。
+     */
+    Attributes buildParametricMapInstance(Attributes tmpl, DerivedSeriesRequest req, String newSeriesUid,
+                                                  int seriesNumber, DerivedSeriesRequest.Frame f, byte[] px) {
+        Attributes a = buildInstance(tmpl, req, newSeriesUid, seriesNumber, "OT", f, new byte[0]);
+        for (int tag : new int[] { Tag.ImagePositionPatient, Tag.ImageOrientationPatient, Tag.PixelSpacing,
+                Tag.SliceThickness, Tag.SpacingBetweenSlices, Tag.SliceLocation, Tag.RescaleSlope,
+                Tag.RescaleIntercept, Tag.RescaleType, Tag.BitsStored, Tag.HighBit, Tag.PixelRepresentation,
+                Tag.PixelPaddingValue, Tag.PixelData,
+                // 元の窓は別の量のもの。ビューアが値域から決める（ParametricMapFrameExpander.extractFrame）
+                Tag.WindowCenter, Tag.WindowWidth, Tag.VOILUTFunction }) {
+            a.remove(tag);
+        }
+        a.setString(Tag.SOPClassUID, VR.UI, UID.ParametricMapStorage);
+        a.setString(Tag.ImageType, VR.CS, "DERIVED", "PRIMARY");
+        a.setInt(Tag.NumberOfFrames, VR.IS, 1);
+        a.setInt(Tag.BitsAllocated, VR.US, 32);
+        a.setString(Tag.ContentLabel, VR.CS, "FUSION_CALC");
+        a.setString(Tag.ContentDescription, VR.LO, "Pixel-value calculation of two registered series");
+        a.setString(Tag.ContentCreatorName, VR.PN, "GRAPHY-Next");
+        a.setString(Tag.Manufacturer, VR.LO, "Visionary Imaging Services, Inc.");
+        a.setString(Tag.ManufacturerModelName, VR.LO, "GRAPHY-Next");
+        a.setString(Tag.SoftwareVersions, VR.LO, "GRAPHY-Next");
+        a.setString(Tag.PresentationLUTShape, VR.CS, "IDENTITY");
+
+        String dimOrgUid = newSeriesUid + ".1";
+        if (dimOrgUid.length() > 64) {
+            dimOrgUid = UIDUtils.createUID();
+        }
+        Attributes org = new Attributes();
+        org.setString(Tag.DimensionOrganizationUID, VR.UI, dimOrgUid);
+        a.newSequence(Tag.DimensionOrganizationSequence, 1).add(org);
+        Attributes dim = new Attributes();
+        dim.setString(Tag.DimensionOrganizationUID, VR.UI, dimOrgUid);
+        dim.setInt(Tag.DimensionIndexPointer, VR.AT, Tag.ImagePositionPatient);
+        dim.setInt(Tag.FunctionalGroupPointer, VR.AT, Tag.PlanePositionSequence);
+        a.newSequence(Tag.DimensionIndexSequence, 1).add(dim);
+
+        Attributes shared = new Attributes();
+        Attributes po = new Attributes();
+        po.setDouble(Tag.ImageOrientationPatient, VR.DS, req.imageOrientationPatient());
+        shared.newSequence(Tag.PlaneOrientationSequence, 1).add(po);
+        Attributes pmeas = new Attributes();
+        pmeas.setDouble(Tag.PixelSpacing, VR.DS, req.pixelSpacing());
+        pmeas.setDouble(Tag.SliceThickness, VR.DS, req.sliceThickness());
+        pmeas.setDouble(Tag.SpacingBetweenSlices, VR.DS, req.spacingBetweenSlices());
+        shared.newSequence(Tag.PixelMeasuresSequence, 1).add(pmeas);
+        Attributes ft = new Attributes();
+        ft.setString(Tag.FrameType, VR.CS, "DERIVED", "PRIMARY");
+        shared.newSequence(Tag.ParametricMapFrameTypeSequence, 1).add(ft);
+
+        DerivedSeriesRequest.ParametricMap pm = req.parametricMap();
+        Attributes rw = new Attributes();
+        rw.setDouble(Tag.DoubleFloatRealWorldValueFirstValueMapped, VR.FD, -Float.MAX_VALUE);
+        rw.setDouble(Tag.DoubleFloatRealWorldValueLastValueMapped, VR.FD, Float.MAX_VALUE);
+        rw.setDouble(Tag.RealWorldValueSlope, VR.FD, 1.0);
+        rw.setDouble(Tag.RealWorldValueIntercept, VR.FD, 0.0);
+        rw.setString(Tag.LUTLabel, VR.SH, orDefault(pm.label(), "FUSION_CALC"));
+        rw.setString(Tag.LUTExplanation, VR.LO, orDefault(pm.explanation(), "Fusion calculation"));
+        String code = orDefault(pm.unitCode(), "1");
+        Attributes unit = new Attributes();
+        unit.setString(Tag.CodeValue, VR.SH, code);
+        unit.setString(Tag.CodingSchemeDesignator, VR.SH, "UCUM");
+        unit.setString(Tag.CodeMeaning, VR.LO, orDefault(pm.unitMeaning(), "1".equals(code) ? "no units" : code));
+        rw.newSequence(Tag.MeasurementUnitsCodeSequence, 1).add(unit);
+        shared.newSequence(Tag.RealWorldValueMappingSequence, 1).add(rw);
+        a.newSequence(Tag.SharedFunctionalGroupsSequence, 1).add(shared);
+
+        Attributes frame = new Attributes();
+        Attributes pp = new Attributes();
+        pp.setDouble(Tag.ImagePositionPatient, VR.DS, f.imagePositionPatient());
+        frame.newSequence(Tag.PlanePositionSequence, 1).add(pp);
+        Attributes fc = new Attributes();
+        fc.setInt(Tag.DimensionIndexValues, VR.UL, f.instanceNumber());
+        frame.newSequence(Tag.FrameContentSequence, 1).add(fc);
+        a.newSequence(Tag.PerFrameFunctionalGroupsSequence, 1).add(frame);
+
+        a.setBytes(Tag.FloatPixelData, VR.OF, px);
+        return a;
+    }
+
+    private static String orDefault(String v, String fallback) {
+        return v != null && !v.isBlank() ? v.trim() : fallback;
     }
 
     /**
