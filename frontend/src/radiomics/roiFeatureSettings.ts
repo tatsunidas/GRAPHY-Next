@@ -11,6 +11,20 @@
  */
 
 /** 族のスイッチ。`key` は結果表の列名の接頭辞、`setting` は RadiomicsJ の有効化キー。並びは RadiomicsJ の計算順。 */
+export const DEFAULT_SCALES = "0, 2, 3, 4, 5, 6";
+
+export const SCALE_CONVERSIONS = ["SQRT_D", "IDENTITY", "COEFFICIENT"] as const;
+export type ScaleConversion = (typeof SCALE_CONVERSIONS)[number];
+
+/** 半径の入力（カンマ・空白区切り）を数に直す。0 以上の有限数だけ。重複は取り除く。空や不正があれば null。 */
+export function parseScaleList(text: string): number[] | null {
+  const parts = text.split(/[\s,]+/).filter((x) => x !== "");
+  if (parts.length === 0) return null;
+  const nums = parts.map(Number);
+  if (!nums.every((v) => Number.isFinite(v) && v >= 0)) return null;
+  return nums.filter((v, i) => nums.indexOf(v) === i);
+}
+
 export interface RoiFeatureFamily {
   key: string;
   setting: string;
@@ -59,6 +73,13 @@ export interface RoiFeatureForm {
   /** 核の切り捨て（σ の倍数）。 */
   logTruncate: number;
   logPadding: LogPadding;
+  /** true なら σ を直接ではなく、強調する構造の半径 r（mm）の並びで指定する（logOn のとき）。 */
+  logByRadius: boolean;
+  /** r（mm）の並び。カンマか空白で区切る。0 はフィルタなし。 */
+  scalesText: string;
+  scaleConversion: ScaleConversion;
+  /** COEFFICIENT のときの k（σ = k·r）。 */
+  scaleK: number;
 }
 
 export const LOG_PADDINGS = ["MIRROR", "NEAREST", "CONSTANT", "PERIODIC"] as const;
@@ -92,7 +113,25 @@ export function defaultRoiFeatureForm(): RoiFeatureForm {
     logSigmaMm: "1.5",
     logTruncate: 4,
     logPadding: "MIRROR",
+    logByRadius: false,
+    scalesText: DEFAULT_SCALES,
+    scaleConversion: "SQRT_D",
+    scaleK: 1,
     families: Object.fromEntries(ROI_FEATURE_FAMILIES.map((f) => [f.key, f.defaultOn])),
+  };
+}
+
+/** 半径で指定するときの、要求のスケールの欄（σ で指定するときは空）。 */
+export function roiFeatureScaleRequest(form: RoiFeatureForm): {
+  scalesMm?: number[]; scaleConversion?: ScaleConversion; scaleCoefficient?: number;
+} {
+  if (!form.logOn || !form.logByRadius) return {};
+  const scalesMm = parseScaleList(form.scalesText);
+  if (!scalesMm) return {};
+  return {
+    scalesMm,
+    scaleConversion: form.scaleConversion,
+    ...(form.scaleConversion === "COEFFICIENT" ? { scaleCoefficient: form.scaleK } : {}),
   };
 }
 
@@ -115,7 +154,8 @@ export function roiFeatureSettings(form: RoiFeatureForm): Record<string, string>
   }
   for (const f of ROI_FEATURE_FAMILIES) s[f.setting] = form.families[f.key] ? "1" : "0";
   if (form.logOn) {
-    const sigmas = parseSigmaList(form.logSigmaMm);
+    // 半径で指定するときの σ は backend がスケールごとに換算して足す
+    const sigmas = form.logByRadius ? null : parseSigmaList(form.logSigmaMm);
     if (sigmas) s.DOUBLEARRAY_logSigmaMm = sigmas.join(",");
     s.DOUBLE_logTruncate = String(form.logTruncate);
     s.STRING_logPadding = form.logPadding;
