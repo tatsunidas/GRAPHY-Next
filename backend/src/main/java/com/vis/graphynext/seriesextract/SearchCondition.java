@@ -14,9 +14,10 @@ import java.util.List;
  * @param segments タグパス（中間 SQ→末尾値。{@link Seg}）
  * @param vr       末尾タグの VR（比較方法の切替に使用。DS/IS/.. 数値、DA/DT/TM 日時、その他 文字列）
  * @param exclude  true=Exclude(OR: どれか一致で除外) / false=Include(AND: 全て一致必須)
- * @param op       EQUALS | CONTAINS | GE | LE | RANGE
+ * @param op       数値・日時: EQUALS | GT | LT | GE | LE | RANGE／文字: EQUALS | CONTAINS | STARTS_WITH | ENDS_WITH
  * @param value1   比較値（RANGE の下限）
  * @param value2   RANGE の上限（その他は未使用）
+ * @param label    データシートの列名（任意。無ければタグの 16 進を連結）
  */
 public record SearchCondition(
         List<Seg> segments,
@@ -24,5 +25,6 @@ public record SearchCondition(
         boolean exclude,
         String op,
         String value1,
-        String value2) {
+        String value2,
+        String label) {
 }

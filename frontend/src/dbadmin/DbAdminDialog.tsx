@@ -28,8 +28,9 @@ import { desktop } from "../desktopBridge";
 import { DbTransferDialog } from "./DbTransferDialog";
 import { deleteRelatedNote } from "./dbAdminApi";
 import { friendlyDbAdminError } from "./dbAdminErrors";
+import { SeriesExtractorPanel } from "../mainscreen/SeriesExtractorPanel";
 
-type Tab = "patients" | "stats";
+type Tab = "patients" | "series" | "stats";
 
 export function DbAdminDialog({
   open,
@@ -43,6 +44,8 @@ export function DbAdminDialog({
 }) {
   const { t } = useI18n();
   const [tab, setTab] = useState<Tab>("patients");
+  // シリーズ抽出タブは、条件や結果をタブを往復しても失わないよう、一度開いたら残す。
+  const [seriesOpened, setSeriesOpened] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(true);
   // ファイルも消す設定のときは、ROI などの付随データも消える（確認文に添える）
   const [deleteFiles, setDeleteFiles] = useState(true);
@@ -79,13 +82,38 @@ export function DbAdminDialog({
           <TabBtn active={tab === "patients"} onClick={() => setTab("patients")}>
             {t("dbadmin.tab.patients")}
           </TabBtn>
+          <TabBtn
+            active={tab === "series"}
+            testId="dbadmin-tab-series"
+            onClick={() => {
+              setSeriesOpened(true);
+              setTab("series");
+            }}
+          >
+            {t("dbadmin.tab.series")}
+          </TabBtn>
           <TabBtn active={tab === "stats"} onClick={() => setTab("stats")}>
             {t("dbadmin.tab.stats")}
           </TabBtn>
         </div>
 
         <div style={{ flex: 1, overflow: "auto", padding: "14px 18px" }}>
-          {tab === "patients" ? <PatientsTab confirmDelete={confirmDelete} deleteFiles={deleteFiles} notify={notify} /> : <StatsTab />}
+          {tab === "patients" && <PatientsTab confirmDelete={confirmDelete} deleteFiles={deleteFiles} notify={notify} />}
+          {tab === "stats" && <StatsTab />}
+          {seriesOpened && (
+            <div style={{ display: tab === "series" ? "block" : "none", height: "100%" }}>
+              <SeriesExtractorPanel
+                active={tab === "series"}
+                scopeLabel={t("seriesext.scope.db")}
+                mode="standalone"
+                resolveStudyUids={async () => {
+                  const studies = await fetchStudies();
+                  if (studies.length === 0) throw new Error(t("tagext.err.noStudies"));
+                  return studies.map((s) => s.studyInstanceUid);
+                }}
+              />
+            </div>
+          )}
         </div>
       </div>
     </div>
@@ -950,9 +978,10 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
     </div>
   );
 }
-function TabBtn({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
+function TabBtn({ active, onClick, children, testId }: { active: boolean; onClick: () => void; children: React.ReactNode; testId?: string }) {
   return (
     <button
+      data-testid={testId}
       onClick={onClick}
       style={{
         border: "none",
