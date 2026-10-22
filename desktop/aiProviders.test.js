@@ -456,3 +456,68 @@ test("🔴 平文 http: IPv6 は ::1 だけ（[] 付きの hostname でも）", 
   }
   assert.equal(p.allowsPlainHttp("[2001:db8::1]"), false);
 });
+
+// ── 会話（text-to-text）・鍵なし・フォールバック鎖 ─────────────────────────
+
+const CLOUD = { id: "cloud", kind: "openai", endpoint: "https://api.example.test", models: { "text-to-text": "m" } };
+const CLOUD2 = { id: "cloud2", kind: "openai", endpoint: "https://api2.example.test", models: { "text-to-text": "m2" } };
+const LOCAL = {
+  id: "local", kind: "openai", endpoint: "http://127.0.0.1:8080", auth: "none",
+  models: { "text-to-text": "tiny", "image-to-text": "tiny-vl" },
+};
+
+test("text-to-text は用途として扱える", () => {
+  assert.ok(providers.CAPABILITIES.includes("text-to-text"));
+  const r = providers.normalize({ providers: [CLOUD] });
+  assert.equal(r.defaults["text-to-text"], "cloud");
+});
+
+test("🔴 auth:none はループバックだけ通る（負例: 院内アドレス・公開ホスト・https の公開ホスト）", () => {
+  const ok = (ep) => providers.normalize({ providers: [{ ...LOCAL, endpoint: ep }] }).providers.length;
+  assert.equal(ok("http://127.0.0.1:8080"), 1);
+  assert.equal(ok("http://localhost:11434"), 1);
+  assert.equal(ok("http://[::1]:8080"), 1);
+  assert.equal(ok("http://192.168.1.10:8080"), 0, "RFC1918 は鍵なしを許さない");
+  assert.equal(ok("http://aiserver:8080"), 0, "単一ラベル名も許さない");
+  assert.equal(ok("https://api.example.test"), 0, "公開ホストは許さない");
+  const r = providers.normalize({ providers: [{ ...LOCAL, endpoint: "http://192.168.1.10:8080" }] });
+  assert.ok(r.problems.some((p) => p.includes("auth-none-needs-loopback")));
+});
+
+test("toolMode は native / none だけ", () => {
+  assert.equal(providers.normalize({ providers: [{ ...LOCAL, toolMode: "none" }] }).providers[0].toolMode, "none");
+  assert.equal(providers.normalize({ providers: [{ ...LOCAL, toolMode: "auto" }] }).providers.length, 0);
+});
+
+test("🔴 フォールバックはローカルだけ。クラウドは鎖に入れない", () => {
+  const r = providers.normalize({
+    providers: [CLOUD, CLOUD2, LOCAL],
+    defaults: { "text-to-text": "cloud" },
+    fallbacks: { "text-to-text": ["cloud2", "local", "nope"] },
+  });
+  assert.deepEqual(r.fallbacks["text-to-text"], ["local"]);
+  assert.ok(r.problems.some((p) => p.includes("fallback:text-to-text:not-local:cloud2")));
+  assert.ok(r.problems.some((p) => p.includes("unknown-provider")));
+});
+
+test("resolveChain: クラウド→ローカルになる（正例）／ローカルが既定なら鎖は 1 件（負例）", () => {
+  const dir = freshDir();
+  let p = freshStore(dir);
+  p.save({ providers: [CLOUD, LOCAL], defaults: { "text-to-text": "cloud" }, fallbacks: { "text-to-text": ["local"] } });
+  p = freshStore(dir); // 再起動後も残る
+  const a = p.resolveChain("text-to-text");
+  assert.deepEqual(a.chain.map((c) => c.provider.id), ["cloud", "local"]);
+  assert.equal(a.chain[1].model, "tiny");
+
+  p.save({ providers: [CLOUD, LOCAL], defaults: { "text-to-text": "local" }, fallbacks: { "text-to-text": ["cloud"] } });
+  const b = freshStore(dir).resolveChain("text-to-text");
+  assert.deepEqual(b.chain.map((c) => c.provider.id), ["local"], "ローカル→クラウドは自動にしない");
+});
+
+test("フォールバックが空なら ai-providers.json に fallbacks を書かない（既存の形を増やさない）", () => {
+  const dir = freshDir();
+  const p = freshStore(dir);
+  p.save({ providers: [CLOUD] });
+  const saved = JSON.parse(fs.readFileSync(path.join(dir, "ai-providers.json"), "utf8"));
+  assert.equal("fallbacks" in saved, false);
+});

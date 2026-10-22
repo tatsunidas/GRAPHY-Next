@@ -16,6 +16,8 @@
  * @param fallback アダプタの既定 `{header, prefix}`
  */
 function authHeaders(provider, apiKey, fallback) {
+  // 鍵なし（ループバックだけ検査を通る）。認証ヘッダを付けない。
+  if (provider && provider.auth === "none") return {};
   const auth = provider && typeof provider.auth === "object" && provider.auth !== null ? provider.auth : {};
   const header = auth.header || fallback.header;
   // 🔑 **空文字の接頭辞は「接頭辞なし」**（`x-api-key` 系）。`||` で既定へ落とすと
@@ -58,4 +60,25 @@ function mergeHeaders(own, extra) {
   return { ...out, ...own };
 }
 
-module.exports = { authHeaders, pathFor, mergeHeaders };
+/**
+ * ツール引数の JSON 文字列を読む。**意味は解釈しない**（解釈・実行は呼び出し側）。
+ * 壊れていれば空オブジェクトと `argsError` を返す——実行させないための目印で、例外にはしない。
+ */
+function parseToolArgs(raw) {
+  if (raw && typeof raw === "object" && !Array.isArray(raw)) return { args: raw };
+  if (raw == null || raw === "") return { args: {} };
+  try {
+    const v = JSON.parse(String(raw));
+    if (v && typeof v === "object" && !Array.isArray(v)) return { args: v };
+    return { args: {}, argsError: "arguments-not-an-object" };
+  } catch {
+    return { args: {}, argsError: "arguments-not-json" };
+  }
+}
+
+/** 会話 1 件の本文（文字列）。テキスト以外の型は空扱い。 */
+function messageText(m) {
+  return typeof m.text === "string" ? m.text : "";
+}
+
+module.exports = { authHeaders, pathFor, mergeHeaders, parseToolArgs, messageText };

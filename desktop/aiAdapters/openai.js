@@ -25,7 +25,7 @@ const KIND_AZURE = "azure-openai";
 const DEFAULT_AZURE_API_VERSION = "2024-10-21";
 
 /** 扱える用途。**画像生成は multipart なので経路が違う**（下記）。 */
-const SUPPORTED = new Set(["image-to-image", "image-to-text"]);
+const SUPPORTED = new Set(["image-to-image", "image-to-text", "text-to-text"]);
 
 function supports(capability) {
   return SUPPORTED.has(capability);
@@ -173,7 +173,177 @@ function buildRequest(req) {
   // 🔴 用途が無い呼び出し（0.3.0 のプラグイン）はここへ来ない想定だが、来たら断る。
   //    Gemini の語彙（responseModalities）をこちらで解釈すると、意味が合わない。
   if (!supports(req.capability)) return { error: "unsupported-capability" };
+  // 会話の用途は画像を持たない 1 往復（接続テスト用）。本番の会話は buildChatRequest。
+  if (req.capability === "text-to-text") {
+    return buildChatRequest({ ...req, messages: [{ role: "user", text: req.prompt }] });
+  }
   return req.capability === "image-to-image" ? buildImageEdit(req) : buildChat(req);
+}
+
+// ── 会話（text-to-text・ツール・ストリーミング） ───────────────────────────
+
+/** 会話 1 件 → Chat Completions の message。 */
+function toChatMessage(m) {
+  const text = wire.messageText(m);
+  if (m.role === "tool") {
+    return { role: "tool", tool_call_id: String(m.toolCallId || ""), content: text };
+  }
+  if (m.role === "assistant") {
+    const out = { role: "assistant", content: text || null };
+    if (Array.isArray(m.toolCalls) && m.toolCalls.length > 0) {
+      out.tool_calls = m.toolCalls.map((c) => ({
+        id: String(c.id),
+        type: "function",
+        function: { name: String(c.name), arguments: JSON.stringify(c.args || {}) },
+      }));
+    }
+    return out;
+  }
+  const images = Array.isArray(m.images) ? m.images : [];
+  if (m.role === "user" && images.length > 0) {
+    return {
+      role: "user",
+      content: [
+        ...(text ? [{ type: "text", text }] : []),
+        ...images.map((im) => ({
+          type: "image_url",
+          image_url: { url: `data:${im.mimeType || "image/png"};base64,${im.base64}` },
+        })),
+      ],
+    };
+  }
+  return { role: m.role === "system" ? "system" : "user", content: text };
+}
+
+/**
+ * 会話の要求を組む。**1 呼び出し＝1 ターン**（ツール結果を受けて次を呼ぶループは呼び出し側）。
+ *
+ * @param {{model: string, messages: object[], tools?: object[], stream?: boolean,
+ *          temperature?: number, providerOptions?: object, provider: object, apiKey?: string}} req
+ * @returns {{path: string, headers: object, body: Buffer, streaming: boolean}}
+ */
+function buildChatRequest(req) {
+  const tools = req.provider && req.provider.toolMode === "none" ? [] : req.tools || [];
+  const body = {
+    ...(isAzure(req) ? {} : { model: req.model }),
+    messages: req.messages.map(toChatMessage),
+    ...(tools.length > 0
+      ? { tools: tools.map((t) => ({ type: "function", function: { name: t.name, description: t.description || "", parameters: t.parameters || { type: "object", properties: {} } } })) }
+      : {}),
+    ...(req.stream ? { stream: true } : {}),
+    ...(typeof req.temperature === "number" ? { temperature: req.temperature } : {}),
+  };
+  if (req.providerOptions && typeof req.providerOptions === "object") {
+    // 🔴 送る内容（messages・tools・model・stream）は上書きさせない。
+    for (const [k, v] of Object.entries(req.providerOptions)) {
+      if (!["messages", "tools", "tool_choice", "model", "stream"].includes(k)) body[k] = v;
+    }
+  }
+  const fallbackPath = isAzure(req)
+    ? `/openai/deployments/${encodeURIComponent(req.model)}/chat/completions${query(req)}`
+    : "/v1/chat/completions";
+  const own = {
+    "Content-Type": "application/json",
+    ...(req.stream ? { Accept: "text/event-stream" } : {}),
+    ...authHeaders(req),
+  };
+  return {
+    path: wire.pathFor(req.provider, "text-to-text", fallbackPath),
+    headers: wire.mergeHeaders(own, req.provider && req.provider.headers),
+    body: Buffer.from(JSON.stringify(body), "utf8"),
+    streaming: !!req.stream,
+  };
+}
+
+/** `tool_calls[]` → 提供元非依存の形。引数が壊れていれば `argsError` を付ける。 */
+function readToolCalls(list) {
+  const out = [];
+  for (const c of Array.isArray(list) ? list : []) {
+    const rec = asRecord(c);
+    const fn = asRecord(rec && rec.function);
+    if (!fn || typeof fn.name !== "string" || !fn.name) continue;
+    const parsed = wire.parseToolArgs(fn.arguments);
+    out.push({
+      id: typeof rec.id === "string" && rec.id ? rec.id : `call-${out.length}`,
+      name: fn.name,
+      args: parsed.args,
+      ...(parsed.argsError ? { argsError: parsed.argsError } : {}),
+    });
+  }
+  return out;
+}
+
+/**
+ * 会話の応答（非ストリーミング）→ 提供元非依存の形。壊れた応答で例外を投げない。
+ *
+ * @returns {{text?: string, toolCalls?: object[], finishReason?: string, blockReason?: string}}
+ */
+function normalizeChat(json) {
+  const root = asRecord(json);
+  const choice = asRecord(root && Array.isArray(root.choices) ? root.choices[0] : null);
+  if (!choice) return {};
+  const message = asRecord(choice.message) || {};
+  const out = {};
+  const base = normalize({ choices: [{ message, finish_reason: choice.finish_reason }] });
+  if (base.text) out.text = base.text;
+  const toolCalls = readToolCalls(message.tool_calls);
+  if (toolCalls.length > 0) out.toolCalls = toolCalls;
+  const reason = typeof choice.finish_reason === "string" ? choice.finish_reason : null;
+  if (reason) out.finishReason = reason;
+  if (!out.text && !out.toolCalls && reason && reason !== "stop") out.blockReason = reason;
+  return out;
+}
+
+/**
+ * ストリーミング（SSE）の差分を溜める。`push(data)` は 1 イベントの `data:` 本文を受け、
+ * 画面へ流す差分（`{type:"delta", text}`）を返す。`result()` は非ストリーミングと**同じ形**。
+ *
+ * <p>ツール呼び出しは `index` ごとに `arguments` の断片が分かれて届く。全部届いてから 1 件に組む。
+ */
+function createStreamParser() {
+  let text = "";
+  let finishReason = null;
+  const calls = new Map();
+  return {
+    push(data) {
+      if (data === "[DONE]") return [];
+      let json;
+      try {
+        json = JSON.parse(data);
+      } catch {
+        return [];
+      }
+      const choice = asRecord(Array.isArray(json && json.choices) ? json.choices[0] : null);
+      if (!choice) return [];
+      const events = [];
+      const delta = asRecord(choice.delta) || {};
+      if (typeof delta.content === "string" && delta.content.length > 0) {
+        text += delta.content;
+        events.push({ type: "delta", text: delta.content });
+      }
+      for (const t of Array.isArray(delta.tool_calls) ? delta.tool_calls : []) {
+        const rec = asRecord(t);
+        if (!rec) continue;
+        const idx = Number.isInteger(rec.index) ? rec.index : 0;
+        const cur = calls.get(idx) || { id: "", name: "", arguments: "" };
+        if (typeof rec.id === "string" && rec.id) cur.id = rec.id;
+        const fn = asRecord(rec.function);
+        if (fn && typeof fn.name === "string") cur.name += fn.name;
+        if (fn && typeof fn.arguments === "string") cur.arguments += fn.arguments;
+        calls.set(idx, cur);
+      }
+      if (typeof choice.finish_reason === "string") finishReason = choice.finish_reason;
+      return events;
+    },
+    result() {
+      const tool_calls = [...calls.entries()]
+        .sort((a, b) => a[0] - b[0])
+        .map(([, c]) => ({ id: c.id, function: { name: c.name, arguments: c.arguments } }));
+      return normalizeChat({
+        choices: [{ message: { content: text, tool_calls }, finish_reason: finishReason }],
+      });
+    },
+  };
 }
 
 function asRecord(v) {
@@ -263,6 +433,9 @@ module.exports = {
   DEFAULT_AZURE_API_VERSION,
   supports,
   buildRequest,
+  buildChatRequest,
+  normalizeChat,
+  createStreamParser,
   buildListRequest,
   parseModelList,
   normalize,

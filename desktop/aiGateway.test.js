@@ -734,3 +734,287 @@ test("知らない提供元 id は unknown-provider", async () => {
     assert.equal((await s.aiGateway.listModels({ providerId: "nope" })).error, "unknown-provider");
   } finally { s.restore(); }
 });
+
+// ── 会話（text-to-text・ツール・ストリーミング・フォールバック） ───────────
+
+const CHAT_CLOUD = {
+  id: "cloud", label: "クラウド", kind: "openai", endpoint: "https://api.example.test",
+  models: { "text-to-text": "cloud-m", "image-to-text": "cloud-vl" },
+};
+const CHAT_CLOUD2 = {
+  id: "cloud2", label: "別のクラウド", kind: "openai", endpoint: "https://api2.example.test",
+  models: { "text-to-text": "cloud2-m" },
+};
+const CHAT_LOCAL = {
+  id: "local", label: "ローカル", kind: "openai", endpoint: "http://127.0.0.1:8080", auth: "none",
+  models: { "text-to-text": "tiny" },
+};
+const CHAT_LOCAL_VL = { ...CHAT_LOCAL, models: { "text-to-text": "tiny", "image-to-text": "tiny-vl" } };
+
+const OK_JSON = (text, extra) => ({
+  statusCode: 200, text: "",
+  json: { choices: [{ finish_reason: "stop", message: { content: text, ...(extra || {}) } }] },
+});
+const MSGS = [{ role: "user", text: "こんにちは" }];
+
+/** aiHttp.post / postStream を差し替える。`handlers.post(target, path, headers, body, calls)` が応答を決める。 */
+function chatGateway(config, handlers, keys) {
+  const dir = freshDir();
+  const g = freshGateway(dir, config);
+  for (const [id, key] of Object.entries(keys || {})) g.secretStore.setSecret(`ai.provider.${id}.apiKey`, key);
+  const aiHttp = require("./aiHttp");
+  const orig = { post: aiHttp.post, postStream: aiHttp.postStream };
+  const calls = [];
+  aiHttp.post = async (target, p, headers, body) => {
+    calls.push({ host: target.display, path: p, headers, body: JSON.parse(body.toString("utf8")) });
+    return handlers.post(target, p, headers, calls[calls.length - 1], calls);
+  };
+  aiHttp.postStream = async (target, p, headers, body, opts) => {
+    calls.push({ host: target.display, path: p, headers, body: JSON.parse(body.toString("utf8")), stream: true });
+    return handlers.stream(target, p, headers, calls[calls.length - 1], opts, calls);
+  };
+  return { ...g, calls, restore: () => { aiHttp.post = orig.post; aiHttp.postStream = orig.postStream; } };
+}
+
+test("chat: 文章とツール呼び出しが提供元非依存の形で返り、由来が付く", async () => {
+  const g = chatGateway(
+    { providers: [CHAT_CLOUD], defaults: { "text-to-text": "cloud" } },
+    { post: () => OK_JSON("", { tool_calls: [{ id: "t1", function: { name: "f", arguments: '{"a":1}' } }] }) },
+    { cloud: "SECRET-KEY-1" },
+  );
+  try {
+    const r = await g.aiGateway.chat({ sessionId: "s1", messages: MSGS, tools: [{ name: "f", parameters: { type: "object" } }] });
+    assert.equal(r.ok, true);
+    assert.deepEqual(r.toolCalls, [{ id: "t1", name: "f", args: { a: 1 } }]);
+    assert.equal(r.provenance.providerId, "cloud");
+    assert.equal(r.provenance.model, "cloud-m");
+    assert.equal(r.degraded, undefined);
+    assert.equal(g.calls[0].headers.Authorization, "Bearer SECRET-KEY-1");
+    assert.equal(g.calls[0].body.tools[0].function.name, "f");
+  } finally { g.restore(); }
+});
+
+test("chat: 鍵が無ければ送らない（負例）／鍵なし(auth:none)のローカルは鍵無しで送れる（正例）", async () => {
+  const g = chatGateway({ providers: [CHAT_CLOUD], defaults: { "text-to-text": "cloud" } }, { post: () => OK_JSON("x") });
+  try {
+    assert.equal((await g.aiGateway.chat({ sessionId: "s", messages: MSGS })).error, "no-api-key");
+    assert.equal(g.calls.length, 0, "鍵が無いなら 1 バイトも送らない");
+  } finally { g.restore(); }
+  const l = chatGateway({ providers: [CHAT_LOCAL], defaults: { "text-to-text": "local" } }, { post: () => OK_JSON("hi") });
+  try {
+    const r = await l.aiGateway.chat({ sessionId: "s", messages: MSGS });
+    assert.equal(r.ok, true);
+    assert.equal(r.text, "hi");
+    assert.equal(Object.keys(l.calls[0].headers).some((k) => /authorization|api-key/i.test(k)), false);
+    assert.equal(r.provenance.plaintext, true);
+  } finally { l.restore(); }
+});
+
+const FALLBACK_CONFIG = {
+  providers: [CHAT_CLOUD, CHAT_CLOUD2, CHAT_LOCAL],
+  defaults: { "text-to-text": "cloud" },
+  fallbacks: { "text-to-text": ["cloud2", "local"] }, // cloud2 は検査で落ちる
+};
+
+test("🔴 フォールバック: ネットワーク断・タイムアウト・5xx でローカルへ落ち、縮退と由来が付く", async () => {
+  for (const failure of [
+    () => { throw new Error("connect ECONNREFUSED 1.2.3.4:443"); },
+    () => { throw new Error("タイムアウト(120000 ms)"); },
+    () => ({ statusCode: 503, json: null, text: "unavailable" }),
+  ]) {
+    const g = chatGateway(FALLBACK_CONFIG, {
+      post: (t) => (t.hostname === "127.0.0.1" ? OK_JSON("ローカルの返答") : failure()),
+    }, { cloud: "K" });
+    try {
+      const r = await g.aiGateway.chat({ sessionId: "s", messages: MSGS });
+      assert.equal(r.ok, true);
+      assert.equal(r.text, "ローカルの返答");
+      assert.equal(r.degraded, true);
+      assert.equal(r.provenance.providerId, "local");
+      assert.equal(r.provenance.fallbackFrom, "cloud");
+      assert.deepEqual(g.calls.map((c) => c.host), ["api.example.test", "127.0.0.1:8080"], "別のクラウド(cloud2)へは送らない");
+    } finally { g.restore(); }
+  }
+});
+
+test("🔴 フォールバックしない失敗: 401 / 400 / 429 は次へ回さない（負例）", async () => {
+  for (const status of [401, 403, 400, 429]) {
+    const g = chatGateway(FALLBACK_CONFIG, { post: () => ({ statusCode: status, json: null, text: "no" }) }, { cloud: "K" });
+    try {
+      const r = await g.aiGateway.chat({ sessionId: "s", messages: MSGS });
+      assert.equal(r.ok, false);
+      assert.equal(r.status, status);
+      assert.equal(g.calls.length, 1, `HTTP ${status} でローカルへ回してはいけない`);
+    } finally { g.restore(); }
+  }
+});
+
+test("🔴 ローカルが既定なら、落ちてもクラウドへは出ない（負例）", async () => {
+  const g = chatGateway(
+    { providers: [CHAT_CLOUD, CHAT_LOCAL], defaults: { "text-to-text": "local" }, fallbacks: { "text-to-text": ["cloud"] } },
+    { post: () => { throw new Error("connect ECONNREFUSED 127.0.0.1:8080"); } },
+    { cloud: "K" },
+  );
+  try {
+    const r = await g.aiGateway.chat({ sessionId: "s", messages: MSGS });
+    assert.equal(r.ok, false);
+    assert.deepEqual(g.calls.map((c) => c.host), ["127.0.0.1:8080"]);
+  } finally { g.restore(); }
+});
+
+test("画像: 画像対応の宣言(image-to-text)があればそのモデルで送る／無ければ落として数える", async () => {
+  const withVl = chatGateway({ providers: [CHAT_LOCAL_VL], defaults: { "text-to-text": "local" } }, { post: () => OK_JSON("見えた") });
+  try {
+    const m = [{ role: "user", text: "これは", images: [{ base64: "QUJD", mimeType: "image/png" }] }];
+    const r = await withVl.aiGateway.chat({ sessionId: "s", messages: m });
+    assert.equal(withVl.calls[0].body.model, "tiny-vl");
+    assert.equal(r.droppedImages, undefined);
+    assert.equal(r.provenance.model, "tiny-vl");
+  } finally { withVl.restore(); }
+  const without = chatGateway({ providers: [CHAT_LOCAL], defaults: { "text-to-text": "local" } }, { post: () => OK_JSON("見えない") });
+  try {
+    const m = [{ role: "user", text: "これは", images: [{ base64: "QUJD" }, { base64: "REVG" }] }];
+    const r = await without.aiGateway.chat({ sessionId: "s", messages: m });
+    assert.equal(r.ok, true);
+    assert.equal(r.droppedImages, 2, "黙って欠損させない");
+    assert.equal(without.calls[0].body.model, "tiny");
+    assert.equal(JSON.stringify(without.calls[0].body).includes("QUJD"), false, "画像は送らない");
+  } finally { without.restore(); }
+});
+
+test("ストリーミング: 差分が順に届き、結果は非ストリームと同じ形", async () => {
+  const g = chatGateway({ providers: [CHAT_LOCAL], defaults: { "text-to-text": "local" } }, {
+    stream: (t, p, h, call, opts) => {
+      opts.onData(JSON.stringify({ choices: [{ delta: { content: "あ" } }] }));
+      opts.onData(JSON.stringify({ choices: [{ delta: { content: "い" }, finish_reason: "stop" }] }));
+      opts.onData("[DONE]");
+      return { statusCode: 200, json: null, text: "" };
+    },
+  });
+  try {
+    const events = [];
+    const r = await g.aiGateway.chat({ sessionId: "s", messages: MSGS, stream: true }, { onEvent: (e) => events.push(e.text) });
+    assert.deepEqual(events, ["あ", "い"]);
+    assert.equal(r.text, "あい");
+    assert.equal(g.calls[0].body.stream, true);
+  } finally { g.restore(); }
+});
+
+test("🔴 差分を流したあとの失敗は、別の宛先へ回さない（同じ文が二重に出る）", async () => {
+  const g = chatGateway(FALLBACK_CONFIG, {
+    post: () => OK_JSON("ローカル"),
+    stream: (t, p, h, call, opts) => {
+      opts.onData(JSON.stringify({ choices: [{ delta: { content: "途中" } }] }));
+      throw new Error("read ECONNRESET");
+    },
+  }, { cloud: "K" });
+  try {
+    const r = await g.aiGateway.chat({ sessionId: "s", messages: MSGS, stream: true }, { onEvent: () => {} });
+    assert.equal(r.ok, false);
+    assert.equal(g.calls.length, 1);
+  } finally { g.restore(); }
+});
+
+test("錠: 同一セッションの二重送信は busy、別セッションは通る、終われば解放される", async () => {
+  let release;
+  const gate = new Promise((res) => { release = res; });
+  const g = chatGateway({ providers: [CHAT_LOCAL], defaults: { "text-to-text": "local" } }, { post: async () => { await gate; return OK_JSON("x"); } });
+  try {
+    const first = g.aiGateway.chat({ sessionId: "A", messages: MSGS });
+    assert.equal((await g.aiGateway.chat({ sessionId: "A", messages: MSGS })).error, "busy");
+    const other = g.aiGateway.chat({ sessionId: "B", messages: MSGS });
+    release();
+    assert.equal((await first).ok, true);
+    assert.equal((await other).ok, true);
+    assert.equal((await g.aiGateway.chat({ sessionId: "A", messages: MSGS })).ok, true, "終われば同じセッションで再び送れる");
+  } finally { g.restore(); }
+});
+
+test("会話の錠は画像生成の錠と独立（会話中でも接続テストが busy にならない）", async () => {
+  let release;
+  const gate = new Promise((res) => { release = res; });
+  const g = chatGateway({ providers: [CHAT_LOCAL_VL], defaults: { "text-to-text": "local", "image-to-text": "local" } }, {
+    post: async (t, p, h, call) => { if (call.body.messages && call.body.messages[0].content === "hold") await gate; return OK_JSON("OK"); },
+  });
+  try {
+    const running = g.aiGateway.chat({ sessionId: "A", messages: [{ role: "user", text: "hold" }] });
+    const t = await g.aiGateway.testConnection({ providerId: "local", capability: "image-to-text" });
+    assert.notEqual(t.verdict, "busy");
+    release();
+    await running;
+  } finally { g.restore(); }
+});
+
+test("中断: cancelChat で進行中のストリームが止まり、錠が解放される", async () => {
+  const g = chatGateway({ providers: [CHAT_LOCAL], defaults: { "text-to-text": "local" } }, {
+    stream: (t, p, h, call, opts) => new Promise((_, reject) => {
+      opts.signal.addEventListener("abort", () => reject(new Error("canceled")));
+    }),
+  });
+  try {
+    const running = g.aiGateway.chat({ sessionId: "A", messages: MSGS, stream: true }, { onEvent: () => {} });
+    await new Promise((r) => setImmediate(r));
+    assert.equal(g.aiGateway.cancelChat("A").ok, true);
+    const r = await running;
+    assert.equal(r.error, "canceled");
+    assert.equal(g.aiGateway.cancelChat("A").ok, false, "もう走っていない");
+    assert.equal(g.calls.length, 1, "中断を失敗として別の宛先へ回さない");
+  } finally { g.restore(); }
+});
+
+test("入力の検査: 不正な sessionId・空の会話・不正なツール名・画像の上限（負例）", async () => {
+  const g = chatGateway({ providers: [CHAT_LOCAL], defaults: { "text-to-text": "local" } }, { post: () => OK_JSON("x") });
+  try {
+    const chat = (r) => g.aiGateway.chat(r);
+    assert.equal((await chat({ sessionId: "../x", messages: MSGS })).error, "invalid-session");
+    assert.equal((await chat({ sessionId: "s", messages: [] })).error, "empty-messages");
+    assert.equal((await chat({ sessionId: "s", messages: [{ role: "root", text: "x" }] })).error, "invalid-message");
+    assert.equal((await chat({ sessionId: "s", messages: [{ role: "assistant", images: [{ base64: "QQ==" }] }] })).error, "invalid-message");
+    assert.equal((await chat({ sessionId: "s", messages: MSGS, tools: [{ name: "bad name" }] })).error, "invalid-tools");
+    assert.equal((await chat({ sessionId: "s", messages: MSGS, tools: [{ name: "a" }, { name: "a" }] })).error, "invalid-tools");
+    const big = "A".repeat(g.aiGateway.MAX_IMAGE_BYTES + 1);
+    assert.equal((await chat({ sessionId: "s", messages: [{ role: "user", images: [{ base64: big }] }] })).error, "image-too-large");
+    assert.equal(g.calls.length, 0, "検査で落ちたものは送らない");
+  } finally { g.restore(); }
+});
+
+test("🔴 鍵はエラー文に出ない", async () => {
+  const g = chatGateway({ providers: [CHAT_CLOUD], defaults: { "text-to-text": "cloud" } }, {
+    post: () => ({ statusCode: 400, json: { error: { message: "bad key SECRET-KEY-9 sk-abcdef123456" } }, text: "" }),
+  }, { cloud: "SECRET-KEY-9" });
+  try {
+    const r = await g.aiGateway.chat({ sessionId: "s", messages: MSGS });
+    assert.equal(r.ok, false);
+    assert.equal(JSON.stringify(r).includes("SECRET-KEY-9"), false);
+    assert.equal(JSON.stringify(r).includes("sk-abcdef123456"), false);
+  } finally { g.restore(); }
+});
+
+test("200 なのに中身が読めないときは成功を返さない", async () => {
+  const g = chatGateway({ providers: [CHAT_LOCAL], defaults: { "text-to-text": "local" } }, { post: () => ({ statusCode: 200, json: { object: "other" }, text: "" }) });
+  try {
+    assert.equal((await g.aiGateway.chat({ sessionId: "s", messages: MSGS })).error, "empty-response");
+  } finally { g.restore(); }
+});
+
+test("generate は text-to-text を受けない（会話は chat の仕事）／接続テストは画像なしで通る", async () => {
+  const g = chatGateway({ providers: [CHAT_LOCAL], defaults: { "text-to-text": "local" } }, { post: () => OK_JSON("OK") });
+  try {
+    const r = await g.aiGateway.generate({ capability: "text-to-text", prompt: "x", imageBase64: "QQ==" });
+    assert.equal(r.error, "unsupported-capability");
+    const t = await g.aiGateway.testConnection({ providerId: "local", capability: "text-to-text" });
+    assert.equal(t.ok, true);
+    assert.equal(t.verdict, "reachable");
+    assert.equal(JSON.stringify(g.calls[0].body).includes("image_url"), false, "接続テストに画像は付けない");
+  } finally { g.restore(); }
+});
+
+test("resolveCapability は toolMode と local を返す（会話の呼び出し側が使う）", () => {
+  const dir = freshDir();
+  const { aiGateway } = freshGateway(dir, { providers: [{ ...CHAT_LOCAL, toolMode: "none" }], defaults: { "text-to-text": "local" } });
+  const r = aiGateway.resolveCapability("text-to-text");
+  assert.equal(r.ok, true);
+  assert.equal(r.toolMode, "none");
+  assert.equal(r.local, true);
+  assert.equal(r.hasApiKey, true, "鍵なしの提供元は鍵が要らない");
+});

@@ -29,6 +29,7 @@ const { createWindowStateKeeper } = require("./windowState");
 const messages = require("./startupMessages");
 const secretStore = require("./secretStore");
 const aiGateway = require("./aiGateway");
+const { isAssistantSender } = require("./assistantSender");
 const aiProviders = require("./aiProviders");
 const computeEndpoints = require("./computeEndpoints");
 const localPython = require("./localPython");
@@ -1212,6 +1213,29 @@ function migrateTlsPasswords() {
 // 用途 → 提供元の解決と応答の正規化は aiGateway / aiAdapters が行う（fw/ai-routing-design.md）。
 ipcMain.handle("graphy:ai-generate", async (_e, req) => aiGateway.generate(req || {}));
 
+// 会話（text-to-text・ツール・ストリーミング）。**アシスタント窓（#assistant）だけが呼べる**——
+// プラグインは viewer / main 窓の同じ realm にいて、この口が見えてしまうため（assistantSender.js）。
+// 結果は invoke の戻り値で返し、ストリームの差分は送信元へ `graphy:ai-chat-event` で押し出す。
+ipcMain.handle("graphy:ai-chat", async (e, req) => {
+  if (!isAssistantSender(e)) return { ok: false, error: "forbidden" };
+  const sessionId = req && typeof req.sessionId === "string" ? req.sessionId : "";
+  const onGone = () => aiGateway.cancelChat(sessionId);
+  e.sender.once("destroyed", onGone);
+  try {
+    return await aiGateway.chat(req || {}, {
+      onEvent: (ev) => {
+        if (!e.sender.isDestroyed()) e.sender.send("graphy:ai-chat-event", { sessionId, ...ev });
+      },
+    });
+  } finally {
+    e.sender.removeListener("destroyed", onGone);
+  }
+});
+ipcMain.handle("graphy:ai-chat-cancel", (e, sessionId) => {
+  if (!isAssistantSender(e)) return { ok: false, error: "forbidden" };
+  return aiGateway.cancelChat(String(sessionId || ""));
+});
+
 // 用途 → どこへ何で送るか。**同意ダイアログに出す宛先をレンダラが知るため**に要る。
 // 🔑 解決の権限は main に 1 つだけ置く（レンダラ側に同じ計算を持つと、同意画面に出す宛先と
 //    実際の宛先がずれる余地ができる）。
@@ -1231,6 +1255,9 @@ ipcMain.handle("graphy:ai-providers-get", () => {
       models: p.models,
       // 設定で差を吸収する項目（段 5）。**鍵は含まれない。**
       ...(p.auth !== undefined ? { auth: p.auth } : {}),
+      // 鍵なし（ループバックのローカルモデル）。画面が鍵の欄・警告を出し分ける。
+      ...(p.auth === "none" ? { keyless: true } : {}),
+      ...(p.toolMode ? { toolMode: p.toolMode } : {}),
       ...(p.pathStyle ? { pathStyle: p.pathStyle } : {}),
       ...(p.apiVersion ? { apiVersion: p.apiVersion } : {}),
       ...(p.paths ? { paths: p.paths } : {}),
@@ -1242,6 +1269,7 @@ ipcMain.handle("graphy:ai-providers-get", () => {
       secretKey: aiProviders.secretKeyFor(p.id),
     })),
     defaults: c.defaults,
+    fallbacks: c.fallbacks,
     problems: c.problems,
     capabilities: aiProviders.CAPABILITIES,
   };
@@ -1256,6 +1284,7 @@ ipcMain.handle("graphy:ai-defaults-set", (_e, defaults) => {
   return aiProviders.save({
     providers: current.providers,
     defaults: { ...current.defaults, ...(defaults || {}) },
+    fallbacks: current.fallbacks,
   });
 });
 
@@ -1300,7 +1329,8 @@ ipcMain.handle("graphy:ai-providers-set", async (e, cfg) => {
     });
     if (choice !== 0) return { ok: false, canceled: true, problems: [] };
   }
-  const result = aiProviders.save(cfg || {});
+  // 🔴 自動フォールバックの設定は画面から渡されない。保存で黙って消さないよう現在の値を引き継ぐ。
+  const result = aiProviders.save({ ...(cfg || {}), fallbacks: (cfg && cfg.fallbacks) ?? aiProviders.get().fallbacks });
   if (result.ok && added.length > 0) {
     console.log(`[ai] registry change: ${added.join(" / ")}`);
   }

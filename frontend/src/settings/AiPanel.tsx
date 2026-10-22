@@ -247,7 +247,7 @@ export function AiPanel() {
                       </option>
                     ))}
                   </select>
-                  {!usable.find((p) => p.id === current)?.hasApiKey ? (
+                  {!usable.find((p) => p.id === current)?.hasApiKey && !usable.find((p) => p.id === current)?.keyless ? (
                     <span style={{ fontSize: 11, color: "#8a4b00" }}>{t("settings.ai.cap.noKey")}</span>
                   ) : null}
                 </>
@@ -322,7 +322,9 @@ export function AiPanel() {
             <div style={row}>
               <span style={label}>{t("settings.ai.state")}</span>
               <span style={value} data-testid={`ai-key-state-${p.id}`}>
-                {p.hasApiKey ? (
+                {p.keyless ? (
+                  <b style={{ color: "#2e7d32" }}>{t("settings.ai.state.keyless")}</b>
+                ) : p.hasApiKey ? (
                   <b style={{ color: "#2e7d32" }}>{t("settings.ai.state.set")}</b>
                 ) : (
                   <span style={{ color: "#6b7785" }}>{t("settings.ai.state.unset")}</span>
@@ -369,7 +371,7 @@ export function AiPanel() {
                 <button
                   key={cap}
                   style={btn}
-                  disabled={busy || !p.hasApiKey || tests[p.id] === "running"}
+                  disabled={busy || (!p.hasApiKey && !p.keyless) || tests[p.id] === "running"}
                   onClick={() => void runTest(p, cap)}
                   // 🔴 画像生成の疎通は 1 枚生成＝課金。押す前に分かるようにする。
                   title={cap === "image-to-image" ? t("settings.ai.test.i2iCost") : undefined}
@@ -446,7 +448,7 @@ const sectionTitle: React.CSSProperties = {
   borderBottom: "1px solid #dfe6ee",
   color: "#5a6b7d",
 };
-const row: React.CSSProperties = { display: "flex", alignItems: "center", gap: 8, margin: "6px 0" };
+const row: React.CSSProperties = { display: "flex", alignItems: "center", gap: 8, margin: "6px 0", flexWrap: "wrap" };
 const label: React.CSSProperties = { width: 150, flex: "0 0 auto", fontSize: 12, color: "#5a6b7d" };
 const value: React.CSSProperties = { fontSize: 12, color: "#22303d" };
 const mono: React.CSSProperties = {
