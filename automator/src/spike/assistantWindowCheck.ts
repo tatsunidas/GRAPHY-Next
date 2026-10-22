@@ -181,11 +181,11 @@ async function main(): Promise<void> {
     console.log("\n[6] 画像");
     const imgFile = path.join(OUT_DIR, "pixel.png");
     fs.writeFileSync(imgFile, PNG);
-    const txtFile = path.join(OUT_DIR, "note.txt");
+    const txtFile = path.join(OUT_DIR, "note.bin");
     fs.writeFileSync(txtFile, "hello");
     await win.locator('input[type="file"]').setInputFiles(txtFile);
     await sleep(300);
-    check((await win.getByText(/画像ファイルではありません|Not an image file/).count()) === 1, "🔴 画像でないファイルは弾いて理由を出す");
+    check((await win.getByText(/対応していない形式|Unsupported format/).count()) === 1, "🔴 対応外のファイルは弾いて理由を出す");
     await win.locator('input[type="file"]').setInputFiles(imgFile);
     await sleep(300);
     check((await win.locator("img").count()) === 1, "画像のサムネイルが出る");

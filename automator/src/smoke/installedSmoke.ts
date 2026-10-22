@@ -271,6 +271,57 @@ async function localAiSection(app: ElectronApplication, main: Page): Promise<{ p
   return { pid, dataDir };
 }
 
+/**
+ * [8] アシスタントへの PDF 添付: 同梱された pdfjs の worker が配布物の CSP（worker-src 'self' blob:）と asar の下で動くか。
+ * 開発サーバーでは通っても、配布物でだけ worker が読めず添付が失敗することがあるため、実物で確かめる。
+ * 送信はしない（宛先を立てない）。チップに本文の文字数が出れば、抽出まで通っている。
+ */
+async function attachmentSection(app: ElectronApplication, main: Page): Promise<void> {
+  type B = {
+    aiProvidersGet: () => Promise<{ providers: unknown[]; defaults: Record<string, string>; fallbacks?: Record<string, string[]> }>;
+    aiProvidersSet: (c: unknown) => Promise<{ ok: boolean }>;
+  };
+  // 提供元の宛先を足すと main がネイティブの確認ダイアログ（showMessageBoxSync）を出して止まる。アプリ本体は変えず、差し替えて「許可」を返す。
+  await app.evaluate(({ dialog }) => { dialog.showMessageBoxSync = (() => 0) as typeof dialog.showMessageBoxSync; });
+  const orig = await main.evaluate(() => (window as unknown as { graphyDesktop: B }).graphyDesktop.aiProvidersGet());
+  const prov = { id: "smoke-att", label: "smoke", kind: "openai", endpoint: "http://127.0.0.1:9", auth: "none", toolMode: "none", models: { "text-to-text": "x" } };
+  const set = await main.evaluate((c) => (window as unknown as { graphyDesktop: B }).graphyDesktop.aiProvidersSet(c), { providers: [prov], defaults: { "text-to-text": "smoke-att" } });
+  check(set.ok === true, "[8] 添付検査用の提供元を保存できる", set);
+  let win: Page | null = null;
+  try {
+    // 実 OS（Linux・macOS）ではボタンが「安定」と判定されず Playwright のクリックが待ち続けたため、DOM のクリックで押す。
+    const domClick = (tid: string) => main.waitForSelector(`[data-testid="${tid}"]`, { timeout: 20_000 }).then((h) => h.evaluate((el) => (el as HTMLElement).click()));
+    await domClick("mainscreen-menu-system");
+    await domClick("menu-item-assistant");
+    win = await findWindow(app, (u) => u.includes("#assistant"), 30_000);
+    check(!!win, "[8] アシスタント窓が開く");
+    if (!win) return;
+    await win.getByTestId("assistant-input").waitFor({ state: "visible", timeout: 20_000 });
+    const objs = [
+      "<< /Type /Catalog /Pages 2 0 R >>",
+      "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+      "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>",
+      "<< /Length 44 >>\nstream\nBT /F1 18 Tf 10 50 Td (Hello PDFTEXT) Tj ET\nendstream",
+      "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    ];
+    let pdf = "%PDF-1.4\n";
+    const offs: number[] = [];
+    objs.forEach((o, i) => { offs[i] = pdf.length; pdf += `${i + 1} 0 obj\n${o}\nendobj\n`; });
+    const xref = pdf.length;
+    pdf += `xref\n0 ${objs.length + 1}\n0000000000 65535 f \n${offs.map((o) => String(o).padStart(10, "0") + " 00000 n \n").join("")}trailer\n<< /Size ${objs.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF`;
+    await win.locator('input[type="file"]').setInputFiles({ name: "a.pdf", mimeType: "application/pdf", buffer: Buffer.from(pdf) }, { timeout: 20_000 });
+    const chip = win.getByTestId("assistant-attach-chip").first();
+    const ok = await chip.waitFor({ state: "visible", timeout: 30_000 }).then(() => true, () => false);
+    const txt = ok ? ((await chip.textContent()) ?? "") : ((await win.locator("body").innerText()).slice(0, 300));
+    check(ok && txt.includes("a.pdf") && /(文字|chars)/.test(txt), "[8] ★PDF を添付すると配布物でも本文が取り出せる（pdfjs の worker が動く）", txt);
+    await win.screenshot({ path: path.join(OUT, "5-assistant-pdf.png") }).catch(() => undefined);
+  } finally {
+    await win?.close().catch(() => undefined);
+    await main.evaluate((c) => (window as unknown as { graphyDesktop: B }).graphyDesktop.aiProvidersSet(c), { providers: orig.providers, defaults: orig.defaults, fallbacks: orig.fallbacks })
+      .catch((e) => console.log(`  [情報] 提供元の設定を元に戻せなかった: ${String(e).slice(0, 120)}`));
+  }
+}
+
 async function main(): Promise<void> {
   if (process.platform === "darwin" && process.env.CI !== "true") {
     throw new Error("macOS は実プロファイルを隔離できないので、CI（CI=true）以外では実行しません。");
@@ -349,6 +400,8 @@ async function main(): Promise<void> {
     );
     const st = await fetch(`http://127.0.0.1:${PORT}/api/status`).catch((e) => e as Error);
     check(st instanceof Response && st.ok, "[2] 同梱 backend が /api/status に 200 を返す", st instanceof Response ? st.status : String(st));
+    // メニューの操作はメイン画面が出ている今のうちに行う（後の節で設定画面などへ遷移する）。
+    await attachmentSection(app, main).catch((e) => check(false, "[8] PDF 添付の検査が完走しなかった", String(e).slice(0, 300)));
     await main.screenshot({ path: path.join(OUT, "1-main.png") }).catch(() => {});
 
     // ── 5. 動画を取り込んで開く ─────────────────────────────
