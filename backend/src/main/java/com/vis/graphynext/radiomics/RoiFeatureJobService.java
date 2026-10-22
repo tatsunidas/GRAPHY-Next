@@ -34,7 +34,9 @@ public class RoiFeatureJobService {
 
     public enum State { QUEUED, LOADING, EXTRACTING, DONE, FAILED, CANCELLED }
 
-    public record Status(String jobId, State state, long elapsedMs, RoiFeatureResult result, String error) {}
+    /** sliceDone / sliceTotal はスライス別 2D の進み（その単位を選ばなかったときは 0 / 0）。 */
+    public record Status(String jobId, State state, long elapsedMs, RoiFeatureResult result, String error,
+                         int sliceDone, int sliceTotal) {}
 
     private static final class Job {
         final String id;
@@ -44,6 +46,8 @@ public class RoiFeatureJobService {
         volatile long finishedAt;
         volatile RoiFeatureResult result;
         volatile String error;
+        volatile int sliceDone;
+        volatile int sliceTotal;
 
         Job(String id) {
             this.id = id;
@@ -57,9 +61,9 @@ public class RoiFeatureJobService {
         Status toStatus() {
             // 取り消した後に計算が終わっても、結果は見せない
             if (cancelled) {
-                return new Status(id, State.CANCELLED, elapsedMs(), null, null);
+                return new Status(id, State.CANCELLED, elapsedMs(), null, null, sliceDone, sliceTotal);
             }
-            return new Status(id, state, elapsedMs(), result, error);
+            return new Status(id, state, elapsedMs(), result, error, sliceDone, sliceTotal);
         }
     }
 
@@ -106,10 +110,16 @@ public class RoiFeatureJobService {
         job.startedAt = System.currentTimeMillis();
         try {
             job.result = service.compute(req, phase ->
-                    job.state = phase == RoiFeatureService.Phase.LOADING ? State.LOADING : State.EXTRACTING);
+                    job.state = phase == RoiFeatureService.Phase.LOADING ? State.LOADING : State.EXTRACTING,
+                    (done, total) -> {
+                        job.sliceDone = done;
+                        job.sliceTotal = total;
+                    }, () -> job.cancelled);
             job.state = State.DONE;
             log.info("[roi-features] job {} done in {} ms (cache={})", job.id, job.elapsedMs(),
                     job.result.fromCache());
+        } catch (java.util.concurrent.CancellationException e) {
+            log.info("[roi-features] job {} stopped at a slice boundary", job.id);
         } catch (IllegalArgumentException | IllegalStateException e) {
             job.state = State.FAILED;
             job.error = e.getMessage();

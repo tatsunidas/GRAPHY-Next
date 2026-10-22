@@ -19,6 +19,8 @@ import java.util.List;
  *                       （{@link RadiomicsJSettingsSnapshot}）。{@code provenance.settingsSha256} はこの UTF-8 の SHA-256
  * @param roiSize        ROI の大きさと小さい ROI の警告。返すたびに行と今の環境設定から付け直す（キャッシュの値は使わない）
  * @param lossyCompressed 元画像が非可逆圧縮（特徴量は圧縮の影響を受ける）。返すたびに読み込んだ画像から付ける
+ * @param section        最大断面 2D の結果。単位に {@code MAX_SECTION_2D} を選んだときだけ入る
+ * @param slices         スライス別 2D の結果。単位に {@code SLICES_2D} を選んだときだけ入る
  */
 public record RoiFeatureResult(
         String radiomicsjVersion,
@@ -30,7 +32,17 @@ public record RoiFeatureResult(
         Provenance provenance,
         String settingsProperties,
         RoiSize roiSize,
-        boolean lossyCompressed) {
+        boolean lossyCompressed,
+        Section section,
+        Slices slices) {
+
+    /** 3D だけの結果（2D の単位を選ばなかったとき）。 */
+    public RoiFeatureResult(String radiomicsjVersion, Instant computedAt, boolean fromCache, int label,
+                            List<Row> rows, Discretisation discretisation, Provenance provenance,
+                            String settingsProperties, RoiSize roiSize, boolean lossyCompressed) {
+        this(radiomicsjVersion, computedAt, fromCache, label, rows, discretisation, provenance,
+                settingsProperties, roiSize, lossyCompressed, null, null);
+    }
 
     /**
      * @param column  RadiomicsJ の列名（例 {@code IntensityBasedStatistical_Kurtosis}）
@@ -66,14 +78,54 @@ public record RoiFeatureResult(
     public record RoiSize(Long initialVoxels, Long intensityVoxels, Long morphVoxels, Double volumeMm3,
                           Integer smallRoiWarnVoxels, Boolean smallRoi) {}
 
+    /**
+     * 2D の計算の記録（実際に使った設定 {@code BOOL_force2D=1} を含む）。3D と設定が違うのでハッシュも別。
+     */
+    public record Record2d(Instant computedAt, Discretisation discretisation, Provenance provenance,
+                           String settingsProperties) {}
+
+    /**
+     * 最大断面 2D（{@link MaxSectionService} が選んだ 1 枚）。
+     *
+     * @param positionMm 患者座標の法線方向の位置（mm）。スライス番号は持たない
+     */
+    public record Section(boolean fromCache, double positionMm, double areaMm2, long pixels, List<Row> rows,
+                          Record2d record, RoiSize roiSize) {}
+
+    /** スライス 1 枚ぶんの行（前景のあるスライスだけ）。 */
+    public record SliceRow(double positionMm, long pixels, double areaMm2, List<Row> rows) {}
+
+    /** 抽出に失敗したスライス（黙って飛ばさず、位置と理由を持つ）。 */
+    public record SliceFailure(double positionMm, String reason) {}
+
+    /**
+     * スライス別 2D。
+     *
+     * @param rows               値のあるスライス（位置の昇順）
+     * @param failures           失敗したスライス
+     * @param mean               列ごとの単純平均（値のあるスライスだけ）
+     * @param pixelWeightedMean  列ごとの強度マスク画素数の重み付き平均
+     * @param slicesUsed         列ごとに集約に使ったスライス数
+     * @param foregroundSlices   前景のあるスライス数（rows＋failures）
+     */
+    public record Slices(boolean fromCache, List<SliceRow> rows, List<SliceFailure> failures, List<Row> mean,
+                         List<Row> pixelWeightedMean, java.util.Map<String, Integer> slicesUsed,
+                         int foregroundSlices, Record2d record, Integer smallRoiWarnPixels,
+                         List<Double> smallRoiPositionsMm) {}
+
     RoiFeatureResult asCached() {
         return new RoiFeatureResult(radiomicsjVersion, computedAt, true, label, rows, discretisation,
-                provenance, settingsProperties, roiSize, lossyCompressed);
+                provenance, settingsProperties, roiSize, lossyCompressed, section, slices);
+    }
+
+    RoiFeatureResult withModes(Section sec, Slices sl) {
+        return new RoiFeatureResult(radiomicsjVersion, computedAt, fromCache, label, rows, discretisation,
+                provenance, settingsProperties, roiSize, lossyCompressed, sec, sl);
     }
 
     /** 返すたびに付け直す欄（キャッシュに無い・古いかもしれない値）。 */
     RoiFeatureResult withPerRequest(RoiSize size, boolean lossy) {
         return new RoiFeatureResult(radiomicsjVersion, computedAt, fromCache, label, rows, discretisation,
-                provenance, settingsProperties, size, lossy);
+                provenance, settingsProperties, size, lossy, section, slices);
     }
 }
