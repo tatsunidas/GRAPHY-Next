@@ -16,6 +16,7 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { useI18n } from "../i18n/i18n";
 import { desktop, type AiProviderEntry, type AiProvidersConfig, type AiTestResult } from "../desktopBridge";
+import { LocalAiSection } from "./LocalAiSection";
 import { AiProviderForm, describeProblem, emptyDraft, toDraft, type ProviderDraft } from "./AiProviderForm";
 
 export function AiPanel() {
@@ -422,6 +423,8 @@ export function AiPanel() {
           {`${t("settings.ai.configProblems")} ${config.problems.map((x) => describeProblem(x, t)).join(" / ")}`}
         </p>
       ) : null}
+      <LocalAiSection onChanged={() => void refresh()} />
+
       {message ? <p style={{ color: "#2e7d32", fontSize: 12 }} data-testid="ai-message">{message}</p> : null}
       {error ? <p style={{ color: "#b00020", fontSize: 12 }} data-testid="ai-error">{error}</p> : null}
 

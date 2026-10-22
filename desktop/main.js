@@ -35,6 +35,8 @@ const aiProviders = require("./aiProviders");
 const computeEndpoints = require("./computeEndpoints");
 const localPython = require("./localPython");
 const localJupyter = require("./localJupyter");
+const localLlm = require("./localLlm");
+const localAiInstaller = require("./localAiInstaller");
 const dbFolders = require("./dbFolders");
 const { resolveDevDataDir } = require("./devDataDir");
 const tlsPasswords = require("./tlsPasswords");
@@ -1331,7 +1333,11 @@ function destinationOf(p) {
  * プラグインが「自分のサーバを提供元として追加し、既定にする」ことを防ぐ唯一の実効的な手段が
  * これ**（ダイアログは main が描くのでレンダラから偽装・迂回できない）。
  */
-ipcMain.handle("graphy:ai-providers-set", async (e, cfg) => {
+ipcMain.handle("graphy:ai-providers-set", async (e, rawCfg) => {
+  // 🔴 ローカル LLM(local-llm)の宛先は main だけが書き換える。画面（＝プラグインも同じ realm）から来た値は差し戻す。
+  const cfg = rawCfg && Array.isArray(rawCfg.providers)
+    ? { ...rawCfg, providers: localLlm.pinManaged(rawCfg.providers, aiProviders.get().providers) }
+    : rawCfg;
   const incoming = (cfg && Array.isArray(cfg.providers) ? cfg.providers : []);
   const before = new Map(aiProviders.get().providers.map((p) => [p.id, destinationOf(p)]));
   const added = [];
@@ -1391,6 +1397,146 @@ ipcMain.handle("graphy:ai-test-connection", async (e, payload) => {
     if (choice !== 0) return { ok: false, verdict: "canceled", error: "canceled" };
   }
   return aiGateway.testConnection({ providerId, capability });
+});
+
+// ── ローカル AI（llama-server + 小型モデル）。設計: fw/ai-routing-design.md §18 ──
+// 🔴 取得先は同梱マニフェストの固定 URL だけ（renderer から URL は受けない）。
+// 🔴 renderer（＝プラグインも同じ realm）から呼べるので、ダウンロードと削除は main の確認ダイアログを必ず通す。
+let localAiManifest = null;
+
+function sendLocalAiEvent(ev) {
+  for (const w of BrowserWindow.getAllWindows()) {
+    if (!w.isDestroyed()) w.webContents.send("graphy:ai-local-event", ev);
+  }
+}
+
+function initLocalAi() {
+  try {
+    const manifest = require("./localAiManifest.json");
+    const problems = localAiInstaller.validateManifest(manifest);
+    if (problems.length > 0) {
+      console.error(`[ai] local manifest is invalid: ${problems.join(" / ")}`);
+      return;
+    }
+    localAiManifest = manifest;
+    const ai = localLlm.init({ dataDir: resolveDataDir(), manifest, aiProviders, emit: sendLocalAiEvent });
+    aiGateway.setPrepareHook((provider, signal) => ai.prepare(provider, signal));
+    const swept = ai.sweepStale(); // 前回 Electron が落ちて残った llama-server があれば止める（目印が一致したものだけ）
+    if (swept.swept) console.log(`[ai] stopped a leftover local llm (pid ${swept.pid})`);
+  } catch (e) {
+    console.error("[ai] local llm init failed:", e && e.message);
+  }
+  offerLocalAiFirstRun();
+}
+
+/** インストーラのチェックボックスが置いたフラグ。あれば一度だけ導入を提案する（ダウンロード自体はここで確認を取る）。 */
+function offerLocalAiFirstRun() {
+  const flag = path.join(resolveDataDir(), "first-run-local-llm.flag");
+  if (!fs.existsSync(flag)) return;
+  try { fs.unlinkSync(flag); } catch { /* 消せなくても提案は 1 回で済ませたい */ }
+  const ai = localLlm.get();
+  if (!ai || ai.status().runtime.installed) return;
+  setTimeout(() => {
+    const win = BrowserWindow.getAllWindows().find((w) => !w.isDestroyed()) || null;
+    const choice = dialog.showMessageBoxSync(win, {
+      type: "question",
+      buttons: ["今すぐ導入する", "あとで"],
+      defaultId: 1,
+      cancelId: 1,
+      title: "ローカル AI の導入",
+      message: "インターネットに接続できないときも使える、この PC 上の軽量 AI を導入しますか?",
+      detail: "設定の AI タブからいつでも導入できます。導入には数 GB のダウンロードが必要です。",
+    });
+    if (choice === 0) runLocalAiInstall(win, localAiManifest && localAiManifest.defaultModelId);
+  }, 4000);
+}
+
+function formatBytes(n) {
+  return n >= 1e9 ? `${(n / 1e9).toFixed(1)} GB` : `${Math.round(n / 1e6)} MB`;
+}
+
+async function runLocalAiInstall(win, modelId) {
+  const ai = localLlm.get();
+  if (!ai || !localAiManifest) return { ok: false, error: "unavailable" };
+  const st = ai.status();
+  const md = localAiManifest.models.find((m) => m.id === modelId);
+  if (!md) return { ok: false, error: "unknown-model" };
+  const rtAsset = localAiManifest.runtime.assets[st.platform];
+  if (!rtAsset) return { ok: false, error: "unsupported-platform" };
+  const total = (st.runtime.installed ? 0 : rtAsset.size) + (st.model.installed && st.model.id === md.id ? 0 : md.size);
+  const choice = dialog.showMessageBoxSync(win, {
+    type: "question",
+    buttons: ["ダウンロードする", "取り消す"],
+    defaultId: 1,
+    cancelId: 1,
+    title: "ローカル AI をダウンロードします",
+    message: `${formatBytes(total)} をダウンロードして、この PC に保存します。`,
+    detail: `実行ファイル: llama.cpp ${localAiManifest.runtime.build} (MIT)\nモデル: ${md.label} (${md.license})\n取得元: github.com / huggingface.co\n\n取得したファイルは SHA-256 を確かめてから使います。`,
+  });
+  if (choice !== 0) return { ok: false, error: "canceled" };
+  return ai.install({ modelId: md.id });
+}
+
+ipcMain.handle("graphy:ai-local-status", () => {
+  const ai = localLlm.get();
+  return ai ? { ...ai.status(), defaultModelId: localAiManifest.defaultModelId } : { supported: false };
+});
+ipcMain.handle("graphy:ai-local-install", (e, payload) => {
+  const win = BrowserWindow.fromWebContents(e.sender) || BrowserWindow.getFocusedWindow();
+  return runLocalAiInstall(win, payload && typeof payload.modelId === "string" ? payload.modelId : undefined);
+});
+ipcMain.handle("graphy:ai-local-cancel", () => { const ai = localLlm.get(); if (ai) ai.cancelInstall(); return { ok: true }; });
+ipcMain.handle("graphy:ai-local-check", async () => {
+  const ai = localLlm.get();
+  return ai ? ai.check() : { ok: false, error: "unavailable" };
+});
+ipcMain.handle("graphy:ai-local-role", (_e, p) => {
+  const ai = localLlm.get();
+  if (!ai) return { ok: false, error: "unavailable" };
+  return ai.setRole({
+    ...(p && typeof p.fallback === "boolean" ? { fallback: p.fallback } : {}),
+    ...(p && typeof p.makeDefault === "boolean" ? { makeDefault: p.makeDefault } : {}),
+  });
+});
+ipcMain.handle("graphy:ai-local-import", async (e, payload) => {
+  const ai = localLlm.get();
+  if (!ai) return { ok: false, error: "unavailable" };
+  const win = BrowserWindow.fromWebContents(e.sender) || BrowserWindow.getFocusedWindow();
+  const allowUnverified = !!(payload && payload.allowUnverified === true);
+  if (allowUnverified) {
+    const c = dialog.showMessageBoxSync(win, {
+      type: "warning",
+      buttons: ["続ける", "取り消す"],
+      defaultId: 1,
+      cancelId: 1,
+      title: "検証できないモデルを使います",
+      message: "公式の一覧にない GGUF モデルは、中身を検証できません。",
+      detail: "提供元と内容を自分で確かめたファイルだけを選んでください。",
+    });
+    if (c !== 0) return { ok: false, error: "canceled" };
+  }
+  const picked = await dialog.showOpenDialog(win, {
+    title: "ローカル AI のファイルを選択（llama.cpp の配布ファイル、または GGUF モデル）",
+    properties: ["openFile"],
+    filters: [{ name: "llama.cpp / GGUF", extensions: ["zip", "gz", "tgz", "gguf"] }],
+  });
+  if (picked.canceled || picked.filePaths.length === 0) return { ok: false, error: "canceled" };
+  return ai.importFile({ file: picked.filePaths[0], allowUnverified });
+});
+ipcMain.handle("graphy:ai-local-remove", async (e) => {
+  const ai = localLlm.get();
+  if (!ai) return { ok: false, error: "unavailable" };
+  const win = BrowserWindow.fromWebContents(e.sender) || BrowserWindow.getFocusedWindow();
+  const c = dialog.showMessageBoxSync(win, {
+    type: "warning",
+    buttons: ["削除する", "取り消す"],
+    defaultId: 1,
+    cancelId: 1,
+    title: "ローカル AI を削除します",
+    message: "ダウンロードした実行ファイルとモデルを削除します。",
+  });
+  if (c !== 0) return { ok: false, error: "canceled" };
+  return ai.remove();
 });
 
 /**
@@ -2133,6 +2279,7 @@ app.whenReady().then(async () => {
   } catch (e) {
     console.error("[compute] local jupyter sweep failed:", e && e.message);
   }
+  initLocalAi();
   initColab();
   initGdrive();
   if (MAIN_SECRET) computeBridge.init({ secret: MAIN_SECRET, apiBase: API_BASE });
@@ -2186,6 +2333,7 @@ app.on("window-all-closed", () => {
 // （Colab は利用者の利用枠を使い続けない・Jupyter はカーネルが GPU メモリを握ったまま残らない）。
 // どちらも非同期なので一度だけ終了を止め、並べて待つ（最大 10 秒。直列にすると終了が延びる）。
 let releasedOnQuit = false;
+let releasedLocalAi = false;
 app.on("before-quit", (event) => {
   const hasColab = !!colabRuntimes && colabRuntimes.endpoints().length > 0;
   const hasLocal = localJupyter.endpoint() !== null;
@@ -2196,6 +2344,13 @@ app.on("before-quit", (event) => {
   if (hasColab) jobs.push(colabRuntimes.releaseAll());
   if (hasLocal) jobs.push(localJupyter.stop());
   Promise.race([Promise.allSettled(jobs), new Promise((r) => setTimeout(r, 10000))]).finally(() => app.quit());
+});
+app.on("before-quit", (event) => {
+  const ai = localLlm.get();
+  if (releasedLocalAi || !ai || !ai.status().running) return;
+  event.preventDefault();
+  releasedLocalAi = true;
+  Promise.race([ai.stop().catch(() => undefined), new Promise((r) => setTimeout(r, 10000))]).finally(() => app.quit());
 });
 app.on("before-quit", () => localPython.cancel());
 app.on("before-quit", stopBackend);

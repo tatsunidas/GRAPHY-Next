@@ -1018,3 +1018,37 @@ test("resolveCapability は toolMode と local を返す（会話の呼び出し
   assert.equal(r.local, true);
   assert.equal(r.hasApiKey, true, "鍵なしの提供元は鍵が要らない");
 });
+
+test("🔑 prepare フック: 送る直前に呼ばれ、保存し直した endpoint(ポート)へ送る／local 以外には影響しない", async () => {
+  const g = chatGateway({ providers: [CHAT_LOCAL], defaults: { "text-to-text": "local" } }, { post: () => OK_JSON("hi") });
+  try {
+    const seen = [];
+    g.aiGateway.setPrepareHook(async (provider) => {
+      seen.push(provider.id);
+      // 起動のたびにポートが変わる想定: 保存し直す
+      const cfg = g.aiProviders.get();
+      g.aiProviders.save({
+        providers: cfg.providers.map(({ plaintext, ...p }) => (p.id === "local" ? { ...p, endpoint: "http://127.0.0.1:9191" } : p)),
+        defaults: cfg.defaults,
+      });
+      return { ok: true };
+    });
+    const r = await g.aiGateway.chat({ sessionId: "s", messages: MSGS });
+    assert.equal(r.ok, true);
+    assert.deepEqual(seen, ["local"]);
+    assert.equal(g.calls[0].host, "127.0.0.1:9191", "準備のあとの endpoint へ送る");
+  } finally { g.aiGateway.setPrepareHook(null); g.restore(); }
+});
+
+test("🔴 prepare フックが失敗したら送らない（負例）／クラウド→ローカルの縮退で、ローカルの準備失敗は握りつぶさない", async () => {
+  const g = chatGateway(FALLBACK_CONFIG, {
+    post: (t) => (t.hostname === "127.0.0.1" ? OK_JSON("届いてはいけない") : (() => { throw new Error("connect ECONNREFUSED"); })()),
+  }, { cloud: "K" });
+  try {
+    g.aiGateway.setPrepareHook(async (p) => (p.id === "local" ? { ok: false, error: "local-llm:not-installed" } : { ok: true }));
+    const r = await g.aiGateway.chat({ sessionId: "s", messages: MSGS });
+    assert.equal(r.ok, false);
+    assert.equal(r.error, "local-llm:not-installed");
+    assert.deepEqual(g.calls.map((c) => c.host), ["api.example.test"], "準備に失敗したローカルへは送っていない");
+  } finally { g.aiGateway.setPrepareHook(null); g.restore(); }
+});

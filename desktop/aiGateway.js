@@ -32,6 +32,15 @@ const SECRET_KEY = aiProviders.LEGACY_SECRET_KEY;
 /** 送信画像の上限。これを超えるものはプラグイン側の縮小漏れなので、ここで弾く。 */
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
 
+/**
+ * 宛先に送る直前に呼ぶ準備（この PC のローカル LLM を遅延起動して endpoint を確定する）。
+ * `fn(provider)` → `{ok:true}` か `{ok:false, error}`。electron に依存させないため、結線は main.js が行う。
+ */
+let prepareHook = null;
+function setPrepareHook(fn) {
+  prepareHook = typeof fn === "function" ? fn : null;
+}
+
 /** 同時実行は 1 本に限る。誤操作や暴走ループで課金が積み上がるのを防ぐ。 */
 let inFlight = false;
 
@@ -334,10 +343,15 @@ function verdictForError(message) {
 async function testConnection(args) {
   const providerId = args && args.providerId;
   const capability = args && args.capability;
-  const provider = aiProviders.byId(providerId);
+  let provider = aiProviders.byId(providerId);
   if (!provider) return { ok: false, verdict: "config", error: "unknown-provider" };
   if (!aiProviders.CAPABILITIES.includes(capability)) {
     return { ok: false, verdict: "config", error: "unsupported-capability" };
+  }
+  if (prepareHook) {
+    const prep = await prepareHook(provider);
+    if (prep && prep.ok === false) return { ok: false, verdict: "network", error: prep.error || "local-unavailable" };
+    provider = aiProviders.byId(providerId) || provider;
   }
   const model = provider.models[capability];
   if (!model) return { ok: false, verdict: "config", error: "no-provider-for-capability" };
@@ -489,8 +503,16 @@ async function chat(req, opts) {
   let lastFailure = null;
   try {
     for (let i = 0; i < resolved.chain.length; i++) {
-      const { provider } = resolved.chain[i];
-      const attempt = await chatOnce(req, provider, controller.signal, onEvent);
+      let { provider } = resolved.chain[i];
+      let attempt;
+      const prep = prepareHook ? await prepareHook(provider, controller.signal) : { ok: true };
+      if (prep && prep.ok === false) {
+        attempt = { ok: false, error: prep.error || "local-unavailable", verdict: "network", streamed: false };
+      } else {
+        // 起動のたびにポートが変わるので、準備のあとで保存済みの宛先を引き直す
+        provider = aiProviders.byId(provider.id) || provider;
+        attempt = await chatOnce(req, provider, controller.signal, onEvent);
+      }
       if (attempt.ok) {
         if (i > 0) {
           attempt.degraded = true;
@@ -681,6 +703,7 @@ async function listModels(args) {
 }
 
 module.exports = {
+  setPrepareHook,
   generate,
   chat,
   cancelChat,
