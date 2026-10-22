@@ -22,6 +22,12 @@ final class RemoteBurnPolicy {
     static final Set<String> RISKY_MODALITIES = Set.of(
             "US", "XA", "RF", "ES", "SC", "OT", "DX", "CR", "MG", "XC", "GM", "SM", "IVUS", "IVOCT", "DOC");
 
+    /**
+     * データがこの PC の外へ出ない計算機（kind=local）に限り、マスク無しでも通すモダリティ。胸部X線などの単純X線は
+     * 焼き込みが普通にあるが、外へ出ないので匿名化だけで足りる。それ以外の危ない種類は local でも通さない。
+     */
+    static final Set<String> LOCAL_OK_MODALITIES = Set.of("DX", "CR", "MG");
+
     /** マスクが無ければ送らない SOP クラス（の接頭辞）。二次キャプチャ・可視光（写真・動画）・PDF。 */
     static final Set<String> RISKY_SOP_PREFIXES = Set.of(
             "1.2.840.10008.5.1.4.1.1.7",      // Secondary Capture（.7.1〜.7.4 を含む）
@@ -32,8 +38,13 @@ final class RemoteBurnPolicy {
      * @param allowed  送ってよいか
      * @param reason   拒否の理由（コード。画面で訳す）。許可なら null
      * @param burnIn   匿名化で焼き込みを塗るか（マスクがあるときだけ true）
+     * @param localOnly local 限定の緩和で通した（画素に焼き込みが残りうる）。外部の計算機へは送れない
      */
-    record Decision(boolean allowed, String reason, boolean burnIn) {
+    record Decision(boolean allowed, String reason, boolean burnIn, boolean localOnly) {
+        Decision(boolean allowed, String reason, boolean burnIn) {
+            this(allowed, reason, burnIn, false);
+        }
+
         static Decision refuse(String reason) {
             return new Decision(false, reason, false);
         }
@@ -42,7 +53,13 @@ final class RemoteBurnPolicy {
     private RemoteBurnPolicy() {
     }
 
+    /** 外部の計算機へ送る規則（従来どおり）。 */
     static Decision decide(AnonymizeService.SeriesBurnFacts f) {
+        return decide(f, false);
+    }
+
+    /** @param localDestination 送り先がこの PC の外へデータを出さない計算機（kind=local）か */
+    static Decision decide(AnonymizeService.SeriesBurnFacts f, boolean localDestination) {
         if (f.instances() == 0) {
             return Decision.refuse("series-not-found");
         }
@@ -61,8 +78,15 @@ final class RemoteBurnPolicy {
         if (f.burnedInYes() > 0) {
             return Decision.refuse("burnin-declared");
         }
+        boolean relaxed = false;
         for (String m : f.modalities()) {
-            if (RISKY_MODALITIES.contains(m.toUpperCase(java.util.Locale.ROOT))) {
+            String mod = m.toUpperCase(java.util.Locale.ROOT);
+            if (!RISKY_MODALITIES.contains(mod)) {
+                continue;
+            }
+            if (localDestination && LOCAL_OK_MODALITIES.contains(mod)) {
+                relaxed = true;
+            } else {
                 return Decision.refuse("burnin-risky-modality");
             }
         }
@@ -76,6 +100,6 @@ final class RemoteBurnPolicy {
         if (f.modalities().isEmpty()) {
             return Decision.refuse("burnin-unknown-modality"); // 種類が分からないものは送らない
         }
-        return new Decision(true, null, false);
+        return new Decision(true, null, false, relaxed);
     }
 }
