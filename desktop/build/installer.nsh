@@ -138,8 +138,11 @@ This cannot be undone. Choose No to keep your data." \
 !include nsDialogs.nsh
 !include LogicLib.nsh
 
-Var LocalAiCheckbox
-Var LocalAiWanted
+; アンインストーラ用のビルドでは使わない変数を宣言すると warning 6001 になり、electron-builder は警告をエラーにする。
+!ifndef BUILD_UNINSTALLER
+  Var LocalAiCheckbox
+  Var LocalAiWanted
+!endif
 
 !macro customPageAfterChangeDir
   Function LocalAiPageCreate
