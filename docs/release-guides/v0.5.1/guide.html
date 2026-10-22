@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>GRAPHY-Next v0.5.1 操作ガイド — v0.5.0 からの主な新機能</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;900&family=IBM+Plex+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="../guide.css">
+<style>
+  /* この版のための部品（共通の guide.css は変えない） */
+  .duo { display: grid; grid-template-columns: 1fr 1fr; gap: 56px; align-items: start; }
+  .duo .col { display: flex; flex-direction: column; gap: 28px; }
+  .duo .explain li p { font-size: 26px; }
+  .portrait-row { display: grid; grid-template-columns: 560px 1fr; gap: 80px; align-items: start; }
+  .others { display: grid; grid-template-columns: 1fr 1fr; gap: 20px 72px; list-style: none; }
+  .others li { font-size: 26px; line-height: 1.5; padding-left: 28px; position: relative; }
+  .others li::before { content: ""; position: absolute; left: 0; top: 16px; width: 10px; height: 10px; border-radius: 50%; background: var(--accent); }
+  .others b { color: var(--text); }
+  .others span { color: var(--sub); }
+</style>
+</head>
+<body>
+
+<section class="page cover">
+  <div class="left">
+    <p class="eyebrow">GRAPHY-NEXT v0.5.1 / 操作ガイド</p>
+    <h1>v0.5.0 からの<br>主な新機能</h1>
+    <p class="lead">取り込み・この PC の計算機・ROI 特徴量・つなぎ合わせ・タグの編集を、画面つきで紹介します。小さな変更は最後のページに一覧しました。</p>
+    <div class="chips">
+      <span class="chip on">この PC の計算機</span>
+      <span class="chip">Radiomics</span>
+      <span class="chip">つなぎ合わせ</span>
+    </div>
+  </div>
+  <div class="panel">
+    <h3>この版の内容</h3>
+    <ol class="steps">
+      <li><span class="n">01</span><p>取り込み<small>ヘッダの無い画素配列（Raw）を DICOM に</small></p></li>
+      <li><span class="n">02</span><p>計算機とプラグイン<small>この PC の Python・GPU を見分ける／プラグインを見つけて導入</small></p></li>
+      <li><span class="n">03</span><p>ROI 特徴量<small>全腫瘍（3D）と最大断面（2D）を表に並べて CSV へ</small></p></li>
+      <li><span class="n">04</span><p>つなぎ合わせ<small>部分のシリーズを 1 本の派生シリーズに</small></p></li>
+      <li><span class="n">05</span><p>タグの編集<small>バックアップを促してから書き換え</small></p></li>
+      <li><span class="n">06</span><p>そのほかの変更</p></li>
+    </ol>
+  </div>
+  <div class="footer"><span>研究用です。診断には使わないでください。データ: TCIA HCC-TACE-Seg（Moawad et al., 2021）CC BY 4.0　doi.org/10.7937/TCIA.5FNA-0924</span><span>1 / 8</span></div>
+</section>
+
+<section class="page">
+  <div>
+    <p class="eyebrow">01 / ファイル ＞ 非DICOM取込</p>
+    <h2>ヘッダの無い画素配列（Raw）を、取り込む前に確かめて DICOM にする</h2>
+  </div>
+  <div class="shot-row">
+    <figure class="shot" data-shot="import-raw"><img src="shots/import-raw.png" alt="非DICOM取込の Raw。大きさの一致の確認と、中央のスライスのプレビュー"></figure>
+    <div style="display:flex;flex-direction:column;gap:32px">
+      <ol class="explain">
+        <li><span class="num">1</span><p>型・バイト順・大きさ・読み飛ばしを入れると、<b>申告した大きさとファイルの大きさが一致するか</b>をその場で確かめます</p></li>
+        <li><span class="num">2</span><p>「中央のスライスを見る」で、<b>読み方が合っているか</b>を取り込む前に確かめます</p></li>
+        <li><span class="num">3</span><p>確認できたら「取込」。DICOM に変換して一覧に入ります</p></li>
+      </ol>
+      <p class="callout">.raw・.img・.bin・拡張子の無いファイルを選べます。</p>
+      <p class="note">⚠ 向きと位置は入力した値です（元データの情報ではありません）。取り込んだ画像にも、その旨を記録します。</p>
+    </div>
+  </div>
+  <div class="footer"><span>研究用です。診断には使わないでください。この図の画像は合成データです。</span><span>2 / 8</span></div>
+</section>
+
+<section class="page">
+  <div>
+    <p class="eyebrow">02 / 環境設定 ＞ プラグイン ＞ 見つける</p>
+    <h2>公式の索引から、プラグインを「見つけて」導入する</h2>
+  </div>
+  <div class="shot-row">
+    <figure class="shot" data-shot="plugins-catalog"><img src="shots/plugins-catalog.png" alt="環境設定のプラグイン。見つけるの一覧に公式のプラグインが出ている"></figure>
+    <div style="display:flex;flex-direction:column;gap:32px">
+      <ol class="explain">
+        <li><span class="num">1</span><p>「プラグインの導入を許可する」を入れると導入できます（既定は許可しません）</p></li>
+        <li><span class="num">2</span><p>「見つける」に、公式の索引の一覧が出ます</p></li>
+        <li><span class="num">3</span><p>名前・説明・リポジトリで絞り込みます</p></li>
+        <li><span class="num">4</span><p>必要な本体の版と「導入」。導入のたびに、署名と中身を確かめます</p></li>
+      </ol>
+      <p class="callout">例は、胸部X線から所見の下書きを作る公式プラグインです（本体 0.5.1 以上）。</p>
+      <p class="note">⚠ 一覧に載っていても、安全の保証ではありません。</p>
+    </div>
+  </div>
+  <div class="footer"><span>研究用です。診断には使わないでください。</span><span>3 / 8</span></div>
+</section>
+
+<section class="page">
+  <div>
+    <p class="eyebrow">02 / 環境設定 ＞ 計算機</p>
+    <h2>この PC の Python と GPU を見分け、計算機として使う</h2>
+  </div>
+  <div class="shot-row">
+    <figure class="shot" data-shot="compute-local"><img src="shots/compute-local.png" alt="環境設定の計算機。この PC の Python と GPU の検出結果"></figure>
+    <div style="display:flex;flex-direction:column;gap:32px">
+      <ol class="explain">
+        <li><span class="num">1</span><p>この PC の GPU を、PyTorch が <b>CUDA で使えるか</b>を表示します</p></li>
+        <li><span class="num">2</span><p>GPU の名前とメモリ。足りないものがあれば名前で案内します（GRAPHY はパッケージを入れません）</p></li>
+        <li><span class="num">3</span><p>環境を変えたら「再検出」</p></li>
+      </ol>
+      <p class="callout">CUDA の使える GPU があれば、この PC が既定の計算機になります。</p>
+      <p class="callout">単純X線（CR/DX）は、焼き込みの文字を塗らずに<b>この PC の計算機にだけ</b>渡せます（外部の計算機へは送れません）。</p>
+    </div>
+  </div>
+  <div class="footer"><span>研究用です。診断には使わないでください。</span><span>4 / 8</span></div>
+</section>
+
+<section class="page">
+  <div>
+    <p class="eyebrow">03 / 2D Viewer ＞ 解析 ＞ Radiomics 特徴量（ROI）</p>
+    <h2>全腫瘍（3D）と最大断面（2D）の特徴量を、表に並べて CSV へ</h2>
+  </div>
+  <div class="portrait-row">
+    <figure class="shot" data-shot="roi-features"><img src="shots/roi-features.png" alt="ROI 特徴量の画面。計算の単位・計算ボタン・結果の表"></figure>
+    <div style="display:flex;flex-direction:column;gap:32px">
+      <ol class="explain">
+        <li><span class="num">1</span><p><b>計算の単位</b>。全腫瘍（3D）は常に計算し、最大断面（2D）・スライス別（2D）を足せます</p></li>
+        <li><span class="num">2</span><p>「計算」。結果は記録され、同じ条件で計算し直すとすぐに出ます</p></li>
+        <li><span class="num">3</span><p>結果の表。単位ごとの列を<b>並べて比較</b>できます（IBSI の識別子つき）</p></li>
+        <li><span class="num">4</span><p>「CSV に書き出す」。版・設定・ROI の大きさの記録もつきます</p></li>
+      </ol>
+      <p class="callout">ROI マスクには、SEG などのマスクのシリーズを選びます（塗りの ROI は、ROI マネージャで DICOM SEG にして保存してから）。</p>
+      <p class="note">画像フィルタ（LoG：σ または構造の半径）や、離散化・リサンプリングも選べます。この図は、4 mm の等方リサンプリングと、形態・局所強度・一次統計に絞った設定です。数値の定義は RadiomicsJ のものです。</p>
+    </div>
+  </div>
+  <div class="footer"><span>研究用です。診断には使わないでください。データ: TCIA HCC-TACE-Seg（Moawad et al., 2021）CC BY 4.0</span><span>5 / 8</span></div>
+</section>
+
+<section class="page">
+  <div>
+    <p class="eyebrow">04 / 2D Viewer ＞ 画像 ＞ つなぎ合わせ</p>
+    <h2>部分のシリーズを、1 本の派生シリーズにつなぐ</h2>
+  </div>
+  <div class="shot-row">
+    <figure class="shot" data-shot="stitch"><img src="shots/stitch.png" alt="つなぎ合わせのダイアログ。候補・条件・保存"></figure>
+    <div style="display:flex;flex-direction:column;gap:32px">
+      <ol class="explain">
+        <li><span class="num">1</span><p>つなぐシリーズを選びます（2 本以上）</p></li>
+        <li><span class="num">2</span><p>つなげる条件（同じ患者・同じ向き・同じモダリティ）を確かめます</p></li>
+        <li><span class="num">3</span><p>「保存」で、1 本の<b>派生シリーズ</b>として保管庫に入ります</p></li>
+      </ol>
+      <p class="callout">重なりと隙間は座標から測って表示し、3 方向のプレビューで確かめられます。ずれ・向き・大きさの<b>位置合わせ</b>もできます。</p>
+      <p class="note">この図の画像は、この資料のために作った合成データです（2 本が 18 mm 重なっています）。</p>
+    </div>
+  </div>
+  <div class="footer"><span>研究用です。診断には使わないでください。</span><span>6 / 8</span></div>
+</section>
+
+<section class="page">
+  <div>
+    <p class="eyebrow">05 / タグ表示（メイン画面）</p>
+    <h2>DICOM のタグを書き換える。始める前にバックアップを促す</h2>
+  </div>
+  <div class="duo">
+    <div class="col">
+      <figure class="shot" data-shot="tags-warn"><img src="shots/tags-warn.png" alt="タグの編集を始める前の、バックアップを促す確認"></figure>
+      <ol class="explain">
+        <li><span class="num">1</span><p>「編集」を押すと、<b>バックアップを促す確認</b>が出ます。元の画像を書き換えるためです</p></li>
+      </ol>
+    </div>
+    <div class="col">
+      <figure class="shot" data-shot="tags-edit"><img src="shots/tags-edit.png" alt="タグの編集。値の欄・鍵の印・保存"></figure>
+      <ol class="explain">
+        <li><span class="num">1</span><p>表の値の欄を、そのまま書き換えます</p></li>
+        <li><span class="num">2</span><p>UID など<b>変えられないタグには鍵の印</b>が付きます（ROI などの参照が切れるため）</p></li>
+        <li><span class="num">3</span><p>範囲（シリーズ／画像／スタディ）を選び「保存…」で最終確認</p></li>
+      </ol>
+    </div>
+  </div>
+  <div class="footer"><span>研究用です。診断には使わないでください。データ: TCIA HCC-TACE-Seg（Moawad et al., 2021）CC BY 4.0</span><span>7 / 8</span></div>
+</section>
+
+<section class="page">
+  <div>
+    <p class="eyebrow">06 / そのほかの変更</p>
+    <h2>ほかにも、こんなところが変わりました</h2>
+  </div>
+  <ul class="others">
+    <li><b>取り込み</b> <span>ZIP の取り込み・進捗バーと中止ボタン・ANALYZE 7.5 / NIfTI の 2 ファイル形式</span></li>
+    <li><b>シリーズ抽出</b> <span>演算子の追加・進捗・データシート CSV・DB 管理タブ</span></li>
+    <li><b>2D Viewer</b> <span>Scissors（矩形・円・球）、しきい値で範囲内の画素を塗る、狭い窓で隠れるボタンを「⋯」から</span></li>
+    <li><b>Fusion</b> <span>前景の等値線、差分・乗算の結果を新しいシリーズとして保存</span></li>
+    <li><b>値の点検</b> <span>Probe の点の時間曲線</span></li>
+    <li><b>ROI</b> <span>最大断面へ移動、3D 球の中心を数値で入力</span></li>
+    <li><b>設定</b> <span>描画環境の自己診断と GPU の選択、3D の画質、AI の提供元とモデルの選択</span></li>
+    <li><b>プラグイン</b> <span>計算ジョブの窓と一括実行、外部の計算機での実行の台帳</span></li>
+    <li><b>書き出し・共有</b> <span>ポータブル 2D ビューアの作り直し、起動の案内ページ、期限つきの共有リンク</span></li>
+    <li><b>そのほか</b> <span>起動時の利用条件（研究用・非診断）の確認、モバイル web のホーム画面への追加</span></li>
+  </ul>
+  <p class="note">この一覧は、更新の内容から拾った主なものです。すべての変更は、リリースノートを参照してください。</p>
+  <div class="footer"><span>研究用です。診断には使わないでください。</span><span>8 / 8</span></div>
+</section>
+
+<script src="shots/marks.js"></script>
+<script src="../guide.js"></script>
+</body>
+</html>
