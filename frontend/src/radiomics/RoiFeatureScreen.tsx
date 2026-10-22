@@ -17,17 +17,20 @@ import { useI18n, type TFn } from "../i18n/i18n";
 import { HttpError } from "../http";
 import {
   cancelRoiFeatureJob,
+  fetchMaxSection,
   fetchSeries,
   fetchSeriesLayout,
   getRoiFeatureJob,
   readDicomSegSegments,
   submitRoiFeatureJob,
+  type MaxSectionResult,
   type RoiFeatureJobStatus,
   type RoiFeatureResult,
   type RoiFeatureRow,
   type Series,
 } from "../api";
 import { formatFeatureValue } from "./GlamFeatureTable";
+import { formatAreaMm2, formatPositionMm, tiePositions } from "./maxSection";
 import {
   discretisationOf,
   parseSettingsProperties,
@@ -105,6 +108,9 @@ export function RoiFeatureScreen() {
   const [resultFor, setResultFor] = useState<{ seriesNumber?: number | string | null; maskChannel: number } | null>(null);
   const [query, setQuery] = useState("");
 
+  /** 選んだ ROI の最大断面。ROI を選び直すたびに求める（特徴量の計算とは独立）。 */
+  const [maxSection, setMaxSection] = useState<{ result?: MaxSectionResult; error?: string } | null>(null);
+
   const busy = job != null && !FINISHED.has(job.state);
 
   useEffect(() => {
@@ -167,6 +173,22 @@ export function RoiFeatureScreen() {
       cancelled = true;
     };
   }, [studyUid, maskSeriesUid]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setMaxSection(null);
+    if (!studyUid || !sourceSeriesUid || !maskSeriesUid) return;
+    void fetchMaxSection({
+      studyInstanceUid: studyUid, sourceSeriesUid, maskSeriesUid, maskChannel, channel, timePoint, label: 1,
+    })
+      .then((result) => { if (!cancelled) setMaxSection({ result }); })
+      .catch((e) => {
+        if (!cancelled) setMaxSection({ error: e instanceof HttpError ? e.message : String(e) });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [studyUid, sourceSeriesUid, maskSeriesUid, maskChannel, channel, timePoint]);
 
   // ジョブの問い合わせ。取り消し後や投げ直し後の古い応答は jobId で捨てる。
   useEffect(() => {
@@ -351,6 +373,28 @@ export function RoiFeatureScreen() {
           </Field>
         )}
         <div style={note}>{t("roiFeat.mask.help")}</div>
+        {maskSeriesUid !== "" && maxSection && (
+          <div style={maxSection.error ? errText : { ...note, color: "#1f2d3d", fontSize: 12 }} data-testid="roifeat-maxsection">
+            {maxSection.result ? (
+              <>
+                {t("roiFeat.maxSection.line", {
+                  pos: formatPositionMm(maxSection.result.best.positionMm),
+                  total: maxSection.result.totalSlices,
+                  area: formatAreaMm2(maxSection.result.best.areaMm2),
+                  pixels: maxSection.result.best.pixels,
+                })}
+                {maxSection.result.ties.length > 1 && (
+                  <div style={note} data-testid="roifeat-maxsection-ties">
+                    {t("roiFeat.maxSection.ties", {
+                      n: maxSection.result.ties.length, positions: tiePositions(maxSection.result),
+                    })}
+                  </div>
+                )}
+                <div style={note}>{t("roiFeat.maxSection.basis")}</div>
+              </>
+            ) : maxSection.error}
+          </div>
+        )}
         <Field label={t("roiFeat.field.caseLabel")}>
           <input value={caseLabel} onChange={(e) => setCaseLabel(e.target.value)} placeholder="case-012"
             style={input} data-testid="roifeat-caselabel" />

@@ -20,9 +20,11 @@ import org.springframework.web.server.ResponseStatusException;
 public class RoiFeatureController {
 
     private final RoiFeatureJobService jobs;
+    private final MaxSectionService maxSection;
 
-    public RoiFeatureController(RoiFeatureJobService jobs) {
+    public RoiFeatureController(RoiFeatureJobService jobs, MaxSectionService maxSection) {
         this.jobs = jobs;
+        this.maxSection = maxSection;
     }
 
     @PostMapping("/jobs")
@@ -34,6 +36,20 @@ public class RoiFeatureController {
         } catch (IllegalStateException e) {
             // web モードで standalone 専用の機能を呼んだ
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, e.getMessage(), e);
+        }
+    }
+
+    /** ROI の最大断面（前景の画素数が最大のスライス）。位置は患者座標の mm。 */
+    @PostMapping("/max-section")
+    public MaxSectionService.Result maxSection(@RequestBody MaxSectionService.Request req) {
+        try {
+            return maxSection.find(req);
+        } catch (IllegalArgumentException e) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, e.getMessage(), e);
+        } catch (IllegalStateException e) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, e.getMessage(), e);
+        } catch (java.io.IOException e) {
+            throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, e.getMessage(), e);
         }
     }
 
