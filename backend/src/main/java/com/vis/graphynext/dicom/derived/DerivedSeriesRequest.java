@@ -37,6 +37,9 @@ import java.util.List;
  * @param pixelPaddingValue   PixelPaddingValue(0028,0120) の<b>格納値</b>（null なら書かない）。
  *                            プラグイン出力で「データ無し」を埋めた背景値を明示するために使う
  * @param producer            プラグイン由来の場合の出所（null なら本体の機能による生成）
+ * @param parametricMap       null でなければ **Parametric Map（Float Pixel Data・Modality=OT）として保存**する。
+ *                            画素は {@code frames[].pixels} の Float32 リトルエンディアン（rows*columns*4 バイト）で、
+ *                            Rescale / PixelPadding は使わない（値はそのまま実際の量）。元のモダリティの定量属性は引き継がない
  * @param frames              スライス毎（InstanceNumber 昇順で並べる）
  */
 public record DerivedSeriesRequest(
@@ -65,6 +68,7 @@ public record DerivedSeriesRequest(
         String rescaleType,
         Integer pixelPaddingValue,
         Producer producer,
+        ParametricMap parametricMap,
         List<Frame> frames) {
 
     /**
@@ -81,6 +85,16 @@ public record DerivedSeriesRequest(
      * @param version 版
      */
     public record Producer(String id, String name, String version) {}
+
+    /**
+     * Parametric Map 出力の値の説明（RealWorldValueMapping に書く）。
+     *
+     * @param label       LUTLabel（SH、16 文字以内）。例 {@code FUSION_MULT}
+     * @param explanation LUTExplanation（LO、64 文字以内）。式と元の単位を人が読める形で
+     * @param unitCode    UCUM のコード。単位なし・不明は {@code 1}
+     * @param unitMeaning CodeMeaning（LO）。例 {@code HU x SUVbw}
+     */
+    public record ParametricMap(String label, String explanation, String unitCode, String unitMeaning) {}
 
     /**
      * 1 スライス。

@@ -81,6 +81,8 @@ import { LevelSetsDialog } from "./LevelSetsDialog";
 import { HistogramDialog } from "./HistogramDialog";
 import { ValueInspectorDialog } from "./ValueInspectorDialog";
 import { ResampleDialog } from "./ResampleDialog";
+import { FusionCalcDialog } from "./FusionCalcDialog";
+import { initialCalcOp } from "../viewer/fusionCalc";
 import { StitchDialog } from "./StitchDialog";
 import { FourierDialog } from "./FourierDialog";
 import { SUVCalibrationDialog } from "../viewer/SUVCalibrationDialog";
@@ -2259,6 +2261,9 @@ function TileCell({
   // プレビューは composeTransforms(自動, 手動) で合成される。
   const [fusionRegistration, setFusionRegistration] = useState<RegistrationResult | null>(null);
   const [registrationOpen, setRegistrationOpen] = useState(false);
+  // Fusion の演算結果を新規シリーズとして保存するダイアログ。背景（このタイル）の現在の C/T は onDimChange で控える。
+  const [fusionCalcOpen, setFusionCalcOpen] = useState(false);
+  const bgDimsRef = useRef({ c: 0, t: 0 });
   /**
    * 記録の復元状態。
    *
@@ -2682,7 +2687,7 @@ function TileCell({
           commandKey={commandKey}
           patientKey={patientKey}
           seriesLabel={seriesLabel}
-          onDimChange={onDimChange}
+          onDimChange={(c, tIdx, z) => { bgDimsRef.current = { c, t: tIdx }; onDimChange(c, tIdx, z); }}
           renderFusionOverlay={renderFusionOverlay}
           // タスク・ランチャー（A13-2）の依頼を引き受けるのは**このタイルだけ**
           // （StudyList のプレビューに取られないようにする）。
@@ -2721,6 +2726,7 @@ function TileCell({
           onOpacityChange={(v) => onFusionChange({ ...tile.fusion!, opacity: v })}
           blend={fusionBlendCss(tile.fusion.blend)}
           onBlendChange={(b) => onFusionChange({ ...tile.fusion!, blend: b })}
+          onSaveImage={() => setFusionCalcOpen(true)}
           onCChange={setFusionC}
           onTChange={setFusionT}
           onLutChange={setFusionLut}
@@ -2792,6 +2798,24 @@ function TileCell({
         </div>
       )}
 
+      {fusionCalcOpen && tile.fusion && (
+        <FusionCalcDialog
+          mode={mode}
+          background={{
+            study: tile.study, series: tile.series, instances: tile.instances,
+            c: bgDimsRef.current.c, t: bgDimsRef.current.t,
+          }}
+          foreground={{
+            study: tile.fusion.study, series: tile.fusion.series, instances: tile.fusion.instances,
+            c: fusionC, t: fusionT,
+          }}
+          registration={registrationTransform}
+          adjust={fusionAdjust}
+          initialOp={initialCalcOp(fusionBlendCss(tile.fusion.blend))}
+          onClose={() => setFusionCalcOpen(false)}
+        />
+      )}
+
       {/* 自動位置合わせのパネル（設計 §12）。タイル内に絶対配置する。 */}
       {registrationOpen && tile.fusion && (
         <RegistrationPanel
@@ -2847,6 +2871,7 @@ function FusionControlBar({
   onOpacityChange,
   blend,
   onBlendChange,
+  onSaveImage,
   onCChange,
   onTChange,
   onLutChange,
@@ -2884,6 +2909,8 @@ function FusionControlBar({
   onOpacityChange: (v: number) => void;
   blend: FusionBlend;
   onBlendChange: (b: FusionBlend) => void;
+  /** 差分・乗算の画素値演算を新規シリーズとして保存するダイアログを開く。 */
+  onSaveImage: () => void;
   onCChange: (v: number) => void;
   onTChange: (v: number) => void;
   onLutChange: (lut: LutData | null) => void;
@@ -3001,6 +3028,35 @@ function FusionControlBar({
           </button>
         </div>
       </div>
+
+      {/* 差分・乗算は表示上の合成であること（画素値は元の背景のまま）を常に見せる。画像として残す操作もここ。 */}
+      {blend !== "normal" && (
+        <div
+          role="note"
+          data-testid="fusion-blend-info"
+          title={t("fusion.blend.info.detail")}
+          style={{
+            flexBasis: "100%", display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: "#33404d",
+            background: "#e3eefb", border: "1px solid #b9d2f0", borderRadius: 3, padding: "2px 6px", minWidth: 0,
+          }}
+        >
+          <span aria-hidden="true" style={{ color: "#0b5cad", flex: "none" }}>ⓘ</span>
+          <span style={{ flex: 1, minWidth: 0 }}>{t("fusion.blend.info")}</span>
+          <button
+            type="button"
+            onClick={onSaveImage}
+            disabled={!adjustEnabled}
+            title={adjustEnabled ? t("fusion.blend.saveImage.title") : t("fusion.blend.saveImage.unavailable")}
+            data-testid="fusion-blend-save-image"
+            style={{
+              fontSize: 11, padding: "1px 6px", borderRadius: 3, border: "1px solid #c0c8d4", background: "#f5f7fa",
+              color: "#0b5cad", cursor: adjustEnabled ? "pointer" : "not-allowed", flex: "none", lineHeight: 1.4,
+            }}
+          >
+            {t("fusion.blend.saveImage")}
+          </button>
+        </div>
+      )}
 
       {showLutDialog && (
         <LutDialog
