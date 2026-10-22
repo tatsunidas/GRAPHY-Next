@@ -137,6 +137,9 @@ export function MenuBar({
         { label: t("app.btn.settingsTitle"), onClick: onOpenSettings, testId: "menu-item-settings" },
         { label: t("app.btn.dbTitle"), onClick: onOpenDb, disabled: !isStandalone, testId: "menu-item-dbadmin" },
         ...(isStandalone && !isDemo
+          ? [{ label: t("assistant.menu"), onClick: () => onOpenViewer("assistant"), testId: "menu-item-assistant" }]
+          : []),
+        ...(isStandalone && !isDemo
           ? [{ label: t("computeJobs.menu"), onClick: () => onOpenViewer("computejobs"), testId: "menu-item-compute-jobs" }]
           : []),
         ...(isDemo

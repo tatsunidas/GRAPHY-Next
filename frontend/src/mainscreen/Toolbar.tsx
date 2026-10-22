@@ -6,7 +6,7 @@ import { useI18n } from "../i18n/i18n";
 import { ToolIcon } from "../icons/ToolIcon";
 import { UI_ICON_FILES } from "../icons/toolIcons";
 
-export type ViewerKind = "2d" | "3d" | "mpr" | "slicer" | "qr" | "computejobs";
+export type ViewerKind = "2d" | "3d" | "mpr" | "slicer" | "qr" | "computejobs" | "assistant";
 export type ToolKind =
   | "export"
   | "send"

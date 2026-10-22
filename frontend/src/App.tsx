@@ -178,6 +178,9 @@ export function App() {
 
   useGlobalShortcuts({
     "open-settings": () => setSettingsOpen(true),
+    "open-assistant": () => {
+      if (status?.mode === "standalone") void desktop()?.openViewer?.("assistant");
+    },
     "open-db": () => {
       if (status?.mode === "standalone") setDbOpen(true);
     },

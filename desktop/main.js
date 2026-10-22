@@ -135,6 +135,8 @@ const VIEWER_DEFAULTS = {
   glam: { width: 1250, height: 900 },
   "radiomics-features": { width: 1250, height: 900 },
   computejobs: { width: 1150, height: 720 },
+  // AI アシスタント（#assistant）。チャットなので縦長。
+  assistant: { width: 520, height: 780 },
 };
 
 /** 同梱 / 開発時の backend jar のパスを解決する。 */
