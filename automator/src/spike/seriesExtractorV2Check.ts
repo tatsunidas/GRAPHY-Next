@@ -15,7 +15,7 @@ import type { Page } from "@playwright/test";
 
 import { DesktopDriver } from "../driver/desktopDriver.js";
 import { resetDb } from "../backend/dbReset.js";
-import { importFixtureCategory } from "../fixtures/importFixtures.js";
+import { importFixtureCategory, importPaths } from "../fixtures/importFixtures.js";
 import { selectFirstStudy } from "../checklist/items/shared/helpers.js";
 import { createStepRecorder } from "../checklist/types.js";
 import { AUTOMATOR_ROOT } from "../fixtures/manifest.js";
@@ -112,7 +112,7 @@ async function main(): Promise<void> {
     fs.rmSync(dlDir, { recursive: true, force: true });
     fs.mkdirSync(dlDir, { recursive: true });
     await d.app.evaluate(({ session }, dir) => {
-      session.defaultSession.on("will-download", (_e, item) => {
+      session.defaultSession.on("will-download", (_e: unknown, item: { getFilename(): string; setSavePath(p: string): void }) => {
         item.setSavePath(`${dir}/${item.getFilename()}`);
       });
     }, dlDir);
@@ -333,19 +333,119 @@ async function main(): Promise<void> {
     check(true, "ダイアログを閉じる（✕）");
 
     // ── DB 管理のタブ ──────────────────────────────────────────
-    console.log("\n[10] DB 管理の「シリーズ抽出」タブ（DB 全体が対象）");
+    console.log("\n[10] DB 管理の「シリーズ抽出」タブ: 対象を絞る");
+    const BENCH = "C:/Users/t_kob/gxse-bench";
+    const haveSyn = fs.existsSync(`${BENCH}/small`) && fs.existsSync(`${BENCH}/small2`) && fs.existsSync(`${BENCH}/dicom`);
+    if (!haveSyn) console.log("  [未達] 合成データ（gxse-bench/small, small2, dicom）が無い。絞り込みの検査は未実施");
+    if (haveSyn) console.log(`  import small: ${JSON.stringify(await importPaths(d.ports.http, [`${BENCH}/small`]))}`);
+    const scopeApi = (body: unknown) => api<{ studies: number; series: number; instances: number }>(page, "/api/series-extract/scope", { conditions: [], ...(body as object) });
+    const allUids = await studyUids(page);
     await page.getByTestId("mainscreen-menu-system").click();
     await page.getByTestId("menu-item-dbadmin").click();
     await page.getByTestId("dbadmin-tab-series").click();
     await page.getByTestId("series-extractor-panel").waitFor({ state: "visible", timeout: 10_000 });
-    check(await page.getByText(/DB に登録されているスタディ全体|registered in the DB/).first().isVisible(), "対象が DB 全体と表示される");
+    const counts = page.getByTestId("series-scope-counts");
+    const whole = await scopeApi({ filters: {} });
+    await page.waitForTimeout(900);
+    check(/DB 全体|Whole DB/.test(await counts.innerText()), "絞り込みなしは「DB 全体」と表示される");
+    check((await counts.innerText()).includes(`${whole.studies} スタディ`) && (await counts.innerText()).includes(`${whole.series} シリーズ`),
+      "規模の表示が API の数え方と一致（スタディ・シリーズ）", { ui: await counts.innerText(), api: whole });
     const nDb = await runVerify(page);
-    check(nDb === all.length, "DB タブで条件なしの行数が API の全シリーズ数と一致", { nDb, all: all.length });
+    const allTruth = await truth(page, allUids, []);
+    check(nDb === allTruth.length, "DB 全体: 条件なしの行数が API の全シリーズ数と一致", { nDb, api: allTruth.length });
     await page.screenshot({ path: path.join(OUT_DIR, "4-dbadmin-tab.png") });
-    await page.getByTestId("dbadmin-dialog").getByRole("tab").first().isVisible().catch(() => false);
+
+    if (haveSyn) {
+      // 患者で絞る
+      await page.getByTestId("series-scope-patient-id").fill("P000");
+      await page.waitForTimeout(900);
+      const p0 = await scopeApi({ filters: { patientId: "P000" } });
+      check(p0.studies >= 1 && p0.studies < whole.studies, "患者 P000 の規模は全体より小さい（絞れている）", { p0, whole });
+      check((await counts.innerText()).includes(`${p0.studies} スタディ`) && !/DB 全体|Whole DB/.test(await counts.innerText()),
+        "絞ると規模の表示が変わり、「DB 全体」が消える", await counts.innerText());
+      const nP0 = await runVerify(page);
+      const p0uids = (await page.evaluate(async (b) => (await (await fetch(`${b}/api/studies?patientId=P000`)).json()), BASE)) as { studyInstanceUid: string }[];
+      const p0truth = await truth(page, p0uids.map((x) => x.studyInstanceUid), []);
+      check(nP0 === p0truth.length && nP0 >= 1, "患者 P000: 画面の行数 = API", { nP0, api: p0truth.length });
+      const pidsInTable = await page.getByTestId("series-extractor-result-table").locator("tbody tr td:first-child").allInnerTexts();
+      check(pidsInTable.every((x) => x.trim() === "P000"), "負例: 他の患者のシリーズが混ざらない", [...new Set(pidsInTable)]);
+
+      // スタディを 1 件外す
+      await page.getByTestId("series-scope-pick-btn").click();
+      const list = page.getByTestId("series-scope-list");
+      await list.waitFor({ state: "visible", timeout: 10_000 });
+      const boxes = list.locator('input[type="checkbox"][data-testid^="series-scope-study-"]');
+      await boxes.first().waitFor({ timeout: 10_000 });
+      const nBoxes = await boxes.count();
+      check(nBoxes === p0.studies, "一覧にその患者のスタディだけが並ぶ", { nBoxes, studies: p0.studies });
+      const firstTid = (await boxes.first().getAttribute("data-testid")) ?? "";
+      const firstUid = firstTid.replace("series-scope-study-", "");
+      await boxes.first().uncheck();
+      await page.waitForTimeout(900);
+      check(/選択中|selected/.test(await counts.innerText()), "外すと「選択中 n / total」が出る", await counts.innerText());
+      const keep = p0uids.map((x) => x.studyInstanceUid).filter((u) => u !== firstUid);
+      const nKeep = await runVerify(page);
+      const keepTruth = await truth(page, keep, []);
+      check(nKeep === keepTruth.length, "1 件外した対象: 画面の行数 = API", { nKeep, api: keepTruth.length });
+      check(nKeep < p0truth.length, "負例: 外したスタディのシリーズは結果に出ない", { nKeep, before: p0truth.length });
+      await page.screenshot({ path: path.join(OUT_DIR, "5-scope-picked.png") });
+
+      // 検証のあとに足したデータは、データシート・抽出に入らない（再探索していない）
+      console.log("\n[11] 検証済みの一覧を使う（再探索しない）");
+      const rowsBefore = await rowCount(page);
+      console.log(`  import small2: ${JSON.stringify(await importPaths(d.ports.http, [`${BENCH}/small2`]))}`);
+      for (const f of fs.readdirSync(dlDir)) if (f.endsWith(".csv")) fs.rmSync(path.join(dlDir, f));
+      await page.getByTestId("series-extractor-datasheet-btn").click();
+      await page.waitForTimeout(2500);
+      console.log(`  datasheet files: ${JSON.stringify(fs.readdirSync(dlDir))}`);
+      const csvName2 = fs.readdirSync(dlDir).filter((f) => f.endsWith("series_datasheet.csv")).sort().pop();
+      const csv2 = csvName2 ? fs.readFileSync(path.join(dlDir, csvName2), "utf8").replace(/^\uFEFF/, "") : "";
+      const lines2 = csv2.split(/\r?\n/).filter(Boolean);
+      check(lines2.length - 1 === rowsBefore, "データシートの行数 = 検証した行数（後から取り込んだ分は入らない）", { csv: lines2.length - 1, rowsBefore });
+      // 対象を変えれば結果は捨てられ、抽出ボタンは再検証まで使えない
+      await page.getByTestId("series-scope-patient-id").fill("");
+      await page.waitForTimeout(900);
+      check(await page.getByTestId("series-extractor-extract-btn").isDisabled(), "対象を変えると結果が捨てられ、抽出は再検証まで押せない（負例）");
+    }
+
+    // 大規模: 300 スタディ・約 5,400 ファイルを取り込み、進捗・残り時間・中止・結果の上限を実際に見る
+    console.log("\n[12] 大規模（合成 300 スタディ）");
+    if (fs.existsSync(`${BENCH}/dicom`)) {
+      const t0 = Date.now();
+      console.log(`  import big: ${JSON.stringify(await importPaths(d.ports.http, [`${BENCH}/dicom`]))} (${Math.round((Date.now() - t0) / 1000)} s)`);
+      await page.getByTestId("series-scope-patient-id").fill("");
+      await page.getByTestId("series-scope-refresh").click();
+      await page.waitForTimeout(1500);
+      const bigScope = await scopeApi({ filters: {} });
+      check((await counts.innerText()).includes(`${bigScope.series} シリーズ`), "大きな DB でも規模が API と一致", { ui: await counts.innerText(), api: bigScope });
+      // 進捗と中止
+      await page.getByTestId("series-extractor-verify-btn").click();
+      await page.getByTestId("series-extractor-progress").waitFor({ state: "visible", timeout: 10_000 });
+      const seen: string[] = [];
+      for (let i = 0; i < 8; i++) {
+        seen.push(await page.getByTestId("series-extractor-progress").innerText().catch(() => ""));
+        await page.waitForTimeout(250);
+      }
+      check(seen.some((x) => /探索中|Scanning/.test(x) && /\d+ \/ \d+/.test(x)), "探索中に進捗（n / 総数）が出る", seen.slice(0, 3));
+      await page.screenshot({ path: path.join(OUT_DIR, "6-progress.png") });
+      await page.getByTestId("series-extractor-cancel-btn").click().catch(() => {});
+      await page.waitForTimeout(3000);
+      const cancelled = (await page.getByText(/検証を中止|Verification cancelled/).count()) > 0;
+      const finished = (await page.getByTestId("series-extractor-result-table").count()) > 0;
+      check(cancelled || finished, "中止を押すと止まる（または既に終わっている）", { cancelled, finished });
+      // 最後まで走らせて上限表示
+      const nBig = await runVerify(page);
+      check(nBig === 1000, "結果表は先頭 1000 行だけ描画する", nBig);
+      check((await page.getByTestId("series-extractor-result-cap").count()) === 1, "「全 N 件（表示は先頭 1000 件）」の注記が出る");
+      const bigTruth = await truth(page, await studyUids(page), []);
+      check((await page.getByTestId("series-extractor-result-cap").innerText()).includes(String(bigTruth.length)), "注記の総数が API の一致数と一致", { n: bigTruth.length });
+      await page.screenshot({ path: path.join(OUT_DIR, "7-big.png") });
+    } else {
+      console.log("  [未達] gxse-bench/dicom が無い");
+    }
     await page.getByRole("button", { name: /患者|Patients/ }).first().click();
     await page.getByTestId("dbadmin-tab-series").click();
-    check((await rowCount(page)) === all.length, "タブを往復しても結果が残る");
+    check((await rowCount(page)) >= 1, "タブを往復しても結果が残る");
   } finally {
     await d.stop();
   }

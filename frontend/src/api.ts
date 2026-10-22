@@ -1487,7 +1487,16 @@ export interface SeriesVerifyResult {
   matched: SeriesMatch[];
   studyCount: number;
   seriesCount: number;
+  /** 読めなかった理由（先頭 500 件まで）。総数は errorTotal。 */
   errors: string[];
+  errorTotal: number;
+}
+
+/** 対象の規模（ファイルは読まずに数える）。web モードの series/instances は -1（不明）。 */
+export interface SeriesScopeCounts {
+  studies: number;
+  series: number;
+  instances: number;
 }
 
 export interface SeriesCopyResult {
@@ -1498,7 +1507,11 @@ export interface SeriesCopyResult {
 }
 
 export interface SeriesExtractRequest {
-  studyUids: string[];
+  /** 対象のスタディ UID の明示。空で filters があれば、サーバーが絞り込み条件で解決する。 */
+  studyUids?: string[];
+  filters?: StudyFilters;
+  /** 検証ジョブの id。あれば再探索せず、その結果を使う（copy・datasheet）。期限切れは 410。 */
+  verifyJobId?: string;
   conditions: SeriesCondition[];
   /** 平面フィルタ（AXIAL/SAGITTAL/CORONAL）。空/未指定で無効。 */
   planes?: string[];
@@ -1519,6 +1532,8 @@ export interface SeriesExtractJobStatus {
   error: string | null;
 }
 
+export const seriesExtractScope = (req: Pick<SeriesExtractRequest, "studyUids" | "filters">) =>
+  httpSend<SeriesScopeCounts>("/api/series-extract/scope", "POST", { conditions: [], ...req });
 export const seriesExtractSubmitVerify = (req: SeriesExtractRequest) =>
   httpSend<SeriesExtractJobStatus>("/api/series-extract/jobs", "POST", req);
 export const seriesExtractSubmitCopy = (req: SeriesExtractRequest) =>
@@ -1536,7 +1551,7 @@ export const seriesExtractDatasheet = async (req: SeriesExtractRequest): Promise
     body: JSON.stringify(req),
   });
   if (!res.ok) {
-    throw new Error(`HTTP ${res.status}`);
+    throw new HttpError(`HTTP ${res.status}`, res.status);
   }
   return res.blob();
 };

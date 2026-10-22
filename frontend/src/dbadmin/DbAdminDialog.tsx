@@ -2,7 +2,7 @@
  * Copyright (c) Visionary Imaging Services, Inc. All rights reserved.
  * Author: Tatsuaki Kobayashi
  */
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   fetchPatients,
   fetchStats,
@@ -29,6 +29,8 @@ import { DbTransferDialog } from "./DbTransferDialog";
 import { deleteRelatedNote } from "./dbAdminApi";
 import { friendlyDbAdminError } from "./dbAdminErrors";
 import { SeriesExtractorPanel } from "../mainscreen/SeriesExtractorPanel";
+import { DbScopePicker } from "./DbScopePicker";
+import type { ScopeSpec } from "../mainscreen/seriesScopeUtil";
 
 type Tab = "patients" | "series" | "stats";
 
@@ -46,6 +48,9 @@ export function DbAdminDialog({
   const [tab, setTab] = useState<Tab>("patients");
   // シリーズ抽出タブは、条件や結果をタブを往復しても失わないよう、一度開いたら残す。
   const [seriesOpened, setSeriesOpened] = useState(false);
+  // 「対象を絞る」で決めた対象。実行のたびに最新を読む（ref）。
+  const seriesScope = useRef<{ scope: ScopeSpec; key: string }>({ scope: { filters: {} }, key: "{}" });
+  const [seriesScopeKey, setSeriesScopeKey] = useState("{}");
   const [confirmDelete, setConfirmDelete] = useState(true);
   // ファイルも消す設定のときは、ROI などの付随データも消える（確認文に添える）
   const [deleteFiles, setDeleteFiles] = useState(true);
@@ -70,7 +75,7 @@ export function DbAdminDialog({
 
   return (
     <div style={overlay} onClick={onClose}>
-      <div data-testid="dbadmin-dialog" style={dialog} onClick={(e) => e.stopPropagation()}>
+      <div data-testid="dbadmin-dialog" style={tab === "series" ? { ...dialog, ...seriesDialog } : dialog} onClick={(e) => e.stopPropagation()}>
         <div style={header}>
           <span style={{ fontWeight: 700 }}>{t("dbadmin.title")}</span>
           <button data-testid="dialog-close-button" style={closeBtn} onClick={onClose} aria-label={t("common.close")}>
@@ -104,13 +109,18 @@ export function DbAdminDialog({
             <div style={{ display: tab === "series" ? "block" : "none", height: "100%" }}>
               <SeriesExtractorPanel
                 active={tab === "series"}
-                scopeLabel={t("seriesext.scope.db")}
+                scopeSlot={
+                  <DbScopePicker
+                    active={tab === "series"}
+                    onChange={(scope, key) => {
+                      seriesScope.current = { scope, key };
+                      setSeriesScopeKey(key);
+                    }}
+                  />
+                }
+                scopeKey={seriesScopeKey}
                 mode="standalone"
-                resolveStudyUids={async () => {
-                  const studies = await fetchStudies();
-                  if (studies.length === 0) throw new Error(t("tagext.err.noStudies"));
-                  return studies.map((s) => s.studyInstanceUid);
-                }}
+                resolveScope={async () => seriesScope.current.scope}
               />
             </div>
           )}
@@ -1012,6 +1022,8 @@ const overlay: React.CSSProperties = {
   justifyContent: "center",
   zIndex: 1000,
 };
+// シリーズ抽出タブは、タグ一覧・条件・結果を並べるので広く取る（画面に収まる範囲）。
+const seriesDialog: React.CSSProperties = { width: 1120, height: 840, maxWidth: "97vw", maxHeight: "94vh" };
 const dialog: React.CSSProperties = {
   width: 860,
   maxWidth: "94vw",

@@ -100,6 +100,46 @@ public interface DicomInstanceRepository extends JpaRepository<DicomInstance, St
             """)
     List<DicomInstance> findBySeries(@Param("studyUid") String studyUid, @Param("seriesUid") String seriesUid);
 
+    /**
+     * 複数スタディのシリーズ（枚数つき）を 1 回で引く。スタディごとに問い合わせる N+1 を避ける。
+     * 呼び出し側は IN 句の長さを抑えるため、スタディ UID を数百件ずつのチャンクで渡す。
+     */
+    @Query("""
+            select i.studyInstanceUid as studyUid, i.seriesInstanceUid as seriesUid, count(i) as instances
+            from DicomInstance i
+            where i.studyInstanceUid in :studyUids
+            group by i.studyInstanceUid, i.seriesInstanceUid
+            order by i.studyInstanceUid, max(i.seriesNumber), i.seriesInstanceUid
+            """)
+    List<SeriesRef> findSeriesRefs(@Param("studyUids") List<String> studyUids);
+
+    /** findSeriesRefs の射影。 */
+    interface SeriesRef {
+        String getStudyUid();
+
+        String getSeriesUid();
+
+        long getInstances();
+    }
+
+    /**
+     * シリーズの代表ヘッダ候補。画像でない SOP（SC・SR/KO・PR・PDF）を後ろへ回し、次に InstanceNumber 順。
+     * 呼び出し側は Pageable で先頭数件だけ取る（1000 枚のシリーズの実体を全部読まないため）。
+     */
+    @Query("""
+            select i from DicomInstance i
+            where i.studyInstanceUid = :studyUid and i.seriesInstanceUid = :seriesUid
+            order by case when i.sopClassUid is null
+                            or i.sopClassUid = '1.2.840.10008.5.1.4.1.1.7' or i.sopClassUid like '1.2.840.10008.5.1.4.1.1.7.%'
+                            or i.sopClassUid = '1.2.840.10008.5.1.4.1.1.88' or i.sopClassUid like '1.2.840.10008.5.1.4.1.1.88.%'
+                            or i.sopClassUid = '1.2.840.10008.5.1.4.1.1.11' or i.sopClassUid like '1.2.840.10008.5.1.4.1.1.11.%'
+                            or i.sopClassUid = '1.2.840.10008.5.1.4.1.1.104' or i.sopClassUid like '1.2.840.10008.5.1.4.1.1.104.%'
+                          then 1 else 0 end,
+                     i.instanceNumber
+            """)
+    List<DicomInstance> findCandidates(@Param("studyUid") String studyUid, @Param("seriesUid") String seriesUid,
+                                       org.springframework.data.domain.Pageable page);
+
     // --- 患者テーブル（DB 管理 UI 用）---
 
     /** 患者単位の集計（検索可。q が null/空なら全件）。 */

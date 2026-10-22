@@ -41,40 +41,58 @@ public class SeriesExtractController {
         this.jobs = jobs;
     }
 
-    /** リクエスト本文。destination/sequentialRename は copy/zip 用。 */
+    /**
+     * リクエスト本文。対象は studyUids の明示か filters（サーバーで解決）。destination/sequentialRename は copy/zip 用。
+     * verifyJobId を渡すと、その検証ジョブの結果を再探索せずに使う（copy・datasheet）。
+     */
     public record ExtractReq(List<String> studyUids, List<SearchCondition> conditions, List<String> planes,
-                             String destination, boolean sequentialRename) {
+                             String destination, boolean sequentialRename,
+                             com.vis.graphynext.dicom.StudySearch filters, String verifyJobId) {
+    }
+
+    /** 対象の規模（スタディ・シリーズ・枚数）。ファイルは読まない。 */
+    @PostMapping("/scope")
+    public SeriesExtractService.ScopeCounts scope(@RequestBody ExtractReq req) {
+        return service.scope(scopeOf(req));
     }
 
     @PostMapping("/verify")
     public SeriesExtractService.VerifyResult verify(@RequestBody ExtractReq req) {
-        if (req.studyUids() == null || req.studyUids().isEmpty()) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "studyUids が空です");
-        }
         checkDuplicates(req);
-        return service.verify(req.studyUids(), conds(req), req.planes());
+        return service.verify(resolve(req), conds(req), req.planes());
     }
 
     /** 進捗付きの探索（検証）。{@code GET /jobs/{id}} をポーリングし、DONE で一致一覧が入る。 */
     @PostMapping("/jobs")
     public SeriesExtractJobService.Status submitVerify(@RequestBody ExtractReq req) {
-        requireStudies(req);
         checkDuplicates(req);
-        return jobs.submitVerify(req.studyUids(), conds(req), req.planes());
+        return jobs.submitVerify(resolve(req), conds(req), req.planes());
     }
 
     /** 進捗付きのフォルダコピー（standalone のみ）。 */
     @PostMapping("/jobs/copy")
     public SeriesExtractJobService.Status submitCopy(@RequestBody ExtractReq req) {
-        requireStudies(req);
-        checkDuplicates(req);
         if (service.isWeb()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "フォルダコピーは standalone 専用です（web は ZIP を使用）。");
         }
         if (req.destination() == null || req.destination().isBlank()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "出力先フォルダが指定されていません。");
         }
-        return jobs.submitCopy(req.studyUids(), conds(req), req.planes(), req.destination(), req.sequentialRename());
+        if (req.verifyJobId() != null && !req.verifyJobId().isBlank()) {
+            try {
+                return jobs.submitCopyVerified(req.verifyJobId(), req.destination(), req.sequentialRename());
+            } catch (SeriesExtractJobService.StaleJobException e) {
+                throw new ResponseStatusException(HttpStatus.GONE, e.getMessage());
+            }
+        }
+        checkDuplicates(req);
+        return jobs.submitCopy(resolve(req), conds(req), req.planes(), req.destination(), req.sequentialRename());
+    }
+
+    /** 検証済みの一覧からデータシートを作る（GET でも取れるようにしておく）。 */
+    @GetMapping("/jobs/{id}/datasheet")
+    public ResponseEntity<byte[]> jobDatasheet(@PathVariable String id) {
+        return datasheet(new ExtractReq(null, null, null, null, false, null, id));
     }
 
     @GetMapping("/jobs/{id}")
@@ -98,13 +116,23 @@ public class SeriesExtractController {
     /** データシート CSV（患者 ID・Study 日付・StudyUID・SeriesUID ＋ 条件タグの実測値）。 */
     @PostMapping("/datasheet")
     public ResponseEntity<byte[]> datasheet(@RequestBody ExtractReq req) {
-        requireStudies(req);
-        checkDuplicates(req);
-        SeriesExtractService.VerifyResult vr = service.verify(req.studyUids(), conds(req), req.planes());
-        if (vr.matched().isEmpty()) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT, "条件に一致するシリーズがありません");
+        String csv;
+        if (req.verifyJobId() != null && !req.verifyJobId().isBlank()) {
+            // 検証済みの一覧から作る（再探索しない）。
+            try {
+                csv = jobs.datasheet(req.verifyJobId());
+            } catch (SeriesExtractJobService.StaleJobException e) {
+                throw new ResponseStatusException(HttpStatus.GONE, e.getMessage());
+            }
+        } else {
+            checkDuplicates(req);
+            SeriesExtractService.VerifyResult vr = service.verify(resolve(req), conds(req), req.planes());
+            if (vr.matched().isEmpty()) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT, "条件に一致するシリーズがありません");
+            }
+            csv = SeriesExtractService.datasheetCsv(vr.matched(), conds(req));
         }
-        byte[] body = SeriesExtractService.datasheetCsv(vr.matched(), conds(req)).getBytes(StandardCharsets.UTF_8);
+        byte[] body = csv.getBytes(StandardCharsets.UTF_8);
         return ResponseEntity.ok()
                 .contentType(MediaType.parseMediaType("text/csv; charset=UTF-8"))
                 .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"series_datasheet.csv\"")
@@ -113,12 +141,10 @@ public class SeriesExtractController {
 
     @PostMapping("/copy")
     public ResponseEntity<SeriesExtractService.CopyResult> copy(@RequestBody ExtractReq req) {
-        if (req.studyUids() == null || req.studyUids().isEmpty()) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "studyUids が空です");
-        }
+        checkDuplicates(req);
         try {
             return ResponseEntity.ok(service.copyToFolder(
-                    req.studyUids(), conds(req), req.planes(), req.destination(), req.sequentialRename()));
+                    resolve(req), conds(req), req.planes(), req.destination(), req.sequentialRename()));
         } catch (IllegalStateException e) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, e.getMessage());
         } catch (Exception e) {
@@ -128,9 +154,6 @@ public class SeriesExtractController {
 
     @PostMapping("/zip")
     public ResponseEntity<StreamingResponseBody> zip(@RequestBody ExtractReq req) {
-        if (req.studyUids() == null || req.studyUids().isEmpty()) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "studyUids が空です");
-        }
         if (service.isWeb()) {
             // web の ZIP は WADO-RS 取得が必要（未実装）。
             throw new ResponseStatusException(HttpStatus.NOT_IMPLEMENTED,
@@ -138,12 +161,13 @@ public class SeriesExtractController {
         }
         checkDuplicates(req);
         // ストリーミングは失敗しても HTTP 200 になるので、書く前に件数を数えて 0 件は 409 で弾く。
-        if (service.countMatched(req.studyUids(), conds(req), req.planes()) == 0) {
+        List<String> uids = resolve(req);
+        if (service.countMatched(uids, conds(req), req.planes()) == 0) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "条件に一致するシリーズがありません");
         }
         StreamingResponseBody body = out -> {
             try {
-                service.zipLocal(req.studyUids(), conds(req), req.planes(), req.sequentialRename(), out);
+                service.zipLocal(uids, conds(req), req.planes(), req.sequentialRename(), out);
             } catch (Exception e) {
                 throw new java.io.IOException(e);
             }
@@ -154,10 +178,22 @@ public class SeriesExtractController {
                 .body(body);
     }
 
-    private static void requireStudies(ExtractReq req) {
-        if (req.studyUids() == null || req.studyUids().isEmpty()) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "studyUids が空です");
+    private static SeriesExtractService.ScopeReq scopeOf(ExtractReq req) {
+        return new SeriesExtractService.ScopeReq(req.studyUids(), req.filters());
+    }
+
+    /** 対象のスタディ UID（明示か、絞り込み条件のサーバー解決）。0 件は 400。 */
+    private List<String> resolve(ExtractReq req) {
+        List<String> uids;
+        try {
+            uids = service.resolveStudies(scopeOf(req));
+        } catch (IllegalArgumentException e) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, e.getMessage());
         }
+        if (uids.isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "対象のスタディがありません");
+        }
+        return uids;
     }
 
     /** 全く同じタグ経路の条件は重複として 400（画面でも弾くが、API 直叩きも守る）。 */

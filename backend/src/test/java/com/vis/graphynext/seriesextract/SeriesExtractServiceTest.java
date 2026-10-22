@@ -227,7 +227,7 @@ class SeriesExtractServiceTest {
         var same = include("0008103E", "LO", "EQUALS", "OTHER", null);
         var other = include("00080060", "CS", "EQUALS", "MR", null);
         var req = (java.util.function.Function<List<SearchCondition>, SeriesExtractController.ExtractReq>)
-                cs -> new SeriesExtractController.ExtractReq(List.of("ST.SX"), cs, null, null, false);
+                cs -> new SeriesExtractController.ExtractReq(List.of("ST.SX"), cs, null, null, false, null, null);
         org.junit.jupiter.api.Assertions.assertThrows(org.springframework.web.server.ResponseStatusException.class,
                 () -> SeriesExtractController.checkDuplicates(req.apply(List.of(a, same))));
         SeriesExtractController.checkDuplicates(req.apply(List.of(a, other)));

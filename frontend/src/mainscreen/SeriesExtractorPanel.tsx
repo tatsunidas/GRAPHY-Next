@@ -2,7 +2,7 @@
  * Copyright (c) Visionary Imaging Services, Inc. All rights reserved.
  * Author: Tatsuaki Kobayashi
  */
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   fetchTagDictionary,
   seriesExtractCancel,
@@ -13,11 +13,13 @@ import {
   seriesExtractZip,
   type SeriesCondition,
   type SeriesExtractJobStatus,
+  type SeriesExtractRequest,
   type SeriesVerifyResult,
   type TagDictEntry,
   type TagPath,
 } from "../api";
 import { desktop } from "../desktopBridge";
+import { HttpError } from "../http";
 import { useI18n } from "../i18n/i18n";
 import { NestedTagBuilder } from "./NestedTagBuilder";
 import { exportPercent, runExportJob } from "./exportJob";
@@ -35,6 +37,7 @@ import {
   usedSingleTags,
   visibleDict,
 } from "./seriesCondUtil";
+import { RESULT_ROWS_CAP, etaSeconds, formatEta, type ScopeSpec } from "./seriesScopeUtil";
 import { dictMap, ggggeeee, isSQ, normHex, parseConditions, pathDisplay, pathLabel, serializeConditions } from "./tagPathUtil";
 
 const PLANES = ["AXIAL", "SAGITTAL", "CORONAL"];
@@ -57,17 +60,22 @@ type Phase = null | "scan" | "copy" | "zip" | "sheet";
 /**
  * シリーズ抽出の本体（DB 管理のタブにも、メイン画面のダイアログにも載せる）。
  * 左: 辞書からタグを探す → 右: 条件を組む → 下: 実行（進捗・結果・データシート・抽出）。
- * 対象スタディは resolveStudyUids が決める（検索リスト全体／DB 全体）。失敗は Error の message で返す。
+ * 対象は resolveScope が決める（スタディ UID の明示か、サーバーで解決する絞り込み条件）。失敗は Error の message で返す。
+ * 検証のあとのデータシート・抽出は、検証ジョブの結果をそのまま使う（再探索しない）。
  */
 export function SeriesExtractorPanel({
   active,
-  scopeLabel,
-  resolveStudyUids,
+  scopeSlot,
+  scopeKey,
+  resolveScope,
   mode,
 }: {
   active: boolean;
-  scopeLabel: string;
-  resolveStudyUids: () => Promise<string[]>;
+  /** 対象の表示欄（検索リスト版は一行の説明、DB タブは「対象を絞る」欄）。 */
+  scopeSlot: ReactNode;
+  /** 対象が変わったら変える。前回の検証結果は古くなるので捨てる。 */
+  scopeKey: string;
+  resolveScope: () => Promise<ScopeSpec>;
   mode: string;
 }) {
   const { t } = useI18n();
@@ -87,6 +95,9 @@ export function SeriesExtractorPanel({
   const [pv, setPv] = useState({ tag: "", name: "", creator: "", vr: "LO" });
 
   const [result, setResult] = useState<SeriesVerifyResult | null>(null);
+  const [verifyJobId, setVerifyJobId] = useState<string | null>(null);
+  const startRef = useRef(0);
+  const [elapsedMs, setElapsedMs] = useState(0);
   const [phase, setPhase] = useState<Phase>(null);
   const [progress, setProgress] = useState<{ processed: number; total: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -107,8 +118,15 @@ export function SeriesExtractorPanel({
   // 条件を変えたら、前回の検証結果は古い。
   const touch = () => {
     setResult(null);
+    setVerifyJobId(null);
     setInfo(null);
   };
+  // 対象を変えたときも同じ。
+  useEffect(() => {
+    setResult(null);
+    setVerifyJobId(null);
+    setInfo(null);
+  }, [scopeKey]);
 
   const firstVr = (vr: string) => (vr || "").split(/[ ,/]/).filter(Boolean)[0] ?? "";
 
@@ -173,8 +191,9 @@ export function SeriesExtractorPanel({
   };
 
   const labelFor = (c: SeriesCondition) => c.label || pathLabel(dmap, c.segments);
-  const buildReq = (studyUids: string[], withDest = false) => ({
-    studyUids,
+  const buildReq = (scope: ScopeSpec, withDest = false): SeriesExtractRequest => ({
+    studyUids: scope.studyUids,
+    filters: scope.filters,
     conditions: conditions.map((c) => ({ ...c, label: labelFor(c) })),
     planes: [...planes],
     destination: withDest ? destination ?? undefined : undefined,
@@ -183,17 +202,33 @@ export function SeriesExtractorPanel({
 
   const fail = (e: unknown) => setError(e instanceof Error ? e.message : String(e));
 
-  const onStatus = (s: SeriesExtractJobStatus) => setProgress({ processed: s.processed, total: s.total });
+  const onStatus = (s: SeriesExtractJobStatus) => {
+    setProgress({ processed: s.processed, total: s.total });
+    setElapsedMs(Date.now() - startRef.current);
+  };
+
+  /** 検証結果の期限切れ（410）は、検証し直しを促して一覧を捨てる。 */
+  const handleStale = (e: unknown): boolean => {
+    if (e instanceof HttpError && e.status === 410) {
+      touch();
+      setError(t("seriesext.err.stale"));
+      return true;
+    }
+    return false;
+  };
 
   const verify = async () => {
     setPhase("scan");
     setError(null);
     setInfo(null);
     setProgress(null);
+    setResult(null);
+    setVerifyJobId(null);
     cancelRef.current = false;
+    startRef.current = Date.now();
     try {
-      const studyUids = await resolveStudyUids();
-      const req = buildReq(studyUids);
+      const scope = await resolveScope();
+      const req = buildReq(scope);
       const fin = await runExportJob<SeriesExtractJobStatus>(
         { submit: () => seriesExtractSubmitVerify(req), get: seriesExtractJob, cancel: seriesExtractCancel },
         onStatus,
@@ -206,6 +241,7 @@ export function SeriesExtractorPanel({
         setError(fin.error ?? t("seriesext.err.failed"));
       } else {
         setResult(fin.verify);
+        setVerifyJobId(fin.jobId);
         setInfo(t("seriesext.verified", { series: fin.verify.seriesCount, studies: fin.verify.studyCount }));
       }
     } catch (e) {
@@ -220,11 +256,11 @@ export function SeriesExtractorPanel({
     setPhase("sheet");
     setError(null);
     try {
-      const studyUids = await resolveStudyUids();
-      download(await seriesExtractDatasheet(buildReq(studyUids)), "series_datasheet.csv");
+      // 検証済みの一覧から作る（再探索しない）。
+      download(await seriesExtractDatasheet({ verifyJobId: verifyJobId ?? undefined, conditions: [] }), "series_datasheet.csv");
       setInfo(t("seriesext.sheetSaved"));
     } catch (e) {
-      fail(e);
+      if (!handleStale(e)) fail(e);
     } finally {
       setPhase(null);
     }
@@ -244,11 +280,11 @@ export function SeriesExtractorPanel({
     setError(null);
     setInfo(null);
     cancelRef.current = false;
+    startRef.current = Date.now();
     try {
-      const studyUids = await resolveStudyUids();
       if (isWeb) {
         setPhase("zip");
-        const { blob, filename } = await seriesExtractZip(buildReq(studyUids));
+        const { blob, filename } = await seriesExtractZip(buildReq(await resolveScope()));
         download(blob, filename);
         setInfo(t("seriesext.zipped"));
         return;
@@ -259,7 +295,8 @@ export function SeriesExtractorPanel({
       }
       setPhase("copy");
       setProgress(null);
-      const req = buildReq(studyUids, true);
+      // 検証ジョブの結果をそのままコピーする（プレビューで見た一覧と同じものが出る）。
+      const req: SeriesExtractRequest = { verifyJobId: verifyJobId ?? undefined, conditions: [], destination, sequentialRename };
       const fin = await runExportJob<SeriesExtractJobStatus>(
         { submit: () => seriesExtractSubmitCopy(req), get: seriesExtractJob, cancel: seriesExtractCancel },
         onStatus,
@@ -275,7 +312,7 @@ export function SeriesExtractorPanel({
         if (fin.copy.errors.length > 0) setError(fin.copy.errors.slice(0, 3).join(" / "));
       }
     } catch (e) {
-      fail(e);
+      if (!handleStale(e)) fail(e);
     } finally {
       setPhase(null);
       setProgress(null);
@@ -305,12 +342,14 @@ export function SeriesExtractorPanel({
   const first = Math.max(0, Math.floor(scrollTop / ROW_H) - 5);
   const last = Math.min(shown.length, Math.ceil((scrollTop + viewH) / ROW_H) + 5);
 
-  const canExtract = !busy && !!result && result.seriesCount > 0 && (isWeb || !!destination);
+  const canExtract = !busy && !!result && result.seriesCount > 0 && (isWeb || (!!destination && !!verifyJobId));
+  const etaSec = progress ? etaSeconds(elapsedMs, progress.processed, progress.total) : null;
+  const eta = etaSec === null ? null : formatEta(etaSec);
   const pct = progress ? exportPercent({ jobId: "", state: "RUNNING", total: progress.total, processed: progress.processed }) : null;
 
   return (
     <div data-testid="series-extractor-panel" style={root}>
-      <div style={scopeBar}>{scopeLabel}</div>
+      {scopeSlot}
 
       <div style={twoPane}>
         {/* ① タグを探す */}
@@ -500,7 +539,7 @@ export function SeriesExtractorPanel({
         <button data-testid="series-extractor-verify-btn" style={primaryBtn(runnable && !busy)} onClick={() => void verify()} disabled={!runnable || busy}>
           {phase === "scan" ? t("seriesext.verifying") : t("seriesext.verify")}
         </button>
-        <button data-testid="series-extractor-datasheet-btn" style={btn} onClick={() => void datasheet()} disabled={busy || !result || result.seriesCount === 0} title={t("seriesext.datasheetHint")}>
+        <button data-testid="series-extractor-datasheet-btn" style={btn} onClick={() => void datasheet()} disabled={busy || !result || result.seriesCount === 0 || !verifyJobId} title={t("seriesext.datasheetHint")}>
           {t("seriesext.datasheet")}
         </button>
         <span style={{ flex: 1 }} />
@@ -535,6 +574,9 @@ export function SeriesExtractorPanel({
           <span style={{ fontSize: 12, minWidth: 130 }}>
             {phase === "scan" && t("seriesext.progress.scan", { n: progress?.processed ?? 0, total: progress && progress.total > 0 ? progress.total : "…" })}
             {phase === "copy" && t("seriesext.progress.copy", { pct: pct ?? 0 })}
+            {(phase === "scan" || phase === "copy") && eta !== null && (
+              <span style={{ color: "#8a98a6", marginLeft: 8 }}>{t(`seriesext.progress.eta.${eta.unit}`, { n: eta.n })}</span>
+            )}
             {phase === "zip" && t("seriesext.progress.zip")}
             {phase === "sheet" && t("seriesext.progress.sheet")}
           </span>
@@ -569,7 +611,7 @@ export function SeriesExtractorPanel({
                 </tr>
               </thead>
               <tbody>
-                {result.matched.map((m, i) => (
+                {result.matched.slice(0, RESULT_ROWS_CAP).map((m, i) => (
                   <tr key={i} style={{ borderBottom: "1px solid #eef1f4" }} title={m.seriesUid}>
                     <td style={td}>{m.patientId}</td>
                     <td style={td}>{m.studyDate}</td>
@@ -584,9 +626,14 @@ export function SeriesExtractorPanel({
                 ))}
               </tbody>
             </table>
-            {result.errors.length > 0 && (
+            {result.matched.length > RESULT_ROWS_CAP && (
+              <div data-testid="series-extractor-result-cap" style={capNote}>
+                {t("seriesext.resultCap", { total: result.matched.length, shown: RESULT_ROWS_CAP })}
+              </div>
+            )}
+            {result.errorTotal > 0 && (
               <div style={errBox}>
-                <div style={{ fontWeight: 600 }}>{t("seriesext.skipped", { count: result.errors.length })}</div>
+                <div style={{ fontWeight: 600 }}>{t("seriesext.skipped", { count: result.errorTotal })}</div>
                 {result.errors.slice(0, 30).map((e, i) => (
                   <div key={i}>{e}</div>
                 ))}
@@ -643,7 +690,6 @@ function ValueInput({
 }
 
 const root: React.CSSProperties = { display: "flex", flexDirection: "column", height: "100%", minHeight: 0, gap: 8, fontFamily: "system-ui, sans-serif", color: "#1a1a1a" };
-const scopeBar: React.CSSProperties = { fontSize: 12, color: "#556", background: "#f3f6f9", border: "1px solid #e1e7ee", borderRadius: 6, padding: "5px 10px" };
 const twoPane: React.CSSProperties = { display: "flex", gap: 10, flex: "0 0 auto", height: 330, minHeight: 0 };
 const leftPane: React.CSSProperties = { width: 320, flex: "none", display: "flex", flexDirection: "column", minHeight: 0, border: "1px solid #e1e7ee", borderRadius: 8, padding: 8 };
 const rightPane: React.CSSProperties = { flex: 1, minWidth: 0, display: "flex", flexDirection: "column", minHeight: 0, border: "1px solid #e1e7ee", borderRadius: 8, padding: 8 };
@@ -672,6 +718,7 @@ const empty: React.CSSProperties = { color: "#8a98a6", fontSize: 12, padding: 6 
 const tableStyle: React.CSSProperties = { borderCollapse: "collapse", fontSize: 12, width: "100%", whiteSpace: "nowrap" };
 const th: React.CSSProperties = { position: "sticky", top: 0, background: "#f7f9fb", border: "1px solid #e1e7ee", padding: "4px 8px", textAlign: "left", fontWeight: 600 };
 const td: React.CSSProperties = { border: "1px solid #eef1f4", padding: "3px 8px", maxWidth: 260, overflow: "hidden", textOverflow: "ellipsis" };
+const capNote: React.CSSProperties = { marginTop: 6, fontSize: 12, color: "#5b6b7a" };
 const errBox: React.CSSProperties = { marginTop: 8, padding: 8, background: "#fff8e6", border: "1px solid #f0dca0", borderRadius: 6, fontSize: 11.5, color: "#7a5b00" };
 const btn: React.CSSProperties = { padding: "6px 14px", border: "1px solid #cdd5de", borderRadius: 6, background: "#fff", cursor: "pointer", fontSize: 13, whiteSpace: "nowrap" };
 const primaryBtn = (on: boolean): React.CSSProperties => ({ ...btn, background: on ? "#0b5cad" : "#9fb6cf", color: "#fff", border: "none", cursor: on ? "pointer" : "default" });
