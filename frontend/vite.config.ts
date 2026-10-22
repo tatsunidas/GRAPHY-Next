@@ -1,5 +1,6 @@
 import { defineConfig, loadEnv, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
+import { cornerstonePreScaleFix } from "./vite.cornerstonePreScaleFix";
 
 // 本番ビルド時のみ index.html に厳格な Content-Security-Policy を注入する。
 // dev(Vite/HMR は unsafe-eval を使う) には適用しない＝HMR を壊さない。
@@ -77,12 +78,14 @@ export default defineConfig(({ mode }) => {
 
   return {
     base: "./",
-    plugins: [react(), cspPlugin(), cornerstoneCodecEsm()],
+    plugins: [react(), cspPlugin(), cornerstoneCodecEsm(), cornerstonePreScaleFix()],
     // Cornerstone3D の dicom-image-loader はデコード用 Web Worker を ES module + 動的 import
     // （コーデックの遅延ロード）で構成するため、worker を ES 形式でバンドルする必要がある
     // （既定の iife はコード分割と非互換でビルドが失敗する）。
     worker: {
       format: "es",
+      // 本番ビルドは worker を別の Rollup で束ねるため、plugins とは別に渡す（dev は plugins 側が効く）。
+      plugins: () => [cornerstonePreScaleFix()],
     },
     optimizeDeps: {
       // dicom-image-loader は Web Worker(?worker_file)を内包し dep-optimizer と非互換のため除外する
