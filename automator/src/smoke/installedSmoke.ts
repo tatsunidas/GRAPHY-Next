@@ -51,6 +51,8 @@ const DIST = path.resolve(arg("dist", path.join(AUTOMATOR_ROOT, "..", "desktop",
 const OUT = path.resolve(arg("out", path.join(AUTOMATOR_ROOT, ".results", "installed-smoke")));
 const PORT = Number(arg("port", "18190"));
 const LINUX_PACKAGE = arg("linux-package", "appimage");
+/** 実際にローカル AI（llama.cpp とモデル、約 2 GB）を取得して動かす節 [7]。時間と通信が要るので指定したときだけ。 */
+const LOCAL_AI = process.argv.includes("--local-ai");
 
 const failures: string[] = [];
 let passed = 0;
@@ -188,6 +190,87 @@ async function seekState(p: Page): Promise<{ value: number; max: number; canvasW
   );
 }
 
+function pidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+type Bridge = Record<string, (...a: unknown[]) => Promise<any>>; // eslint-disable-line @typescript-eslint/no-explicit-any
+
+/**
+ * [7] ローカル AI: 本物の取得経路（許可ホスト・302・sha256）で導入 → 起動 → 会話 → 終了で残らない、を実 OS で確かめる。
+ * アプリ本体は変えない。確認ダイアログ（showMessageBoxSync）だけ、利用者が「ダウンロードする」を押した扱いに差し替える。
+ * 返り値は、後で終了を確かめる llama-server の PID（記録が無ければ null）。
+ */
+async function localAiSection(app: ElectronApplication, main: Page): Promise<{ pid: number | null; dataDir: string }> {
+  const call = <T,>(expr: string): Promise<T> => main.evaluate(expr) as Promise<T>;
+  const dataDir = await app.evaluate(({ app: a }) => a.getPath("appData") + "/GRAPHY-Next");
+  await app.evaluate(({ dialog }) => {
+    dialog.showMessageBoxSync = (() => 0) as typeof dialog.showMessageBoxSync;
+  });
+
+  const st0 = await call<Record<string, any>>(`window.graphyDesktop.aiLocalStatus()`); // eslint-disable-line @typescript-eslint/no-explicit-any
+  check(st0.supported === true, "[7] この OS・CPU でローカル AI が対応している", { platform: st0.platform });
+  check(st0.runtime.installed === false && st0.model.installed === false, "[7] 導入前は runtime もモデルも未導入（前提）", { runtime: st0.runtime.installed, model: st0.model.installed });
+  if (!st0.supported) return { pid: null, dataDir };
+
+  // 負例: 確認ダイアログで「取り消す」(1) を返したら、何も取得しない。
+  await app.evaluate(({ dialog }) => {
+    dialog.showMessageBoxSync = (() => 1) as typeof dialog.showMessageBoxSync;
+  });
+  const canceled = await call<{ ok: boolean; error?: string }>(`window.graphyDesktop.aiLocalInstall(${JSON.stringify(st0.defaultModelId)})`);
+  const st1 = await call<Record<string, any>>(`window.graphyDesktop.aiLocalStatus()`); // eslint-disable-line @typescript-eslint/no-explicit-any
+  check(canceled.ok === false && canceled.error === "canceled" && st1.runtime.installed === false, "[7] 負例: 確認で取り消すと取得せず canceled", { canceled, runtime: st1.runtime.installed });
+  await app.evaluate(({ dialog }) => {
+    dialog.showMessageBoxSync = (() => 0) as typeof dialog.showMessageBoxSync;
+  });
+
+  console.log(`  [情報] ローカル AI 導入開始: ${st0.defaultModelId} (${st0.platform})`);
+  const t0 = Date.now();
+  const inst = await call<{ ok: boolean; error?: string }>(`window.graphyDesktop.aiLocalInstall(${JSON.stringify(st0.defaultModelId)})`);
+  console.log(`  [情報] 導入に ${Math.round((Date.now() - t0) / 1000)} 秒: ${JSON.stringify(inst)}`);
+  check(inst.ok === true, "[7] ★ローカル AI を取得・検証・展開できる（sha256 一致）", inst);
+  if (!inst.ok) return { pid: null, dataDir };
+  const st2 = await call<Record<string, any>>(`window.graphyDesktop.aiLocalStatus()`); // eslint-disable-line @typescript-eslint/no-explicit-any
+  check(st2.runtime.installed === true && st2.model.installed === true && st2.model.verified === true, "[7] runtime とモデルが導入済み（モデルは検証済み）", { runtime: st2.runtime.installed, model: st2.model });
+  check(st2.registered === true, "[7] 提供元 local-llm が登録された", { registered: st2.registered });
+
+  const chk = await call<{ ok: boolean; error?: string; startedMs?: number; log?: string }>(`window.graphyDesktop.aiLocalCheck()`);
+  check(chk.ok === true, "[7] ★llama-server が起動して /health が 200 を返す", { ok: chk.ok, error: chk.error, startedMs: chk.startedMs, log: (chk.log ?? "").slice(-600) });
+  console.log(`  [情報] 起動テスト: ${JSON.stringify({ ok: chk.ok, startedMs: chk.startedMs })}`);
+
+  const cfg = await call<{ providers: { id: string; endpoint?: string; auth?: unknown }[] }>(`window.graphyDesktop.aiProvidersGet()`);
+  const prov = cfg.providers.find((x) => x.id === "local-llm");
+  check(!!prov && /^http:\/\/127\.0\.0\.1:\d+$/.test(String(prov.endpoint)) && (prov.auth === "none" || (prov.auth as { type?: string })?.type === "none" || prov.auth === undefined), "[7] local-llm の宛先は 127.0.0.1 だけ・鍵なし", { endpoint: prov?.endpoint, auth: prov?.auth });
+
+  const role = await call<{ ok: boolean }>(`window.graphyDesktop.aiLocalRole({ fallback: true, makeDefault: true })`);
+  check(role.ok === true, "[7] 会話の既定先と縮退先をローカルにできる", role);
+
+  // 実会話: アシスタント窓から。モデルの中身は問わず、空でない応答が返ること。
+  await main.evaluate(() => { window.location.hash = "#assistant"; });
+  await main.waitForFunction(() => window.location.hash === "#assistant");
+  const t1 = Date.now();
+  const chat = await main.evaluate(
+    (req) => (window as unknown as { graphyDesktop: Bridge }).graphyDesktop.aiChat(req),
+    { sessionId: "smoke-local", messages: [{ role: "user", text: "Reply with one short word." }] },
+  ) as { ok: boolean; text?: string; error?: string; provenance?: { providerId?: string } };
+  console.log(`  [情報] 会話 ${Date.now() - t1} ms: ${JSON.stringify({ ok: chat.ok, textLen: (chat.text ?? "").length, error: chat.error, provider: chat.provenance?.providerId })}`);
+  check(chat.ok === true && (chat.text ?? "").trim().length > 0, "[7] ★ローカルモデルが会話に応答する（空でない）", { ok: chat.ok, error: chat.error, textLen: (chat.text ?? "").length });
+  check(chat.provenance?.providerId === "local-llm", "[7] 応答の由来が local-llm", chat.provenance);
+  await main.screenshot({ path: path.join(OUT, "4-assistant-local.png") }).catch(() => {});
+
+  let pid: number | null = null;
+  try {
+    pid = (JSON.parse(fs.readFileSync(path.join(dataDir, "local-ai", "server.json"), "utf8")) as { pid: number }).pid;
+  } catch { /* 記録が無ければ下の検査で失敗になる */ }
+  check(pid !== null && pidAlive(pid), "[7] 会話中は llama-server のプロセスが生きている（記録した PID）", { pid });
+  return { pid, dataDir };
+}
+
 async function main(): Promise<void> {
   if (process.platform === "darwin" && process.env.CI !== "true") {
     throw new Error("macOS は実プロファイルを隔離できないので、CI（CI=true）以外では実行しません。");
@@ -250,6 +333,7 @@ async function main(): Promise<void> {
   proc.stdout?.on("data", (d) => appLog.write(d));
   proc.stderr?.on("data", (d) => appLog.write(d));
   app.on("window", (w) => watchPage(w, "window"));
+  let localAi: { pid: number | null; dataDir: string } | null = null;
   try {
     const main = await findWindow(app, (u) => /renderer[\\/]index\.html/.test(u) && !u.includes("2dviewer"), 120_000);
     check(!!main, "[2] ★製品版のメイン画面が開く（splash のまま・起動直後の落下ではない）", {
@@ -384,6 +468,9 @@ async function main(): Promise<void> {
     fs.writeFileSync(path.join(OUT, "local-detect.json"), scrub(JSON.stringify(localJson, null, 2)));
     await main.screenshot({ path: path.join(OUT, "3-compute-local.png") }).catch(() => {});
 
+    // ── 7. ローカル AI（--local-ai のとき）──────────────────
+    if (LOCAL_AI) localAi = await localAiSection(app, main);
+
     // ── 3. 画面の異常 ───────────────────────────────────────
     check(pageProblems.length === 0, "[3] ★★画面に CSP 違反・未捕捉エラーが出ていない", pageProblems.slice(0, 5));
   } catch (e) {
@@ -401,6 +488,29 @@ async function main(): Promise<void> {
     appLog.end();
     await Promise.race([app.close().catch(() => {}), new Promise((r) => setTimeout(r, 20_000))]);
     if (proc && proc.exitCode === null) killProcessTree(proc);
+  }
+
+  if (localAi && localAi.pid !== null) {
+    // アプリを閉じたら llama-server も終わる（孤児を残さない）。終了処理は最大 10 秒待つ。
+    const pid = localAi.pid;
+    for (let i = 0; i < 40 && pidAlive(pid); i++) await new Promise((r) => setTimeout(r, 500));
+    check(!pidAlive(pid), "[7] ★アプリを閉じると llama-server も終了している（孤児が残らない）", { pid });
+    if (pidAlive(pid)) process.kill(pid); // 検査は失敗として記録済み。runner に残さない
+
+    // 初回導入の提案フラグは、起動時に消費される（ダイアログ自体は導入済みなので出ない）。
+    const flag = path.join(localAi.dataDir, "first-run-local-llm.flag");
+    fs.writeFileSync(flag, "");
+    const app2 = await electron.launch({ executablePath: inst.exe, args: inst.args, env, timeout: 120_000 });
+    try {
+      let gone = false;
+      for (let i = 0; i < 60 && !gone; i++) {
+        gone = !fs.existsSync(flag);
+        if (!gone) await new Promise((r) => setTimeout(r, 500));
+      }
+      check(gone, "[7] 初回導入フラグ(first-run-local-llm.flag)が起動時に消費される", { flag: path.basename(flag) });
+    } finally {
+      await Promise.race([app2.close().catch(() => {}), new Promise((r) => setTimeout(r, 20_000))]);
+    }
   }
 }
 
