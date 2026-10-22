@@ -83,6 +83,7 @@ import { ValueInspectorDialog } from "./ValueInspectorDialog";
 import { ResampleDialog } from "./ResampleDialog";
 import { FusionCalcDialog } from "./FusionCalcDialog";
 import { initialCalcOp } from "../viewer/fusionCalc";
+import { isFusionCalcBlend, setFusionMeasure } from "../viewer/fusionMeasureContext";
 import { StitchDialog } from "./StitchDialog";
 import { FourierDialog } from "./FourierDialog";
 import { SUVCalibrationDialog } from "../viewer/SUVCalibrationDialog";
@@ -2293,6 +2294,21 @@ function TileCell({
    * 計算したばかりの結果まで「復元」と表示されてしまう。
    */
   const [restoredResultAt, setRestoredResultAt] = useState<string | null>(null);
+  // 差分・乗算の間は、ROI 計測が背景画像を読んでいることを計測側へ伝える（fusionMeasureContext.ts）
+  const fusionBlendNow = tile.fusion?.blend;
+  const fusionFgLabel = tile.fusion
+    ? tile.fusion.series.seriesDescription || `#${tile.fusion.series.seriesNumber ?? "?"} ${tile.fusion.series.modality ?? ""}`.trim()
+    : "";
+  useEffect(() => {
+    if (!tile.fusion || !isFusionCalcBlend(fusionBlendNow)) return;
+    setFusionMeasure(tile.id, {
+      backgroundSeriesUid: tile.series.seriesInstanceUid,
+      foregroundLabel: fusionFgLabel,
+      blend: fusionBlendNow,
+    });
+    return () => setFusionMeasure(tile.id, null);
+  }, [tile.id, tile.fusion, tile.series.seriesInstanceUid, fusionBlendNow, fusionFgLabel]);
+
   // fusion が切り替わったら C/T / LUT / W/L / 位置合わせをリセット
   const prevFusionSeriesUid = useRef<string | null>(null);
   useEffect(() => {

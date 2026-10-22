@@ -14,6 +14,7 @@
  */
 import { imageToWorldOnPlane, type PlaneGeometry } from "./imageCoords";
 import { cell } from "./roiStatsCsv";
+import { FUSION_CSV_HEADER, fusionCsvCells, type FusionMeasureInfo } from "./fusionMeasureContext";
 import { isSegmentForeground } from "./maskStatsCore";
 
 export interface MaskDumpSlice {
@@ -47,6 +48,8 @@ export interface MaskVoxelDumpMeta {
   unit: string;
   /** 指定すると、その segment のボクセルだけを出す（ROI 1 件ぶん）。 */
   segmentIndex?: number;
+  /** 差分・乗算の Fusion の背景を測ったとき。あれば末尾に `measuredOn` 等の 3 列を足す。 */
+  fusion?: FusionMeasureInfo;
 }
 
 /** 前景ボクセルをスライス順・画素順に 1 行ずつ返す。 */
@@ -76,8 +79,8 @@ export function* iterateMaskVoxels(
 
 const n = (v: number | undefined): string => (v === undefined || !Number.isFinite(v) ? "" : String(v));
 
-export function maskVoxelDumpHeader(unit: string): string[] {
-  return [
+export function maskVoxelDumpHeader(unit: string, fusion = false): string[] {
+  const head = [
     "label",
     "maskId",
     "slice",
@@ -90,6 +93,7 @@ export function maskVoxelDumpHeader(unit: string): string[] {
     unit ? `value[${unit}]` : "value",
     "imageId",
   ];
+  return fusion ? [...head, ...FUSION_CSV_HEADER] : head;
 }
 
 /**
@@ -104,10 +108,10 @@ export function maskVoxelDumpCsvChunks(
   const chunks: string[] = [];
   const label = cell(meta.label);
   const maskId = cell(meta.maskId);
-  let buf: string[] = [maskVoxelDumpHeader(meta.unit).map(cell).join(",")];
+  let buf: string[] = [maskVoxelDumpHeader(meta.unit, !!meta.fusion).map(cell).join(",")];
   for (const r of iterateMaskVoxels(slices, meta.segmentIndex)) {
     buf.push(
-      [label, maskId, r.slice, r.segment, r.col, r.row, n(r.x), n(r.y), n(r.z), n(r.value), cell(r.imageId)].join(","),
+      [label, maskId, r.slice, r.segment, r.col, r.row, n(r.x), n(r.y), n(r.z), n(r.value), cell(r.imageId), ...(meta.fusion ? fusionCsvCells(meta.fusion).map(cell) : [])].join(","),
     );
     if (buf.length >= linesPerChunk) {
       chunks.push(buf.join("\r\n") + "\r\n");

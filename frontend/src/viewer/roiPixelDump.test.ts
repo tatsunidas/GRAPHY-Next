@@ -188,3 +188,14 @@ describe("CSV", () => {
     expect(blob.endsWith("\r\n")).toBe(true);
   });
 });
+
+describe("Fusion の背景を測ったときの記録", () => {
+  it("負例: fusion が無ければ列は増えない／正例: あれば末尾に 3 列", () => {
+    const rows = [{ col: 1, row: 2, value: 3 }];
+    const base = roiPixelDumpToCsv(rows, meta).split("\r\n");
+    expect(base[0].split(",")).not.toContain("measuredOn");
+    const withF = roiPixelDumpToCsv(rows, { ...meta, fusion: { backgroundSeriesUid: "S1", foregroundLabel: "PET, \"early\"", blend: "difference" as const } }).split("\r\n");
+    expect(withF[0].split(",").slice(-3)).toEqual(["measuredOn", "fusionBlend", "fusionForeground"]);
+    expect(withF[1].endsWith(',background,difference,"PET, ""early"""')).toBe(true);
+  });
+});

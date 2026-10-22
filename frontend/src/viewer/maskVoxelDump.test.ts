@@ -149,3 +149,13 @@ describe("segment 指定（塗りの ROI 1 件）", () => {
     expect(collectMaskValues(inputs).voxels).toBe(6);
   });
 });
+
+describe("Fusion の背景を測ったときの記録（マスク）", () => {
+  it("負例: fusion が無ければ見出しは変わらない／正例: 末尾に 3 列で全行そろう", () => {
+    expect(maskVoxelDumpHeader("HU")).not.toContain("measuredOn");
+    const ls = lines(maskVoxelDumpCsvChunks(slices, { label: "Liver", maskId: "seg-1", unit: "HU", fusion: { backgroundSeriesUid: "S1", foregroundLabel: "PET, \"early\"", blend: "difference" as const } }));
+    const head = ls[0].split(",");
+    expect(head.slice(-3)).toEqual(["measuredOn", "fusionBlend", "fusionForeground"]);
+    expect(ls.slice(1).every((l) => l.endsWith(',background,difference,"PET, ""early"""'))).toBe(true);
+  });
+});
