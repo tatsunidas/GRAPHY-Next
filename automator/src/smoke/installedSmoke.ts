@@ -281,6 +281,8 @@ async function attachmentSection(app: ElectronApplication, main: Page): Promise<
     aiProvidersGet: () => Promise<{ providers: unknown[]; defaults: Record<string, string>; fallbacks?: Record<string, string[]> }>;
     aiProvidersSet: (c: unknown) => Promise<{ ok: boolean }>;
   };
+  // 提供元の宛先を足すと main がネイティブの確認ダイアログ（showMessageBoxSync）を出して止まる。アプリ本体は変えず、差し替えて「許可」を返す。
+  await app.evaluate(({ dialog }) => { dialog.showMessageBoxSync = (() => 0) as typeof dialog.showMessageBoxSync; });
   const orig = await main.evaluate(() => (window as unknown as { graphyDesktop: B }).graphyDesktop.aiProvidersGet());
   const prov = { id: "smoke-att", label: "smoke", kind: "openai", endpoint: "http://127.0.0.1:9", auth: "none", toolMode: "none", models: { "text-to-text": "x" } };
   const set = await main.evaluate((c) => (window as unknown as { graphyDesktop: B }).graphyDesktop.aiProvidersSet(c), { providers: [prov], defaults: { "text-to-text": "smoke-att" } });
