@@ -53,3 +53,20 @@ export function subscribeRoiReveal(l: (req: RoiRevealRequest) => void): () => vo
     listeners.delete(l);
   };
 }
+
+/** いま表示中のタイルが開いているシリーズ（重複あり）。別ウィンドウからの要求を受けるかの判定に使う。 */
+const revealSeries = new Map<string, number>();
+
+/** タイルが自分のシリーズを登録する。返り値は解除関数。 */
+export function registerRevealSeries(seriesUid: string): () => void {
+  revealSeries.set(seriesUid, (revealSeries.get(seriesUid) ?? 0) + 1);
+  return () => {
+    const n = (revealSeries.get(seriesUid) ?? 1) - 1;
+    if (n <= 0) revealSeries.delete(seriesUid);
+    else revealSeries.set(seriesUid, n);
+  };
+}
+
+export function hasRevealSeries(seriesUid: string): boolean {
+  return revealSeries.has(seriesUid);
+}

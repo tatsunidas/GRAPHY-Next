@@ -54,6 +54,8 @@ import { subscribeRoiMaskStore } from "../viewer/roiMaskStore";
 import { getLoadedRois, registerRoiCollector, scheduleRoiSave } from "../viewer/roiSaveStore";
 import { collectRoisForPatient, sopOfImageId } from "../viewer/roiRestore";
 import { emitRoiReveal } from "../viewer/roiReveal";
+import { installRoiRevealReceiver } from "../viewer/roiRevealBridge";
+import { MaxSectionDialog } from "./MaxSectionDialog";
 import { frameOfImageId, sopFromImageId } from "../viewer/imageId";
 import { derivePatientKey } from "../viewer/patientKey";
 import { getFocusedTile } from "../viewer/focusedTile";
@@ -812,6 +814,7 @@ function TileGrid({
   const [suvTarget, setSuvTarget] = useState<{ imageId: string; seriesUid: string } | null>(null);
   const [tagTarget, setTagTarget] = useState<{ tile: Tile; sop: string | null } | null>(null);
   const [reportTarget, setReportTarget] = useState<Tile | null>(null);
+  const [maxSectionTarget, setMaxSectionTarget] = useState<Tile | null>(null);
   const [textureTarget, setTextureTarget] = useState<Tile | null>(null);
   // コントラスト調整（W/L）ダイアログの対象（開いている時のみ non-null）。
   const [wlAdjust, setWlAdjust] = useState<WlTarget | null>(null);
@@ -1087,6 +1090,9 @@ function TileGrid({
         /* 既定のまま */
       });
   }, []);
+  // 別ウィンドウ（ROI 特徴量の画面）からの「このスライスを見せて」を受ける。
+  useEffect(() => installRoiRevealReceiver(), []);
+
   // ROI 統計: 計算のイベント購読と、表示モード/選択に追従する textBox の出し分け。
   useEffect(() => {
     const offWatch = installRoiStatsWatcher();
@@ -1752,6 +1758,12 @@ function TileGrid({
         if (d?.openViewer) void d.openViewer("radiomics-features");
         else window.open(`${window.location.pathname}#radiomics-features`, "graphy-radiomics-features");
       },
+      openMaxSection: () => {
+        const tid = resolveTargets()[0];
+        const tile = patient.tiles.find((tl) => tl.id === tid);
+        if (!tile) { comingSoon(t("roiFeat.maxSection.menu")); return; }
+        setMaxSectionTarget(tile);
+      },
       // レポート: 対象（選択→無ければ先頭）タイルのスタディでレポート編集ダイアログを開く。
       copyImage: () => {
         const tid = resolveTargets()[0];
@@ -2092,6 +2104,13 @@ function TileGrid({
           tree={patient.tiles.map((tl) => ({ study: tl.study, series: tl.series, instances: tl.instances }))}
           editable={mode === "standalone"}
           onClose={() => setTagTarget(null)}
+        />
+      )}
+      {maxSectionTarget && (
+        <MaxSectionDialog
+          studyUid={maxSectionTarget.study.studyInstanceUid}
+          seriesUid={maxSectionTarget.series.seriesInstanceUid}
+          onClose={() => setMaxSectionTarget(null)}
         />
       )}
       {reportTarget && (
