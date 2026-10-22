@@ -453,6 +453,20 @@ export interface GraphyDesktop {
    */
   aiChat?: (req: AiChatRequest) => Promise<AiChatResult>;
   aiChatCancel?: (sessionId: string) => Promise<{ ok: boolean; error?: string }>;
+  /**
+   * 2D ビューアへの表示操作（アシスタント窓から。**それ以外は main が `forbidden`**）。
+   * 操作の中身の検証は 2D 窓が行う。窓が無ければ `no-viewer`。
+   */
+  assistantViewerCmd?: (
+    sessionId: string,
+    cmd: { kind: "action" | "getState"; id?: string; params?: unknown },
+  ) => Promise<import("./assistant/actions/registry").ActionResult>;
+  /** 2D 窓側: main が中継してきた命令を受ける。購読解除の関数を返す。 */
+  onViewerCmd?: (
+    cb: (cmd: { reqId: string; kind: "action" | "getState"; id?: string; params?: unknown; includeLabels?: boolean }) => void,
+  ) => () => void;
+  /** 2D 窓側: 命令の結果を返す（main は命令を送った窓からのものだけ受理する）。 */
+  viewerCmdResult?: (reqId: string, result: import("./assistant/actions/registry").ActionResult) => void;
   /** ストリームの差分を受ける。購読解除の関数を返す。 */
   onAiChatEvent?: (cb: (ev: AiChatEvent) => void) => () => void;
   /** 提供元の一覧と用途ごとの既定。**鍵の値は返らない**（有無だけ）。 */

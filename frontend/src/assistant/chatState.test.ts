@@ -40,3 +40,35 @@ describe("chatReducer", () => {
     expect(chatReducer(initialChatState, { type: "delta", text: "z" })).toBe(initialChatState);
   });
 });
+
+describe("tool rounds", () => {
+  const act = { id: "c1", name: "flipH", status: "running" as const };
+  it("keeps text from earlier rounds and adds action/proposal cards", () => {
+    let s = chatReducer(sent(), { type: "delta", text: "調べます" });
+    s = chatReducer(s, { type: "actionAdd", action: act });
+    s = chatReducer(s, { type: "roundDone", text: "調べます" });
+    s = chatReducer(s, { type: "delta", text: "完了" });
+    s = chatReducer(s, { type: "proposalAdd", proposal: { id: "p", title: "t", steps: ["a"] } });
+    s = chatReducer(s, { type: "done", result: { ok: true, text: "完了しました", provenance: prov } });
+    expect(s.messages[1].text).toBe("調べます\n\n完了しました");
+    expect(s.messages[1].actions).toHaveLength(1);
+    expect(s.messages[1].proposals).toHaveLength(1);
+    expect(s.pending).toBeNull();
+  });
+  it("roundDone without text keeps streamed text; action update patches by id", () => {
+    let s = chatReducer(sent(), { type: "delta", text: "x" });
+    s = chatReducer(s, { type: "actionAdd", action: act });
+    s = chatReducer(s, { type: "roundDone" });
+    expect(s.messages[1].text).toBe("x\n\n");
+    s = chatReducer(s, { type: "actionUpdate", id: "c1", patch: { status: "done" } });
+    expect(s.messages[1].actions?.[0].status).toBe("done");
+    s = chatReducer(s, { type: "actionUpdate", id: "nope", patch: { status: "failed" } });
+    expect(s.messages[1].actions?.[0].status).toBe("done");
+  });
+  it("actionUpdate still works after the turn ended (undo)", () => {
+    let s = chatReducer(sent(), { type: "actionAdd", action: act });
+    s = chatReducer(s, { type: "done", result: { ok: true, text: "ok", provenance: prov } });
+    s = chatReducer(s, { type: "actionUpdate", id: "c1", patch: { status: "undone" } });
+    expect(s.messages[1].actions?.[0].status).toBe("undone");
+  });
+});

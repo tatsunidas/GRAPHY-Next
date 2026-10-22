@@ -30,6 +30,7 @@ const messages = require("./startupMessages");
 const secretStore = require("./secretStore");
 const aiGateway = require("./aiGateway");
 const { isAssistantSender } = require("./assistantSender");
+const { createRelay, createJournal } = require("./viewerRelay");
 const aiProviders = require("./aiProviders");
 const computeEndpoints = require("./computeEndpoints");
 const localPython = require("./localPython");
@@ -1236,6 +1237,27 @@ ipcMain.handle("graphy:ai-chat", async (e, req) => {
 ipcMain.handle("graphy:ai-chat-cancel", (e, sessionId) => {
   if (!isAssistantSender(e)) return { ok: false, error: "forbidden" };
   return aiGateway.cancelChat(String(sessionId || ""));
+});
+
+// アシスタント窓 → 2D ビューア窓の表示操作の中継（desktop/viewerRelay.js）。
+// 送れるのはアシスタント窓だけ。宛先は main が決める（#2dviewer の窓だけ）。操作の許可リストと引数の検証は
+// 受信側の 2D 窓が行う。履歴は userData/assistant-journal.jsonl（数値・列挙の引数だけ。患者情報は入らない）。
+const viewerRelay = createRelay({
+  resolveTarget: () => {
+    const w = viewerWins.get("2dviewer");
+    return w && !w.isDestroyed() ? w.webContents : null;
+  },
+  journal: (entry) => createJournal({ file: path.join(app.getPath("userData"), "assistant-journal.jsonl") })(entry),
+});
+ipcMain.handle("graphy:assistant-viewer-cmd", (e, sessionId, cmd) => {
+  if (!isAssistantSender(e)) return { ok: false, error: "forbidden" };
+  // seriesLabel（自由記述）を状態に含めてよいのは、会話の宛先がローカルと判定できるときだけ。判定は main が行う。
+  const dest = aiGateway.resolveCapability("text-to-text");
+  const includeLabels = !!(dest && dest.ok && dest.local === true);
+  return viewerRelay.relay(sessionId, cmd && typeof cmd === "object" ? { ...cmd, includeLabels } : cmd);
+});
+ipcMain.on("graphy:viewer-cmd-result", (e, reqId, result) => {
+  viewerRelay.handleResult(e.sender, reqId, result);
 });
 
 // 用途 → どこへ何で送るか。**同意ダイアログに出す宛先をレンダラが知るため**に要る。
