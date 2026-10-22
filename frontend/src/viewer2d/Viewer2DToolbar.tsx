@@ -255,6 +255,7 @@ export interface ViewerActions {
   openTagViewer(): void;
   /** 対象タイルのシリーズで Texture（Radiomics 可視化マップ）ダイアログを開く。 */
   openTexture(): void;
+  openFilterImage(): void;
   /** GLAM 解析（ROI 全体の記述子）を別ウィンドウで開く。 */
   openGlamAnalysis(): void;
   /** Radiomics 特徴量（ROI 全体の特徴量表）を別ウィンドウで開く。 */

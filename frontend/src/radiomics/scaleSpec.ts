@@ -16,6 +16,9 @@ export const SCALE_NOTATIONS: readonly ScaleNotation[] = ["RADIUS_MM", "WIDTH_PX
 
 export const DEFAULT_SCALES = "0, 2, 3, 4, 5, 6";
 
+/** フィルタ画像（派生シリーズ）の既定。0（フィルタなし）は画像を作らないので入れない。 */
+export const DEFAULT_FILTER_SCALES = "2, 4, 6";
+
 /** 読み取りの失敗。`key` は i18n の鍵（`roiFeat.scale.err.<key>`）、`token` は問題の入力。 */
 export type ScaleSpecError = { key: "empty" | "number" | "step" | "order"; token?: string };
 
