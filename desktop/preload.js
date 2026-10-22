@@ -81,6 +81,15 @@ contextBridge.exposeInMainWorld("graphyDesktop", {
     ipcRenderer.on("graphy:ai-chat-event", handler);
     return () => ipcRenderer.removeListener("graphy:ai-chat-event", handler);
   },
+  // アシスタント窓から 2D ビューアへの表示操作（アシスタント窓以外は main が forbidden）。
+  assistantViewerCmd: (sessionId, cmd) => ipcRenderer.invoke("graphy:assistant-viewer-cmd", sessionId, cmd),
+  // 2D ビューア窓側: main が中継してきた命令を受け、結果を返す。受けた命令は 2D 窓が許可リストで再検証する。
+  onViewerCmd: (cb) => {
+    const handler = (_e, cmd) => cb(cmd);
+    ipcRenderer.on("graphy:viewer-cmd", handler);
+    return () => ipcRenderer.removeListener("graphy:viewer-cmd", handler);
+  },
+  viewerCmdResult: (reqId, result) => ipcRenderer.send("graphy:viewer-cmd-result", reqId, result),
   // 提供元の一覧と既定。鍵の値は返らない（有無だけ）。
   aiProvidersGet: () => ipcRenderer.invoke("graphy:ai-providers-get"),
   aiProvidersSet: (cfg) => ipcRenderer.invoke("graphy:ai-providers-set", cfg),

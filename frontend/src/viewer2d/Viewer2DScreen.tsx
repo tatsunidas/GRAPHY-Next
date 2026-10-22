@@ -66,6 +66,9 @@ import { isTextEntryTarget, matchesShortcut } from "../shortcuts/registry";
 import { isInsideViewerOverlay } from "../viewer/viewerOverlay";
 import { runSeriesCommand } from "../viewer/seriesCommands";
 import { TOOL_IDS } from "../viewer/toolIds";
+import { useAssistantBridge } from "./useAssistantBridge";
+import { useWlPresets } from "./wlPresetStore";
+import { presetLabel } from "./wlPresets";
 import { emitToast, subscribeToast } from "../viewer/toast";
 import { composeTileWithAnnotations, visibleRoiCount } from "../viewer/tileCapture";
 import { askCopyWithRoi, CopyImageAskHost } from "./CopyImageAsk";
@@ -1779,6 +1782,18 @@ function TileGrid({
     }),
     [resolveTargets, resolveRoiEditTarget, notify, onSetGrid, onSetSync, onSetFusion, patient.patientKey, patient.tiles, comingSoon, t],
   );
+
+  // AI アシスタント窓からの表示操作（main 中継）。許可リストの操作だけを受け、引数は実行器が再検証する。
+  const wlPresets = useWlPresets();
+  useAssistantBridge({
+    tileIds: patient.tiles.map((tl) => tl.id),
+    resolveTargets,
+    activeTool,
+    layoutCols: cols,
+    setTool: actions.setTool,
+    setLayoutCols: (c) => onSetGrid(patient.patientKey, 0, c),
+    presets: wlPresets.map((p) => ({ key: p.key, label: presetLabel(p, t), center: p.center, width: p.width })),
+  });
 
   /**
    * ROI マネージャで行を選んだとき: **ハイライト＋その ROI が乗っているスライスへ移動**。

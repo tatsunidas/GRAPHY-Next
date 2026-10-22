@@ -10,7 +10,9 @@ import remarkGfm from "remark-gfm";
 import { desktop, type AiChatMessage, type AiResolveResult } from "../desktopBridge";
 import { useI18n } from "../i18n/i18n";
 import { MarkdownPreviewBoundary } from "../report/MarkdownEditor";
-import { chatReducer, initialChatState, type UiImage, type UiMessage } from "./chatState";
+import { chatReducer, initialChatState, type UiAction, type UiImage, type UiMessage } from "./chatState";
+import { buildTools } from "./actions/registry";
+import { runToolLoop } from "./toolLoop";
 import { DOC_CHUNKS } from "./docsBundle";
 import { searchDocs } from "./docsIndex";
 import { buildSystemPrompt } from "./systemPrompt";
@@ -57,6 +59,7 @@ export function AssistantScreen() {
   const timerRef = useRef<number | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const abortedRef = useRef(false);
 
   const bridge = desktop();
   const available = !!bridge?.aiChat;
@@ -120,8 +123,10 @@ export function AssistantScreen() {
     const history: AiChatMessage[] = state.messages
       .filter((m) => !m.error && !m.canceled && m.text)
       .map((m) => ({ role: m.role, text: m.text }));
+    // ツールを送るのは、使える口があり、提供元がツール呼び出しに対応するとき（toolMode:none は案内のみ）。
+    const canOperate = !!bridge.assistantViewerCmd && !!resolved?.ok && resolved.toolMode !== "none";
     const req: AiChatMessage[] = [
-      { role: "system", text: buildSystemPrompt(locale, hits) },
+      { role: "system", text: buildSystemPrompt(locale, hits, { canOperate }) },
       ...history,
       { role: "user", text, images: images.length ? images.map((i) => ({ base64: i.base64, mimeType: i.mimeType })) : undefined },
     ];
@@ -129,7 +134,22 @@ export function AssistantScreen() {
     setInput("");
     setImages([]);
     setNote(null);
-    const result = await bridge.aiChat({ sessionId, messages: req, stream: true });
+    abortedRef.current = false;
+    const viewer = (cmd: { kind: "action" | "getState"; id?: string; params?: unknown }) =>
+      bridge.assistantViewerCmd!(sessionId, cmd);
+    const result = await runToolLoop(req, canOperate ? buildTools() : [], {
+      chat: (messages, tools) => bridge.aiChat!({ sessionId, messages, tools: tools.length ? tools : undefined, stream: true }),
+      viewer,
+      onAction: (action) => dispatch({ type: "actionAdd", action }),
+      onActionUpdate: (id, patch) => dispatch({ type: "actionUpdate", id, patch }),
+      onProposal: (proposal) => dispatch({ type: "proposalAdd", proposal }),
+      onRoundDone: (roundText) => {
+        if (timerRef.current !== null) window.clearTimeout(timerRef.current);
+        flush();
+        dispatch({ type: "roundDone", text: roundText });
+      },
+      aborted: () => abortedRef.current,
+    });
     if (timerRef.current !== null) {
       window.clearTimeout(timerRef.current);
       flush();
@@ -138,8 +158,25 @@ export function AssistantScreen() {
   }, [input, images, state.pending, state.messages, bridge, locale, sessionId, flush]);
 
   const stop = useCallback(() => {
+    abortedRef.current = true;
     void bridge?.aiChatCancel?.(sessionId);
   }, [bridge, sessionId]);
+
+  /** 実行時に 2D 窓が返した逆操作を、同じ口（main 中継・再検証つき）で実行して元に戻す。 */
+  const undoAction = useCallback(
+    async (a: UiAction) => {
+      if (!a.inverse?.length || !bridge?.assistantViewerCmd) return;
+      for (const step of a.inverse) {
+        const r = await bridge.assistantViewerCmd(sessionId, { kind: "action", id: step.id, params: step.params });
+        if (!r.ok) {
+          dispatch({ type: "actionUpdate", id: a.id, patch: { error: r.error } });
+          return;
+        }
+      }
+      dispatch({ type: "actionUpdate", id: a.id, patch: { status: "undone", error: undefined } });
+    },
+    [bridge, sessionId],
+  );
 
   const onPaste = (e: ClipboardEvent) => {
     const files = Array.from(e.clipboardData.files).filter((f) => f.type.startsWith("image/"));
@@ -177,7 +214,7 @@ export function AssistantScreen() {
         ) : !state.messages.length ? (
           <div style={S.hint}>{t("assistant.hint")}</div>
         ) : (
-          state.messages.map((m) => <Bubble key={m.id} m={m} t={t} />)
+          state.messages.map((m) => <Bubble key={m.id} m={m} t={t} onUndo={undoAction} busy={busy} />)
         )}
       </div>
 
@@ -241,7 +278,17 @@ export function AssistantScreen() {
   );
 }
 
-function Bubble({ m, t }: { m: UiMessage; t: (k: string, v?: Record<string, string | number>) => string }) {
+function Bubble({
+  m,
+  t,
+  onUndo,
+  busy,
+}: {
+  m: UiMessage;
+  t: (k: string, v?: Record<string, string | number>) => string;
+  onUndo: (a: UiAction) => void;
+  busy: boolean;
+}) {
   const mine = m.role === "user";
   return (
     <div style={{ ...S.bubbleRow, justifyContent: mine ? "flex-end" : "flex-start" }}>
@@ -259,6 +306,34 @@ function Bubble({ m, t }: { m: UiMessage; t: (k: string, v?: Record<string, stri
         ) : !m.error && !m.canceled ? (
           <span style={S.dim}>{t("assistant.thinking")}</span>
         ) : null}
+        {m.actions?.map((a) => (
+          <div key={a.id} style={S.card} data-testid={`assistant-action-${a.name}`} data-status={a.status}>
+            <span>
+              {t(`assistant.act.${a.name}`)}
+              {a.params && Object.keys(a.params).length ? ` ${Object.entries(a.params).map(([k, v]) => `${k}=${String(v)}`).join(" ")}` : ""}
+            </span>
+            <span style={a.status === "failed" ? S.err : S.dim} data-testid="assistant-action-status">
+              {t(`assistant.actionState.${a.status}`)}
+              {a.error ? ` (${a.error})` : ""}
+            </span>
+            {a.status === "done" && a.inverse?.length ? (
+              <button style={S.linkBtn} disabled={busy} onClick={() => onUndo(a)} data-testid="assistant-undo">
+                {t("assistant.undo")}
+              </button>
+            ) : null}
+          </div>
+        ))}
+        {m.proposals?.map((p) => (
+          <div key={p.id} style={{ ...S.card, flexDirection: "column", alignItems: "flex-start", gap: 2 }} data-testid="assistant-proposal">
+            <strong>{p.title}</strong>
+            <div style={S.dim}>{t("assistant.proposalNote")}</div>
+            <ol style={{ margin: "4px 0 0", paddingLeft: 20 }}>
+              {p.steps.map((st, i) => (
+                <li key={i}>{st}</li>
+              ))}
+            </ol>
+          </div>
+        ))}
         {m.canceled && <div style={S.dim}>{t("assistant.canceled")}</div>}
         {m.error && <div style={S.err}>{t("assistant.error", { error: m.error })}</div>}
         {m.droppedImages ? <div style={S.warn}>{t("assistant.dropped", { n: m.droppedImages })}</div> : null}
@@ -308,6 +383,7 @@ const S: Record<string, React.CSSProperties> = {
   dim: { color: "#9aa0a6" },
   err: { marginTop: 6, color: "#f28b82", overflowWrap: "anywhere" },
   warn: { marginTop: 6, color: "#fdd663", fontSize: 12 },
+  card: { marginTop: 6, padding: "6px 8px", border: "1px solid #3a3b3f", borderRadius: 6, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", fontSize: 12 },
   note: { padding: "4px 12px", color: "#fdd663", fontSize: 12 },
   thumbs: { display: "flex", gap: 6, padding: "4px 12px", flexWrap: "wrap" },
   thumb: { position: "relative", display: "inline-block" },
