@@ -3,9 +3,12 @@
  * Author: Tatsuaki Kobayashi
  */
 import { describe, expect, it } from "vitest";
-import { anyFamilyOn, defaultRoiFeatureForm, roiFeatureSettings, ROI_FEATURE_FAMILIES } from "./roiFeatureSettings";
+import {
+  anyFamilyOn, defaultRoiFeatureForm, parseSigmaList, roiFeatureSettings, ROI_FEATURE_FAMILIES, splitFilteredFamily,
+} from "./roiFeatureSettings";
+import { discretisationOf } from "./roiFeatureCsv";
 
-/** RadiomicsJ 2.4.1 の `SettingParams` の名前（javap で列挙）。backend はこれ以外を 400 で断る。 */
+/** RadiomicsJ の `SettingParams` の名前（2.4.1 の javap の列挙に、LoG の 3 キー〔2.5.0〜〕を足したもの）。backend はこれ以外を 400 で断る。 */
 const SETTING_PARAMS = new Set([
   "INT_label", "INT_interpolation2D", "INT_interpolation_mask2D", "INT_interpolation3D", "INT_interpolation_mask3D",
   "DOUBLE_Mask_PartialVolumeThareshold", "BOOL_interpolation_intensity_rounding",
@@ -22,6 +25,7 @@ const SETTING_PARAMS = new Set([
   "BOOL_enableGLRLM", "BOOL_enableGLSZM", "BOOL_enableGLDZM", "BOOL_enableGLAM", "BOOL_enableNGTDM",
   "BOOL_enableNGLDM", "BOOL_enableHomological", "BOOL_enableFractal", "BOOL_enableOperationalInfo",
   "BOOL_enableDiagnostics",
+  "DOUBLEARRAY_logSigmaMm", "DOUBLE_logTruncate", "STRING_logPadding",
 ]);
 
 describe("roiFeatureSettings", () => {
@@ -66,5 +70,33 @@ describe("roiFeatureSettings", () => {
     expect(anyFamilyOn(form)).toBe(true);
     const none = { ...form, families: Object.fromEntries(ROI_FEATURE_FAMILIES.map((f) => [f.key, false])) };
     expect(anyFamilyOn(none)).toBe(false);
+  });
+});
+
+describe("LoG フィルタ", () => {
+  it("既定ではオフで、フィルタのキーは送らない（従来と同じ要求）", () => {
+    const s = roiFeatureSettings(defaultRoiFeatureForm());
+    expect(Object.keys(s).filter((k) => /logSigma|logTruncate|logPadding/.test(k))).toEqual([]);
+  });
+
+  it("オンなら σ・切り捨て・境界を RadiomicsJ のキーで送る（キーは SettingParams にある）", () => {
+    const s = roiFeatureSettings({ ...defaultRoiFeatureForm(), logOn: true, logSigmaMm: "1.5, 2.5", logTruncate: 4, logPadding: "NEAREST" });
+    expect(s.DOUBLEARRAY_logSigmaMm).toBe("1.5,2.5");
+    expect(s.DOUBLE_logTruncate).toBe("4");
+    expect(s.STRING_logPadding).toBe("NEAREST");
+    for (const k of Object.keys(s)) expect(SETTING_PARAMS.has(k) || k.startsWith("BOOL_enable")).toBe(true);
+  });
+
+  it("σ の検査: 正の数だけ。空・0・負・数でないものは null", () => {
+    expect(parseSigmaList("1.5,2.5 3")).toEqual([1.5, 2.5, 3]);
+    for (const bad of ["", "  ", "0", "-1", "1,abc", "1,,x", "NaN", "Infinity"]) expect(parseSigmaList(bad)).toBeNull();
+  });
+
+  it("フィルタ後の族を σ と元の族に分け、離散化は元の族で判定する", () => {
+    expect(splitFilteredFamily("log_sigma1.5mm_GLCM")).toEqual({ sigma: "1.5", base: "GLCM" });
+    expect(splitFilteredFamily("GLCM")).toBeNull();
+    const d = { fixedBinNumber: true, nBins: 32, binWidth: 25, ivhMode: 0, ivhBinCount: 1000, ivhBinWidth: 2.5 };
+    expect(discretisationOf("log_sigma1.5mm_GLCM", d)).toBe("fixedBinNumber=32");
+    expect(discretisationOf("log_sigma1.5mm_IntensityBasedStatistical", d)).toBe("");
   });
 });

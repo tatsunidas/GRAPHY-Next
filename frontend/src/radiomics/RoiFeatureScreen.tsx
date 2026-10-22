@@ -43,9 +43,13 @@ import {
 } from "./roiFeatureCsv";
 import {
   ROI_FEATURE_FAMILIES,
+  LOG_PADDINGS,
   anyFamilyOn,
   defaultRoiFeatureForm,
+  parseSigmaList,
   roiFeatureSettings,
+  splitFilteredFamily,
+  type LogPadding,
   type RoiFeatureForm,
 } from "./roiFeatureSettings";
 
@@ -245,6 +249,7 @@ export function RoiFeatureScreen() {
     setError(null);
     if (!maskSeriesUid) return setError(t("roiFeat.err.needMask"));
     if (!anyFamilyOn(form)) return setError(t("roiFeat.err.noFamily"));
+    if (form.logOn && !parseSigmaList(form.logSigmaMm)) return setError(t("roiFeat.err.sigma"));
     try {
       const status = await submitRoiFeatureJob({
         studyInstanceUid: studyUid,
@@ -311,7 +316,13 @@ export function RoiFeatureScreen() {
       ? t("roiFeat.summary.resampled", { mm: p.DOUBLEARRAY_resamplingFactorXYZ.split(",").map(Number).join(" × ") })
       : t("roiFeat.summary.noResampling");
     const on = ROI_FEATURE_FAMILIES.filter((f) => p[f.setting] === "1").length;
-    return t("roiFeat.summary.settings", { disc, resampling: rs, on, total: ROI_FEATURE_FAMILIES.length });
+    const sig = p.DOUBLEARRAY_logSigmaMm;
+    const filter = sig
+      ? t("roiFeat.summary.log", {
+        sigma: sig.split(",").join(", "), truncate: p.DOUBLE_logTruncate ?? "?", padding: p.STRING_logPadding ?? "?",
+      })
+      : "";
+    return t("roiFeat.summary.settings", { disc, resampling: rs, filter, on, total: ROI_FEATURE_FAMILIES.length });
   }, [result, t]);
 
   const setFamily = (key: string, on: boolean) =>
@@ -320,7 +331,9 @@ export function RoiFeatureScreen() {
   const seriesLabel = (s: Series) =>
     `#${s.seriesNumber ?? "?"} ${s.modality ?? ""} ${s.seriesDescription ?? ""}`.trim();
 
-  const familyLabel = (family: string) => {
+  const familyLabel = (family: string): string => {
+    const f = splitFilteredFamily(family);
+    if (f) return t("roiFeat.family.log", { sigma: f.sigma, family: familyLabel(f.base) });
     const k = `roiFeat.family.${family}`;
     const v = t(k);
     return v === k ? family : v;
@@ -483,6 +496,37 @@ export function RoiFeatureScreen() {
             )}
           </span>
         </Field>
+        <Field label={t("roiFeat.field.filter")}>
+          <span style={{ display: "inline-flex", gap: 8, alignItems: "center", justifyContent: "flex-end", flexWrap: "wrap" }}>
+            <label>
+              <input type="radio" checked={!form.logOn} disabled={busy} data-testid="roifeat-filter-none"
+                onChange={() => setForm((f) => ({ ...f, logOn: false }))} /> {t("roiFeat.filter.none")}
+            </label>
+            <label>
+              <input type="radio" checked={form.logOn} disabled={busy} data-testid="roifeat-filter-log"
+                onChange={() => setForm((f) => ({ ...f, logOn: true }))} /> {t("roiFeat.filter.log")}
+            </label>
+          </span>
+        </Field>
+        {form.logOn && (
+          <>
+            <Field label={t("roiFeat.filter.sigma")}>
+              <input value={form.logSigmaMm} disabled={busy} style={{ ...input, width: 120 }} data-testid="roifeat-log-sigma"
+                onChange={(e) => setForm((f) => ({ ...f, logSigmaMm: e.target.value }))} />
+            </Field>
+            <Field label={t("roiFeat.filter.truncate")}>
+              <NumberField value={form.logTruncate} onChange={(v) => setForm((f) => ({ ...f, logTruncate: v }))}
+                min={1} max={10} step={0.5} disabled={busy} style={{ ...input, width: 64 }} />
+            </Field>
+            <Field label={t("roiFeat.filter.padding")}>
+              <select value={form.logPadding} disabled={busy} style={{ ...input, width: 120 }} data-testid="roifeat-log-padding"
+                onChange={(e) => setForm((f) => ({ ...f, logPadding: e.target.value as LogPadding }))}>
+                {LOG_PADDINGS.map((pd) => <option key={pd} value={pd}>{pd}</option>)}
+              </select>
+            </Field>
+            <div style={note}>{t("roiFeat.filter.note")}</div>
+          </>
+        )}
         <div style={{ ...fieldLabel, marginTop: 6 }}>{t("roiFeat.field.families")}</div>
         <div style={familyGrid}>
           {ROI_FEATURE_FAMILIES.map((f) => (
@@ -718,7 +762,7 @@ function CompareTable({ result, query, familyLabel, t }: {
               <tr key={r.column} style={{ borderTop: "1px solid #eef2f6" }} data-testid={`roifeat-cmp-${r.column}`}>
                 <td style={td} title={r.column}>{r.feature}</td>
                 <td style={{ ...td, fontFamily: "ui-monospace, monospace" }}>
-                  {r.ibsi ?? (r.family === "Diagnostics" ? "" : t("roiFeat.nonIbsi"))}
+                  {r.ibsi ?? (r.family === "Diagnostics" || splitFilteredFamily(r.family) ? "" : t("roiFeat.nonIbsi"))}
                 </td>
                 <td style={valCell} data-col="whole">{fmtCell(r.whole)}</td>
                 {showSection && <td style={valCell} data-col="section">{fmtCell(r.section)}</td>}
@@ -759,7 +803,7 @@ function FamilyRows({ label, raw, discretisation, rows, t }: {
           <td style={td} title={r.column}>{r.feature}</td>
           {/* Diagnostics は特徴量ではなく付帯情報（寸法・ボクセル数）なので、IBSI の欄は空にする。 */}
           <td style={{ ...td, fontFamily: "ui-monospace, monospace" }}>
-            {r.ibsi ?? (r.family === "Diagnostics" ? "" : t("roiFeat.nonIbsi"))}
+            {r.ibsi ?? (r.family === "Diagnostics" || splitFilteredFamily(r.family) ? "" : t("roiFeat.nonIbsi"))}
           </td>
           <td style={{ ...td, textAlign: "right", fontVariantNumeric: "tabular-nums" }}
             title={r.value == null ? "NaN" : String(r.value)}>

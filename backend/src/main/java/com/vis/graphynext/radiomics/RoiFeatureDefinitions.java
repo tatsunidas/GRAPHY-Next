@@ -24,6 +24,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Function;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
@@ -45,11 +46,11 @@ final class RoiFeatureDefinitions {
     /** IBSI の定義の外にある特徴。 */
     static final String NOTE_NON_IBSI = "NON_IBSI";
 
-    /**
-     * RadiomicsJ 2.4.1 の {@code DiagnosticsInfo} は、再セグメント後の形態マスクの数に強度マスクの数を入れている。
-     * 形態マスクは再セグメントしないので、範囲フィルタ・外れ値除去を使うと実際の形態マスクの数と食い違う。
-     */
-    static final String NOTE_RJ_MORPH_COUNT_IS_INTENSITY = "RJ_MORPH_COUNT_IS_INTENSITY";
+    /** LoG フィルタ後の画像に、元の画像と同じ定義（離散化は掛け直す）を適用した値。IBSI の識別子は付けない。 */
+    static final String NOTE_LOG_FILTERED = "LOG_FILTERED";
+
+    /** LoG の列の接頭辞（{@code log_sigma1.5mm_}）。σ は RadiomicsJ が書いた表記のまま持つ。 */
+    private static final Pattern LOG_PREFIX = Pattern.compile("^(log_sigma[^_]+)_(.+)$");
 
     static final String DIAGNOSTICS = "Diagnostics";
 
@@ -80,6 +81,13 @@ final class RoiFeatureDefinitions {
 
     /** 列名を族・特徴・IBSI・注記に分ける。知らない接頭辞・名前は例外（RadiomicsJ の列名の変化に気づくため）。 */
     static RoiFeatureResult.Row row(String column, Double value) {
+        Matcher log = LOG_PREFIX.matcher(column);
+        if (log.matches()) {
+            // フィルタ後の列: 基底の列を引いて族と特徴を取り、族は接頭辞つき（表で別の塊にする）。
+            RoiFeatureResult.Row base = row(log.group(2), value);
+            return new RoiFeatureResult.Row(column, log.group(1) + "_" + base.family(), base.feature(), null, value,
+                    List.of(NOTE_LOG_FILTERED));
+        }
         int us = column.indexOf('_');
         if (us <= 0) {
             throw new IllegalStateException("RadiomicsJ の列名を解釈できません: " + column);
@@ -87,9 +95,7 @@ final class RoiFeatureDefinitions {
         String family = column.substring(0, us);
         String feature = column.substring(us + 1);
         if (DIAGNOSTICS.equals(family)) {
-            List<String> diagNotes = "DiagnosticsResegmentedROIMorphMaskVoxelCount".equals(feature)
-                    ? List.of(NOTE_RJ_MORPH_COUNT_IS_INTENSITY) : List.of();
-            return new RoiFeatureResult.Row(column, family, feature, null, value, diagNotes);
+            return new RoiFeatureResult.Row(column, family, feature, null, value, List.of());
         }
         Function<String, String> idOf = FAMILIES.get(family);
         if (idOf == null) {

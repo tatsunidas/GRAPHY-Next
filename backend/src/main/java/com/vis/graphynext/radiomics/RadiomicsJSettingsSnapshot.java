@@ -78,6 +78,25 @@ final class RadiomicsJSettingsSnapshot {
             return v == null ? ""
                     : Arrays.stream(v).mapToObj(Double::toString).collect(Collectors.joining(","));
         });
+        // 画像フィルタ（RadiomicsJ 2.5.0〜）。配列は loadSettings が読み戻せる区切り（数値は , 文字列の組は ;）で書く。
+        put(SettingParams.DOUBLEARRAY_logSigmaMm, r -> doubles(RadiomicsJ.logSigmaMm));
+        put(SettingParams.DOUBLE_logTruncate, r -> s(RadiomicsJ.logTruncate));
+        put(SettingParams.STRING_logPadding, r -> s(RadiomicsJ.logPadding));
+        put(SettingParams.INTARRAY_meanSupport, r -> ints(RadiomicsJ.meanSupport));
+        put(SettingParams.STRING_meanPadding, r -> s(RadiomicsJ.meanPadding));
+        put(SettingParams.STRING_lawsKernels, r -> join(RadiomicsJ.lawsKernels, ","));
+        put(SettingParams.STRING_lawsPadding, r -> s(RadiomicsJ.lawsPadding));
+        put(SettingParams.STRING_lawsPooling, r -> s(RadiomicsJ.lawsPooling));
+        put(SettingParams.INT_lawsEnergyDelta, r -> s(RadiomicsJ.lawsEnergyDelta));
+        put(SettingParams.STRING_gaborSets, r -> join(RadiomicsJ.gaborSets, ";"));
+        put(SettingParams.STRING_gaborPadding, r -> s(RadiomicsJ.gaborPadding));
+        put(SettingParams.STRING_gaborPooling, r -> s(RadiomicsJ.gaborPooling));
+        put(SettingParams.DOUBLE_gaborDeltaTheta, r -> s(RadiomicsJ.gaborDeltaTheta));
+        put(SettingParams.STRING_waveletSets, r -> join(RadiomicsJ.waveletSets, ";"));
+        put(SettingParams.STRING_waveletPadding, r -> s(RadiomicsJ.waveletPadding));
+        put(SettingParams.STRING_waveletPooling, r -> s(RadiomicsJ.waveletPooling));
+        put(SettingParams.INTARRAY_simoncelliLevels, r -> ints(RadiomicsJ.simoncelliLevels));
+        put(SettingParams.STRING_simoncelliPadding, r -> s(RadiomicsJ.simoncelliPadding));
         put(SettingParams.BOOL_force2D, r -> b(RadiomicsJ.force2D));
         put(SettingParams.BOOL_activate_no_default_features, r -> b(RadiomicsJ.activate_no_default_features));
         // 族の有効化はインスタンスのフィールドで、名前は設定キーと同じ。
@@ -120,6 +139,18 @@ final class RadiomicsJSettingsSnapshot {
 
     private static String s(Object v) {
         return v == null ? "" : v.toString();
+    }
+
+    private static String doubles(double[] v) {
+        return v == null ? "" : Arrays.stream(v).mapToObj(Double::toString).collect(Collectors.joining(","));
+    }
+
+    private static String ints(int[] v) {
+        return v == null ? "" : Arrays.stream(v).mapToObj(Integer::toString).collect(Collectors.joining(","));
+    }
+
+    private static String join(String[] v, String sep) {
+        return v == null ? "" : String.join(sep, v);
     }
 
     private static String b(Boolean v) {
