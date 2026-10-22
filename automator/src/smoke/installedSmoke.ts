@@ -435,6 +435,22 @@ async function voiceSection(app: ElectronApplication, main: Page): Promise<void>
     await mic.waitFor({ state: "visible", timeout: 20_000 });
     await win.getByTestId("assistant-voice-dest").waitFor({ state: "visible", timeout: 20_000 });
     check(await mic.isEnabled(), "[9] マイクボタンが使える（音声入力の提供元が解決できている）");
+    // 切り分け用: 偽マイク自体が音を出しているか（OS によって --use-file-for-fake-audio-capture の挙動が違いうる）。
+    const probe = await win.evaluate(async () => {
+      try {
+        const st = await navigator.mediaDevices.getUserMedia({ audio: true });
+        const ctx = new AudioContext();
+        const an = ctx.createAnalyser();
+        ctx.createMediaStreamSource(st).connect(an);
+        const buf = new Float32Array(an.fftSize);
+        let peak = 0;
+        for (let i = 0; i < 10; i++) { await new Promise((r) => setTimeout(r, 150)); an.getFloatTimeDomainData(buf); for (const v of buf) peak = Math.max(peak, Math.abs(v)); }
+        st.getTracks().forEach((t) => t.stop());
+        void ctx.close();
+        return { peak: Number(peak.toFixed(4)), state: ctx.state };
+      } catch (e) { return { error: (e as Error).name }; }
+    });
+    console.log(`  [情報] 偽マイクの入力レベル(AnalyserNode): ${JSON.stringify(probe)}`);
     await mic.evaluate((el) => (el as HTMLElement).click());
     const rec = await win.getByTestId("assistant-voice-recording").waitFor({ state: "visible", timeout: 20_000 }).then(() => true, () => false);
     check(rec, "[9] ★配布物でマイクの録音が始まる（getUserMedia と許可ハンドラが通る）");
@@ -443,6 +459,7 @@ async function voiceSection(app: ElectronApplication, main: Page): Promise<void>
       await win.getByTestId("assistant-voice-stop").evaluate((el) => (el as HTMLElement).click());
       const input = win.getByTestId("assistant-input");
       const got = await win.waitForFunction(() => (document.querySelector('[data-testid="assistant-input"]') as HTMLTextAreaElement | null)?.value.includes("スモーク音声"), undefined, { timeout: 30_000 }).then(() => true, () => false);
+      if (!got) console.log(`  [情報] 画面の文言: ${JSON.stringify((await win.locator("body").innerText().catch(() => "")).slice(0, 400))}`);
       check(got, "[9] ★録音 → 16 kHz WAV → 文字起こしの要求 → 入力欄に文字が入る（配布物）", (await input.inputValue().catch(() => "")).slice(0, 80));
       const w = received[0];
       const ok = !!w && w.subarray(0, 4).toString() === "RIFF" && w.readUInt32LE(24) === 16000 && w.readUInt16LE(22) === 1 && w.readUInt16LE(34) === 16;
