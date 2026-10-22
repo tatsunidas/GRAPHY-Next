@@ -42,6 +42,9 @@ import {
   roiFeatureFileBase,
 } from "./roiFeatureCsv";
 import {
+  SCALE_NOTATIONS, parseScaleLabels, parseScaleSpec, sigmaPreview, type ScaleNotation,
+} from "./scaleSpec";
+import {
   roiFeatureScaledDataCsv, roiFeatureScaledDefinitionsCsv, scale2dFiles, scaleSettingsFiles,
 } from "./roiFeatureScales";
 import {
@@ -49,7 +52,6 @@ import {
   LOG_PADDINGS,
   SCALE_CONVERSIONS,
   anyFamilyOn,
-  parseScaleList,
   roiFeatureScaleRequest,
   type ScaleConversion,
   defaultRoiFeatureForm,
@@ -258,14 +260,39 @@ export function RoiFeatureScreen() {
     [allSeries, sourceSeriesUid],
   );
 
+  // 計算するスケールの一覧（打ち間違い・走査の個数に計算の前に気づけるように）
+  const scalePreview = useMemo(() => parseScaleSpec(form.scalesText), [form.scalesText]);
+  const scaleLabelList = useMemo(
+    () => (scalePreview.values ? parseScaleLabels(form.scaleLabelsText, scalePreview.values.length) : null),
+    [scalePreview, form.scaleLabelsText],
+  );
+  const scaleLabelOf = (i: number) => {
+    if (!Array.isArray(scaleLabelList) || !scaleLabelList[i]) return "";
+    return t("roiFeat.scale.labelSuffix", { label: scaleLabelList[i] });
+  };
+  const scaleLine = (v: number) => {
+    if (form.scaleNotation === "WIDTH_PX") {
+      return v === 0 ? t("roiFeat.scale.listNone", { input: "0 px" }) : t("roiFeat.scale.listWidth", { w: v });
+    }
+    const s3 = sigmaPreview(v, 3, form.scaleConversion, form.scaleK);
+    const s2 = sigmaPreview(v, 2, form.scaleConversion, form.scaleK);
+    return s3 == null
+      ? t("roiFeat.scale.listNone", { input: `r ${v} mm` })
+      : t("roiFeat.scale.listRadius", { r: v, s3, s2: s2 ?? "?" });
+  };
+
   const run = async (recompute: boolean) => {
     setError(null);
     if (!maskSeriesUid) return setError(t("roiFeat.err.needMask"));
     if (!anyFamilyOn(form)) return setError(t("roiFeat.err.noFamily"));
     if (form.logOn && !form.logByRadius && !parseSigmaList(form.logSigmaMm)) return setError(t("roiFeat.err.sigma"));
-    if (form.logOn && form.logByRadius && !parseScaleList(form.scalesText)) return setError(t("roiFeat.err.scales"));
-    if (form.logOn && form.logByRadius && form.scaleConversion === "COEFFICIENT" && !(form.scaleK > 0)) {
-      return setError(t("roiFeat.err.scales"));
+    if (form.logOn && form.logByRadius) {
+      const spec = parseScaleSpec(form.scalesText);
+      if (!spec.values) return setError(t(`roiFeat.scale.err.${spec.error.key}`, { token: spec.error.token ?? "" }));
+      if (parseScaleLabels(form.scaleLabelsText, spec.values.length) === "mismatch") {
+        return setError(t("roiFeat.scale.err.labels", { n: spec.values.length }));
+      }
+      if (form.scaleConversion === "COEFFICIENT" && !(form.scaleK > 0)) return setError(t("roiFeat.scale.err.number", { token: String(form.scaleK) }));
     }
     try {
       const status = await submitRoiFeatureJob({
@@ -546,10 +573,41 @@ export function RoiFeatureScreen() {
           <>
             {form.logByRadius ? (
               <>
-                <Field label={t("roiFeat.scale.radii")}>
-                  <input value={form.scalesText} disabled={busy} style={{ ...input, width: 160 }} data-testid="roifeat-scales"
+                <Field label={t("roiFeat.scale.notation")}>
+                  <select value={form.scaleNotation} disabled={busy} style={{ ...input, width: 160 }}
+                    data-testid="roifeat-scale-notation"
+                    onChange={(e) => setForm((f) => ({ ...f, scaleNotation: e.target.value as ScaleNotation }))}>
+                    {SCALE_NOTATIONS.map((n) => <option key={n} value={n}>{t(`roiFeat.scale.notation.${n}`)}</option>)}
+                  </select>
+                </Field>
+                <Field label={t("roiFeat.scale.values")}>
+                  <input value={form.scalesText} disabled={busy} style={{ ...input, width: 220 }} data-testid="roifeat-scales"
                     onChange={(e) => setForm((f) => ({ ...f, scalesText: e.target.value }))} />
                 </Field>
+                <div style={note}>{t("roiFeat.scale.valuesHint")}</div>
+                <Field label={t("roiFeat.scale.labels")}>
+                  <input value={form.scaleLabelsText} disabled={busy} style={{ ...input, width: 220 }} data-testid="roifeat-scale-labels"
+                    onChange={(e) => setForm((f) => ({ ...f, scaleLabelsText: e.target.value }))} />
+                </Field>
+                <div style={note}>{t("roiFeat.scale.labelsHint")}</div>
+                <div style={note} data-testid="roifeat-scale-list">
+                  {scalePreview.values ? (
+                    <>
+                      <div style={{ fontWeight: 600 }}>{t("roiFeat.scale.listTitle", { n: scalePreview.values.length })}</div>
+                      {scalePreview.values.slice(0, 30).map((v, i) => (
+                        <div key={v}>{scaleLine(v)}{scaleLabelOf(i)}</div>
+                      ))}
+                      {scalePreview.values.length > 30 && (
+                        <div>{t("roiFeat.scale.listMore", { n: scalePreview.values.length - 30 })}</div>
+                      )}
+                    </>
+                  ) : (
+                    <span style={errText} data-testid="roifeat-scale-spec-error">
+                      {t(`roiFeat.scale.err.${scalePreview.error.key}`, { token: scalePreview.error.token ?? "" })}
+                    </span>
+                  )}
+                </div>
+                {form.scaleNotation === "WIDTH_PX" && <div style={note} data-testid="roifeat-scale-width-note">{t("roiFeat.scale.noteWidth")}</div>}
                 <Field label={t("roiFeat.scale.conversion")}>
                   <select value={form.scaleConversion} disabled={busy} style={{ ...input, width: 260 }}
                     data-testid="roifeat-scale-conversion"
@@ -619,6 +677,14 @@ export function RoiFeatureScreen() {
                     total: job.scaleTotal ?? 0,
                     r: job.scaleMm ?? 0,
                   })}
+                  {(job.scaleDone ?? 0) >= 1 && (job.scaleTotal ?? 0) > (job.scaleDone ?? 0) && (
+                    <span data-testid="roifeat-scale-eta">
+                      {" ・"}{t("roiFeat.scale.eta", {
+                        sec: Math.round((job.elapsedMs / job.scaleDone!) * (job.scaleTotal! - job.scaleDone!) / 1000),
+                        each: (job.elapsedMs / job.scaleDone! / 1000).toFixed(1),
+                      })}
+                    </span>
+                  )}
                 </span>
               )}
               {(job.sliceTotal ?? 0) > 0 && (
@@ -643,7 +709,10 @@ export function RoiFeatureScreen() {
                 {fullResult.scales.map((s, i) => (
                   <button key={s.scaleMm} onClick={() => setScaleIndex(i)} data-testid={`roifeat-scale-tab-${i}`}
                     style={{ ...miniBtn, fontWeight: i === scaleIndex ? 700 : 400, borderWidth: i === scaleIndex ? 2 : 1 }}>
-                    {t("roiFeat.scale.tab", { r: s.scaleMm })}
+                    {s.inputNotation === "width_px"
+                      ? t("roiFeat.scale.tabWidth", { w: s.inputValue, r: s.scaleMm })
+                      : t("roiFeat.scale.tab", { r: s.scaleMm })}
+                    {s.legacyLabel ? t("roiFeat.scale.labelSuffix", { label: s.legacyLabel }) : ""}
                   </button>
                 ))}
               </div>
@@ -657,6 +726,9 @@ export function RoiFeatureScreen() {
                         r: s.scaleMm, s3: s.sigma3dMm, s2: s.sigma2dMm ?? "?",
                         conv: s.conversion === "COEFFICIENT" ? `σ = ${s.coefficient}·r` : t(`roiFeat.scale.conv.${s.conversion}`),
                       })}
+                    {s.inputNotation === "width_px" && s.pixelSpacingMm != null && (
+                      <>{" "}{t("roiFeat.scale.infoInput", { w: s.inputValue, sp: s.pixelSpacingMm, r: s.scaleMm })}</>
+                    )}
                     {" "}{t("roiFeat.scale.csvNote")}
                   </div>
                 );

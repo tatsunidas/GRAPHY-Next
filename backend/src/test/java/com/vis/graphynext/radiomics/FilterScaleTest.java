@@ -19,6 +19,18 @@ class FilterScaleTest {
     }
 
     @Test
+    void widthInPixelsIsTheDiameterAndCarriesNoFloatingPointNoise() {
+        assertEquals(1.96, FilterScale.radiusMmFromWidthPx(4, 0.98));
+        assertEquals(1.0, FilterScale.radiusMmFromWidthPx(4, 0.5));
+        assertEquals(2.1, FilterScale.radiusMmFromWidthPx(6, 0.7), "6 × 0.7 / 2 は 2.0999999999999996 にしない");
+        assertEquals(4.2, FilterScale.radiusMmFromWidthPx(12, 0.7));
+        assertEquals(0.0, FilterScale.radiusMmFromWidthPx(0, 0.7));
+        assertThrows(IllegalArgumentException.class, () -> FilterScale.radiusMmFromWidthPx(-1, 0.7));
+        assertThrows(IllegalArgumentException.class, () -> FilterScale.radiusMmFromWidthPx(4, 0));
+        assertThrows(IllegalArgumentException.class, () -> FilterScale.radiusMmFromWidthPx(Double.NaN, 0.7));
+    }
+
+    @Test
     void zeroMeansNoFilter() {
         assertNull(FilterScale.sigmaMm(0, 3, FilterScale.Conversion.SQRT_D, null));
     }

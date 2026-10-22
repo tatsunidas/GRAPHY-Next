@@ -2020,10 +2020,14 @@ export interface RoiFeatureRequest {
   /** 計算の単位。省略は 3D だけ（3D は常に計算する）。 */
   roiModes?: RoiMode[];
   /**
-   * LoG で強調する構造の半径 r（mm）の並び。0 はフィルタなし。省略は従来（スケールなし）。
+   * LoG のスケールの値の並び（単位は scaleNotation）。0 はフィルタなし。省略は従来（スケールなし）。
    * 設定の DOUBLEARRAY_logSigmaMm とは併用できない。
    */
-  scalesMm?: number[];
+  scales?: number[];
+  /** scales の書き方。RADIUS_MM（強調する構造の半径 r、mm。既定）か WIDTH_PX（構造の直径の画素数。r = 幅 × 面内の画素間隔 / 2）。 */
+  scaleNotation?: "RADIUS_MM" | "WIDTH_PX";
+  /** 各スケールの名札（旧フィルタ値など。記録するだけで計算には使わない）。scales と同じ数。 */
+  scaleLabels?: string[];
   /** r → σ の換算。省略は SQRT_D（σ = r/√d、d は LoG の次元）。 */
   scaleConversion?: "SQRT_D" | "IDENTITY" | "COEFFICIENT";
   /** COEFFICIENT の k（σ = k·r）。 */
@@ -2081,11 +2085,19 @@ export interface RoiFeatureResult {
 
 /** 空間スケール 1 つぶん（backend: RoiFeatureResult.ScaleEntry）。σ は換算後（mm）。r=0 は σ が null。 */
 export interface RoiFeatureScaleEntry {
+  /** 換算後の半径 r（mm）。 */
   scaleMm: number;
   sigma3dMm: number | null;
   sigma2dMm: number | null;
   conversion: string;
   coefficient: number | null;
+  /** 指定された書き方（radius_mm・width_px）と値。 */
+  inputNotation: "radius_mm" | "width_px";
+  inputValue: number;
+  /** 幅（画素）を r に直した画素間隔（mm。幅のときだけ）。 */
+  pixelSpacingMm: number | null;
+  /** 名札（旧フィルタ値など。無ければ null）。 */
+  legacyLabel: string | null;
   result: RoiFeatureResult;
 }
 

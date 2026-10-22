@@ -48,10 +48,14 @@ public record RoiFeatureResult(
 
     /**
      * 空間スケール 1 つぶんの結果。{@code sigma3dMm}（3D の単位）・{@code sigma2dMm}（2D の単位）は換算後の σ で、
-     * r=0（フィルタなし）なら null。{@code result} は通常の結果（入れ子には {@code scales} が無い）。
+     * r=0（フィルタなし）なら null。{@code scaleMm} は換算後の半径 r。{@code inputNotation}（{@code radius_mm}・
+     * {@code width_px}）・{@code inputValue} は指定された書き方と値、{@code pixelSpacingMm} は幅（画素）を r に直した
+     * 画素間隔（幅のときだけ）、{@code legacyLabel} は名札（無ければ null）。{@code result} は通常の結果
+     * （入れ子には {@code scales} が無い）。
      */
     public record ScaleEntry(double scaleMm, Double sigma3dMm, Double sigma2dMm, String conversion,
-                             Double coefficient, RoiFeatureResult result) {}
+                             Double coefficient, String inputNotation, double inputValue, Double pixelSpacingMm,
+                             String legacyLabel, RoiFeatureResult result) {}
 
     /** 3D だけの結果（2D の単位を選ばなかったとき）。 */
     public RoiFeatureResult(String radiomicsjVersion, Instant computedAt, boolean fromCache, int label,

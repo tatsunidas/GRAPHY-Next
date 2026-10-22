@@ -5,9 +5,7 @@
 import { describe, expect, it } from "vitest";
 import type { RoiFeatureResult, RoiFeatureRoiSize, RoiFeatureRow } from "../api";
 import { ROI_FEATURE_RECORD_COLUMNS, ROI_FEATURE_SIZE_COLUMNS } from "./roiFeatureCsv";
-import {
-  defaultRoiFeatureForm, parseScaleList, roiFeatureScaleRequest, roiFeatureSettings,
-} from "./roiFeatureSettings";
+import { defaultRoiFeatureForm, roiFeatureScaleRequest, roiFeatureSettings } from "./roiFeatureSettings";
 import {
   FILTER_COLUMNS, roiFeatureScaledDataCsv, roiFeatureScaledDefinitionsCsv, scale2dFiles, scaleSettingsFiles,
 } from "./roiFeatureScales";
@@ -35,23 +33,13 @@ const r3 = res(
 const full: RoiFeatureResult = {
   ...r0,
   scales: [
-    { scaleMm: 0, sigma3dMm: null, sigma2dMm: null, conversion: "SQRT_D", coefficient: null, result: r0 },
-    { scaleMm: 3, sigma3dMm: 1.7321, sigma2dMm: 2.1213, conversion: "SQRT_D", coefficient: null, result: r3 },
+    { scaleMm: 0, sigma3dMm: null, sigma2dMm: null, conversion: "SQRT_D", coefficient: null,
+      inputNotation: "radius_mm", inputValue: 0, pixelSpacingMm: null, legacyLabel: null, result: r0 },
+    { scaleMm: 3, sigma3dMm: 1.7321, sigma2dMm: 2.1213, conversion: "SQRT_D", coefficient: null,
+      inputNotation: "width_px", inputValue: 6, pixelSpacingMm: 1, legacyLabel: "1.5", result: r3 },
   ],
 };
 const splitRow = (l: string) => l.split(",");
-
-describe("parseScaleList", () => {
-  it("accepts commas and spaces, drops duplicates, keeps 0", () => {
-    expect(parseScaleList("0, 2  3,3 4.5")).toEqual([0, 2, 3, 4.5]);
-  });
-  it("refuses empty, negative and non-numeric input", () => {
-    expect(parseScaleList("")).toBeNull();
-    expect(parseScaleList("0, -1")).toBeNull();
-    expect(parseScaleList("2, x")).toBeNull();
-    expect(parseScaleList("Infinity")).toBeNull();
-  });
-});
 
 describe("scale request", () => {
   it("is empty unless LoG by radius is chosen, and never sends a sigma then", () => {
@@ -59,11 +47,16 @@ describe("scale request", () => {
     expect(roiFeatureScaleRequest(f)).toEqual({});
     expect(roiFeatureScaleRequest({ ...f, logOn: true })).toEqual({});
     const byR = { ...f, logOn: true, logByRadius: true };
-    expect(roiFeatureScaleRequest(byR)).toEqual({ scalesMm: [0, 2, 3, 4, 5, 6], scaleConversion: "SQRT_D" });
+    expect(roiFeatureScaleRequest(byR)).toEqual({ scales: [0, 2, 3, 4, 5, 6], scaleNotation: "RADIUS_MM", scaleConversion: "SQRT_D" });
     expect(roiFeatureSettings(byR).DOUBLEARRAY_logSigmaMm).toBeUndefined();
     expect(roiFeatureSettings(byR).DOUBLE_logTruncate).toBe("4");
     expect(roiFeatureScaleRequest({ ...byR, scaleConversion: "COEFFICIENT", scaleK: 1.5 }))
-      .toEqual({ scalesMm: [0, 2, 3, 4, 5, 6], scaleConversion: "COEFFICIENT", scaleCoefficient: 1.5 });
+      .toEqual({ scales: [0, 2, 3, 4, 5, 6], scaleNotation: "RADIUS_MM", scaleConversion: "COEFFICIENT", scaleCoefficient: 1.5 });
+    // 走査・幅（画素）・名札
+    expect(roiFeatureScaleRequest({ ...byR, scalesText: "1:2:0.5", scaleNotation: "WIDTH_PX", scaleLabelsText: "a, b, c" }))
+      .toEqual({ scales: [1, 1.5, 2], scaleNotation: "WIDTH_PX", scaleLabels: ["a", "b", "c"], scaleConversion: "SQRT_D" });
+    // 名札の数が合わないものは送らない（画面が先に断る）
+    expect(roiFeatureScaleRequest({ ...byR, scalesText: "1, 2", scaleLabelsText: "a" }).scaleLabels).toBeUndefined();
     // σ で指定するときは従来どおり
     expect(roiFeatureSettings({ ...f, logOn: true }).DOUBLEARRAY_logSigmaMm).toBe("1.5");
   });
@@ -86,7 +79,11 @@ describe("scaled CSV", () => {
     const col = (name: string, line: string) => splitRow(line)[head.indexOf(name)];
     expect(col("Filter_Kind", lines[1])).toBe("none");
     expect(col("Filter_ScaleMm", lines[1])).toBe("0");
-    for (const c of FILTER_COLUMNS.slice(2)) expect(col(c, lines[1])).toBe("");
+    for (const c of FILTER_COLUMNS.slice(2, 7)) expect(col(c, lines[1])).toBe("");
+    expect(col("Filter_InputNotation", lines[1])).toBe("radius_mm");
+    expect(col("Filter_InputValue", lines[1])).toBe("0");
+    expect(col("Filter_PixelSpacingMm", lines[1])).toBe("");
+    expect(col("Filter_LegacyLabel", lines[1])).toBe("");
     expect(col("Filter_Kind", lines[2])).toBe("LoG");
     expect(col("Filter_ScaleMm", lines[2])).toBe("3");
     expect(col("Filter_SigmaMm", lines[2])).toBe("1.7321");
@@ -94,6 +91,10 @@ describe("scaled CSV", () => {
     expect(col("Filter_Dimension", lines[2])).toBe("3D");
     expect(col("Filter_TruncateSigma", lines[2])).toBe("4.0");
     expect(col("Filter_Boundary", lines[2])).toBe("MIRROR");
+    expect(col("Filter_InputNotation", lines[2])).toBe("width_px");
+    expect(col("Filter_InputValue", lines[2])).toBe("6");
+    expect(col("Filter_PixelSpacingMm", lines[2])).toBe("1");
+    expect(col("Filter_LegacyLabel", lines[2])).toBe("1.5");
   });
 
   it("leaves columns a scale does not have empty, and keeps each row's own settings hash", () => {

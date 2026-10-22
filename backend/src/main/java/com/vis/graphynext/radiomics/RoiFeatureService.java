@@ -244,14 +244,17 @@ public class RoiFeatureService {
         Map<String, String> settings = effectiveSettings(req.settings(), label);
 
         FilterScale.Conversion conversion = FilterScale.parse(req.scaleConversion());
-        List<Double> scales = req.hasScales() ? distinctScales(req.scalesMm()) : null;
-        if (scales != null) {
+        FilterScale.Notation notation = FilterScale.parseNotation(req.scaleNotation());
+        List<ScaleInput> inputs = req.hasScales() ? scaleInputs(req) : null;
+        if (inputs != null) {
             if (settings.containsKey("DOUBLEARRAY_logSigmaMm")) {
                 throw new IllegalArgumentException(
-                        "構造の半径（scalesMm）と σ（DOUBLEARRAY_logSigmaMm）は同時に指定できません。どちらか一方にしてください。");
+                        "スケール（scales）と σ（DOUBLEARRAY_logSigmaMm）は同時に指定できません。どちらか一方にしてください。");
             }
-            // 不正な半径・係数は、体積を読む前に断る
-            for (double r : scales) {
+            // 不正な値・係数は、体積を読む前に断る（幅は画素間隔が要るので、ここでは正の数かだけ見る）
+            for (ScaleInput in : inputs) {
+                double r = notation == FilterScale.Notation.WIDTH_PX
+                        ? FilterScale.radiusMmFromWidthPx(in.value(), 1.0) : in.value();
                 FilterScale.sigmaMm(r, 3, conversion, req.scaleCoefficient());
                 FilterScale.sigmaMm(r, 2, conversion, req.scaleCoefficient());
             }
@@ -262,35 +265,82 @@ public class RoiFeatureService {
         RadiomicsMapEngine.LoadedVolume vol = engine.load(req.studyInstanceUid(), req.sourceSeriesUid(),
                 req.channel(), req.timePoint(), req.maskSeriesUid(), req.maskChannel(), label, new HashMap<>());
 
-        if (scales == null) {
+        if (inputs == null) {
             return computeUnits(req, vol, label, settings, settings, phase, progress, cancelled);
         }
+        List<ResolvedScale> scales = resolveScales(inputs, notation, vol);
         List<RoiFeatureResult.ScaleEntry> entries = new ArrayList<>();
         for (int i = 0; i < scales.size(); i++) {
             if (cancelled.getAsBoolean()) {
                 throw new java.util.concurrent.CancellationException("スケールの境界で取り消しました");
             }
-            double r = scales.get(i);
+            ResolvedScale sc = scales.get(i);
+            double r = sc.radiusMm();
             scaleProgress.scale(i, scales.size(), r);
             Double s3 = FilterScale.sigmaMm(r, 3, conversion, req.scaleCoefficient());
             Double s2 = FilterScale.sigmaMm(r, 2, conversion, req.scaleCoefficient());
             RoiFeatureResult res = computeUnits(req, vol, label, withSigma(settings, s3), withSigma(settings, s2),
                     phase, progress, cancelled);
-            entries.add(new RoiFeatureResult.ScaleEntry(r, s3, s2, conversion.name(), req.scaleCoefficient(), res));
+            entries.add(new RoiFeatureResult.ScaleEntry(r, s3, s2, conversion.name(), req.scaleCoefficient(),
+                    notation == FilterScale.Notation.WIDTH_PX ? "width_px" : "radius_mm", sc.input().value(),
+                    sc.pixelSpacingMm(), sc.input().label(), res));
         }
-        scaleProgress.scale(scales.size(), scales.size(), scales.get(scales.size() - 1));
+        scaleProgress.scale(scales.size(), scales.size(), scales.get(scales.size() - 1).radiusMm());
         // 先頭のスケールの結果をトップレベルに置く（スケールを知らない呼び手はそれを読む）
         return entries.get(0).result().withScales(entries);
     }
 
-    private static List<Double> distinctScales(List<Double> in) {
-        List<Double> out = new ArrayList<>();
-        for (Double r : in) {
-            if (r == null) {
-                throw new IllegalArgumentException("構造の半径に空の値があります。");
+    /** 指定された 1 つの値と名札。 */
+    private record ScaleInput(double value, String label) {}
+
+    /** 半径 r（mm）に直したスケール。幅（画素）のときだけ画素間隔を持つ。 */
+    private record ResolvedScale(ScaleInput input, double radiusMm, Double pixelSpacingMm) {}
+
+    /** 値と名札を組にする。同じ値は先のものを残して 1 つにまとめる。名札の数が合わなければ断る。 */
+    private static List<ScaleInput> scaleInputs(RoiFeatureRequest req) {
+        List<Double> values = req.scales();
+        List<String> labels = req.scaleLabels();
+        boolean hasLabels = labels != null && !labels.isEmpty();
+        if (hasLabels && labels.size() != values.size()) {
+            throw new IllegalArgumentException(String.format(
+                    "名札の数（%d）が値の数（%d）と合いません。名札は値と同じ数を入れるか、空にしてください。",
+                    labels.size(), values.size()));
+        }
+        List<ScaleInput> out = new ArrayList<>();
+        for (int i = 0; i < values.size(); i++) {
+            Double v = values.get(i);
+            if (v == null) {
+                throw new IllegalArgumentException("スケールに空の値があります。");
             }
-            if (!out.contains(r)) {
-                out.add(r);
+            if (out.stream().noneMatch(x -> x.value() == v)) {
+                String label = hasLabels && labels.get(i) != null && !labels.get(i).isBlank() ? labels.get(i).trim() : null;
+                out.add(new ScaleInput(v, label));
+            }
+        }
+        return out;
+    }
+
+    /**
+     * 書き方に応じて半径 r（mm）に直す。幅（画素）は読み込んだ画像の元の面内の画素間隔（リサンプリング前）を使い、
+     * 縦横が違う画像は断る（1 つの幅に 2 つの長さができる）。換算後に同じ r になるものは 1 つにまとめる。
+     */
+    private static List<ResolvedScale> resolveScales(List<ScaleInput> inputs, FilterScale.Notation notation,
+                                                     RadiomicsMapEngine.LoadedVolume vol) {
+        Double spacing = null;
+        if (notation == FilterScale.Notation.WIDTH_PX) {
+            var c = vol.calibration();
+            if (Math.abs(c.pixelWidth - c.pixelHeight) > 1e-3 * Math.max(c.pixelWidth, c.pixelHeight)) {
+                throw new IllegalArgumentException(String.format(
+                        "画素幅は縦横の間隔が同じ画像だけで使えます（この画像は %.3f × %.3f mm）。半径（mm）で指定してください。",
+                        c.pixelWidth, c.pixelHeight));
+            }
+            spacing = c.pixelWidth;
+        }
+        List<ResolvedScale> out = new ArrayList<>();
+        for (ScaleInput in : inputs) {
+            double r = spacing == null ? in.value() : FilterScale.radiusMmFromWidthPx(in.value(), spacing);
+            if (out.stream().noneMatch(x -> x.radiusMm() == r)) {
+                out.add(new ResolvedScale(in, r, spacing));
             }
         }
         return out;

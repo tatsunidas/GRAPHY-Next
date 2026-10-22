@@ -18,8 +18,13 @@ import java.util.Map;
  * @param recompute     キャッシュを使わずに計算し、結果でキャッシュを置き換える
  * @param roiModes      計算の単位（{@code WHOLE_3D}・{@code MAX_SECTION_2D}・{@code SLICES_2D}）。
  *                      null か空は {@code WHOLE_3D} だけ（従来の要求と同じ）。{@code WHOLE_3D} は常に計算する
- * @param scalesMm      LoG で強調する構造の半径 r（mm）の並び。0 はフィルタなし。null か空はスケールなし（従来）。
- *                      設定の {@code DOUBLEARRAY_logSigmaMm} とは併用できない（切り捨て・境界は設定のものを全スケールに使う）
+ * @param scales        LoG のスケールの値の並び（単位は {@code scaleNotation}）。0 はフィルタなし。
+ *                      null か空はスケールなし（従来）。設定の {@code DOUBLEARRAY_logSigmaMm} とは併用できない
+ *                      （切り捨て・境界は設定のものを全スケールに使う）
+ * @param scaleNotation {@code scales} の書き方。{@code RADIUS_MM}（強調する構造の半径 r、mm〔既定〕）か
+ *                      {@code WIDTH_PX}（構造の直径の画素数。r ＝ 幅 × 元の面内の画素間隔 / 2）
+ * @param scaleLabels   各スケールの名札（旧フィルタ値など。記録するだけで計算には使わない）。null か空は名札なし、
+ *                      あれば {@code scales} と同じ数
  * @param scaleConversion r → σ の換算（{@code SQRT_D}〔既定〕・{@code IDENTITY}・{@code COEFFICIENT}）
  * @param scaleCoefficient {@code COEFFICIENT} の k（σ = k·r）
  */
@@ -33,7 +38,9 @@ public record RoiFeatureRequest(
         Map<String, String> settings,
         boolean recompute,
         java.util.Set<RoiMode> roiModes,
-        java.util.List<Double> scalesMm,
+        java.util.List<Double> scales,
+        String scaleNotation,
+        java.util.List<String> scaleLabels,
         String scaleConversion,
         Double scaleCoefficient) {
 
@@ -42,7 +49,7 @@ public record RoiFeatureRequest(
                              int maskChannel, int channel, int timePoint, Map<String, String> settings,
                              boolean recompute, java.util.Set<RoiMode> roiModes) {
         this(studyInstanceUid, sourceSeriesUid, maskSeriesUid, maskChannel, channel, timePoint, settings,
-                recompute, roiModes, null, null, null);
+                recompute, roiModes, null, null, null, null, null);
     }
 
     public enum RoiMode { WHOLE_3D, MAX_SECTION_2D, SLICES_2D }
@@ -56,7 +63,7 @@ public record RoiFeatureRequest(
     }
 
     public boolean hasScales() {
-        return scalesMm != null && !scalesMm.isEmpty();
+        return scales != null && !scales.isEmpty();
     }
 
     public boolean has(RoiMode mode) {
