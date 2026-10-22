@@ -526,7 +526,7 @@ class RoiFeatureServiceTest {
     }
 
     @Test
-    void resegmentationShowsBothCountsAndTheRadiomicsJMorphCountQuirk(@TempDir Path dir) throws Exception {
+    void resegmentationShowsBothCounts(@TempDir Path dir) throws Exception {
         RoiFeatureService svc = service(new FixedEngine(box()), dir, "t");
         RoiFeatureResult r = svc.compute(req("1.2.10",
                 settings("DOUBLE_rangeMin", "0", "DOUBLE_rangeMax", "300"), false), p -> { });
@@ -536,10 +536,11 @@ class RoiFeatureServiceTest {
         assertEquals(1000L, s.morphVoxels(), "形態マスクは再セグメントしない");
         assertEquals(500.0, s.volumeMm3(), 1e-9);
         assertEquals(500.0, row(r, "Morphology_VolumeVoxelCounting").value(), 1e-9);
-        // RadiomicsJ 2.4.1 の食い違い: 再セグメント後の「形態マスク」の数が強度マスクの数になっている
-        RoiFeatureResult.Row quirk = row(r, "Diagnostics_DiagnosticsResegmentedROIMorphMaskVoxelCount");
-        assertEquals(900.0, quirk.value());
-        assertEquals(List.of(RoiFeatureDefinitions.NOTE_RJ_MORPH_COUNT_IS_INTENSITY), quirk.notes());
+        // RadiomicsJ 2.5.0 で直った（2.4.1 では強度マスクの数 900 が入っていた）: 再セグメント後の形態マスクの数は
+        // 形態マスクのまま。回避と注記は外した。
+        RoiFeatureResult.Row morphCount = row(r, "Diagnostics_DiagnosticsResegmentedROIMorphMaskVoxelCount");
+        assertEquals(1000.0, morphCount.value());
+        assertTrue(morphCount.notes().isEmpty());
         assertTrue(row(r, "Diagnostics_DiagnosticsResegmentedROIIntMaskVoxelCount").notes().isEmpty());
     }
 

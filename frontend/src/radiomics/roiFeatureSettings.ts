@@ -52,6 +52,33 @@ export interface RoiFeatureForm {
   resampleMm: number | null;
   /** 族の key → 有効か。 */
   families: Record<string, boolean>;
+  /** 画像フィルタ LoG（RadiomicsJ 2.5 以降）。オンなら σ ごとの列が元の列の後ろに足される。 */
+  logOn: boolean;
+  /** σ（mm）。カンマか空白で区切って複数。 */
+  logSigmaMm: string;
+  /** 核の切り捨て（σ の倍数）。 */
+  logTruncate: number;
+  logPadding: LogPadding;
+}
+
+export const LOG_PADDINGS = ["MIRROR", "NEAREST", "CONSTANT", "PERIODIC"] as const;
+export type LogPadding = (typeof LOG_PADDINGS)[number];
+
+/** σ の入力（カンマ・空白区切り）を数に直す。正の有限数でないものが 1 つでもあれば null。 */
+export function parseSigmaList(text: string): number[] | null {
+  const parts = text.split(/[\s,]+/).filter((x) => x !== "");
+  if (parts.length === 0) return null;
+  const out = parts.map(Number);
+  return out.every((v) => Number.isFinite(v) && v > 0) ? out : null;
+}
+
+/**
+ * フィルタ後の族の列名（`log_sigma1.5mm_GLCM` の族）を、σ と元の族に分ける。フィルタ後でなければ null。
+ * 元の族の定義（離散化など）はそのまま使えるので、表示と定義表で元の族を引くのに使う。
+ */
+export function splitFilteredFamily(family: string): { sigma: string; base: string } | null {
+  const m = /^log_sigma([^_]+)mm_(.+)$/.exec(family);
+  return m ? { sigma: m[1], base: m[2] } : null;
 }
 
 /** RadiomicsJ の既定（ビン数 32・ビン幅 25・リサンプリングなし・GLAM と Shape2D はオフ）。 */
@@ -61,6 +88,10 @@ export function defaultRoiFeatureForm(): RoiFeatureForm {
     binCount: 32,
     binWidth: 25,
     resampleMm: null,
+    logOn: false,
+    logSigmaMm: "1.5",
+    logTruncate: 4,
+    logPadding: "MIRROR",
     families: Object.fromEntries(ROI_FEATURE_FAMILIES.map((f) => [f.key, f.defaultOn])),
   };
 }
@@ -83,5 +114,11 @@ export function roiFeatureSettings(form: RoiFeatureForm): Record<string, string>
     s.DOUBLEARRAY_resamplingFactorXYZ = `${v},${v},${v}`;
   }
   for (const f of ROI_FEATURE_FAMILIES) s[f.setting] = form.families[f.key] ? "1" : "0";
+  if (form.logOn) {
+    const sigmas = parseSigmaList(form.logSigmaMm);
+    if (sigmas) s.DOUBLEARRAY_logSigmaMm = sigmas.join(",");
+    s.DOUBLE_logTruncate = String(form.logTruncate);
+    s.STRING_logPadding = form.logPadding;
+  }
   return s;
 }

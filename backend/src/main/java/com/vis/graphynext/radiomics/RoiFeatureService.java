@@ -163,8 +163,8 @@ public class RoiFeatureService {
         }
         Long initial = count(diag.get("DiagnosticsInitialROIIntMaskVoxelCount"));
         Long intensity = count(diag.get("DiagnosticsResegmentedROIIntMaskVoxelCount"));
-        // RadiomicsJ 2.4.1 の ResegmentedROIMorphMaskVoxelCount は強度マスクの数になっている。形態マスクは
-        // 再セグメントしない（RadiomicsJ も形態特徴にはリサンプリング後のマスクを使う）ので、こちらを読む。
+        // 形態マスクは再セグメントしない（RadiomicsJ も形態特徴にはリサンプリング後のマスクを使う）ので、
+        // リサンプリング後の形態マスクの数を読む。
         Long morph = count(diag.get("DiagnosticsInterpolatedROIMorphMaskVoxelCount"));
         Double dx = diag.get("DiagnosticsInterpolatedImageVoxelDimensionX");
         Double dy = diag.get("DiagnosticsInterpolatedImageVoxelDimensionY");
@@ -232,6 +232,8 @@ public class RoiFeatureService {
         RadiomicsMapEngine.LoadedVolume vol = engine.load(req.studyInstanceUid(), req.sourceSeriesUid(),
                 req.channel(), req.timePoint(), req.maskSeriesUid(), req.maskChannel(), label, new HashMap<>());
 
+        checkLogGrid(settings, vol, req.has(RoiFeatureRequest.RoiMode.MAX_SECTION_2D)
+                || req.has(RoiFeatureRequest.RoiMode.SLICES_2D));
         RoiFeatureResult whole = compute3d(req, vol, label, settings, phase);
         if (!req.has(RoiFeatureRequest.RoiMode.MAX_SECTION_2D) && !req.has(RoiFeatureRequest.RoiMode.SLICES_2D)) {
             return whole;
@@ -242,6 +244,27 @@ public class RoiFeatureService {
         RoiFeatureResult.Slices slices = req.has(RoiFeatureRequest.RoiMode.SLICES_2D)
                 ? computeSlices(req, vol, label, settings, progress, cancelled) : null;
         return whole.withModes(section, slices);
+    }
+
+    /**
+     * LoG は画素ごとの値が間隔に依るので、等方でない格子は断る（RadiomicsJ も断るが、メッセージが英語で、
+     * 3D と 2D の単位のどちらで落ちたかも分からない）。リサンプリングを指定していれば RadiomicsJ が等方にする。
+     * 3D の単位は 3 軸、2D の単位は面内の 2 軸が揃っていること。
+     */
+    static void checkLogGrid(Map<String, String> settings, RadiomicsMapEngine.LoadedVolume vol, boolean with2d) {
+        String sigma = settings.get("DOUBLEARRAY_logSigmaMm");
+        String resample = settings.get("DOUBLEARRAY_resamplingFactorXYZ");
+        if (sigma == null || sigma.isBlank() || (resample != null && !resample.isBlank())) {
+            return;
+        }
+        var c = vol.calibration();
+        boolean inPlane = Math.abs(c.pixelWidth - c.pixelHeight) <= 1e-3 * Math.max(c.pixelWidth, c.pixelHeight);
+        boolean volume = inPlane && Math.abs(c.pixelWidth - c.pixelDepth) <= 1e-3 * Math.max(c.pixelWidth, c.pixelDepth);
+        if (!volume || (with2d && !inPlane)) {
+            throw new IllegalArgumentException(String.format(
+                    "LoG フィルタは等方の格子が前提です（この画像は %.3f × %.3f × %.3f mm）。"
+                            + "先にリサンプリングを指定してください。", c.pixelWidth, c.pixelHeight, c.pixelDepth));
+        }
     }
 
     private RoiFeatureResult compute3d(RoiFeatureRequest req, RadiomicsMapEngine.LoadedVolume vol, int label,

@@ -18,7 +18,7 @@
  */
 import type { RoiFeatureDiscretisation, RoiFeatureProvenance, RoiFeatureResult, RoiFeatureRoiSize } from "../api";
 import { cell } from "../viewer/roiStatsCsv";
-import { DISCRETISED_FAMILIES, IVH_FAMILY } from "./roiFeatureSettings";
+import { DISCRETISED_FAMILIES, IVH_FAMILY, splitFilteredFamily } from "./roiFeatureSettings";
 
 /**
  * 値の書き方。JS の数値の文字列化は倍精度を往復で保つので、読み戻すと API の値と差 0 になる。
@@ -75,7 +75,9 @@ export function roiFeatureDataCsv(result: RoiFeatureResult, caseLabel = ""): str
 }
 
 /** 族の離散化の書き方（定義表の 1 セル）。離散化を使わない族は空。 */
-export function discretisationOf(family: string, d: RoiFeatureDiscretisation): string {
+export function discretisationOf(familyOrFiltered: string, d: RoiFeatureDiscretisation): string {
+  // LoG 後の族は元の族と同じ離散化（フィルタ後の値で掛け直す）
+  const family = splitFilteredFamily(familyOrFiltered)?.base ?? familyOrFiltered;
   if (DISCRETISED_FAMILIES.has(family)) {
     return d.fixedBinNumber ? `fixedBinNumber=${d.nBins}` : `binWidth=${d.binWidth}`;
   }
