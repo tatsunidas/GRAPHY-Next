@@ -96,6 +96,8 @@ export default defineConfig(({ mode }) => {
     },
     server: {
       port: devPort,
+      // アシスタント窓が ../docs/*.md を ?raw で同梱するため（dev でプロジェクト外の読み出しを許す）。
+      fs: { allow: [".."] },
       // dev では /api を backend にプロキシし、ブラウザから同一オリジンで叩けるようにする。
       proxy: {
         "/api": backendUrl,

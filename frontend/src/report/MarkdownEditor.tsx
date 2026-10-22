@@ -18,7 +18,7 @@ const PREVIEW_DEBOUNCE_MS = 400;
  * だけだと、プレビュー側の例外で入力中の本文ごと画面全体がクラッシュ表示に置き換わってしまうため、
  * ここでプレビュー欄だけに閉じ込める。{@code source} が変われば次の描画で自動的に再試行する。
  */
-class MarkdownPreviewBoundary extends Component<
+export class MarkdownPreviewBoundary extends Component<
   { source: string; children: ReactNode },
   { error: Error | null; lastSource: string }
 > {

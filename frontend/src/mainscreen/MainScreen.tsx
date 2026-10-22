@@ -175,7 +175,12 @@ export function MainScreen({
   };
 
   // 各ビューア起動。2D Viewer は別ウィンドウ（desktop）/ ハッシュ（web）で開く。3D/MPR/Slicer は順次。
-  const handleOpenViewer = (kind: "2d" | "3d" | "mpr" | "slicer" | "qr" | "computejobs") => {
+  const handleOpenViewer = (kind: "2d" | "3d" | "mpr" | "slicer" | "qr" | "computejobs" | "assistant") => {
+    if (kind === "assistant") {
+      // AI アシスタントは常駐の別ウィンドウ（シングルトン）。患者・検査の文脈は渡さない。
+      void desktop()?.openViewer?.("assistant");
+      return;
+    }
     if (kind === "computejobs") {
       // standalone のみ（メニュー側で出し分け）。別ウィンドウのシングルトン。
       void desktop()?.openViewer?.("computejobs");

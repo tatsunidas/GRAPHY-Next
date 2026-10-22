@@ -32,6 +32,7 @@ export interface ShortcutDef {
 export const SHORTCUTS: ShortcutDef[] = [
   // --- グローバル（実装済み） ---
   { id: "open-settings", combo: "Mod+,", descriptionKey: "sc.openSettings", group: "global" },
+  { id: "open-assistant", combo: "Mod+Shift+A", descriptionKey: "sc.openAssistant", group: "global" },
   { id: "open-db", combo: "Mod+Shift+D", descriptionKey: "sc.openDb", group: "global" },
   { id: "show-help", combo: "?", descriptionKey: "sc.showHelp", group: "global" },
   { id: "close-dialog", combo: "Escape", descriptionKey: "sc.closeDialog", group: "global" },
