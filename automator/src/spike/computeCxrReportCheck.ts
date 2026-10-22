@@ -125,6 +125,21 @@ async function main(): Promise<void> {
       const shown = await viewer.getByTestId("cxr-findings").inputValue();
       check(shown === rep.findings, "画面の所見が返った文と一致する", shown.slice(0, 80));
       check(((await viewer.getByTestId("cxr-disclaimer").textContent()) ?? "").includes("診断"), "結果が出た後も免責が残る");
+
+      console.log("\n[4] Grad-CAM");
+      check(!rep.camError && rep.cam?.shape?.length === 2 && rep.cam.sentences.length >= 3, "Grad-CAM が返る（文ごとの特徴マップ）", { error: rep.camError, shape: rep.cam?.shape });
+      check(rep.cam?.gap < 0.01, "再計算した確率が生成時の確率と一致している（差 0.01 未満）", rep.cam?.gap);
+      check(rep.cam?.sentences.every((x: { strength: number }) => x.strength >= 0 && x.strength <= 1) && rep.cam.sentences.some((x: { strength: number }) => x.strength === 1), "強さは 0〜1 で、最大の文が 1", rep.cam?.sentences.map((x: { strength: number }) => x.strength));
+      const best = rep.cam.sentences.findIndex((x: { strength: number }) => x.strength === 1);
+      await viewer.getByTestId(`cxr-cam-sentence-${best}`).click();
+      await viewer.waitForTimeout(1_000);
+      const st2 = await state(viewer);
+      check(st2.cam?.shown === best && !st2.cam?.error, "文を押すと本体が重ねを受け付ける", st2.cam);
+      await viewer.screenshot({ path: path.join(OUT_DIR, "viewer-cam-on.png") });
+      await viewer.getByTestId("cxr-cam-clear").click();
+      await viewer.waitForTimeout(500);
+      check((await state(viewer)).cam?.shown === null, "「消す」で重ねが外れる");
+      await viewer.screenshot({ path: path.join(OUT_DIR, "viewer-cam-off.png") });
     } else {
       check(st.phase === "failed", "版違いで止まる", { phase: st.phase, status: st.status });
       check(/transformers 4\.57/.test(st.status ?? "") && /4\.46\.3/.test(st.status ?? ""), "止めた理由に入っている版と必要な版が出る", st.status);
