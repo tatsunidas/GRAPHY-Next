@@ -63,23 +63,13 @@ public class MaxSectionService {
         RadiomicsMapEngine.LoadedVolume vol = engine.load(req.studyInstanceUid(), req.sourceSeriesUid(),
                 req.channel(), req.timePoint(), req.maskSeriesUid(), req.maskChannel(), label, new HashMap<>());
 
-        if (!"1".equals(vol.mask().getProp(RadiomicsMapEngine.PROP_GEOMETRY_ALIGNED))) {
-            throw new IllegalArgumentException("位置が分からないため最大断面を示せません"
-                    + "（ターゲットとマスクの向き・位置が揃わず、スライス順の対応にしか落とせません）。");
-        }
-        double[] normal = RadiomicsMapEngine.normalOf(vol.imageOrientationPatient());
+        double[] pos = positionsMm(vol);
         int nZ = vol.slices();
         long[] pixels = new long[nZ];
-        double[] pos = new double[nZ];
         for (int z = 0; z < nZ; z++) {
-            double[] ipp = vol.ippByZ().get(z);
-            pos[z] = ipp[0] * normal[0] + ipp[1] * normal[1] + ipp[2] * normal[2];
             pixels[z] = countSlice(vol.mask().getStack().getProcessor(z + 1), label);
         }
-        double pixelArea = vol.pixelSpacingRow() * vol.pixelSpacingCol();
-        if (!(pixelArea > 0)) {
-            throw new IllegalArgumentException("PixelSpacing が不明なため面積を求められません。");
-        }
+        double pixelArea = pixelAreaOf(vol);
 
         // SOP とフレーム: LoadedVolume は SOP しか持たないので、レイアウトから同じ (C,T) の z 昇順で引く
         SeriesLayout layout = storage.seriesLayout(req.studyInstanceUid(), req.sourceSeriesUid());
@@ -95,6 +85,29 @@ public class MaxSectionService {
             frames[z] = z < sel.size() ? sel.get(z).frame() : -1;
         }
         return analyze(vol.sopPerZ(), frames, pos, pixels, pixelArea);
+    }
+
+    /** スライスごとの法線方向の位置（mm、LPS）。マスクの位置が分からないときは例外（スライス順に落とさない）。 */
+    static double[] positionsMm(RadiomicsMapEngine.LoadedVolume vol) {
+        if (!"1".equals(vol.mask().getProp(RadiomicsMapEngine.PROP_GEOMETRY_ALIGNED))) {
+            throw new IllegalArgumentException("位置が分からないため最大断面を示せません"
+                    + "（ターゲットとマスクの向き・位置が揃わず、スライス順の対応にしか落とせません）。");
+        }
+        double[] normal = RadiomicsMapEngine.normalOf(vol.imageOrientationPatient());
+        double[] pos = new double[vol.slices()];
+        for (int z = 0; z < pos.length; z++) {
+            double[] ipp = vol.ippByZ().get(z);
+            pos[z] = ipp[0] * normal[0] + ipp[1] * normal[1] + ipp[2] * normal[2];
+        }
+        return pos;
+    }
+
+    static double pixelAreaOf(RadiomicsMapEngine.LoadedVolume vol) {
+        double a = vol.pixelSpacingRow() * vol.pixelSpacingCol();
+        if (!(a > 0)) {
+            throw new IllegalArgumentException("PixelSpacing が不明なため面積を求められません。");
+        }
+        return a;
     }
 
     /** 画素数・位置から最大断面を決める（I/O なし。単体テスト用に分離）。 */
@@ -126,7 +139,7 @@ public class MaxSectionService {
         return new Result(best, ties, n, pixelArea);
     }
 
-    private static long countSlice(ImageProcessor mp, int label) {
+    static long countSlice(ImageProcessor mp, int label) {
         long count = 0;
         for (int y = 0; y < mp.getHeight(); y++) {
             for (int x = 0; x < mp.getWidth(); x++) {

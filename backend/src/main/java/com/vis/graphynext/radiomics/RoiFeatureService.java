@@ -23,6 +23,8 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.CancellationException;
+import java.util.function.BooleanSupplier;
 import java.util.Properties;
 import java.util.Set;
 import java.util.TreeMap;
@@ -57,6 +59,11 @@ public class RoiFeatureService {
     static final String DIAGNOSTICS_KEY = SettingParams.BOOL_enableDiagnostics.name();
     /** 環境設定 ▸ テクスチャの「小さい ROI の警告（ボクセル数）」。空なら警告しない。 */
     static final String SMALL_ROI_SETTING = "texture.SmallRoiWarnVoxels";
+    /** 同じく 2D（最大断面・スライス別の画素数）。3D と「小さい」の意味が違うので別の設定。 */
+    static final String SMALL_ROI_SETTING_2D = "texture.SmallRoiWarnPixels2D";
+    static final String SECTION_ENGINE_VERSION = "roi-features-2d-section-1";
+    static final String SLICES_ENGINE_VERSION = "roi-features-2d-slices-1";
+    private static final String WEIGHT_COLUMN = "Diagnostics_DiagnosticsResegmentedROIIntMaskVoxelCount";
 
     private static final String DIAG = RoiFeatureDefinitions.DIAGNOSTICS + "_";
 
@@ -79,17 +86,26 @@ public class RoiFeatureService {
     private final Extractor extractor;
     private final String graphyVersion;
     private final Supplier<String> smallRoiSetting;
+    private final Supplier<String> smallRoiSetting2d;
 
     @Autowired
     public RoiFeatureService(RadiomicsMapEngine engine, MapCheckpointStore cache, RadiomicsMode mode,
                              ObjectMapper json, @Value("${graphy.version:dev}") String graphyVersion,
                              SettingsService settingsService) {
         this(engine, cache, mode, json, (rj, img, mask, label) -> rj.extractAll(img, mask, label), graphyVersion,
-                () -> settingsService.getAll().get(SMALL_ROI_SETTING));
+                () -> settingsService.getAll().get(SMALL_ROI_SETTING),
+                () -> settingsService.getAll().get(SMALL_ROI_SETTING_2D));
     }
 
     RoiFeatureService(RadiomicsMapEngine engine, MapCheckpointStore cache, RadiomicsMode mode,
                       ObjectMapper json, Extractor extractor, String graphyVersion, Supplier<String> smallRoiSetting) {
+        this(engine, cache, mode, json, extractor, graphyVersion, smallRoiSetting, () -> null);
+    }
+
+    RoiFeatureService(RadiomicsMapEngine engine, MapCheckpointStore cache, RadiomicsMode mode,
+                      ObjectMapper json, Extractor extractor, String graphyVersion, Supplier<String> smallRoiSetting,
+                      Supplier<String> smallRoiSetting2d) {
+        this.smallRoiSetting2d = smallRoiSetting2d;
         this.engine = engine;
         this.cache = cache;
         this.mode = mode;
@@ -112,11 +128,16 @@ public class RoiFeatureService {
         }
         effectiveSettings(req.settings(), labelOf(req.settings()));
         smallRoiThreshold();
+        threshold(smallRoiSetting2d, "小さい ROI の警告（画素数、2D）");
     }
 
     /** 環境設定の基準値。空・未設定なら null。整数でない・1 未満なら例外（黙って警告を止めない）。 */
     Integer smallRoiThreshold() {
-        String v = smallRoiSetting.get();
+        return threshold(smallRoiSetting, "小さい ROI の警告（ボクセル数）");
+    }
+
+    private static Integer threshold(Supplier<String> setting, String label) {
+        String v = setting.get();
         if (v == null || v.isBlank()) {
             return null;
         }
@@ -129,7 +150,7 @@ public class RoiFeatureService {
             // 下の例外にまとめる
         }
         throw new IllegalArgumentException(
-                "環境設定の「小さい ROI の警告（ボクセル数）」は 1 以上の整数か空欄にしてください: " + v);
+                "環境設定の「" + label + "」は 1 以上の整数か空欄にしてください: " + v);
     }
 
     /** 行（Diagnostics）から ROI の大きさを読み、今の基準値で判定する。 */
@@ -178,7 +199,7 @@ public class RoiFeatureService {
         }
         if (isTrue(out.get(FORCE_2D_KEY))) {
             throw new IllegalArgumentException(
-                    "スライスごとの 2D 抽出（BOOL_force2D）には未対応です。1 ROI = 1 行の 3D 抽出だけを出します。");
+                    "BOOL_force2D は指定できません。2D は「計算の単位」（roiModes: MAX_SECTION_2D・SLICES_2D）で選びます。");
         }
         out.put(OPERATIONAL_INFO_KEY, "0");
         out.put(DIAGNOSTICS_KEY, "1");
@@ -186,11 +207,23 @@ public class RoiFeatureService {
         return out;
     }
 
-    /** ROI 全体で RadiomicsJ の一括抽出を 1 回かける（キャッシュがあれば返す）。 */
+    /** 進み具合の受け口（スライス別 2D の n / N）。 */
+    @FunctionalInterface
+    public interface Progress {
+        void slice(int done, int total);
+    }
+
     public RoiFeatureResult compute(RoiFeatureRequest req, java.util.function.Consumer<Phase> phase)
             throws IOException {
+        return compute(req, phase, (done, total) -> { }, () -> false);
+    }
+
+    /**
+     * 3D（ROI 全体で一括抽出 1 回）に、選ばれた 2D の単位を足して返す。3D の結果・キャッシュは単位に関わらず同じ。
+     */
+    public RoiFeatureResult compute(RoiFeatureRequest req, java.util.function.Consumer<Phase> phase,
+                                    Progress progress, BooleanSupplier cancelled) throws IOException {
         check(req);
-        Integer threshold = smallRoiThreshold();
         int label = labelOf(req.settings());
         Map<String, String> settings = effectiveSettings(req.settings(), label);
 
@@ -198,6 +231,23 @@ public class RoiFeatureService {
         // Next のテクスチャ設定は渡さない（Next 側のリサンプリングを掛けない。RadiomicsJ の設定に一本化）。
         RadiomicsMapEngine.LoadedVolume vol = engine.load(req.studyInstanceUid(), req.sourceSeriesUid(),
                 req.channel(), req.timePoint(), req.maskSeriesUid(), req.maskChannel(), label, new HashMap<>());
+
+        RoiFeatureResult whole = compute3d(req, vol, label, settings, phase);
+        if (!req.has(RoiFeatureRequest.RoiMode.MAX_SECTION_2D) && !req.has(RoiFeatureRequest.RoiMode.SLICES_2D)) {
+            return whole;
+        }
+        phase.accept(Phase.EXTRACTING);
+        RoiFeatureResult.Section section = req.has(RoiFeatureRequest.RoiMode.MAX_SECTION_2D)
+                ? computeSection(req, vol, label, settings) : null;
+        RoiFeatureResult.Slices slices = req.has(RoiFeatureRequest.RoiMode.SLICES_2D)
+                ? computeSlices(req, vol, label, settings, progress, cancelled) : null;
+        return whole.withModes(section, slices);
+    }
+
+    private RoiFeatureResult compute3d(RoiFeatureRequest req, RadiomicsMapEngine.LoadedVolume vol, int label,
+                                       Map<String, String> settings, java.util.function.Consumer<Phase> phase)
+            throws IOException {
+        Integer threshold = smallRoiThreshold();
 
         long roiVoxels = GlamAnalysisService.countRoiVoxels(vol.mask(), label);
         if (roiVoxels < 1) {
@@ -240,6 +290,256 @@ public class RoiFeatureService {
             cache.saveFeatures(key, json.writeValueAsBytes(result));
         }
         return result.withPerRequest(roiSizeOf(result.rows(), threshold), vol.lossyCompressed());
+    }
+
+    // ───────────── 2D の単位（最大断面・スライス別） ─────────────
+
+    /** 2D の計算に渡す設定（上書き済みの設定に BOOL_force2D=1 を足したもの）。 */
+    private static Map<String, String> settings2d(Map<String, String> settings) {
+        Map<String, String> out = new TreeMap<>(settings);
+        out.put(FORCE_2D_KEY, "1");
+        return out;
+    }
+
+    /** 体積から 1 枚だけ切り出す（画像・マスクとも。校正は元の体積のものを写す）。 */
+    private static ImagePlus sliceOf(ImagePlus src, int z, ij.measure.Calibration cal) {
+        ImagePlus one = new ImagePlus("slice-" + z, src.getStack().getProcessor(z + 1).duplicate());
+        one.setCalibration(cal.copy());
+        return one;
+    }
+
+    private record Prepared(RoiFeatureResult.Record2d record) {}
+
+    /** 2D の設定を RadiomicsJ に読ませ、実際に効いた設定と離散化を記録する。 */
+    private Prepared prepare2d(Map<String, String> settings2d) throws IOException {
+        try {
+            return RadiomicsLock.call(() -> {
+                try {
+                    RadiomicsJ radiomics = new RadiomicsJ();
+                    Properties props = new Properties();
+                    props.putAll(settings2d);
+                    radiomics.loadSettings(props);
+                    RoiFeatureResult.Discretisation disc = new RoiFeatureResult.Discretisation(
+                            RadiomicsJ.BOOL_USE_FixedBinNumber, RadiomicsJ.nBins, RadiomicsJ.binWidth,
+                            RadiomicsJ.IVH_mode, RadiomicsJ.IVH_binCount, RadiomicsJ.IVH_binWidth);
+                    String properties = RadiomicsJSettingsSnapshot.of(radiomics);
+                    Instant at = Instant.now();
+                    return new Prepared(new RoiFeatureResult.Record2d(at, disc,
+                            new RoiFeatureResult.Provenance(graphyVersion, RadiomicsJ.version, at,
+                                    RadiomicsJSettingsSnapshot.sha256(properties)), properties));
+                } finally {
+                    RadiomicsJ.resetSettings();
+                    RadiomicsJ.discretiseImp = null;
+                }
+            });
+        } catch (IOException | RuntimeException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new IllegalStateException("2D の設定を読み込めませんでした: " + e.getMessage(), e);
+        }
+    }
+
+    /** 1 枚を 2D で抽出する（ロックは 1 枚ごと）。結果が無ければ null。 */
+    private List<RoiFeatureResult.Row> extractOne(Map<String, String> settings2d, ImagePlus image, ImagePlus mask,
+                                                 int label) throws Exception {
+        return RadiomicsLock.call(() -> {
+            try {
+                RadiomicsJ radiomics = new RadiomicsJ();
+                Properties props = new Properties();
+                props.putAll(settings2d);
+                radiomics.loadSettings(props);
+                ResultsTable rt = extractor.extract(radiomics, image, mask, label);
+                return rt == null || rt.size() < 1 ? null : rows(rt);
+            } finally {
+                RadiomicsJ.resetSettings();
+                RadiomicsJ.discretiseImp = null;
+            }
+        });
+    }
+
+    private RoiFeatureResult.Section computeSection(RoiFeatureRequest req, RadiomicsMapEngine.LoadedVolume vol,
+                                                    int label, Map<String, String> settings) throws IOException {
+        double[] pos = MaxSectionService.positionsMm(vol);
+        double pixelArea = MaxSectionService.pixelAreaOf(vol);
+        int nZ = vol.slices();
+        long[] pixels = new long[nZ];
+        for (int z = 0; z < nZ; z++) {
+            pixels[z] = MaxSectionService.countSlice(vol.mask().getStack().getProcessor(z + 1), label);
+        }
+        MaxSectionService.Result max = MaxSectionService.analyze(vol.sopPerZ(), new int[nZ], pos, pixels, pixelArea);
+        int z = -1;
+        for (int i = 0; i < nZ; i++) {
+            if (pos[i] == max.best().positionMm() && pixels[i] == max.best().pixels()) {
+                z = i;
+                break;
+            }
+        }
+        Integer threshold = threshold(smallRoiSetting2d, "小さい ROI の警告（画素数、2D）");
+        Map<String, String> s2 = settings2d(settings);
+        Map<String, String> keySettings = new TreeMap<>(s2);
+        keySettings.put("NEXT_sectionPositionMm", Double.toString(max.best().positionMm()));
+        String key = cache.featureKey(SECTION_ENGINE_VERSION, keySettings, vol);
+        if (key != null && !req.recompute()) {
+            Optional<byte[]> raw = cache.loadFeatures(key);
+            if (raw.isPresent()) {
+                try {
+                    RoiFeatureResult.Section hit = json.readValue(raw.get(), RoiFeatureResult.Section.class);
+                    log.info("[roi-features] 2D section cache hit key={}", key.substring(0, 12));
+                    return new RoiFeatureResult.Section(true, hit.positionMm(), hit.areaMm2(), hit.pixels(),
+                            hit.rows(), hit.record(), roiSizeOf(hit.rows(), threshold));
+                } catch (IOException e) {
+                    log.warn("[roi-features] 2D section cache unreadable, recomputing: {}", e.toString());
+                }
+            }
+        }
+        Prepared prepared = prepare2d(s2);
+        List<RoiFeatureResult.Row> rows;
+        try {
+            rows = extractOne(s2, sliceOf(vol.image(), z, vol.calibration()),
+                    sliceOf(vol.mask(), z, vol.calibration()), label);
+        } catch (IllegalArgumentException | IllegalStateException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new IllegalStateException("最大断面 2D の計算に失敗しました: " + e.getMessage(), e);
+        }
+        if (rows == null) {
+            throw new IllegalStateException("RadiomicsJ が最大断面 2D の結果を返しませんでした。");
+        }
+        RoiFeatureResult.Section out = new RoiFeatureResult.Section(false, max.best().positionMm(),
+                max.best().areaMm2(), max.best().pixels(), rows, prepared.record(), null);
+        if (key != null) {
+            cache.saveFeatures(key, json.writeValueAsBytes(out));
+        }
+        return new RoiFeatureResult.Section(false, out.positionMm(), out.areaMm2(), out.pixels(), rows,
+                out.record(), roiSizeOf(rows, threshold));
+    }
+
+    private RoiFeatureResult.Slices computeSlices(RoiFeatureRequest req, RadiomicsMapEngine.LoadedVolume vol,
+                                                  int label, Map<String, String> settings, Progress progress,
+                                                  BooleanSupplier cancelled) throws IOException {
+        double[] pos = MaxSectionService.positionsMm(vol);
+        double pixelArea = MaxSectionService.pixelAreaOf(vol);
+        int nZ = vol.slices();
+        List<Integer> fg = new ArrayList<>();
+        long[] pixels = new long[nZ];
+        for (int z = 0; z < nZ; z++) {
+            pixels[z] = MaxSectionService.countSlice(vol.mask().getStack().getProcessor(z + 1), label);
+            if (pixels[z] > 0) {
+                fg.add(z);
+            }
+        }
+        fg.sort(java.util.Comparator.comparingDouble(z -> pos[z]));
+        Integer threshold = threshold(smallRoiSetting2d, "小さい ROI の警告（画素数、2D）");
+        Map<String, String> s2 = settings2d(settings);
+        String key = cache.featureKey(SLICES_ENGINE_VERSION, s2, vol);
+        if (key != null && !req.recompute()) {
+            Optional<byte[]> raw = cache.loadFeatures(key);
+            if (raw.isPresent()) {
+                try {
+                    RoiFeatureResult.Slices hit = json.readValue(raw.get(), RoiFeatureResult.Slices.class);
+                    log.info("[roi-features] 2D slices cache hit key={}", key.substring(0, 12));
+                    progress.slice(hit.foregroundSlices(), hit.foregroundSlices());
+                    return withSmallRoi(hit, true, threshold);
+                } catch (IOException e) {
+                    log.warn("[roi-features] 2D slices cache unreadable, recomputing: {}", e.toString());
+                }
+            }
+        }
+        Prepared prepared = prepare2d(s2);
+        List<RoiFeatureResult.SliceRow> rows = new ArrayList<>();
+        List<RoiFeatureResult.SliceFailure> failures = new ArrayList<>();
+        int done = 0;
+        progress.slice(0, fg.size());
+        for (int z : fg) {
+            if (cancelled.getAsBoolean()) {
+                throw new CancellationException("取り消されました");
+            }
+            try {
+                List<RoiFeatureResult.Row> r = extractOne(s2, sliceOf(vol.image(), z, vol.calibration()),
+                        sliceOf(vol.mask(), z, vol.calibration()), label);
+                if (r == null) {
+                    failures.add(new RoiFeatureResult.SliceFailure(pos[z], "RadiomicsJ が結果を返しませんでした。"));
+                } else {
+                    rows.add(new RoiFeatureResult.SliceRow(pos[z], pixels[z], pixels[z] * pixelArea, r));
+                }
+            } catch (Exception e) {
+                log.warn("[roi-features] 2D slice at {} mm failed: {}", pos[z], e.toString());
+                failures.add(new RoiFeatureResult.SliceFailure(pos[z],
+                        e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName()));
+            }
+            progress.slice(++done, fg.size());
+        }
+        Aggregation agg = aggregate(rows);
+        RoiFeatureResult.Slices out = new RoiFeatureResult.Slices(false, rows, failures, agg.mean,
+                agg.weighted, agg.used, fg.size(), prepared.record(), null, List.of());
+        if (key != null && failures.isEmpty()) {
+            // 失敗のあった結果は置かない（次回は再計算して、直っていれば全枚の結果になる）
+            cache.saveFeatures(key, json.writeValueAsBytes(out));
+        }
+        return withSmallRoi(out, false, threshold);
+    }
+
+    /** 基準値は返すたびに今の環境設定で判定し直す（キャッシュの値は使わない）。 */
+    private static RoiFeatureResult.Slices withSmallRoi(RoiFeatureResult.Slices s, boolean fromCache,
+                                                       Integer threshold) {
+        List<Double> small = new ArrayList<>();
+        if (threshold != null) {
+            for (RoiFeatureResult.SliceRow r : s.rows()) {
+                Double v = r.rows().stream().filter(x -> x.column().equals(WEIGHT_COLUMN)).map(
+                        RoiFeatureResult.Row::value).findFirst().orElse(null);
+                if (v != null && v < threshold) {
+                    small.add(r.positionMm());
+                }
+            }
+        }
+        return new RoiFeatureResult.Slices(fromCache, s.rows(), s.failures(), s.mean(), s.pixelWeightedMean(),
+                s.slicesUsed(), s.foregroundSlices(), s.record(), threshold, small);
+    }
+
+    private record Aggregation(List<RoiFeatureResult.Row> mean, List<RoiFeatureResult.Row> weighted,
+                               Map<String, Integer> used) {}
+
+    /**
+     * 列ごとに、値のあるスライスだけで (a) 単純平均、(b) 強度マスクの画素数
+     * （{@value #WEIGHT_COLUMN}）で重み付けした平均。使ったスライス数は (a) の数。
+     */
+    static Aggregation aggregate(List<RoiFeatureResult.SliceRow> slices) {
+        java.util.LinkedHashSet<String> columns = new java.util.LinkedHashSet<>();
+        for (RoiFeatureResult.SliceRow s : slices) {
+            for (RoiFeatureResult.Row r : s.rows()) {
+                columns.add(r.column());
+            }
+        }
+        List<RoiFeatureResult.Row> mean = new ArrayList<>();
+        List<RoiFeatureResult.Row> weighted = new ArrayList<>();
+        Map<String, Integer> used = new java.util.LinkedHashMap<>();
+        for (String c : columns) {
+            double sum = 0;
+            int n = 0;
+            double wsum = 0;
+            double wtot = 0;
+            for (RoiFeatureResult.SliceRow s : slices) {
+                Double v = null;
+                Double w = null;
+                for (RoiFeatureResult.Row r : s.rows()) {
+                    if (r.column().equals(c)) v = r.value();
+                    if (r.column().equals(WEIGHT_COLUMN)) w = r.value();
+                }
+                if (v == null) {
+                    continue;
+                }
+                sum += v;
+                n++;
+                if (w != null && w > 0) {
+                    wsum += v * w;
+                    wtot += w;
+                }
+            }
+            used.put(c, n);
+            mean.add(RoiFeatureDefinitions.row(c, n == 0 ? null : sum / n));
+            weighted.add(RoiFeatureDefinitions.row(c, wtot == 0 ? null : wsum / wtot));
+        }
+        return new Aggregation(mean, weighted, used);
     }
 
     private RoiFeatureResult extractLocked(Map<String, String> settings, RadiomicsMapEngine.LoadedVolume vol,
