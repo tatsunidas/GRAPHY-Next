@@ -68,6 +68,65 @@ class ComputeDatasetServiceTest {
     private DatasetFixture fx;
     private final ObjectMapper mapper = new ObjectMapper();
 
+    // ── マスク無しの単純X線は、local の計算機にだけ渡せる（fw/remote-compute-design.md §3.2）──
+
+    @Test
+    void unmaskedDxIsRefusedForAnExternalDestination() throws Exception {
+        fx.writeDx("MONOCHROME2", "2048", "4096", null, false);
+        ComputeDatasetService.DatasetRefused e = assertThrows(ComputeDatasetService.DatasetRefused.class,
+                () -> service().create(STUDY, DatasetFixture.DX_SERIES, ComputeDatasetService.Format.NPZ));
+        assertEquals("burnin-risky-modality", e.reason());
+        assertThrows(ComputeDatasetService.DatasetRefused.class,
+                () -> service().create(STUDY, DatasetFixture.DX_SERIES, ComputeDatasetService.Format.NPZ, false));
+    }
+
+    @Test
+    void unmaskedDxIsPassedAsLocalOnlyForALocalDestinationWithoutPatientInfo() throws Exception {
+        fx.writeDx("MONOCHROME2", "2048", "4096", null, false);
+        ComputeDatasetService.Dataset d = service().create(STUDY, DatasetFixture.DX_SERIES,
+                ComputeDatasetService.Format.NPZ, true);
+        assertTrue(d.localOnly());
+        assertEquals(0, d.burnedInstances(), "マスクが無いので塗らない");
+        assertEquals("DX", d.modality());
+        String all = new String(Files.readAllBytes(d.file()), StandardCharsets.ISO_8859_1);
+        for (String phi : List.of(PHI_NAME, PHI_ID, DatasetFixture.DX_SERIES, STUDY)) {
+            assertFalse(all.contains(phi), "🔴 local でもヘッダの患者情報は消す: " + phi);
+        }
+    }
+
+    /** 実物の胸部X線（automator/fixtures/cxr-dx。環境変数 GRAPHY_CXR_DX でファイルを指す）。無ければ skip。 */
+    @Test
+    void realChestRadiographPassesAsLocalOnlyAndKeepsNoHeaderPatientInfo() throws Exception {
+        String real = System.getenv("GRAPHY_CXR_DX");
+        Assumptions.assumeTrue(real != null && Files.isRegularFile(Path.of(real)), "no GRAPHY_CXR_DX");
+        Attributes src;
+        try (org.dcm4che3.io.DicomInputStream in = new org.dcm4che3.io.DicomInputStream(new java.io.File(real))) {
+            src = in.readDataset();
+        }
+        Path copy = Files.copy(Path.of(real), dir.resolve("real-dx.dcm"));
+        String series = src.getString(Tag.SeriesInstanceUID);
+        fx.index(series, src.getString(Tag.SOPInstanceUID), copy, "DX", src.getString(Tag.SOPClassUID));
+        assertThrows(ComputeDatasetService.DatasetRefused.class,
+                () -> service().create(STUDY, series, ComputeDatasetService.Format.NPZ), "外部には送れない");
+        ComputeDatasetService.Dataset d = service().create(STUDY, series, ComputeDatasetService.Format.NPZ, true);
+        assertTrue(d.localOnly());
+        assertEquals(1, d.instances());
+        assertTrue(d.bytes() > 100_000, "圧縮された 1024x1024 の画素が入っている: " + d.bytes());
+        String all = new String(Files.readAllBytes(d.file()), StandardCharsets.ISO_8859_1);
+        for (String phi : List.of("TEST^NIH^CXR", "TEST-PHI-0001", "TEST HOSPITAL", series)) {
+            assertFalse(all.contains(phi), phi);
+        }
+    }
+
+    @Test
+    void maskedDxIsNotMarkedLocalOnly() throws Exception {
+        fx.writeDx("MONOCHROME2", "2048", "4096", null, true);
+        ComputeDatasetService.Dataset d = service().create(STUDY, DatasetFixture.DX_SERIES,
+                ComputeDatasetService.Format.NPZ, true);
+        assertFalse(d.localOnly(), "マスクで塗れたものは外へ出してよい");
+        assertEquals(1, d.burnedInstances());
+    }
+
     @org.junit.jupiter.api.BeforeEach
     void setUp() {
         fx = new DatasetFixture(dir);
