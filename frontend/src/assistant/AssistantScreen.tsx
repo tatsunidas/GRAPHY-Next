@@ -16,6 +16,12 @@ import { runToolLoop } from "./toolLoop";
 import { DOC_CHUNKS } from "./docsBundle";
 import { searchDocs } from "./docsIndex";
 import { buildSystemPrompt } from "./systemPrompt";
+import { AttachError, MAX_ATTACHMENTS, classify } from "./attachments/limits";
+import { composeUserText, ingest, type Attachment, type IngestDeps } from "./attachments";
+import { loadPdfjs } from "./attachments/pdfLoader";
+import { extractVideoFrames } from "./attachments/video";
+
+const INGEST_DEPS: IngestDeps = { loadPdfjs, extractVideo: extractVideoFrames };
 
 /** main の画像 1 枚の上限（desktop/aiGateway.js MAX_IMAGE_BYTES）と同じ。base64 文字数で数える。 */
 const MAX_IMAGE_B64 = 8 * 1024 * 1024;
@@ -52,6 +58,10 @@ export function AssistantScreen() {
   const [state, dispatch] = useReducer(chatReducer, initialChatState);
   const [input, setInput] = useState("");
   const [images, setImages] = useState<UiImage[]>([]);
+  const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const [ingesting, setIngesting] = useState(0);
+  const [askConfirm, setAskConfirm] = useState(false);
+  const confirmedRef = useRef(false);
   const [note, setNote] = useState<string | null>(null);
   const [resolved, setResolved] = useState<AiResolveResult | null>(null);
   const sessionId = useMemo(newSessionId, []);
@@ -99,25 +109,56 @@ export function AssistantScreen() {
   const addFiles = useCallback(
     async (files: File[]) => {
       setNote(null);
+      let imgCount = images.length;
+      let attCount = attachments.length;
       for (const f of files) {
-        if (images.length >= MAX_IMAGES) {
-          setNote(t("assistant.tooManyImages", { n: MAX_IMAGES }));
-          return;
-        }
-        const r = await readImage(f);
-        if ("error" in r) {
-          setNote(t(`assistant.image.${r.error}`));
+        if (classify(f.name, f.type) === "image") {
+          if (imgCount >= MAX_IMAGES) {
+            setNote(t("assistant.tooManyImages", { n: MAX_IMAGES }));
+            continue;
+          }
+          const r = await readImage(f);
+          if ("error" in r) {
+            setNote(t(`assistant.image.${r.error}`));
+            continue;
+          }
+          imgCount++;
+          setImages((cur) => (cur.length >= MAX_IMAGES ? cur : [...cur, r]));
           continue;
         }
-        setImages((cur) => (cur.length >= MAX_IMAGES ? cur : [...cur, r]));
+        if (attCount >= MAX_ATTACHMENTS) {
+          setNote(t("assistant.attach.tooMany", { n: MAX_ATTACHMENTS }));
+          return;
+        }
+        attCount++;
+        setIngesting((n) => n + 1);
+        try {
+          const a = await ingest(f, INGEST_DEPS);
+          setAttachments((cur) => [...cur, a]);
+        } catch (e) {
+          attCount--;
+          setNote(`${f.name}: ${t(`assistant.attach.err.${e instanceof AttachError ? e.code : "read"}`)}`);
+        } finally {
+          setIngesting((n) => n - 1);
+        }
       }
     },
-    [images.length, t],
+    [images.length, attachments.length, t],
   );
 
   const send = useCallback(async () => {
-    const text = input.trim();
-    if (!text || state.pending !== null || !bridge?.aiChat) return;
+    const typed = input.trim();
+    if ((!typed && !attachments.length) || ingesting > 0 || state.pending !== null || !bridge?.aiChat) return;
+    // 添付の内容は宛先へ出ていく。この PC の外へ出るときは、会話ごとに最初の 1 回だけ確認する。
+    if (attachments.length && resolved?.ok && !resolved.local && !confirmedRef.current) {
+      setAskConfirm(true);
+      return;
+    }
+    setAskConfirm(false);
+    const text = typed || t("assistant.attach.defaultAsk");
+    const composed = composeUserText(text, attachments, resolved?.ok === true && resolved.local === true);
+    const frameImages = attachments.flatMap((a) => a.images);
+    const allImages = [...images, ...frameImages];
     const hits = searchDocs(DOC_CHUNKS, text, { k: DOCS_K, maxChars: DOCS_MAX_CHARS, minScore: DOCS_MIN_SCORE });
     // 過去の画像は履歴に載せない（会話が長くなるほど本文上限に近づくため）。今回の添付だけ送る。
     const history: AiChatMessage[] = state.messages
@@ -128,12 +169,14 @@ export function AssistantScreen() {
     const req: AiChatMessage[] = [
       { role: "system", text: buildSystemPrompt(locale, hits, { canOperate }) },
       ...history,
-      { role: "user", text, images: images.length ? images.map((i) => ({ base64: i.base64, mimeType: i.mimeType })) : undefined },
+      { role: "user", text: composed.text, images: allImages.length ? allImages.map((i) => ({ base64: i.base64, mimeType: i.mimeType })) : undefined },
     ];
-    dispatch({ type: "send", text, images, sources: hits.map((h) => ({ file: h.file, heading: h.heading })) });
+    const shown = attachments.length ? `${attachments.map((a) => `📎 ${a.name}`).join("\n")}\n${text}` : text;
+    dispatch({ type: "send", text: shown, images: allImages, sources: hits.map((h) => ({ file: h.file, heading: h.heading })) });
     setInput("");
     setImages([]);
-    setNote(null);
+    setAttachments([]);
+    setNote(composed.truncated ? t("assistant.attach.truncated") : null);
     abortedRef.current = false;
     const viewer = (cmd: { kind: "action" | "getState"; id?: string; params?: unknown }) =>
       bridge.assistantViewerCmd!(sessionId, cmd);
@@ -155,7 +198,7 @@ export function AssistantScreen() {
       flush();
     }
     dispatch({ type: "done", result });
-  }, [input, images, state.pending, state.messages, bridge, locale, sessionId, flush]);
+  }, [input, images, attachments, ingesting, resolved, t, state.pending, state.messages, bridge, locale, sessionId, flush]);
 
   const stop = useCallback(() => {
     abortedRef.current = true;
@@ -179,7 +222,7 @@ export function AssistantScreen() {
   );
 
   const onPaste = (e: ClipboardEvent) => {
-    const files = Array.from(e.clipboardData.files).filter((f) => f.type.startsWith("image/"));
+    const files = Array.from(e.clipboardData.files);
     if (files.length) {
       e.preventDefault();
       void addFiles(files);
@@ -219,6 +262,48 @@ export function AssistantScreen() {
       </div>
 
       {note && <div style={S.note}>{note}</div>}
+      {attachments.length > 0 && !(resolved?.ok && resolved.local) && (
+        <div style={S.note} data-testid="assistant-attach-dest">
+          {t("assistant.attach.dest", { host: resolved?.ok ? resolved.endpointHost : "?" })}
+        </div>
+      )}
+      {askConfirm && (
+        <div style={S.confirm} data-testid="assistant-attach-confirm">
+          <span>{t("assistant.attach.confirm", { host: resolved?.ok ? resolved.endpointHost : "?" })}</span>
+          <button
+            style={S.btnPrimary}
+            data-testid="assistant-attach-confirm-yes"
+            onClick={() => {
+              confirmedRef.current = true;
+              void send();
+            }}
+          >
+            {t("assistant.attach.confirmYes")}
+          </button>
+          <button style={S.btn} onClick={() => setAskConfirm(false)}>
+            {t("assistant.attach.confirmNo")}
+          </button>
+        </div>
+      )}
+      {(attachments.length > 0 || ingesting > 0) && (
+        <div style={S.thumbs} data-testid="assistant-attachments">
+          {attachments.map((a) => (
+            <span key={a.id} style={S.chip} data-testid="assistant-attach-chip">
+              📎 {a.name}（{a.kind}・{t("assistant.attach.chars", { n: a.totalChars })}
+              {a.images.length ? `・${t("assistant.attach.frames", { n: a.images.length })}` : ""}）
+              {a.identifiers && (
+                <span style={S.warnInline} data-testid="assistant-attach-phi" title={t("assistant.attach.phiHelp")}>
+                  ⚠ {t("assistant.attach.phi")}
+                </span>
+              )}
+              <button style={S.chipX} onClick={() => setAttachments((cur) => cur.filter((x) => x.id !== a.id))} aria-label={t("assistant.attach.remove")}>
+                ×
+              </button>
+            </span>
+          ))}
+          {ingesting > 0 && <span style={S.dim}>{t("assistant.attach.reading")}</span>}
+        </div>
+      )}
       {images.length > 0 && (
         <div style={S.thumbs}>
           {images.map((im, i) => (
@@ -251,7 +336,7 @@ export function AssistantScreen() {
         <input
           ref={fileRef}
           type="file"
-          accept="image/*"
+          accept="image/*,video/*,.pdf,.docx,.xlsx,.pptx,.txt,.md,.csv,.tsv,.json,.log,.xml,.yaml,.yml,.ini"
           multiple
           hidden
           onChange={(e) => {
@@ -268,7 +353,7 @@ export function AssistantScreen() {
               {t("assistant.stop")}
             </button>
           ) : (
-            <button style={S.btnPrimary} disabled={notReady || !input.trim()} onClick={() => void send()} data-testid="assistant-send">
+            <button style={S.btnPrimary} disabled={notReady || ingesting > 0 || (!input.trim() && !attachments.length)} onClick={() => void send()} data-testid="assistant-send">
               {t("assistant.send")}
             </button>
           )}
@@ -384,6 +469,10 @@ const S: Record<string, React.CSSProperties> = {
   err: { marginTop: 6, color: "#f28b82", overflowWrap: "anywhere" },
   warn: { marginTop: 6, color: "#fdd663", fontSize: 12 },
   card: { marginTop: 6, padding: "6px 8px", border: "1px solid #3a3b3f", borderRadius: 6, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", fontSize: 12 },
+  confirm: { display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", padding: "6px 12px", background: "#3b3320", fontSize: 12 },
+  chip: { display: "inline-flex", alignItems: "center", gap: 6, padding: "2px 8px", border: "1px solid #5f6368", borderRadius: 12, fontSize: 12 },
+  chipX: { border: "none", background: "none", color: "inherit", cursor: "pointer", padding: 0 },
+  warnInline: { color: "#fdd663" },
   note: { padding: "4px 12px", color: "#fdd663", fontSize: 12 },
   thumbs: { display: "flex", gap: 6, padding: "4px 12px", flexWrap: "wrap" },
   thumb: { position: "relative", display: "inline-block" },
