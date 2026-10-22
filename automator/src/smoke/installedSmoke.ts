@@ -287,8 +287,8 @@ async function attachmentSection(app: ElectronApplication, main: Page): Promise<
   check(set.ok === true, "[8] 添付検査用の提供元を保存できる", set);
   let win: Page | null = null;
   try {
-    await main.getByTestId("mainscreen-menu-system").click();
-    await main.getByTestId("menu-item-assistant").click();
+    await main.getByTestId("mainscreen-menu-system").click({ timeout: 20_000 });
+    await main.getByTestId("menu-item-assistant").click({ timeout: 20_000 });
     win = await findWindow(app, (u) => u.includes("#assistant"), 30_000);
     check(!!win, "[8] アシスタント窓が開く");
     if (!win) return;
@@ -305,7 +305,7 @@ async function attachmentSection(app: ElectronApplication, main: Page): Promise<
     objs.forEach((o, i) => { offs[i] = pdf.length; pdf += `${i + 1} 0 obj\n${o}\nendobj\n`; });
     const xref = pdf.length;
     pdf += `xref\n0 ${objs.length + 1}\n0000000000 65535 f \n${offs.map((o) => String(o).padStart(10, "0") + " 00000 n \n").join("")}trailer\n<< /Size ${objs.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF`;
-    await win.locator('input[type="file"]').setInputFiles({ name: "a.pdf", mimeType: "application/pdf", buffer: Buffer.from(pdf) });
+    await win.locator('input[type="file"]').setInputFiles({ name: "a.pdf", mimeType: "application/pdf", buffer: Buffer.from(pdf) }, { timeout: 20_000 });
     const chip = win.getByTestId("assistant-attach-chip").first();
     const ok = await chip.waitFor({ state: "visible", timeout: 30_000 }).then(() => true, () => false);
     const txt = ok ? ((await chip.textContent()) ?? "") : ((await win.locator("body").innerText()).slice(0, 300));
@@ -396,6 +396,8 @@ async function main(): Promise<void> {
     );
     const st = await fetch(`http://127.0.0.1:${PORT}/api/status`).catch((e) => e as Error);
     check(st instanceof Response && st.ok, "[2] 同梱 backend が /api/status に 200 を返す", st instanceof Response ? st.status : String(st));
+    // メニューの操作はメイン画面が出ている今のうちに行う（後の節で設定画面などへ遷移する）。
+    await attachmentSection(app, main).catch((e) => check(false, "[8] PDF 添付の検査が完走しなかった", String(e).slice(0, 300)));
     await main.screenshot({ path: path.join(OUT, "1-main.png") }).catch(() => {});
 
     // ── 5. 動画を取り込んで開く ─────────────────────────────
@@ -516,7 +518,6 @@ async function main(): Promise<void> {
     await main.screenshot({ path: path.join(OUT, "3-compute-local.png") }).catch(() => {});
 
     // ── 7. ローカル AI（--local-ai のとき）──────────────────
-    await attachmentSection(app, main);
     if (LOCAL_AI) localAi = await localAiSection(app, main);
 
     // ── 3. 画面の異常 ───────────────────────────────────────
