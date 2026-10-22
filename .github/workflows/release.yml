@@ -15,6 +15,13 @@ on:
         description: "x64 の dmg を追加する公開済みタグ（例 v0.5.0）。空なら予行演習"
         required: false
         default: ""
+      # 予行演習でだけ、ローカル AI（llama.cpp とモデル 約 2 GB）を実際に取得して起動・会話まで確かめる。
+      # タグの本番リリースでは回さない（外部の配布元の都合でリリースが止まらないように）。リリース前に 1 回通す。
+      local_ai_smoke:
+        description: "予行演習でローカル AI の実導入・起動・会話まで検査する（backfill では無効）"
+        type: boolean
+        required: false
+        default: true
 
 permissions:
   contents: write
@@ -306,16 +313,20 @@ jobs:
         working-directory: automator
         shell: bash
         run: npm ci
-      - name: Smoke test (インストール → 起動 → 動画再生)
-        timeout-minutes: 20
+      - name: Smoke test (インストール → 起動 → 動画再生 → 予行演習ではローカル AI)
+        timeout-minutes: 45
         shell: bash
+        env:
+          LOCAL_AI_SMOKE: ${{ github.event_name == 'workflow_dispatch' && inputs.local_ai_smoke && inputs.backfill_tag == '' }}
         run: |
           cd automator
+          extra=""
+          [ "$LOCAL_AI_SMOKE" = "true" ] && extra="--local-ai"
           if [ "$RUNNER_OS" = "Linux" ]; then
             command -v xvfb-run >/dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq xvfb; }
-            xvfb-run -a --server-args="-screen 0 1600x1000x24" npx tsx src/smoke/installedSmoke.ts --dist ../desktop/dist
+            xvfb-run -a --server-args="-screen 0 1600x1000x24" npx tsx src/smoke/installedSmoke.ts --dist ../desktop/dist $extra
           else
-            npx tsx src/smoke/installedSmoke.ts --dist ../desktop/dist
+            npx tsx src/smoke/installedSmoke.ts --dist ../desktop/dist $extra
           fi
       # .deb は apt で実際に入れ、--no-sandbox なしで起動する。Ubuntu 24.04 の AppArmor の下で Chromium の
       # sandbox が動くこと（desktop/build/linux/after-install.sh のプロファイル）の検査を兼ねる。
