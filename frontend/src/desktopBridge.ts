@@ -312,6 +312,26 @@ export interface DbFolderRow {
 }
 
 /** Drive バックアップ: main が返す状態（トークン・API キーは返らない）。 */
+/** ローカル AI の状態（main の localLlm.status() + defaultModelId）。 */
+export interface AiLocalStatus {
+  supported: boolean;
+  platform?: string;
+  defaultModelId?: string;
+  models?: { id: string; label: string; size: number; license: string; licenseUrl?: string; note?: string }[];
+  runtime?: { installed: boolean; build: string | null; size: number | null };
+  model?: { installed: boolean; id: string | null; verified: boolean; file: string | null };
+  running?: boolean;
+  busy?: boolean;
+  registered?: boolean;
+  isDefault?: boolean;
+  isFallback?: boolean;
+}
+export type AiLocalResult = { ok: true; [k: string]: unknown } | { ok: false; error: string };
+export type AiLocalEvent =
+  | { type: "progress"; phase: "runtime-download" | "runtime-extract" | "model-download" | "done"; received?: number; total?: number }
+  | { type: "starting" }
+  | { type: "state" };
+
 export interface GdriveDesktopStatus {
   /** OAuth クライアントがこのアプリに入っているか。 */
   configured: boolean;
@@ -469,6 +489,17 @@ export interface GraphyDesktop {
   viewerCmdResult?: (reqId: string, result: import("./assistant/actions/registry").ActionResult) => void;
   /** ストリームの差分を受ける。購読解除の関数を返す。 */
   onAiChatEvent?: (cb: (ev: AiChatEvent) => void) => () => void;
+  /** ローカル AI（この PC の軽量 LLM）の状態。ダウンロード・削除は main が確認ダイアログを出す。 */
+  aiLocalStatus?: () => Promise<AiLocalStatus>;
+  aiLocalInstall?: (modelId?: string) => Promise<AiLocalResult>;
+  aiLocalCancel?: () => Promise<{ ok: boolean }>;
+  /** main がファイル選択を出す。`allowUnverified` は公式一覧にない GGUF を、検証なしで受け付けるとき。 */
+  aiLocalImport?: (allowUnverified?: boolean) => Promise<AiLocalResult>;
+  /** 起動して /health を確かめる。 */
+  aiLocalCheck?: () => Promise<{ ok: boolean; startedMs?: number; error?: string }>;
+  aiLocalRole?: (role: { fallback?: boolean; makeDefault?: boolean }) => Promise<AiLocalResult>;
+  aiLocalRemove?: () => Promise<AiLocalResult>;
+  onAiLocalEvent?: (cb: (ev: AiLocalEvent) => void) => () => void;
   /** 提供元の一覧と用途ごとの既定。**鍵の値は返らない**（有無だけ）。 */
   aiProvidersGet?: () => Promise<AiProvidersConfig>;
   /** 検査だけ（書かない）。入力中に叩く。 */

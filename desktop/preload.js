@@ -90,6 +90,19 @@ contextBridge.exposeInMainWorld("graphyDesktop", {
     return () => ipcRenderer.removeListener("graphy:viewer-cmd", handler);
   },
   viewerCmdResult: (reqId, result) => ipcRenderer.send("graphy:viewer-cmd-result", reqId, result),
+  // ローカル AI（この PC の軽量 LLM）の導入・状態。ダウンロードと削除は main が確認ダイアログを出す。
+  aiLocalStatus: () => ipcRenderer.invoke("graphy:ai-local-status"),
+  aiLocalInstall: (modelId) => ipcRenderer.invoke("graphy:ai-local-install", { modelId }),
+  aiLocalCancel: () => ipcRenderer.invoke("graphy:ai-local-cancel"),
+  aiLocalImport: (allowUnverified) => ipcRenderer.invoke("graphy:ai-local-import", { allowUnverified: !!allowUnverified }),
+  aiLocalCheck: () => ipcRenderer.invoke("graphy:ai-local-check"),
+  aiLocalRole: (role) => ipcRenderer.invoke("graphy:ai-local-role", role),
+  aiLocalRemove: () => ipcRenderer.invoke("graphy:ai-local-remove"),
+  onAiLocalEvent: (cb) => {
+    const handler = (_e, ev) => cb(ev);
+    ipcRenderer.on("graphy:ai-local-event", handler);
+    return () => ipcRenderer.removeListener("graphy:ai-local-event", handler);
+  },
   // 提供元の一覧と既定。鍵の値は返らない（有無だけ）。
   aiProvidersGet: () => ipcRenderer.invoke("graphy:ai-providers-get"),
   aiProvidersSet: (cfg) => ipcRenderer.invoke("graphy:ai-providers-set", cfg),

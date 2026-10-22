@@ -35,7 +35,7 @@
   DetailPrint "Stopping GRAPHY-Next (app + bundled backend Java) before update/uninstall..."
   ; PowerShell は Win10/11 標準。失敗しても従来動作（electron-builder 標準の CHECK_APP_RUNNING 等）に
   ; フォールバックするだけなので無害。
-  nsExec::Exec 'powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "$$app = @(Get-CimInstance Win32_Process | Where-Object { $$_.Name -eq $\'${APP_EXECUTABLE_FILENAME}$\' }); if ($$app) { $$app | Invoke-CimMethod -MethodName Terminate | Out-Null; Start-Sleep -Milliseconds 500 }; $$procs = @(Get-CimInstance Win32_Process | Where-Object { ($$_.Name -eq $\'java.exe$\' -or $$_.Name -eq $\'ffmpeg.exe$\') -and ( ($$_.CommandLine -and $$_.CommandLine -like $\'*graphy-next-backend.jar*$\') -or ($$_.ExecutablePath -and $$_.ExecutablePath -like $\'$INSTDIR\*$\') ) }); if ($$procs) { $$procs | Invoke-CimMethod -MethodName Terminate | Out-Null; Start-Sleep -Milliseconds 800 }"'
+  nsExec::Exec 'powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "$$app = @(Get-CimInstance Win32_Process | Where-Object { $$_.Name -eq $\'${APP_EXECUTABLE_FILENAME}$\' }); if ($$app) { $$app | Invoke-CimMethod -MethodName Terminate | Out-Null; Start-Sleep -Milliseconds 500 }; $$procs = @(Get-CimInstance Win32_Process | Where-Object { ($$_.Name -eq $\'java.exe$\' -or $$_.Name -eq $\'ffmpeg.exe$\') -and ( ($$_.CommandLine -and $$_.CommandLine -like $\'*graphy-next-backend.jar*$\') -or ($$_.ExecutablePath -and $$_.ExecutablePath -like $\'$INSTDIR\*$\') ) -or ($$_.Name -eq $\'llama-server.exe$\' -and $$_.ExecutablePath -and $$_.ExecutablePath -like $\'*\GRAPHY-Next\local-ai\*$\') }); if ($$procs) { $$procs | Invoke-CimMethod -MethodName Terminate | Out-Null; Start-Sleep -Milliseconds 800 }"'
   Pop $0
   ; ロック解放を待つための小休止（ハンドルクローズ猶予）。
   Sleep 500
@@ -121,6 +121,58 @@ This cannot be undone. Choose No to keep your data." \
 
     skipUserData:
 
+    ${if} $installMode == "all"
+      SetShellVarContext all
+    ${endif}
+  ${endIf}
+!macroend
+
+; -------------------------------------------------------------------------
+; (C) ローカル AI（この PC の軽量 LLM）の導入提案チェックボックス
+; -------------------------------------------------------------------------
+;   設計: fw/ai-routing-design.md §18
+;   🔴 インストーラは何もダウンロードしない。チェックされたときは、初回起動の合図のフラグファイルを置くだけ。
+;      実際の取得（実行ファイルとモデル）はアプリ側が、確認ダイアログのうえで行う（ネット無し環境のインストールを妨げない）。
+;   ⚠ フラグの場所は main.js の offerLocalAiFirstRun（resolveDataDir()/first-run-local-llm.flag）と一致させること。
+;   ⚠ このページと customInstall の動作は、実 Windows ランナーで確かめるまでは未検証。
+!include nsDialogs.nsh
+!include LogicLib.nsh
+
+Var LocalAiCheckbox
+Var LocalAiWanted
+
+!macro customPageAfterChangeDir
+  Function LocalAiPageCreate
+    ${ifNot} ${isUpdated}
+      nsDialogs::Create 1018
+      Pop $0
+      ${NSD_CreateLabel} 0 0 100% 36u "インターネットに接続できないときも使える、この PC 上の軽量 AI（ローカル AI）を、初回起動時に導入するか確認します。$\r$\nOptionally offer to set up a lightweight on-device AI on first launch (nothing is downloaded by this installer)."
+      Pop $0
+      ${NSD_CreateCheckbox} 0 44u 100% 12u "初回起動時にローカル AI の導入を確認する / Offer local AI setup on first launch"
+      Pop $LocalAiCheckbox
+      nsDialogs::Show
+    ${endIf}
+  FunctionEnd
+
+  Function LocalAiPageLeave
+    ${ifNot} ${isUpdated}
+      ${NSD_GetState} $LocalAiCheckbox $LocalAiWanted
+    ${endIf}
+  FunctionEnd
+
+  Page custom LocalAiPageCreate LocalAiPageLeave
+!macroend
+
+!macro customInstall
+  ${if} $LocalAiWanted == ${BST_CHECKED}
+    ; Electron は常に「現在のユーザー」の APPDATA を使う（per-machine 導入でも current に固定して書く）。
+    ${if} $installMode == "all"
+      SetShellVarContext current
+    ${endif}
+    CreateDirectory "$APPDATA\GRAPHY-Next"
+    FileOpen $0 "$APPDATA\GRAPHY-Next\first-run-local-llm.flag" w
+    FileWrite $0 "1"
+    FileClose $0
     ${if} $installMode == "all"
       SetShellVarContext all
     ${endif}
