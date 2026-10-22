@@ -101,10 +101,13 @@ public class TextureSeriesService {
         List<String> sops = new ArrayList<>(map.slices());
         for (int z = 0; z < map.slices(); z++) {
             byte[] px = to16bit(map.data()[z], slope, intercept);
-            Attributes a = buildInstance(tmpl, req, map, newSeriesUid, seriesNumber, seriesDesc,
-                    featureName, derivation, slope, intercept, sliceThickness, spacingBetween, z, px);
+            // slope=(max-min)/65535, intercept=min なので、全域が見える窓を元の範囲から置ける
+            double windowWidth = Math.max(1e-6, slope * 65535.0);
+            Attributes a = buildInstance(tmpl, req.studyInstanceUid(), map, newSeriesUid, seriesNumber, seriesDesc,
+                    "TEXTURE", featureName, derivation, slope, intercept, intercept + windowWidth / 2.0, windowWidth,
+                    sliceThickness, spacingBetween, z, px);
             sops.add(a.getString(Tag.SOPInstanceUID));
-            ingest(a);
+            ingest(storage, a);
         }
         // 派生シリーズは保管庫に入った。途中結果はもう要らない（失敗・キャンセルのときだけ残す）。
         engine.discardCheckpoints(computed);
@@ -155,7 +158,7 @@ public class TextureSeriesService {
     }
 
     /** 全スライスから NaN/Inf を除いた min/max。 */
-    private static double[] minMax(float[][] data) {
+    static double[] minMax(float[][] data) {
         double min = Double.POSITIVE_INFINITY, max = Double.NEGATIVE_INFINITY;
         for (float[] slice : data) {
             for (float v : slice) {
@@ -171,7 +174,7 @@ public class TextureSeriesService {
     }
 
     /** float[] → 16bit unsigned（リトルエンディアン byte[]）。pixel16 = round((v-intercept)/slope)。 */
-    private static byte[] to16bit(float[] src, double slope, double intercept) {
+    static byte[] to16bit(float[] src, double slope, double intercept) {
         byte[] out = new byte[src.length * 2];
         for (int i = 0; i < src.length; i++) {
             float v = src[i];
@@ -190,7 +193,7 @@ public class TextureSeriesService {
     }
 
     /** 隣接 IPP 距離から SpacingBetweenSlices を推定（無ければ sliceThickness or 1）。 */
-    private static double spacingFromIpp(List<double[]> ippPerZ, double sliceThickness) {
+    static double spacingFromIpp(List<double[]> ippPerZ, double sliceThickness) {
         if (ippPerZ != null && ippPerZ.size() >= 2) {
             double[] a = ippPerZ.get(0), b = ippPerZ.get(1);
             if (a != null && b != null && a.length == 3 && b.length == 3) {
@@ -203,10 +206,18 @@ public class TextureSeriesService {
     }
 
     /** 1 スライスの Attributes を構築（属性引き継ぎ＋16bit unsigned＋Rescale＋幾何）。 */
-    private Attributes buildInstance(Attributes tmpl, TextureSeriesRequest req, RadiomicsMapEngine.MapResult map,
-                                     String newSeriesUid, int seriesNumber, String seriesDesc, String featureName,
-                                     String derivation, double slope, double intercept,
-                                     double sliceThickness, double spacingBetween, int z, byte[] px) {
+    /**
+     * 派生シリーズ（Secondary Capture・16bit unsigned＋Rescale）の 1 スライス。テクスチャマップとフィルタ画像が共有する。
+     *
+     * @param imageTypeLast ImageType の 3 つ目（{@code TEXTURE}・{@code LOG}）
+     * @param rescaleType   RescaleType（校正済み画素値の意味。64 桁に切る）
+     * @param windowCenter  初期の窓（WindowCenter）。利用者が動かせばそちらが優先される
+     */
+    static Attributes buildInstance(Attributes tmpl, String studyInstanceUid, RadiomicsMapEngine.MapResult map,
+                                    String newSeriesUid, int seriesNumber, String seriesDesc, String imageTypeLast,
+                                    String rescaleType, String derivation, double slope, double intercept,
+                                    double windowCenter, double windowWidth,
+                                    double sliceThickness, double spacingBetween, int z, byte[] px) {
         Attributes a = new Attributes();
         double[] iop = map.imageOrientationPatient();
         boolean hasGeom = iop != null && iop.length == 6;
@@ -230,7 +241,7 @@ public class TextureSeriesService {
             a.setSpecificCharacterSet("ISO_IR 192");
         }
         if (a.getString(Tag.StudyInstanceUID) == null) {
-            a.setString(Tag.StudyInstanceUID, VR.UI, req.studyInstanceUid());
+            a.setString(Tag.StudyInstanceUID, VR.UI, studyInstanceUid);
         }
 
         // SOP Class = Secondary Capture（テクスチャ値は HU 等ではないため）。Modality は元を維持。
@@ -243,7 +254,7 @@ public class TextureSeriesService {
 
         a.setString(Tag.SOPInstanceUID, VR.UI, UIDUtils.createUID());
         a.setInt(Tag.InstanceNumber, VR.IS, z + 1);
-        a.setString(Tag.ImageType, VR.CS, "DERIVED", "SECONDARY", "TEXTURE");
+        a.setString(Tag.ImageType, VR.CS, "DERIVED", "SECONDARY", imageTypeLast);
         a.setString(Tag.DerivationDescription, VR.ST, derivation);
         copyTag(tmpl, a, Tag.ContentDate);
         copyTag(tmpl, a, Tag.ContentTime);
@@ -261,16 +272,14 @@ public class TextureSeriesService {
         a.setDouble(Tag.RescaleIntercept, VR.DS, intercept);
         a.setDouble(Tag.RescaleSlope, VR.DS, slope);
         // RescaleType(LO, 64 桁): 校正済み画素値の意味＝特徴名。
-        a.setString(Tag.RescaleType, VR.LO, featureName.length() > 64 ? featureName.substring(0, 64) : featureName);
+        a.setString(Tag.RescaleType, VR.LO, rescaleType.length() > 64 ? rescaleType.substring(0, 64) : rescaleType);
         /*
          * 特徴値のとる範囲はモダリティ由来の W/L とは何の関係も無く、特徴ごとに桁も符号も違う。
          * 何も書かないとビューアは既定の窓で開き、マップは一様な白に潰れて何も読めない
          * （実機検証で実際にそうなった）。生成時に min/max は分かっているので、全域が見える窓を
          * 初期値として置いておく。利用者が動かせばそちらが優先されるだけなので、害は無い。
          */
-        // slope=(max-min)/65535, intercept=min で決めた係数なので、そこから元の範囲に戻せる。
-        double windowWidth = Math.max(1e-6, slope * 65535.0);
-        a.setDouble(Tag.WindowCenter, VR.DS, intercept + windowWidth / 2.0);
+        a.setDouble(Tag.WindowCenter, VR.DS, windowCenter);
         a.setDouble(Tag.WindowWidth, VR.DS, windowWidth);
 
         // 幾何（source と共有：Trilinear 拡大済みで 1:1）。
@@ -304,7 +313,7 @@ public class TextureSeriesService {
         return a;
     }
 
-    private static void copyTag(Attributes from, Attributes to, int tag) {
+    static void copyTag(Attributes from, Attributes to, int tag) {
         if (!from.contains(tag)) {
             return;
         }
@@ -315,14 +324,14 @@ public class TextureSeriesService {
         }
     }
 
-    private Attributes readHeader(Path p) throws IOException {
+    static Attributes readHeader(Path p) throws IOException {
         try (DicomInputStream in = new DicomInputStream(p.toFile())) {
             in.setIncludeBulkData(IncludeBulkData.NO);
             return in.readDataset();
         }
     }
 
-    private void ingest(Attributes attrs) throws IOException {
+    static void ingest(DicomStorageService storage, Attributes attrs) throws IOException {
         Path tmp = Files.createTempFile("texture-", ".dcm");
         boolean consumed = false;
         try {
