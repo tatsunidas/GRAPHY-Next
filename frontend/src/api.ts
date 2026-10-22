@@ -2017,7 +2017,11 @@ export interface RoiFeatureRequest {
   settings: Record<string, string>;
   /** true ならキャッシュを使わずに計算し、結果でキャッシュを置き換える。 */
   recompute: boolean;
+  /** 計算の単位。省略は 3D だけ（3D は常に計算する）。 */
+  roiModes?: RoiMode[];
 }
+
+export type RoiMode = "WHOLE_3D" | "MAX_SECTION_2D" | "SLICES_2D";
 
 /** 表の 1 行（backend: RoiFeatureResult.Row）。 */
 export interface RoiFeatureRow {
@@ -2058,6 +2062,57 @@ export interface RoiFeatureResult {
   roiSize: RoiFeatureRoiSize;
   /** 元画像が非可逆圧縮（特徴量は圧縮の影響を受ける）。 */
   lossyCompressed: boolean;
+  /** 最大断面 2D。単位に MAX_SECTION_2D を選んだときだけ。 */
+  section?: RoiFeatureSection | null;
+  /** スライス別 2D。単位に SLICES_2D を選んだときだけ。 */
+  slices?: RoiFeatureSlices | null;
+}
+
+/** 2D の計算の記録（実際に使った設定 BOOL_force2D=1 を含む。3D とはハッシュが違う）。 */
+export interface RoiFeatureRecord2d {
+  computedAt: string;
+  discretisation: RoiFeatureDiscretisation;
+  provenance: RoiFeatureProvenance;
+  settingsProperties: string;
+}
+
+export interface RoiFeatureSection {
+  fromCache: boolean;
+  /** 患者座標の法線方向の位置（mm）。 */
+  positionMm: number;
+  areaMm2: number;
+  pixels: number;
+  rows: RoiFeatureRow[];
+  record: RoiFeatureRecord2d;
+  roiSize: RoiFeatureRoiSize | null;
+}
+
+export interface RoiFeatureSliceRow {
+  positionMm: number;
+  pixels: number;
+  areaMm2: number;
+  rows: RoiFeatureRow[];
+}
+
+export interface RoiFeatureSliceFailure {
+  positionMm: number;
+  reason: string;
+}
+
+export interface RoiFeatureSlices {
+  fromCache: boolean;
+  rows: RoiFeatureSliceRow[];
+  failures: RoiFeatureSliceFailure[];
+  /** 列ごとの単純平均。 */
+  mean: RoiFeatureRow[];
+  /** 列ごとの、強度マスクの画素数で重み付けした平均。 */
+  pixelWeightedMean: RoiFeatureRow[];
+  /** 列ごとに集約に使ったスライス数。 */
+  slicesUsed: Record<string, number>;
+  foregroundSlices: number;
+  record: RoiFeatureRecord2d;
+  smallRoiWarnPixels: number | null;
+  smallRoiPositionsMm: number[];
 }
 
 /** ボクセル数は RadiomicsJ の Diagnostics の値。 */
@@ -2088,13 +2143,16 @@ export interface RoiFeatureProvenance {
 
 export type RoiFeatureJobState = "QUEUED" | "LOADING" | "EXTRACTING" | "DONE" | "FAILED" | "CANCELLED";
 
-/** ROI 特徴量表のジョブの状態（backend: RoiFeatureJobService.Status）。進み具合の件数は無い。 */
+/** ROI 特徴量表のジョブの状態（backend: RoiFeatureJobService.Status）。 */
 export interface RoiFeatureJobStatus {
   jobId: string;
   state: RoiFeatureJobState;
   elapsedMs: number;
   result?: RoiFeatureResult | null;
   error?: string | null;
+  /** スライス別 2D の進み（その単位を選ばなかったときは 0 / 0）。 */
+  sliceDone?: number;
+  sliceTotal?: number;
 }
 
 export const submitRoiFeatureJob = (req: RoiFeatureRequest) =>
