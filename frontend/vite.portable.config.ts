@@ -1,3 +1,4 @@
+import { cornerstonePreScaleFix } from "./vite.cornerstonePreScaleFix";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { cpSync } from "node:fs";
@@ -44,8 +45,9 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 export default defineConfig({
   root: "portable",
   base: "./",
-  plugins: [portableStubs(path.join(here, "src"), path.join(here, "portable/src/shims")), react(), copyIcons(), cspPlugin()],
-  worker: { format: "es" },
+  plugins: [portableStubs(path.join(here, "src"), path.join(here, "portable/src/shims")), react(), copyIcons(), cspPlugin(), cornerstonePreScaleFix()],
+  // 本番ビルドは worker を別の Rollup で束ねるため、plugins とは別に渡す。
+  worker: { format: "es", plugins: () => [cornerstonePreScaleFix()] },
   optimizeDeps: { exclude: ["@cornerstonejs/dicom-image-loader"], include: ["dicom-parser"] },
   build: { outDir: "../portable-dist", emptyOutDir: true, target: "esnext" },
 });

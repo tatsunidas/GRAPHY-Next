@@ -95,6 +95,16 @@ if mode.startswith("sample:"):
     info["neigh"] = [float(vol[k, yy, xx]) for yy in range(y - 1, y + 2) for xx in range(x - 1, x + 2)
                      if 0 <= yy < vol.shape[1] and 0 <= xx < vol.shape[2]]
 
+if mode.startswith("sampleall:"):
+    # sampleall:<x>:<y> … 全スライスの (x, y) 付近 3×3 の値（物理値）。k は呼び出し側が選ぶ
+    _, xs_, ys_ = mode.split(":")
+    x, y = int(round(float(xs_))), int(round(float(ys_)))
+    info["neigh_all"] = [
+        [float(vol[k, yy, xx]) for yy in range(y - 1, y + 2) for xx in range(x - 1, x + 2)
+         if 0 <= yy < vol.shape[1] and 0 <= xx < vol.shape[2]]
+        for k in range(vol.shape[0])
+    ]
+
 if mode == "pt-ct-mult":
     truth = json.load(open(os.path.join(phantom, "truth.json")))
     fg = truth["fg"]

@@ -72,7 +72,16 @@ export class WebDriver implements Driver {
 
     this.viteProc = spawn(
       process.platform === "win32" ? "npm.cmd" : "npm",
-      ["run", "dev", "--", "--port", String(this.ports.vite), "--strictPort"],
+      // GRAPHY_FRONTEND_MODE=preview なら、ビルド済みの dist（`npx vite build` の結果）を `vite preview` で配信する
+      // （本番ビルドだけで出る不具合の検証用。worker は本番では別の Rollup で束ねられる）。既定は従来どおり dev。
+      [
+        "run",
+        process.env.GRAPHY_FRONTEND_MODE === "preview" ? "preview" : "dev",
+        "--",
+        "--port",
+        String(this.ports.vite),
+        "--strictPort",
+      ],
       // detached: npm→node(vite) をプロセスグループリーダー化し、stop() の killProcessTree が
       // 負pid(グループ)で子孫ごと殺せるようにする（里子化した vite の残留とハングを防ぐ）。
       // 転送先を自前で起動した backend に向ける。無指定だと vite.config.ts の既定 :8080 へ行き、

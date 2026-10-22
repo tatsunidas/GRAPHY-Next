@@ -21,27 +21,9 @@ out = sys.argv[1]
 here = os.path.dirname(os.path.abspath(__file__))
 subprocess.run([sys.executable, os.path.join(here, "make-fusion-isoline-phantom.py"), out], check=True, stdout=subprocess.DEVNULL)
 
-# 前景 PT の RescaleSlope を 0.37 に作り直す。
-# 元のファントムは slope 0.5 で、スケール後の最小値・最大値がどちらも整数になる。cornerstone の dicom-image-loader は
-# 「最小値と最大値が整数」だけを見て整数型の配列（Uint16）を選ぶため、間の値（694.5 など）が切り捨てられる
-# （読み込み側の既存の挙動。本機能の検証から切り離すため、ここでは踏まない条件にする）。
-import json
-SLOPE = 0.37
-truth_path = os.path.join(out, "truth.json")
-truth = json.load(open(truth_path))
-A, B, SIGMA = truth["A"], truth["B"], truth["sigma"]
-fgt = truth["fg"]
-xs = fgt["origin_xy"] + fgt["spacing"] * np.arange(fgt["cols"])
-X, Y = np.meshgrid(xs, xs)
-for k, path in enumerate(sorted(glob.glob(os.path.join(out, "pt_*.dcm")))):
-    ds = pydicom.dcmread(path)
-    f = A * np.exp(-(X ** 2 + Y ** 2 + fgt["z"][k] ** 2) / (2 * SIGMA ** 2)) + B
-    ds.RescaleSlope = SLOPE
-    ds.PixelData = np.rint(f / SLOPE).astype(np.uint16).tobytes()
-    ds.save_as(path, write_like_original=False)
-fgt["slope"] = SLOPE
-json.dump(truth, open(truth_path, "w"), indent=2)
-
+# 前景 PT は元のファントムの RescaleSlope 0.5 のまま使う。スケール後の最小・最大が整数になる条件で、
+# cornerstone の preScale が間の値（694.5 など）を切り捨てていた問題（vite.cornerstonePreScaleFix.ts で修正）の
+# 回帰検査を兼ねる。切り捨てが戻ると、乗算の値が numpy の別実装と一致しなくなる。
 series = generate_uid()
 for path in sorted(glob.glob(os.path.join(out, "ct_*.dcm"))):
     ds = pydicom.dcmread(path)
