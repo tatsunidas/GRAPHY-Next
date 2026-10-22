@@ -289,8 +289,10 @@ async function attachmentSection(app: ElectronApplication, main: Page): Promise<
   check(set.ok === true, "[8] 添付検査用の提供元を保存できる", set);
   let win: Page | null = null;
   try {
-    await main.getByTestId("mainscreen-menu-system").click({ timeout: 20_000 });
-    await main.getByTestId("menu-item-assistant").click({ timeout: 20_000 });
+    // 実 OS（Linux・macOS）ではボタンが「安定」と判定されず Playwright のクリックが待ち続けたため、DOM のクリックで押す。
+    const domClick = (tid: string) => main.waitForSelector(`[data-testid="${tid}"]`, { timeout: 20_000 }).then((h) => h.evaluate((el) => (el as HTMLElement).click()));
+    await domClick("mainscreen-menu-system");
+    await domClick("menu-item-assistant");
     win = await findWindow(app, (u) => u.includes("#assistant"), 30_000);
     check(!!win, "[8] アシスタント窓が開く");
     if (!win) return;
