@@ -32,6 +32,8 @@ import { buildMaskVoxelDumpAsync, computeMaskStatsAsync, type MaskStatsResult } 
 import { meanTimesVolumeLabelKey } from "../viewer/maskStatsCore";
 import type { HistogramData } from "../viewer/histogram";
 import { LoadingSpinner } from "../viewer/LoadingSpinner";
+import { fusionMeasureForSeries, useFusionMeasure, type FusionMeasureInfo } from "../viewer/fusionMeasureContext";
+import { seriesUidOf } from "../viewer/suvStore";
 
 const CHART_W = 520;
 const CHART_H = 150;
@@ -66,6 +68,7 @@ export function RoiStatsDialog({
   const [maskStats, setMaskStats] = useState<Record<string, MaskStatsResult>>({});
   const [focus, setFocus] = useState<string | null>(initialUid ?? targets[0]?.uid ?? null);
   const [generation, setGeneration] = useState(0);
+  const fusions = useFusionMeasure();
 
   // 一覧ぶんの統計。画素が未ロードのスライスもあるので非同期で読み込む。
   useEffect(() => {
@@ -114,9 +117,12 @@ export function RoiStatsDialog({
         tool: target.tool,
         stats: stats[target.uid],
         mask: maskStats[target.uid],
+        fusion: fusionMeasureForSeries(seriesUidOf(stats[target.uid]?.imageId ?? maskStats[target.uid]?.imageId)),
       })),
-    [targets, stats, maskStats],
+    // fusions: 登録の変化で行（CSV）の Fusion 列も更新する
+    [targets, stats, maskStats, fusions],
   );
+  const fusionRows = rows.filter((r) => r.fusion);
 
   const copyCsv = useCallback(() => {
     navigator.clipboard
@@ -153,6 +159,7 @@ export function RoiStatsDialog({
           focusTarget?.maskId ?? focus,
           targetLabel(targets[idx]),
           focusTarget?.segmentIndex,
+          fusionMeasureForSeries(seriesUidOf(focusedMask?.imageId)),
         );
         if (!chunks) {
           emitToast(t("roiStats.dumpPixelsFailed"));
@@ -167,7 +174,7 @@ export function RoiStatsDialog({
         emitToast(t("roiStats.dumpPixelsFailed"));
         return;
       }
-      downloadCsv([roiPixelDumpBlobText(d.rows, d)], `roi-pixels-${idx + 1}.csv`);
+      downloadCsv([roiPixelDumpBlobText(d.rows, { ...d, fusion: fusionMeasureForSeries(seriesUidOf(d.imageId)) })], `roi-pixels-${idx + 1}.csv`);
     } catch {
       emitToast(t("roiStats.dumpPixelsFailed"));
     }
@@ -200,6 +207,15 @@ export function RoiStatsDialog({
           </button>
           <button onClick={onClose} style={hbtn} title={t("common.close")}>×</button>
         </div>
+
+        {fusionRows.length > 0 && (
+          <div style={fusionWarnBox} data-testid="roi-stats-fusion-warn">
+            ⚠ {t("roiStats.fusionWarn", {
+              blend: t(`fusion.blend.name.${fusionRows[0].fusion!.blend}`),
+              fg: fusionRows[0].fusion!.foregroundLabel,
+            })}
+          </div>
+        )}
 
         {targets.length === 0 ? (
           <div style={{ padding: 16, color: "#5a6672" }}>{t("roiStats.empty")}</div>
@@ -267,6 +283,7 @@ export function RoiStatsDialog({
 
 /** 選択した 1 件の詳細。 */
 function Detail({ stats }: { stats: RoiStatsResult }) {
+  const fusionInfo = useFusionOf(stats.imageId);
   const { t } = useI18n();
   const g = stats.geometry;
   const v = stats.values;
@@ -308,7 +325,7 @@ function Detail({ stats }: { stats: RoiStatsResult }) {
       ) : null}
 
       <div style={{ ...detailLine, ...dim }}>
-        {t("roiStats.source", { imageId: shortImageId(stats.imageId) })}
+        {t(fusionInfo ? "roiStats.sourceBackground" : "roiStats.source", { imageId: shortImageId(stats.imageId) })}
       </div>
       {stats.warnings.length > 0 && (
         <div style={{ ...detailLine, color: "#b26a00" }}>
@@ -336,6 +353,7 @@ function ValueLine({ v }: { v: RoiValueStats | undefined }) {
 
 /** マスク（3D ROI）の詳細。体積は Σ³ と同じ求め方、値の要約は 2D と同じ関数。 */
 function MaskDetail({ stats }: { stats: MaskStatsResult }) {
+  const fusionInfo = useFusionOf(stats.imageId);
   const { t } = useI18n();
   const v = stats.values;
   const [cx, cy, cz] = stats.voxelMm;
@@ -355,7 +373,7 @@ function MaskDetail({ stats }: { stats: MaskStatsResult }) {
       )}
       {stats.histogram && <HistogramOf h={stats.histogram} unit={v?.unit ?? stats.unit} />}
       <div style={{ ...detailLine, ...dim }}>
-        {t("roiStats.source", { imageId: shortImageId(stats.imageId) })}
+        {t(fusionInfo ? "roiStats.sourceBackground" : "roiStats.source", { imageId: shortImageId(stats.imageId) })}
       </div>
       {stats.warnings.length > 0 && (
         <div style={{ ...detailLine, color: "#b26a00" }}>
@@ -386,6 +404,12 @@ function downloadCsv(chunks: string[], filename: string): void {
 }
 
 /** imageId は長い URL なので、末尾（SOP とフレーム）だけ見せる。 */
+/** この画像（ROI が載っている背景）が、差分・乗算の Fusion の背景になっているか。 */
+function useFusionOf(imageId: string | undefined): FusionMeasureInfo | undefined {
+  useFusionMeasure(); // 登録の変化で再描画する
+  return imageId ? fusionMeasureForSeries(seriesUidOf(imageId)) : undefined;
+}
+
 function shortImageId(id: string): string {
   const m = /instances\/([^/?&]+)/.exec(id);
   const frame = /frame=(\d+)/.exec(id);
@@ -497,5 +521,9 @@ const td: React.CSSProperties = { padding: "3px 6px", borderBottom: "1px solid #
 const tdNum: React.CSSProperties = { ...td, textAlign: "right", fontVariantNumeric: "tabular-nums" };
 const detailBox: React.CSSProperties = { padding: "8px 10px", borderTop: "1px solid #e6eaee", display: "flex", flexDirection: "column", gap: 4 };
 const detailLine: React.CSSProperties = { color: "#33404d", lineHeight: 1.5 };
+const fusionWarnBox: React.CSSProperties = {
+  margin: "6px 12px 0", padding: "6px 10px", border: "1px solid #e0b25a", background: "#fff6e0",
+  color: "#7a4b00", fontSize: 12, lineHeight: 1.5, borderRadius: 4,
+};
 const dim: React.CSSProperties = { color: "#8a95a1" };
 const chart: React.CSSProperties = { background: "#f7f9fb", borderRadius: 4, maxWidth: "100%" };

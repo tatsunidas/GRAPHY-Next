@@ -44,6 +44,7 @@ import { saveRoiNow, scheduleRoiSave, subscribeRoiSave } from "../viewer/roiSave
 import { RoiMetaEditDialog } from "./RoiMetaEditDialog";
 import { RoiStatsDialog, type RoiStatsTarget } from "./RoiStatsDialog";
 import { useI18n } from "../i18n/i18n";
+import { useFusionMeasure } from "../viewer/fusionMeasureContext";
 import { NumField } from "./WandDialog";
 import { formatNumber, valueUnitLabel } from "../viewer/roiStatsText";
 import { meanTimesVolumeLabelKey } from "../viewer/maskStatsCore";
@@ -95,6 +96,7 @@ export function RoiManagerPanel({
   onClose: () => void;
 }) {
   const { t } = useI18n();
+  const fusionMeasure = useFusionMeasure();
   const [model, setModel] = useState<RoiPanelModel>({ rois: [], measures: [] });
   const [editId, setEditId] = useState<string | null>(null);
   // 計測結果ダイアログ。null=閉。{focus} は開いた直後に詳細を出す ROI（ヘッダから開くと未指定）。
@@ -867,6 +869,12 @@ export function RoiManagerPanel({
         <button onClick={onClose} style={hbtn} title={t("common.close")}>×</button>
       </div>
 
+      {fusionMeasure.length > 0 && (
+        <div style={fusionNote} data-testid="roi-mgr-fusion-warn">
+          ⚠ {t("roiMgr.fusionWarn", { blend: t(`fusion.blend.name.${fusionMeasure[0].blend}`) })}
+        </div>
+      )}
+
       <div style={{ ...section, display: "flex", alignItems: "center", gap: 4 }}>
         <span>{t("roiMgr.rois")} ({model.rois.length})</span>
         <span style={{ flex: 1 }} />
@@ -966,6 +974,10 @@ const scopeChipStatic: React.CSSProperties = { ...scopeChip, cursor: "default", 
 const opsBar: React.CSSProperties = { display: "flex", flexWrap: "wrap", alignItems: "center", gap: 4, padding: "6px 8px", borderTop: "1px solid #eef1f4" };
 const opBtn: React.CSSProperties = { border: "1px solid #cdd5de", borderRadius: 5, background: "#fff", cursor: "pointer", fontSize: 11, padding: "2px 7px" };
 const statLine: React.CSSProperties = { padding: "0 10px 4px 28px", color: "#5a6672", fontSize: 11 };
+const fusionNote: React.CSSProperties = {
+  margin: "6px 8px 0", padding: "5px 8px", border: "1px solid #e0b25a", background: "#fff6e0",
+  color: "#7a4b00", fontSize: 11, lineHeight: 1.5, borderRadius: 4,
+};
 const empty: React.CSSProperties = { padding: "2px 10px", color: "#9aa6b2" };
 const note: React.CSSProperties = { marginTop: "auto", padding: 8, color: "#9aa6b2", fontSize: 11, borderTop: "1px solid #eef1f4" };
 // アクティブ編集対象（D2）のハイライト。

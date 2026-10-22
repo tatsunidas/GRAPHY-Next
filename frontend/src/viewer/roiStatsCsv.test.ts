@@ -165,3 +165,24 @@ describe("roiStatsToCsv（マスクの行）", () => {
     expect(data.slice(-2)).toEqual(["", ""]);
   });
 });
+
+describe("Fusion（差分・乗算）の背景を測った行の記録", () => {
+  const fusion = { backgroundSeriesUid: "S1", foregroundLabel: "PET, \"early\"", blend: "difference" as const };
+  const row = (over: Partial<RoiStatsCsvRow> = {}): RoiStatsCsvRow => ({ index: 1, label: "L", tool: "RectangleROI", stats: stats(), ...over });
+
+  it("負例: Fusion の行が無ければ列は増えない（既存の書き出しは変わらない）", () => {
+    const head = roiStatsToCsv([row()]).split("\r\n")[0].split(",");
+    expect(head).not.toContain("measuredOn");
+    expect(head[head.length - 1]).toBe("slices");
+  });
+
+  it("正例: 1 行でも Fusion の背景なら末尾に 3 列。Fusion の行は値、そうでない行は空セル", () => {
+    const lines = roiStatsToCsv([row({ fusion }), row({ index: 2 })]).split("\r\n");
+    const head = lines[0].split(",");
+    expect(head.slice(-3)).toEqual(["measuredOn", "fusionBlend", "fusionForeground"]);
+    expect(lines[1].endsWith(',background,difference,"PET, ""early"""')).toBe(true);
+    expect(lines[2].endsWith(",,,")).toBe(true);
+    // 列数が全行そろう
+    expect(lines[2].split(",").length).toBe(head.length);
+  });
+});

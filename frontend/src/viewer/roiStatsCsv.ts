@@ -19,6 +19,7 @@
  */
 import type { RoiStatsResult } from "./roiStats";
 import type { MaskStatsResult } from "./roi3d";
+import { FUSION_CSV_HEADER, fusionCsvCells, type FusionMeasureInfo } from "./fusionMeasureContext";
 
 export interface RoiStatsCsvRow {
   index: number;
@@ -27,6 +28,8 @@ export interface RoiStatsCsvRow {
   stats: RoiStatsResult | undefined;
   /** マスク（3D ROI）の行。あれば `stats` の代わりにこちらを出す（kind=volume）。 */
   mask?: MaskStatsResult;
+  /** 差分・乗算の Fusion の背景を測った行。1 行でもあれば末尾に `measuredOn` 等の 3 列を足す（無ければ列自体を出さない）。 */
+  fusion?: FusionMeasureInfo;
 }
 
 /** 値の単位（複数 ROI で混在し得るので、代表を 1 つ選んで列名に入れる）。 */
@@ -90,10 +93,14 @@ export function roiStatsToCsv(rows: ReadonlyArray<RoiStatsCsvRow>): string {
     "volume[mL]",
     "slices",
   ];
+  // 既存の列は変えない。Fusion の背景を測った行がある書き出しにだけ、末尾に足す。
+  const withFusion = rows.some((r) => r.fusion);
+  if (withFusion) header.push(...FUSION_CSV_HEADER);
+  const tail = (r: RoiStatsCsvRow): string => (withFusion ? "," + fusionCsvCells(r.fusion).map(cell).join(",") : "");
   const lines = [header.map(cell).join(",")];
   for (const r of rows) {
     if (r.mask) {
-      lines.push(maskRow(r.index, r.label, r.tool, r.mask));
+      lines.push(maskRow(r.index, r.label, r.tool, r.mask) + tail(r));
       continue;
     }
     const g = r.stats?.geometry;
@@ -129,7 +136,7 @@ export function roiStatsToCsv(rows: ReadonlyArray<RoiStatsCsvRow>): string {
         "",
       ]
         .map(cell)
-        .join(","),
+        .join(",") + tail(r),
     );
   }
   return lines.join("\r\n");

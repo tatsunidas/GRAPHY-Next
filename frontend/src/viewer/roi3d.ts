@@ -21,6 +21,7 @@ import { addSphere3D, getSphere3D } from "./sphere3dStore";
 import { getModalityCalibration, readModalitySlice, resolveValueUnit } from "./pixelCalibration";
 import { accumulateMaskStats, collectMaskValues, isSegmentForeground, type MaskSliceInput } from "./maskStatsCore";
 import { maskVoxelDumpCsvChunks, type MaskDumpSlice } from "./maskVoxelDump";
+import type { FusionMeasureInfo } from "./fusionMeasureContext";
 import { roiHistogram, summarizeValues, type RoiValueStats } from "./roiStats";
 import type { HistogramData } from "./histogram";
 import { worldToImageOnPlane, type PlaneGeometry } from "./imageCoords";
@@ -504,6 +505,7 @@ export async function buildMaskVoxelDumpAsync(
   segmentationId: string,
   label: string,
   segmentIndex?: number,
+  fusion?: FusionMeasureInfo,
 ): Promise<string[] | null> {
   const grid = maskGrid(segmentationId);
   if (!grid) return null;
@@ -518,7 +520,7 @@ export async function buildMaskVoxelDumpAsync(
     plane: dumpPlaneOf(s.sourceId),
   }));
   const unit = resolveValueUnit(loaded[0].sourceId);
-  return maskVoxelDumpCsvChunks(slices, { label, maskId: segmentationId, unit, segmentIndex });
+  return maskVoxelDumpCsvChunks(slices, { label, maskId: segmentationId, unit, segmentIndex, fusion });
 }
 
 /** 画素 CSV 用の幾何。IPP/IOP/画素間隔が揃わなければ null（座標セルを空にする。既定値で埋めない）。 */

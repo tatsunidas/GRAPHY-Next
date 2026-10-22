@@ -21,6 +21,7 @@ import {
   type RoiSampleKind,
 } from "./roiStats";
 import { cell } from "./roiStatsCsv";
+import { FUSION_CSV_HEADER, fusionCsvCells, type FusionMeasureInfo } from "./fusionMeasureContext";
 
 export interface RoiPixelDumpRow {
   col: number;
@@ -46,6 +47,8 @@ export interface RoiPixelDumpMeta {
   roiUid: string;
   imageId: string;
   unit: string;
+  /** 差分・乗算の Fusion の背景を測ったとき。あれば末尾に `measuredOn` 等の 3 列を足す。 */
+  fusion?: FusionMeasureInfo;
 }
 
 export function buildRoiPixelDump(input: RoiPixelDumpInput): RoiPixelDumpRow[] | null {
@@ -90,10 +93,11 @@ export function roiPixelDumpToCsv(rows: ReadonlyArray<RoiPixelDumpRow>, meta: Ro
     meta.unit ? `value[${meta.unit}]` : "value",
     "imageId",
   ];
+  if (meta.fusion) header.push(...FUSION_CSV_HEADER);
   const lines = [header.map(cell).join(",")];
   for (const r of rows) {
     lines.push(
-      [meta.label, meta.roiUid, r.col, r.row, n(r.x), n(r.y), n(r.z), n(r.value), meta.imageId]
+      [meta.label, meta.roiUid, r.col, r.row, n(r.x), n(r.y), n(r.z), n(r.value), meta.imageId, ...(meta.fusion ? fusionCsvCells(meta.fusion) : [])]
         .map(cell)
         .join(","),
     );
