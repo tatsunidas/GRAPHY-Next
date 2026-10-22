@@ -398,8 +398,15 @@ async function main(): Promise<void> {
       () => check(true, "[2] ★メイン画面の React がマウントされ、操作できる（検索欄が出る）"),
       (e) => check(false, "[2] ★メイン画面の React がマウントされ、操作できる（検索欄が出る）", String(e).slice(0, 200)),
     );
-    const st = await fetch(`http://127.0.0.1:${PORT}/api/status`).catch((e) => e as Error);
-    check(st instanceof Response && st.ok, "[2] 同梱 backend が /api/status に 200 を返す", st instanceof Response ? st.status : String(st));
+    // 画面（React）は backend より先に出る。遅い実機（Intel Mac のランナーなど）では JVM の起動が間に合わず、
+    // 1 回だけ呼ぶと「まだ待ち受けていない」で落ちる。最大 2 分は待つ（それでも応答しなければ、本当に起動していない）
+    let st: Response | Error = new Error("未接続");
+    for (const until = Date.now() + 120_000; Date.now() < until; ) {
+      st = await fetch(`http://127.0.0.1:${PORT}/api/status`).catch((e) => e as Error);
+      if (st instanceof Response && st.ok) break;
+      await new Promise((r) => setTimeout(r, 1_000));
+    }
+    check(st instanceof Response && st.ok, "[2] 同梱 backend が /api/status に 200 を返す（最大 2 分待つ）", st instanceof Response ? st.status : String(st));
     // メニューの操作はメイン画面が出ている今のうちに行う（後の節で設定画面などへ遷移する）。
     await attachmentSection(app, main).catch((e) => check(false, "[8] PDF 添付の検査が完走しなかった", String(e).slice(0, 300)));
     await main.screenshot({ path: path.join(OUT, "1-main.png") }).catch(() => {});
