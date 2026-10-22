@@ -28,7 +28,14 @@ import { dragOnCanvasHost } from "../common/pointerDrag.js";
 
 const REPO_ROOT = path.resolve(AUTOMATOR_ROOT, "..");
 const CASES_DIR = process.env.FFR_CASES_DIR ?? path.join(os.homedir(), "graphy_sample_images", "ffr-cases");
-const OUT_DIR = path.join(AUTOMATOR_ROOT, ".results", "ffr-cases");
+// 試行 B（アンカー 3 点以上・端点選び直し）は FFR_TRIAL=B。区間は ffr-cases-segments-B.json、出力は別ディレクトリ。
+const TRIAL = process.env.FFR_TRIAL === "B" ? "B" : "A";
+// 実行ごとに別プロセスで走らせる（FFR_ONLY）ので、main() 冒頭の削除が他の実行の結果を消さないよう出力先を分ける。
+const OUT_DIR = path.join(
+  AUTOMATOR_ROOT,
+  ".results",
+  `${TRIAL === "B" ? "ffr-cases-B" : "ffr-cases"}${process.env.FFR_ONLY ? `-${process.env.FFR_ONLY}` : ""}`,
+);
 const HOST = "viewer2d-canvas-host";
 const QUANT_ID = "angio-quant";
 const QUANT_REPO = path.resolve(REPO_ROOT, "..", "graphy-next-plugin-angio-quant");
@@ -49,9 +56,17 @@ interface ViewSeg {
   lad_origin: [number, number];
   distal: [number, number];
 }
+interface AnchorSpec {
+  name: string;
+  /** 方向 A・B それぞれの画像画素（512px・x,y）。両方向で同じ解剖点を指す。 */
+  A: [number, number];
+  B: [number, number];
+}
 interface Segments {
   revision: number;
   views: Record<string, ViewSeg>;
+  /** 試行 B のみ。端点以外のアンカー（症例 → 解析種別 → 点）。 */
+  anchors?: Record<string, Partial<Record<"primary" | "secondary", AnchorSpec[]>>>;
 }
 interface UidEntry {
   studyUid: string;
@@ -241,6 +256,52 @@ async function runQcaForView(
   return viewer;
 }
 
+interface Xa3dSnap {
+  anchorCount: number;
+  steps: unknown;
+  refinement: unknown;
+  result: { acceptable: boolean; lengthMm: number; anchorReprojectionPx: number; separationDeg: number; warnings: unknown[] } | null;
+}
+async function xa3dSnap(viewer: Page): Promise<Xa3dSnap | null> {
+  const raw = (await viewer.evaluate(`(() => {
+    const g = window.__graphyDebug;
+    const s = g && g.getXa3dState ? g.getXa3dState() : null;
+    return s ? JSON.stringify(s) : null;
+  })()`)) as string | null;
+  return raw ? (JSON.parse(raw) as Xa3dSnap) : null;
+}
+
+/**
+ * 中心線プレビュー（SVG）の上で、画像画素 target に最も近い場所をクリックしてアンカーの片側を指す。
+ * 中心線の画素座標は公開されていないので、始点 S・終点 E（＝線を引いた端点）の画面位置から
+ * 画素→画面の等方変換を推定する。端点が中心線に吸着されていれば推定は近似になる（誤差を返す）。
+ */
+async function clickCurveAtPixel(
+  viewer: Page,
+  testId: string,
+  ends: [[number, number], [number, number]],
+  target: [number, number],
+): Promise<{ nearestImgPx: number }> {
+  const raw = (await viewer.evaluate(`(() => {
+    const svg = document.querySelector('[data-testid="${testId}"]');
+    const pl = svg && svg.querySelector("polyline");
+    return pl ? pl.getAttribute("points") : null;
+  })()`)) as string | null;
+  if (!raw) throw new Error(`${testId} の中心線を読めない`);
+  const pts = raw.trim().split(/\s+/).map((q) => q.split(",").map(Number) as [number, number]);
+  const S = pts[0];
+  const E = pts[pts.length - 1];
+  const dImg = Math.hypot(ends[1][0] - ends[0][0], ends[1][1] - ends[0][1]);
+  const scale = Math.hypot(E[0] - S[0], E[1] - S[1]) / Math.max(1e-6, dImg);
+  const sx = S[0] + (target[0] - ends[0][0]) * scale;
+  const sy = S[1] + (target[1] - ends[0][1]) * scale;
+  let nearest = Infinity;
+  for (const q of pts) nearest = Math.min(nearest, Math.hypot(q[0] - sx, q[1] - sy));
+  await viewer.getByTestId(testId).click({ position: { x: sx, y: sy } });
+  await viewer.waitForTimeout(250);
+  return { nearestImgPx: nearest / scale };
+}
+
 async function runOne(
   driver: DesktopDriver,
   caseId: CaseId,
@@ -289,6 +350,19 @@ async function runOne(
   await viewer.selectOption('[data-testid="xa3d-view-a"]', values[0]);
   await viewer.selectOption('[data-testid="xa3d-view-b"]', values[1]);
   await viewer.waitForTimeout(300);
+  // 試行 B: 端点 2 点に、両方向で同定した解剖点を足す（登録済みの点を 1 回だけ。結果を見て選び直さない）。
+  const extra = TRIAL === "B" ? segs.anchors?.[caseId]?.[kind] ?? [] : [];
+  const anchorLog: { name: string; nearestImgPxA: number; nearestImgPxB: number }[] = [];
+  for (const a of extra) {
+    const ra = await clickCurveAtPixel(viewer, "xa3d-curve-a", ends(views[0]), a.A);
+    const rb = await clickCurveAtPixel(viewer, "xa3d-curve-b", ends(views[1]), a.B);
+    anchorLog.push({ name: a.name, nearestImgPxA: Number(ra.nearestImgPx.toFixed(1)), nearestImgPxB: Number(rb.nearestImgPx.toFixed(1)) });
+  }
+  if (TRIAL === "B") {
+    const sn = await xa3dSnap(viewer);
+    check(sn?.anchorCount === 2 + extra.length, `[${tag}] アンカー数が 端点 2 + 追加 ${extra.length}`, { anchorCount: sn?.anchorCount, anchorLog });
+    fs.writeFileSync(path.join(OUT_DIR, `${tag}-anchors.json`), JSON.stringify(anchorLog, null, 1));
+  }
   await viewer.getByTestId("xa3d-run").click();
   await viewer.waitForTimeout(4_000);
   fs.writeFileSync(
@@ -296,6 +370,7 @@ async function runOne(
     (await viewer.getByTestId("xa3d-dialog").textContent().catch(() => "")) ?? "",
   );
   await viewer.screenshot({ path: path.join(OUT_DIR, `${tag}-xa3d-before-orientation.png`) }).catch(() => {});
+  fs.writeFileSync(path.join(OUT_DIR, `${tag}-xa3d-state.json`), JSON.stringify(await xa3dSnap(viewer), null, 1));
   // 近位端 = 線を引いた始点 S（大動脈側から遠位へ引いている）
   await viewer.getByTestId("xa3d-proximal-start").check({ timeout: 8_000 });
   await viewer.waitForTimeout(400);
@@ -377,9 +452,11 @@ async function runOne(
 async function main(): Promise<void> {
   fs.rmSync(OUT_DIR, { recursive: true, force: true });
   fs.mkdirSync(OUT_DIR, { recursive: true });
-  const segs = JSON.parse(fs.readFileSync(path.join(CASES_DIR, "ffr-cases-segments.json"), "utf8")) as Segments;
+  const segs = JSON.parse(
+    fs.readFileSync(path.join(CASES_DIR, TRIAL === "B" ? "ffr-cases-segments-B.json" : "ffr-cases-segments.json"), "utf8"),
+  ) as Segments;
   const uids = JSON.parse(fs.readFileSync(path.join(CASES_DIR, "ffr-cases-uids.json"), "utf8")) as Record<string, UidEntry>;
-  console.log(`区間の版: ${segs.revision}（事前登録の ffr-cases-segments.json）`);
+  console.log(`試行 ${TRIAL}・区間の版: ${segs.revision}（事前登録の区間ファイル）`);
 
   installAngioQuant();
   const driver = new DesktopDriver();
