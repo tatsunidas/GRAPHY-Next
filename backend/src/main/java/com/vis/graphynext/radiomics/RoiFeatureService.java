@@ -390,14 +390,8 @@ public class RoiFeatureService {
         if (sigma == null || sigma.isBlank() || (resample != null && !resample.isBlank())) {
             return;
         }
-        var c = vol.calibration();
-        boolean inPlane = Math.abs(c.pixelWidth - c.pixelHeight) <= 1e-3 * Math.max(c.pixelWidth, c.pixelHeight);
-        boolean volume = inPlane && Math.abs(c.pixelWidth - c.pixelDepth) <= 1e-3 * Math.max(c.pixelWidth, c.pixelDepth);
-        if (!volume || (with2d && !inPlane)) {
-            throw new IllegalArgumentException(String.format(
-                    "LoG フィルタは等方の格子が前提です（この画像は %.3f × %.3f × %.3f mm）。"
-                            + "先にリサンプリングを指定してください。", c.pixelWidth, c.pixelHeight, c.pixelDepth));
-        }
+        // 3D の単位は常に計算するので、3 軸が揃っていること（これは 2D の単位の面内も含む）
+        LogGrid.require(vol.calibration(), true);
     }
 
     private RoiFeatureResult compute3d(RoiFeatureRequest req, RadiomicsMapEngine.LoadedVolume vol, int label,
