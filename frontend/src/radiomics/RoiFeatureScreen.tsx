@@ -11,7 +11,7 @@
  * <p>同じ画素・設定・RadiomicsJ の版なら backend がキャッシュから返すので、表の上にそれと計算日時を出す。
  * RadiomicsJ には途中で止める口が無いので、取り消しは「結果を出さない」だけで計算は最後まで走る。
  */
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { NumberField } from "../hooks/NumberField";
 import { useI18n, type TFn } from "../i18n/i18n";
 import { HttpError } from "../http";
@@ -27,11 +27,13 @@ import {
   type RoiFeatureJobStatus,
   type RoiFeatureResult,
   type RoiFeatureRow,
+  type RoiMode,
   type Series,
 } from "../api";
 import { formatFeatureValue } from "./GlamFeatureTable";
 import { formatAreaMm2, formatPositionMm, tiePositions } from "./maxSection";
 import { requestRemoteReveal } from "../viewer/roiRevealBridge";
+import { compareRows, roiFeature2dFiles, type CompareRow } from "./roiFeatureModes";
 import {
   discretisationOf,
   parseSettingsProperties,
@@ -98,6 +100,9 @@ export function RoiFeatureScreen() {
   const [maskNC, setMaskNC] = useState(1);
   const [maskSegmentNames, setMaskSegmentNames] = useState<string[]>([]);
   const [form, setForm] = useState<RoiFeatureForm>(defaultRoiFeatureForm);
+  /** 計算の単位（3D は常に計算する）。既定は 3D だけ＝従来と同じ。 */
+  const [sectionOn, setSectionOn] = useState(false);
+  const [slicesOn, setSlicesOn] = useState(false);
   /** 症例を突き合わせるための任意の文字列（CSV の CaseLabel 列とファイル名）。患者情報は入れない。 */
   const [caseLabel, setCaseLabel] = useState("");
 
@@ -250,6 +255,11 @@ export function RoiFeatureScreen() {
         timePoint,
         settings: roiFeatureSettings(form),
         recompute,
+        roiModes: [
+          "WHOLE_3D",
+          ...(sectionOn ? ["MAX_SECTION_2D" as RoiMode] : []),
+          ...(slicesOn ? ["SLICES_2D" as RoiMode] : []),
+        ],
       });
       jobIdRef.current = status.jobId;
       setResult(null);
@@ -281,6 +291,7 @@ export function RoiFeatureScreen() {
     const base = fileBase();
     download(roiFeatureDataCsv(result, caseLabel.trim()), `${base}.csv`);
     download(roiFeatureDefinitionsCsv(result), `${base}_definitions.csv`);
+    for (const f of roiFeature2dFiles(result, caseLabel.trim())) download(f.text, `${base}${f.suffix}`, f.mime);
   };
 
   /** 設定ファイルは backend が正規化した本文を一字も変えずに保存する（CSV のハッシュと一致させる）。 */
@@ -421,6 +432,23 @@ export function RoiFeatureScreen() {
         </Field>
         <div style={note}>{t("roiFeat.caseLabel.help")}</div>
 
+        <Field label={t("roiFeat.field.modes")}>
+          <span style={{ display: "inline-flex", gap: 10, alignItems: "center", justifyContent: "flex-end", flexWrap: "wrap" }}>
+            <label title={t("roiFeat.mode.alwaysOn")}>
+              <input type="checkbox" checked disabled data-testid="roifeat-mode-whole" /> {t("roiFeat.mode.whole")}
+            </label>
+            <label>
+              <input type="checkbox" checked={sectionOn} disabled={busy} data-testid="roifeat-mode-section"
+                onChange={(e) => setSectionOn(e.target.checked)} /> {t("roiFeat.mode.section")}
+            </label>
+            <label>
+              <input type="checkbox" checked={slicesOn} disabled={busy} data-testid="roifeat-mode-slices"
+                onChange={(e) => setSlicesOn(e.target.checked)} /> {t("roiFeat.mode.slices")}
+            </label>
+          </span>
+        </Field>
+        {(sectionOn || slicesOn) && <div style={note}>{t("roiFeat.mode.note2d")}</div>}
+
         <Field label={t("roiFeat.field.discretisation")}>
           <span style={{ display: "inline-flex", gap: 8, alignItems: "center", justifyContent: "flex-end" }}>
             <label>
@@ -483,8 +511,13 @@ export function RoiFeatureScreen() {
               <span>{t(job.state === "EXTRACTING" ? "roiFeat.state.extracting" : "roiFeat.state.loading", {
                 seconds: Math.round(job.elapsedMs / 1000),
               })}</span>
+              {(job.sliceTotal ?? 0) > 0 && (
+                <span data-testid="roifeat-slice-progress">
+                  {t("roiFeat.sliceProgress", { done: job.sliceDone ?? 0, total: job.sliceTotal ?? 0 })}
+                </span>
+              )}
               <button onClick={onCancel} style={miniBtn}>{t("roiFeat.cancel")}</button>
-              <span>{t("roiFeat.cancelNote")}</span>
+              <span>{t((job.sliceTotal ?? 0) > 0 ? "roiFeat.cancelNote2d" : "roiFeat.cancelNote")}</span>
             </div>
           </>
         )}
@@ -543,7 +576,11 @@ export function RoiFeatureScreen() {
             })}
           </div>
           <div style={note}>{t("roiFeat.count", { n: result.rows.length })}</div>
+          {(result.section || result.slices) && <Modes2dPanel result={result} t={t} />}
 
+          {(result.section || result.slices) ? (
+            <CompareTable result={result} query={query} familyLabel={familyLabel} t={t} />
+          ) : (
           <table style={table} data-testid="roifeat-table">
             <thead>
               <tr>
@@ -560,11 +597,146 @@ export function RoiFeatureScreen() {
               ))}
             </tbody>
           </table>
+          )}
         </div>
       )}
     </div>
   );
 }
+
+/** 2D の単位の要約: 最大断面の位置・面積、スライス別の枚数・失敗・小さい ROI、スライス別の表（折りたたみ）。 */
+function Modes2dPanel({ result, t }: { result: RoiFeatureResult; t: TFn }) {
+  const sec = result.section;
+  const sl = result.slices;
+  return (
+    <div data-testid="roifeat-modes2d">
+      {sec && (
+        <div style={note} data-testid="roifeat-section-summary">
+          {t("roiFeat.section.summary", {
+            pos: formatPositionMm(sec.positionMm), area: formatAreaMm2(sec.areaMm2), pixels: sec.pixels,
+          })}
+        </div>
+      )}
+      {sl && (
+        <>
+          <div style={note} data-testid="roifeat-slices-summary">
+            {t("roiFeat.slices.summary", { used: sl.rows.length, total: sl.foregroundSlices, failed: sl.failures.length })}
+          </div>
+          {sl.failures.length > 0 && (
+            <div style={warnBand} data-testid="roifeat-slices-failures">
+              ⚠ {t("roiFeat.slices.failures", {
+                n: sl.failures.length,
+                list: sl.failures.map((f) => `${formatPositionMm(f.positionMm)} mm`).join(", "),
+              })}
+              <div>{sl.failures.map((f) => f.reason).filter((v, i, a) => a.indexOf(v) === i).join(" / ")}</div>
+            </div>
+          )}
+          {sl.smallRoiWarnPixels != null && sl.smallRoiPositionsMm.length > 0 && (
+            <div style={warnBand} data-testid="roifeat-slices-small">
+              ⚠ {t("roiFeat.slices.small", {
+                n: sl.smallRoiPositionsMm.length,
+                threshold: sl.smallRoiWarnPixels,
+                list: sl.smallRoiPositionsMm.map((p) => `${formatPositionMm(p)} mm`).join(", "),
+              })}
+            </div>
+          )}
+          <details style={{ marginTop: 6 }} data-testid="roifeat-slices-details">
+            <summary style={{ cursor: "pointer", color: "#0b5cad" }}>{t("roiFeat.slices.open")}</summary>
+            <table style={table} data-testid="roifeat-slices-table">
+              <thead>
+                <tr>
+                  <th style={th}>{t("roiFeat.slices.col.pos")}</th>
+                  <th style={{ ...th, textAlign: "right" }}>{t("roiFeat.slices.col.pixels")}</th>
+                  <th style={{ ...th, textAlign: "right" }}>{t("roiFeat.slices.col.area")}</th>
+                  <th style={{ ...th, textAlign: "right" }}>{MEAN_COLUMN}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {sl.rows.map((r) => (
+                  <tr key={r.positionMm} style={{ borderTop: "1px solid #eef2f6" }}>
+                    <td style={td}>{formatPositionMm(r.positionMm)}</td>
+                    <td style={{ ...td, textAlign: "right" }}>{r.pixels}</td>
+                    <td style={{ ...td, textAlign: "right" }}>{formatAreaMm2(r.areaMm2)}</td>
+                    <td style={{ ...td, textAlign: "right" }}>
+                      {fmtCell(r.rows.find((x) => x.column === MEAN_COLUMN)?.value)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </details>
+        </>
+      )}
+    </div>
+  );
+}
+
+const MEAN_COLUMN = "IntensityBasedStatistical_Mean";
+
+/** undefined＝その単位では計算しない（—）、null＝NaN。 */
+const fmtCell = (v: number | null | undefined): string =>
+  v === undefined ? "—" : v === null ? "NaN" : formatFeatureValue(v);
+
+/** 3 単位を並べた表（行＝特徴、列＝単位）。2D で計算しない特徴は「—」。 */
+function CompareTable({ result, query, familyLabel, t }: {
+  result: RoiFeatureResult;
+  query: string;
+  familyLabel: (family: string) => string;
+  t: TFn;
+}) {
+  const rows = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return compareRows(result).filter((r) => !q || r.column.toLowerCase().includes(q));
+  }, [result, query]);
+  const groups: { family: string; rows: CompareRow[] }[] = [];
+  for (const r of rows) {
+    const last = groups[groups.length - 1];
+    if (last && last.family === r.family) last.rows.push(r);
+    else groups.push({ family: r.family, rows: [r] });
+  }
+  const showSection = !!result.section;
+  const showSlices = !!result.slices;
+  const cols = 4 + (showSection ? 1 : 0) + (showSlices ? 2 : 0);
+  return (
+    <table style={table} data-testid="roifeat-table">
+      <thead>
+        <tr>
+          <th style={th}>{t("roiFeat.col.feature")}</th>
+          <th style={th}>{t("roiFeat.col.ibsi")}</th>
+          <th style={{ ...th, textAlign: "right" }}>{t("roiFeat.col.whole")}</th>
+          {showSection && <th style={{ ...th, textAlign: "right" }}>{t("roiFeat.col.section")}</th>}
+          {showSlices && <th style={{ ...th, textAlign: "right" }}>{t("roiFeat.col.sliceMean")}</th>}
+          {showSlices && <th style={{ ...th, textAlign: "right" }}>{t("roiFeat.col.sliceWeighted")}</th>}
+          <th style={th}>{t("roiFeat.col.notes")}</th>
+        </tr>
+      </thead>
+      <tbody>
+        {groups.map((g) => (
+          <Fragment key={g.family}>
+            <tr><td colSpan={cols} style={familyHead}>{familyLabel(g.family)}</td></tr>
+            {g.rows.map((r) => (
+              <tr key={r.column} style={{ borderTop: "1px solid #eef2f6" }} data-testid={`roifeat-cmp-${r.column}`}>
+                <td style={td} title={r.column}>{r.feature}</td>
+                <td style={{ ...td, fontFamily: "ui-monospace, monospace" }}>
+                  {r.ibsi ?? (r.family === "Diagnostics" ? "" : t("roiFeat.nonIbsi"))}
+                </td>
+                <td style={valCell} data-col="whole">{fmtCell(r.whole)}</td>
+                {showSection && <td style={valCell} data-col="section">{fmtCell(r.section)}</td>}
+                {showSlices && <td style={valCell} data-col="sliceMean">{fmtCell(r.sliceMean)}</td>}
+                {showSlices && <td style={valCell} data-col="sliceWeighted">{fmtCell(r.sliceWeighted)}</td>}
+                <td style={td}>{r.notes.map((n) => t(`roiFeat.note.${n}`)).join("・")}</td>
+              </tr>
+            ))}
+          </Fragment>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
+const valCell: React.CSSProperties = {
+  padding: "2px 6px", verticalAlign: "top", textAlign: "right", fontVariantNumeric: "tabular-nums",
+};
 
 function FamilyRows({ label, raw, discretisation, rows, t }: {
   label: string;

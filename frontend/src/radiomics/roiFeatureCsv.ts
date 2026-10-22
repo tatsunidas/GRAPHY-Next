@@ -16,7 +16,7 @@
  * <p>BOM は付けない。BOM があると R の `read.csv` が 1 列目の名前を `X.U.FEFF.…` に変えてしまう。
  * 症例ラベル以外は ASCII だけ（症例ラベルに日本語を入れたときは UTF-8 として読む）。
  */
-import type { RoiFeatureDiscretisation, RoiFeatureResult } from "../api";
+import type { RoiFeatureDiscretisation, RoiFeatureProvenance, RoiFeatureResult, RoiFeatureRoiSize } from "../api";
 import { cell } from "../viewer/roiStatsCsv";
 import { DISCRETISED_FAMILIES, IVH_FAMILY } from "./roiFeatureSettings";
 
@@ -24,7 +24,7 @@ import { DISCRETISED_FAMILIES, IVH_FAMILY } from "./roiFeatureSettings";
  * 値の書き方。JS の数値の文字列化は倍精度を往復で保つので、読み戻すと API の値と差 0 になる。
  * NaN（API では null）は `NaN` と書く。R・pandas とも数値の NaN として読み、0 や欠損と取り違えない。
  */
-const value = (v: number | null): string => (v == null ? "NaN" : String(v));
+export const value = (v: number | null): string => (v == null ? "NaN" : String(v));
 
 /** 特徴量の列の前に置く記録の列。 */
 export const ROI_FEATURE_RECORD_COLUMNS = [
@@ -45,13 +45,13 @@ export const ROI_FEATURE_SIZE_COLUMNS = [
   "Warning_SmallRoi",
 ] as const;
 
-function recordValues(result: RoiFeatureResult, caseLabel: string): string[] {
-  const p = result.provenance;
+/** 記録の 5 列の値（2D の CSV も同じ並びで使う）。 */
+export function recordValuesOf(p: RoiFeatureProvenance, caseLabel: string): string[] {
   return [caseLabel, p.graphyNextVersion, p.radiomicsjVersion ?? "", p.extractedAt, p.settingsSha256].map(cell);
 }
 
-function sizeValues(result: RoiFeatureResult): string[] {
-  const s = result.roiSize;
+/** ROI の大きさの 6 列の値（2D の CSV も同じ並びで使う）。 */
+export function sizeValuesOf(s: RoiFeatureRoiSize): string[] {
   return [
     value(s.initialVoxels),
     value(s.intensityVoxels),
@@ -67,8 +67,8 @@ export function roiFeatureDataCsv(result: RoiFeatureResult, caseLabel = ""): str
   const header = [...ROI_FEATURE_RECORD_COLUMNS, ...ROI_FEATURE_SIZE_COLUMNS, ...result.rows.map((r) => r.column)]
     .map(cell).join(",");
   const values = [
-    ...recordValues(result, caseLabel),
-    ...sizeValues(result),
+    ...recordValuesOf(result.provenance, caseLabel),
+    ...sizeValuesOf(result.roiSize),
     ...result.rows.map((r) => value(r.value)),
   ].join(",");
   return `${header}\r\n${values}\r\n`;

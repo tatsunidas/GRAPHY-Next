@@ -82,6 +82,10 @@ const TEXTURE_CATEGORY: CategoryDef = {
           key: "texture.SmallRoiWarnVoxels", labelKey: "settings.tex.smallRoiWarn", type: "number", default: "",
           min: 1, step: 1, helpKey: "settings.tex.smallRoiWarn.help",
         },
+        {
+          key: "texture.SmallRoiWarnPixels2D", labelKey: "settings.tex.smallRoiWarn2d", type: "number", default: "",
+          min: 1, step: 1, helpKey: "settings.tex.smallRoiWarn2d.help",
+        },
         { key: "texture.RemoveOutliers_BOOL", labelKey: "settings.tex.removeOutliers", type: "toggle", default: false },
         { key: "texture.Sigma_INT", labelKey: "settings.tex.sigma", type: "number", default: 3, min: 1, max: 10 },
         { key: "texture.RangeFiltering_BOOL", labelKey: "settings.tex.rangeFilter", type: "toggle", default: false },
