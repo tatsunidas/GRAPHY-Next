@@ -7,6 +7,7 @@
  *   (2) 画面: スケールのタブ・各タブの表と換算の説明・仮定の注記・進み具合
  *   (3) CSV がスケールごとに 1 行で API と全列差 0、設定ファイルがスケールごとに 1 本で API と一字も違わない
  *   (4) 「0, 2, 3」の後の「0, 2, 3, 4」で 0・2・3 はキャッシュ、4 だけ新規。
+ *   (5) 走査「1:2:0.5」の一覧と不正な走査の拒否  (6) 幅（画素）・名札: 一覧・タブ・CSV の入力の列・API との差 0。
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -115,7 +116,7 @@ async function main(): Promise<void> {
 
     console.log("[1] API");
     const plain = await runJob(base, req({ ...ISO }));
-    const sc = await runJob(base, { ...req({ ...ISO }), scalesMm: [0, 2, 3] });
+    const sc = await runJob(base, { ...req({ ...ISO }), scales: [0, 2, 3] });
     check(plain.state === "DONE" && sc.state === "DONE", "スケール 0, 2, 3 が計算できる", [plain.state, sc.state, sc.error]);
     const S = (sc.result as unknown as { scales: { scaleMm: number; sigma3dMm: number | null; result: Result }[] }).scales;
     check(S.length === 3 && S.map((x) => x.scaleMm).join() === "0,2,3", "結果にスケールが 3 つ並ぶ");
@@ -124,7 +125,7 @@ async function main(): Promise<void> {
       && plain.result!.rows.every((x, i) => S[0].result.rows[i].column === x.column && S[0].result.rows[i].value === x.value),
       "r=0 の行はフィルタなしの表と全列同じ");
     check(S[2].result.rows.some((x) => x.column.startsWith("log_sigma1.7321mm_")) && !S[0].result.rows.some((x) => x.column.startsWith("log_sigma")), "r=3 だけ LoG の列がある");
-    const both = await runJob(base, { ...req({ ...ISO, DOUBLEARRAY_logSigmaMm: "1.5" }), scalesMm: [2] });
+    const both = await runJob(base, { ...req({ ...ISO, DOUBLEARRAY_logSigmaMm: "1.5" }), scales: [2] });
     check(both.state === "FAILED" && /同時/.test(both.error ?? ""), "負例: 半径と σ の併用は止まる", both.error);
     // 画面の 1 回目を「初回の計算」にするため、ここのキャッシュは捨てて UI 側で recompute させる
     const refScales = S;
@@ -181,7 +182,7 @@ async function main(): Promise<void> {
     await page.getByTestId("roifeat-scales").fill("0, -1");
     await page.getByTestId("roifeat-run").click();
     await page.getByTestId("roifeat-error").waitFor({ state: "visible", timeout: 5000 });
-    check(/半径は 0 以上/.test(await page.getByTestId("roifeat-error").innerText()), "負例: 負の半径は送らずに理由を出す");
+    check(/0 以上の数として読めません/.test(await page.getByTestId("roifeat-error").innerText()), "負例: 負の値は送らずに理由を出す");
     await page.getByTestId("roifeat-scales").fill("0, 2, 3");
     await page.locator("select").filter({ hasText: "等方" }).first().selectOption("iso");
     await page.getByTestId("roifeat-run").click();
@@ -261,6 +262,84 @@ async function main(): Promise<void> {
     }
     check(pills.join() === "cache,cache,cache,new", "0・2・3 はキャッシュから、4 だけ新しく計算", pills);
     await page.screenshot({ path: path.join(OUT_DIR, "03-cache.png"), fullPage: false });
+
+    // ── 走査・幅（画素）・名札 ──
+    console.log("[3] 走査と幅（画素）");
+    const list = page.getByTestId("roifeat-scale-list");
+    await page.getByTestId("roifeat-scales").fill("1:2:0.5");
+    await list.filter({ hasText: "計算するスケール（3 個）" }).waitFor({ timeout: 5000 });
+    const listText = await list.innerText();
+    check(/r 1 mm → σ 0\.5774 mm/.test(listText) && /r 1\.5 mm/.test(listText) && /r 2 mm → σ 1\.1547 mm（3D の単位）・1\.4142 mm（2D の単位）/.test(listText),
+      "走査 1:2:0.5 の一覧に 3 個と σ（3D・2D）が計算の前に出る", listText);
+    await page.getByTestId("roifeat-scales").fill("1:3:0");
+    await page.getByTestId("roifeat-scale-spec-error").waitFor({ timeout: 5000 });
+    check(/刻みは 0 より大きく/.test(await page.getByTestId("roifeat-scale-spec-error").innerText()), "負例: 刻み 0 は一覧のところで理由が出る");
+    await page.getByTestId("roifeat-scales").fill("3:1:0.5");
+    check(/終了が開始より小さく/.test(await page.getByTestId("roifeat-scale-spec-error").innerText()), "負例: 終了 < 開始は理由が出る");
+    await page.getByTestId("roifeat-run").click();
+    await page.getByTestId("roifeat-error").filter({ hasText: /終了が開始より小さく/ }).waitFor({ timeout: 5000 });
+    check(true, "負例: 不正な走査は計算を始めずにエラーで止まる");
+
+    await page.getByTestId("roifeat-scale-notation").selectOption("WIDTH_PX");
+    await page.getByTestId("roifeat-scales").fill("4, 6, 12");
+    await page.getByTestId("roifeat-scale-labels").fill("1.0, 1.5, 2.5");
+    await list.filter({ hasText: "計算するスケール（3 個）" }).waitFor({ timeout: 5000 });
+    const wl = await list.innerText();
+    check(/幅 4 画素/.test(wl) && /（名札 1\.0）/.test(wl) && /（名札 2\.5）/.test(wl), "幅（画素）の一覧に名札が出る", wl);
+    check(/画素の大きさが違う画像どうしでは同じ長さになりません/.test(await page.getByTestId("roifeat-scale-width-note").innerText()), "幅（画素）の注記が出る");
+    await page.getByTestId("roifeat-scale-labels").fill("1.0");
+    await page.getByTestId("roifeat-run").click();
+    await page.getByTestId("roifeat-error").filter({ hasText: /名札の数が値の数（3）と合いません/ }).waitFor({ timeout: 5000 });
+    check(true, "負例: 名札の数が合わなければ送らずに理由を出す");
+    await page.getByTestId("roifeat-scale-labels").fill("1.0, 1.5, 2.5");
+    await page.getByTestId("roifeat-run").click();
+    await page.getByTestId("roifeat-scale-tabs").locator("button").nth(2).waitFor({ state: "visible", timeout: 180_000 });
+    await page.waitForTimeout(500);
+    const tabs = await page.getByTestId("roifeat-scale-tabs").locator("button").allInnerTexts();
+    check(tabs.join("|") === "幅 4（r 1.4）（名札 1.0）|幅 6（r 2.1）（名札 1.5）|幅 12（r 4.2）（名札 2.5）", "タブに幅・換算後の r・名札（0.7 mm × 幅 / 2）", tabs);
+    const infoW = await page.getByTestId("roifeat-scale-info").innerText();
+    check(/指定: 幅 4 画素 × 画素間隔 0\.7 mm \/ 2 = r 1\.4 mm/.test(infoW), "タブの説明に画素間隔と換算", infoW);
+    await page.getByTestId("roifeat-scale-tabs").evaluate((el) => el.scrollIntoView({ block: "start" }));
+    await page.waitForTimeout(300);
+    await page.screenshot({ path: path.join(OUT_DIR, "04-width-tabs.png"), fullPage: false });
+
+    const wApi = await runJob(base, { ...req({ ...ISO }), scales: [4, 6, 12], scaleNotation: "WIDTH_PX", scaleLabels: ["1.0", "1.5", "2.5"] });
+    const WS = (wApi.result as unknown as { scales: { scaleMm: number; inputNotation: string; inputValue: number; pixelSpacingMm: number | null; legacyLabel: string | null; result: Result }[] }).scales;
+    check(WS.map((x) => x.scaleMm).join() === "1.4,2.1,4.2" && WS.every((x) => x.inputNotation === "width_px" && x.pixelSpacingMm === 0.7), "API: 幅 4・6・12 画素 → r 1.4・2.1・4.2 mm", WS.map((x) => x.scaleMm));
+    // 同じ r を半径（mm）で直接指定した計算と全特徴ビット一致（別の recompute で計算し直す）
+    const rApi = await runJob(base, { ...req({ ...ISO }), scales: [1.4, 2.1, 4.2] });
+    const RS = (rApi.result as unknown as { scales: { result: Result }[] }).scales;
+    let same = true;
+    for (let i = 0; i < 3; i++) {
+      same = same && WS[i].result.rows.length === RS[i].result.rows.length
+        && WS[i].result.rows.every((x, j) => RS[i].result.rows[j].column === x.column && RS[i].result.rows[j].value === x.value);
+    }
+    check(same, "幅で指定した計算が、同じ r の直接指定と全特徴一致（recompute で別々に計算）");
+
+    await page.evaluate("window.__roiDownloads = []");
+    await page.getByTestId("roifeat-csv").click();
+    for (let i = 0; i < 100 && ((await page.evaluate("window.__roiDownloads.length")) as number) < 2; i++) await page.waitForTimeout(100);
+    const by2 = Object.fromEntries(((await page.evaluate("window.__roiDownloads")) as { name: string; text: string }[]).map((x) => [x.name, x.text]));
+    const csv2 = parseCsv(by2["log-case-seg0.csv"] ?? "");
+    const c2 = (name: string, r: number) => csv2.rows[r][csv2.header.indexOf(name)];
+    check([0, 1, 2].map((r) => c2("Filter_InputNotation", r)).join() === "width_px,width_px,width_px"
+      && [0, 1, 2].map((r) => c2("Filter_InputValue", r)).join() === "4,6,12"
+      && [0, 1, 2].map((r) => c2("Filter_PixelSpacingMm", r)).join() === "0.7,0.7,0.7"
+      && [0, 1, 2].map((r) => c2("Filter_LegacyLabel", r)).join() === "1.0,1.5,2.5"
+      && [0, 1, 2].map((r) => c2("Filter_ScaleMm", r)).join() === "1.4,2.1,4.2", "CSV: 入力の書き方・値・画素間隔・名札・換算後の r");
+    let worst2 = 0;
+    let n2 = 0;
+    for (let r = 0; r < 3; r++) {
+      for (const row of WS[r].result.rows) {
+        const i = csv2.header.indexOf(row.column);
+        const got = csv2.rows[r][i] === "NaN" ? null : Number(csv2.rows[r][i]);
+        if (i < 0 || (got == null) !== (row.value == null)) { worst2 = Infinity; break; }
+        if (got != null) worst2 = Math.max(worst2, Math.abs(got - row.value!));
+        n2++;
+      }
+    }
+    check(n2 > 300 && worst2 === 0, `幅（画素）の CSV は API と全 ${n2} 値で差 0`, worst2);
+    console.log("  [未達] 縦横の画素間隔が違う画像での幅の拒否は実機では確かめていない（合成 CT は正方画素。backend の単体試験で確認）");
   } finally {
     await d.stop();
   }

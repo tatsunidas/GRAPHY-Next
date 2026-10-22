@@ -18,6 +18,9 @@ final class FilterScale {
 
     enum Conversion { SQRT_D, IDENTITY, COEFFICIENT }
 
+    /** スケールの値の書き方。 */
+    enum Notation { RADIUS_MM, WIDTH_PX }
+
     private FilterScale() {
     }
 
@@ -30,6 +33,32 @@ final class FilterScale {
         } catch (IllegalArgumentException e) {
             throw new IllegalArgumentException("scaleConversion は SQRT_D・IDENTITY・COEFFICIENT のいずれかです: " + name);
         }
+    }
+
+    static Notation parseNotation(String name) {
+        if (name == null || name.isBlank()) {
+            return Notation.RADIUS_MM;
+        }
+        try {
+            return Notation.valueOf(name.trim());
+        } catch (IllegalArgumentException e) {
+            throw new IllegalArgumentException("scaleNotation は RADIUS_MM・WIDTH_PX のいずれかです: " + name);
+        }
+    }
+
+    /**
+     * 幅（画素）を半径 r（mm）に直す。幅は構造の直径として読む（r ＝ 幅 × 画素間隔 / 2）。
+     * 0 はそのまま 0（フィルタなし）。画素は入力の書き方だけで、計算に使うのは mm に直したあとの値。
+     */
+    static double radiusMmFromWidthPx(double widthPx, double pixelSpacingMm) {
+        if (!Double.isFinite(widthPx) || widthPx < 0) {
+            throw new IllegalArgumentException("構造の幅（画素）は 0 以上の数で指定してください（0 はフィルタなし）: " + widthPx);
+        }
+        if (!Double.isFinite(pixelSpacingMm) || pixelSpacingMm <= 0) {
+            throw new IllegalArgumentException("画素間隔が読めないので、画素幅からは換算できません。半径（mm）で指定してください。");
+        }
+        // 浮動小数の誤差（6 × 0.7 / 2 = 2.0999999999999996）を表示・記録に持ち込まないよう、小数 6 桁に丸める
+        return new BigDecimal(widthPx * pixelSpacingMm / 2.0).setScale(6, RoundingMode.HALF_UP).doubleValue();
     }
 
     /**

@@ -27,16 +27,27 @@ export const FILTER_COLUMNS = [
   "Filter_Dimension",
   "Filter_TruncateSigma",
   "Filter_Boundary",
+  "Filter_InputNotation",
+  "Filter_InputValue",
+  "Filter_PixelSpacingMm",
+  "Filter_LegacyLabel",
 ] as const;
 
-/** そのスケールの行のフィルタの 7 列の値。r=0（フィルタなし）は種類と r だけで、他は空。 */
+/**
+ * そのスケールの行のフィルタの 11 列の値。r=0（フィルタなし）は種類・r・入力の記録だけで、σ・換算・次元・
+ * 切り捨て・境界は空。画素間隔は幅（画素）で指定したときだけ、名札は付けたときだけ。
+ */
 export function filterValuesOf(e: NonNullable<RoiFeatureResult["scales"]>[number]): string[] {
-  if (e.sigma3dMm == null) return ["none", String(e.scaleMm), "", "", "", "", ""];
+  const input = [
+    e.inputNotation, String(e.inputValue), e.pixelSpacingMm == null ? "" : String(e.pixelSpacingMm), e.legacyLabel ?? "",
+  ];
+  if (e.sigma3dMm == null) return ["none", String(e.scaleMm), "", "", "", "", "", ...input];
   const p = parseSettingsProperties(e.result.settingsProperties);
   const conversion = e.conversion === "COEFFICIENT" && e.coefficient != null
     ? `COEFFICIENT:${e.coefficient}` : e.conversion;
   return [
     "LoG", String(e.scaleMm), String(e.sigma3dMm), conversion, "3D", p.DOUBLE_logTruncate ?? "", p.STRING_logPadding ?? "",
+    ...input,
   ];
 }
 
