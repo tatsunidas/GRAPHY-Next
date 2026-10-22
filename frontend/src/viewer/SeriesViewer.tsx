@@ -96,7 +96,7 @@ import {
 import { advanceAnchor, sliceStepsFromDrag } from "./touchScroll";
 import { createWheelStepper } from "./wheelScroll";
 import { isSliceNavigationLocked, useSliceNavigationLocked } from "./sliceNavigationLock";
-import { subscribeRoiReveal } from "./roiReveal";
+import { registerRevealSeries, subscribeRoiReveal } from "./roiReveal";
 import { resolveImageId, sopIndex } from "./roiRestore";
 import { isInsideViewerOverlay } from "./viewerOverlay";
 import { installDebugApi, countStackSwap } from "./debugApi";
@@ -1232,6 +1232,9 @@ export function SeriesViewer({
     });
     return unregister;
   }, [syncOn, sliceSyncId]);
+
+  // 別ウィンドウ（ROI 特徴量の画面）からの「見せて」を受けるため、自分のシリーズを登録する。
+  useEffect(() => registerRevealSeries(seriesUid), [seriesUid]);
 
   // ── ROI を見せる（ROI マネージャの行選択・複製の直後）─────────────────────
   // 宛先は SOP Instance UID ＋フレーム番号。どのタイルがその画像を持っているかは

@@ -31,6 +31,7 @@ import {
 } from "../api";
 import { formatFeatureValue } from "./GlamFeatureTable";
 import { formatAreaMm2, formatPositionMm, tiePositions } from "./maxSection";
+import { requestRemoteReveal } from "../viewer/roiRevealBridge";
 import {
   discretisationOf,
   parseSettingsProperties,
@@ -110,6 +111,21 @@ export function RoiFeatureScreen() {
 
   /** 選んだ ROI の最大断面。ROI を選び直すたびに求める（特徴量の計算とは独立）。 */
   const [maxSection, setMaxSection] = useState<{ result?: MaxSectionResult; error?: string } | null>(null);
+
+  const [revealMsg, setRevealMsg] = useState<string | null>(null);
+  useEffect(() => setRevealMsg(null), [maxSection]);
+
+  const showInViewer = async (r: MaxSectionResult) => {
+    const toast = t("roiFeat.maxSection.toast", {
+      pos: formatPositionMm(r.best.positionMm), area: formatAreaMm2(r.best.areaMm2),
+    });
+    const outcome = await requestRemoteReveal({
+      sopInstanceUid: r.best.sopInstanceUid,
+      frame: r.best.frame >= 0 ? r.best.frame : null,
+      seriesUid: sourceSeriesUid,
+    }, toast);
+    setRevealMsg(outcome === "ok" ? toast : outcome === "locked" ? t("roiFeat.maxSection.locked") : t("roiFeat.maxSection.noViewer"));
+  };
 
   const busy = job != null && !FINISHED.has(job.state);
 
@@ -391,6 +407,10 @@ export function RoiFeatureScreen() {
                   </div>
                 )}
                 <div style={note}>{t("roiFeat.maxSection.basis")}</div>
+                <button onClick={() => void showInViewer(maxSection.result!)} style={miniBtn} data-testid="roifeat-maxsection-show">
+                  {t("roiFeat.maxSection.show")}
+                </button>
+                {revealMsg && <span style={{ ...note, marginLeft: 8 }} data-testid="roifeat-maxsection-reveal">{revealMsg}</span>}
               </>
             ) : maxSection.error}
           </div>

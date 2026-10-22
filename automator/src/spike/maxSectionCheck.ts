@@ -169,6 +169,51 @@ async function main(): Promise<void> {
     const t2 = await box.innerText();
     check(/同面積のスライスが 2 枚/.test(t2) && t2.includes("100 画素"), "セグメント 2: 同面積 2 枚の注記", t2);
     await page.screenshot({ path: path.join(OUT_DIR, "02-ties.png"), fullPage: true });
+
+    console.log("[3] ビューアへの移動");
+    const curImage = () => viewer.evaluate(() => {
+      const dbg = (window as unknown as { __graphyDebug?: { getViewportGeometry?: () => { imageId: string | null }[] } }).__graphyDebug;
+      return dbg?.getViewportGeometry?.()[0]?.imageId ?? null;
+    });
+    const sopOf = (z: number) => synth.frames[z].sopInstanceUid;
+    await page.locator("select").nth(2).selectOption({ index: 0 }); // セグメント 1（最大は z=5）
+    await page.getByTestId("roifeat-maxsection-show").waitFor({ state: "visible", timeout: 20_000 });
+    await page.waitForTimeout(1500);
+    const before = await curImage();
+    check(!!before && !before.includes(sopOf(5)), "押す前: ビューアは z=5 以外のスライス", before);
+    await viewer.screenshot({ path: path.join(OUT_DIR, "03-viewer-before.png") });
+    await page.getByTestId("roifeat-maxsection-show").click();
+    await page.getByTestId("roifeat-maxsection-reveal").waitFor({ state: "visible", timeout: 5000 });
+    await viewer.waitForTimeout(800);
+    const after = await curImage();
+    check(!!after && after.includes(sopOf(5)), "押した後: 表示中の画像が最大断面の SOP", after);
+    check(/最大断面へ移動しました/.test(await viewer.getByTestId("viewer2d-toast").innerText().catch(() => "")), "ビューアのトーストに位置と面積");
+    await viewer.screenshot({ path: path.join(OUT_DIR, "04-viewer-after.png") });
+
+    // メニューから: 別のスライスへ動かしてから、セグメント 2（同面積 z=4,10 のうち位置の小さい z=4）
+    await viewer.getByTestId("series-viewer-root").first().hover();
+    for (let i = 0; i < 6; i++) await viewer.mouse.wheel(0, 100);
+    await viewer.waitForTimeout(800);
+    const moved = await curImage();
+    check(!!moved && moved !== after, "メニューの前: スライスを動かした", { after, moved });
+    await viewer.getByTestId("viewer2d-menu-analysis").click();
+    await viewer.getByTestId("menu-max-section").click();
+    await viewer.getByTestId("maxsection-dialog").waitFor({ state: "visible", timeout: 10_000 });
+    await viewer.getByTestId("maxsection-mask").selectOption(seg.seriesInstanceUid);
+    await viewer.getByTestId("maxsection-seg").waitFor({ state: "visible", timeout: 10_000 });
+    await viewer.getByTestId("maxsection-seg").selectOption({ index: 1 });
+    await viewer.getByTestId("maxsection-go").click();
+    await viewer.getByTestId("maxsection-dialog").waitFor({ state: "hidden", timeout: 10_000 });
+    await viewer.waitForTimeout(800);
+    const viaMenu = await curImage();
+    check(!!viaMenu && viaMenu.includes(sopOf(4)), "メニュー: セグメント 2 の最大断面（z=4）へ移る", viaMenu);
+
+    // 負例: ビューアを閉じると、押して 1 秒ほどで「ありません」が出る
+    await viewer.close();
+    await page.getByTestId("roifeat-maxsection-show").click();
+    const t0 = Date.now();
+    await page.getByTestId("roifeat-maxsection-reveal").filter({ hasText: /ありません/ }).waitFor({ timeout: 3000 });
+    check(Date.now() - t0 < 2500, "ビューアが無いときは「開いているビューアがありません」が出る", Date.now() - t0);
   } finally {
     await d.stop();
   }
