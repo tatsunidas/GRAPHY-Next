@@ -20,6 +20,8 @@ import { AttachError, MAX_ATTACHMENTS, classify } from "./attachments/limits";
 import { composeUserText, ingest, type Attachment, type IngestDeps } from "./attachments";
 import { loadPdfjs } from "./attachments/pdfLoader";
 import { extractVideoFrames } from "./attachments/video";
+import { MAX_RECORD_SEC } from "./voice/voiceFlow";
+import { useVoiceInput } from "./voice/useVoiceInput";
 
 const INGEST_DEPS: IngestDeps = { loadPdfjs, extractVideo: extractVideoFrames };
 
@@ -73,6 +75,7 @@ export function AssistantScreen() {
 
   const bridge = desktop();
   const available = !!bridge?.aiChat;
+  const voice = useVoiceInput({ t, setInput, setNote });
 
   useEffect(() => {
     document.title = t("assistant.title");
@@ -316,6 +319,35 @@ export function AssistantScreen() {
           ))}
         </div>
       )}
+      {voice.available && (
+        <div style={S.voiceRow} data-testid="assistant-voice-status">
+          {voice.phase === "confirm" && voice.readiness.kind === "ready" ? (
+            <span style={S.confirm} data-testid="assistant-voice-confirm">
+              <span>{t("assistant.voice.confirm", { host: voice.readiness.host })}</span>
+              <button style={S.btnPrimary} onClick={() => void voice.answerConfirm(true)} data-testid="assistant-voice-confirm-yes">
+                {t("assistant.voice.confirmYes")}
+              </button>
+              <button style={S.btn} onClick={() => void voice.answerConfirm(false)} data-testid="assistant-voice-confirm-no">
+                {t("assistant.voice.confirmNo")}
+              </button>
+            </span>
+          ) : voice.phase === "recording" ? (
+            <span style={S.recording} data-testid="assistant-voice-recording">
+              ● {t("assistant.voice.recording", { sec: voice.elapsed, max: MAX_RECORD_SEC })}
+            </span>
+          ) : voice.phase === "transcribing" ? (
+            <span style={S.dim} data-testid="assistant-voice-transcribing">{t("assistant.voice.transcribing")}</span>
+          ) : voice.readiness.kind === "ready" ? (
+            <span style={S.dim} data-testid="assistant-voice-dest">
+              🎙 {voice.readiness.local ? t("assistant.voice.destLocal") : t("assistant.voice.dest", { host: voice.readiness.host })}
+            </span>
+          ) : (
+            <span style={S.dim} data-testid="assistant-voice-unavailable">
+              🎙 {voice.readiness.kind === "noKey" ? t("assistant.voice.notReady", { label: voice.readiness.label }) : t("assistant.voice.noProvider")}
+            </span>
+          )}
+        </div>
+      )}
       <div style={S.inputRow}>
         <textarea
           style={S.textarea}
@@ -348,6 +380,29 @@ export function AssistantScreen() {
           <button style={S.btn} disabled={notReady || busy} onClick={() => fileRef.current?.click()} data-testid="assistant-attach">
             {t("assistant.attach")}
           </button>
+          {voice.available && (voice.phase === "recording" || voice.phase === "transcribing") ? (
+            <>
+              {voice.phase === "recording" && (
+                <button style={S.btnRec} onClick={() => void voice.toggle()} data-testid="assistant-voice-stop">
+                  ■ {t("assistant.voice.stop")}
+                </button>
+              )}
+              <button style={S.btn} onClick={voice.cancel} data-testid="assistant-voice-cancel">
+                {t("assistant.voice.cancel")}
+              </button>
+            </>
+          ) : voice.available ? (
+            <button
+              style={S.btn}
+              disabled={notReady || busy || voice.phase === "confirm" || voice.readiness.kind !== "ready"}
+              onClick={() => void voice.toggle()}
+              title={t("assistant.voice.start")}
+              aria-label={t("assistant.voice.start")}
+              data-testid="assistant-voice"
+            >
+              🎙 {t("assistant.voice.start")}
+            </button>
+          ) : null}
           {busy ? (
             <button style={S.btn} onClick={stop} data-testid="assistant-stop">
               {t("assistant.stop")}
@@ -482,5 +537,8 @@ const S: Record<string, React.CSSProperties> = {
   textarea: { flex: 1, minWidth: 0, resize: "none", background: "#2b2d31", color: "inherit", border: "1px solid #3a3b3f", borderRadius: 8, padding: 8, font: "inherit" },
   btnCol: { display: "flex", flexDirection: "column", gap: 6 },
   btn: { padding: "4px 10px", borderRadius: 6, border: "1px solid #5f6368", background: "transparent", color: "inherit", cursor: "pointer" },
+  voiceRow: { padding: "2px 12px", fontSize: 12 },
+  recording: { color: "#f28b82" },
+  btnRec: { padding: "4px 10px", borderRadius: 6, border: "none", background: "#c5221f", color: "#fff", cursor: "pointer" },
   btnPrimary: { padding: "4px 10px", borderRadius: 6, border: "none", background: "#2f5fa8", color: "#fff", cursor: "pointer" },
 };

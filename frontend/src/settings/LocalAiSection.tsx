@@ -19,6 +19,7 @@ export function LocalAiSection({ onChanged }: { onChanged?: () => void }) {
   const [status, setStatus] = useState<AiLocalStatus | null>(null);
   const [progress, setProgress] = useState<LocalAiProgress | null>(null);
   const [modelId, setModelId] = useState<string>("");
+  const [sttModelId, setSttModelId] = useState<string>("");
   const [msg, setMsg] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
   const [working, setWorking] = useState(false);
 
@@ -27,6 +28,7 @@ export function LocalAiSection({ onChanged }: { onChanged?: () => void }) {
     const s = await d.aiLocalStatus();
     setStatus(s);
     setModelId((cur) => cur || s.defaultModelId || s.models?.[0]?.id || "");
+    setSttModelId((cur) => cur || s.stt?.defaultModelId || s.stt?.models?.[0]?.id || "");
     onChanged?.();
   }, [d, onChanged]);
 
@@ -63,6 +65,8 @@ export function LocalAiSection({ onChanged }: { onChanged?: () => void }) {
   const phase = phaseOf(status, progress);
   const pct = percentOf(progress);
   const selected = status?.models?.find((m) => m.id === modelId);
+  const stt = status?.stt;
+  const sttSelected = stt?.models?.find((m) => m.id === sttModelId);
 
   return (
     <section style={{ marginBottom: 22 }} data-testid="ai-local">
@@ -136,6 +140,51 @@ export function LocalAiSection({ onChanged }: { onChanged?: () => void }) {
               {t("settings.ai.local.remove")}
             </button>
           </div>
+        </div>
+      ) : null}
+
+      {stt && stt.models.length > 0 && phase !== "unsupported" && phase !== "installing" ? (
+        <div style={{ marginTop: 14, display: "flex", flexDirection: "column", gap: 6 }} data-testid="ai-local-stt">
+          <h4 style={{ fontSize: 12, margin: 0 }}>{t("settings.ai.local.stt.title")}</h4>
+          <span style={help}>{t("settings.ai.local.stt.help")}</span>
+          {!stt.installed ? (
+            <>
+              <label style={{ fontSize: 12 }}>
+                {t("settings.ai.local.stt.model")}{" "}
+                <select value={sttModelId} onChange={(e) => setSttModelId(e.target.value)} data-testid="ai-local-stt-model" style={{ fontSize: 12 }}>
+                  {stt.models.map((m) => (
+                    <option key={m.id} value={m.id}>{`${m.label} — ${formatBytes(m.size)} — ${m.license}`}</option>
+                  ))}
+                </select>
+              </label>
+              {sttSelected?.note ? <span style={help}>{sttSelected.note}</span> : null}
+              <span style={help}>{t("settings.ai.local.stt.sizeNote", { model: formatBytes(sttSelected?.size ?? 0), runtime: formatBytes(status?.runtime?.installed ? 0 : (status?.runtime?.size ?? 0)) })}</span>
+              <div>
+                <button style={btnPrimary} disabled={working || !sttModelId} onClick={() => void run(() => d.aiLocalInstall!(sttModelId), t("settings.ai.local.installed"))} data-testid="ai-local-stt-install">
+                  {t("settings.ai.local.stt.install")}
+                </button>
+              </div>
+            </>
+          ) : (
+            <>
+              <span style={{ fontSize: 12 }} data-testid="ai-local-stt-state">
+                {t("settings.ai.local.stt.state", { model: stt.id ?? "?", running: stt.running ? t("settings.ai.local.running") : t("settings.ai.local.stopped") })}
+              </span>
+              <span style={help}>{stt.isDefault ? t("settings.ai.local.stt.isDefault") : t("settings.ai.local.stt.notDefault")}</span>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                <button style={btn} disabled={working} data-testid="ai-local-stt-check"
+                  onClick={() => void run(async () => {
+                    const r = await d.aiLocalCheck!("stt");
+                    return r.ok ? { ok: true } : { ok: false, error: r.error };
+                  }, t("settings.ai.local.checkOk"))}>
+                  {t("settings.ai.local.check")}
+                </button>
+                <button style={btn} disabled={working} onClick={() => void run(() => d.aiLocalRemoveStt!(), t("settings.ai.local.removed"))} data-testid="ai-local-stt-remove">
+                  {t("settings.ai.local.stt.remove")}
+                </button>
+              </div>
+            </>
+          )}
         </div>
       ) : null}
 
