@@ -48,6 +48,8 @@ public class SeriesExtractJobService {
         volatile long processed;
         volatile boolean cancelRequested;
         volatile SeriesExtractService.VerifyResult verify;
+        /** 検証ジョブの条件（データシートの列名と、結果を使うコピーで要る）。 */
+        volatile List<SearchCondition> conditions = List.of();
         volatile SeriesExtractService.CopyResult copy;
         volatile String error;
         volatile long finishedAt;
@@ -88,8 +90,43 @@ public class SeriesExtractJobService {
         this.service = service;
     }
 
+    /** 検証ジョブの結果が無い・まだ終わっていない・期限切れのとき。呼び出し側は 410 にして再検証を促す。 */
+    public static class StaleJobException extends RuntimeException {
+        public StaleJobException() {
+            super("検証の結果が見つかりません（期限切れ、または検証が終わっていません）。もう一度検証してください。");
+        }
+    }
+
+    private Job doneVerify(String verifyJobId) {
+        Job j = verifyJobId == null ? null : jobs.get(verifyJobId);
+        if (j == null || j.kind != Kind.VERIFY || j.state != State.DONE || j.verify == null) {
+            throw new StaleJobException();
+        }
+        return j;
+    }
+
+    /** 検証済みの一覧（再探索せずに使う）。 */
+    public SeriesExtractService.VerifyResult verified(String verifyJobId) {
+        return doneVerify(verifyJobId).verify;
+    }
+
+    /** 検証済みの一覧からデータシート CSV を作る（再探索しない）。 */
+    public String datasheet(String verifyJobId) {
+        Job j = doneVerify(verifyJobId);
+        return SeriesExtractService.datasheetCsv(j.verify.matched(), j.conditions);
+    }
+
+    /** 検証ジョブの結果をそのままコピーする（プレビューで見た一覧と同じものが出る）。 */
+    public Status submitCopyVerified(String verifyJobId, String destination, boolean sequentialRename) {
+        Job src = doneVerify(verifyJobId);
+        Job job = new Job(Kind.COPY);
+        return enqueue(job, () -> job.copy = service.copyMatches(
+                src.verify, src.conditions, destination, sequentialRename, job));
+    }
+
     public Status submitVerify(List<String> studyUids, List<SearchCondition> conditions, List<String> planes) {
         Job job = new Job(Kind.VERIFY);
+        job.conditions = conditions == null ? List.of() : List.copyOf(conditions);
         return enqueue(job, () -> job.verify = service.verify(studyUids, conditions, planes, job));
     }
 

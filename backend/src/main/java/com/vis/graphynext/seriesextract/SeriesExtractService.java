@@ -5,7 +5,9 @@
 package com.vis.graphynext.seriesextract;
 
 import com.vis.graphynext.dicom.store.DicomInstance;
+import com.vis.graphynext.dicom.StudySearch;
 import com.vis.graphynext.dicom.store.DicomInstanceRepository;
+import com.vis.graphynext.dicom.store.DicomStorageService;
 import com.vis.graphynext.dicom.store.StorageLayout;
 import com.vis.graphynext.dicom.web.WebDicomDataService;
 import com.vis.graphynext.export.ExportNaming;
@@ -47,12 +49,21 @@ public class SeriesExtractService {
     private final DicomInstanceRepository repo;
     private final ObjectProvider<WebDicomDataService> webProvider;
     private final StorageLayout layout;
+    private final DicomStorageService storage;
+    /** ヘッダ読み用（ファイル I/O が主なので少数の固定スレッド）。 */
+    private final java.util.concurrent.ExecutorService readers = java.util.concurrent.Executors.newFixedThreadPool(
+            Math.max(2, Math.min(4, Runtime.getRuntime().availableProcessors())), r -> {
+                Thread t = new Thread(r, "series-extract-read");
+                t.setDaemon(true);
+                return t;
+            });
 
     public SeriesExtractService(DicomInstanceRepository repo, ObjectProvider<WebDicomDataService> webProvider,
-                                StorageLayout layout) {
+                                StorageLayout layout, DicomStorageService storage) {
         this.repo = repo;
         this.webProvider = webProvider;
         this.layout = layout;
+        this.storage = storage;
     }
 
     /** 進捗の受け口。total は数え終わったとき 1 回、advance は 1 シリーズ処理するたびに呼ぶ。 */
@@ -93,14 +104,12 @@ public class SeriesExtractService {
     }
 
     /** 検証結果。 */
-    public record VerifyResult(List<SeriesMatch> matched, int studyCount, int seriesCount, List<String> errors) {
+    public record VerifyResult(List<SeriesMatch> matched, int studyCount, int seriesCount, List<String> errors,
+                               int errorTotal) {
     }
 
     /** コピー結果。 */
     public record CopyResult(int copiedSeries, int copiedFiles, List<String> folders, List<String> errors) {
-    }
-
-    private record SeriesRef(String studyUid, String seriesUid) {
     }
 
     /** 評価に使う代表ヘッダと、そのシリーズの枚数。 */
@@ -115,6 +124,12 @@ public class SeriesExtractService {
             "1.2.840.10008.5.1.4.1.1.104"); // Encapsulated PDF
     /** 代表ヘッダを探すとき、読めないものを何枚まで飛ばすか。 */
     private static final int MAX_HEADER_ATTEMPTS = 10;
+    /** スタディ UID を 1 クエリへ渡す件数（IN 句の長さ）。 */
+    private static final int CHUNK = 500;
+    /** 並列で読むシリーズの窓。窓ごとに進捗と中止を確かめる。 */
+    private static final int WINDOW = 32;
+    /** 読めなかった理由として応答に載せる最大件数。 */
+    private static final int MAX_ERRORS = 500;
 
     static boolean isNonImageSop(String sopClassUid) {
         if (sopClassUid == null) {
@@ -122,7 +137,8 @@ public class SeriesExtractService {
         }
         String u = sopClassUid.trim();
         for (String p : NON_IMAGE_SOP_PREFIX) {
-            if (u.startsWith(p)) {
+            // 「…1.1.7」と「…1.1.77（可視光画像）」を取り違えないよう、完全一致か「.」区切りの子だけ。
+            if (u.equals(p) || u.startsWith(p + ".")) {
                 return true;
             }
         }
@@ -145,10 +161,76 @@ public class SeriesExtractService {
         return true;
     }
 
+    // --- 対象の解決・規模 ---
+
+    /** スタディ UID を明示するか、絞り込み条件で指す（サーバーで解決するので大きな一覧を画面が運ばなくてよい）。 */
+    public record ScopeReq(List<String> studyUids, StudySearch filters) {
+    }
+
+    /** 対象の規模。 */
+    public record ScopeCounts(int studies, int series, long instances) {
+    }
+
+    /** 対象のスタディ UID。UID の明示が優先。絞り込みの解決はローカル保管庫のみ（web は QIDO の一覧を画面が渡す）。 */
+    public List<String> resolveStudies(ScopeReq scope) {
+        if (scope.studyUids() != null && !scope.studyUids().isEmpty()) {
+            return scope.studyUids();
+        }
+        if (scope.filters() == null) {
+            throw new IllegalArgumentException("対象のスタディが指定されていません。");
+        }
+        if (webProvider.getIfAvailable() != null) {
+            throw new IllegalArgumentException("web モードでは絞り込み条件の代わりにスタディ UID を指定してください。");
+        }
+        return storage.listStudies(scope.filters().normalized()).stream()
+                .map(com.vis.graphynext.dicom.StudyDto::studyInstanceUid)
+                .filter(u -> u != null && !u.isBlank()).distinct().toList();
+    }
+
+    /** 対象のスタディ・シリーズ・枚数（実行前の見積り用。ファイルは読まない）。 */
+    @Transactional(readOnly = true)
+    public ScopeCounts scope(ScopeReq scope) {
+        List<String> uids = resolveStudies(scope);
+        if (webProvider.getIfAvailable() != null) {
+            return new ScopeCounts(uids.size(), -1, -1);
+        }
+        long instances = 0;
+        int series = 0;
+        for (SeriesRefRow r : seriesRefs(uids)) {
+            series++;
+            instances += r.instances();
+        }
+        return new ScopeCounts(uids.size(), series, instances);
+    }
+
+    private record SeriesRefRow(String studyUid, String seriesUid, long instances) {
+    }
+
+    /** IN 句を短く保つため、スタディ UID を CHUNK 件ずつ 1 クエリで引く。スタディの並びは渡した順。 */
+    private List<SeriesRefRow> seriesRefs(List<String> studyUids) {
+        Map<String, List<SeriesRefRow>> byStudy = new java.util.HashMap<>();
+        for (int i = 0; i < studyUids.size(); i += CHUNK) {
+            List<String> part = studyUids.subList(i, Math.min(studyUids.size(), i + CHUNK));
+            for (DicomInstanceRepository.SeriesRef r : repo.findSeriesRefs(part)) {
+                byStudy.computeIfAbsent(r.getStudyUid(), k -> new ArrayList<>())
+                        .add(new SeriesRefRow(r.getStudyUid(), r.getSeriesUid(), r.getInstances()));
+            }
+        }
+        List<SeriesRefRow> out = new ArrayList<>();
+        for (String uid : new LinkedHashSet<>(studyUids)) {
+            out.addAll(byStudy.getOrDefault(uid, List.of()));
+        }
+        return out;
+    }
+
     // --- 検証（一致プレビュー） ---
 
     public VerifyResult verify(List<String> studyUids, List<SearchCondition> conditions, List<String> planes) {
         return verify(studyUids, conditions, planes, Progress.NONE);
+    }
+
+    /** 1 シリーズぶんの結果（一致・読めなかった理由・どちらでもない）。 */
+    private record Outcome(SeriesMatch match, String error) {
     }
 
     @Transactional(readOnly = true)
@@ -156,85 +238,119 @@ public class SeriesExtractService {
                                Progress progress) {
         List<SeriesMatch> matched = new ArrayList<>();
         List<String> errors = new ArrayList<>();
+        int[] errorTotal = {0};
         Set<String> studies = new LinkedHashSet<>();
         WebDicomDataService web = webProvider.getIfAvailable();
 
         // シリーズ UID 単位に展開してから順に処理する（総数が分かるので進捗が出せる）。
-        List<SeriesRef> refs = new ArrayList<>();
-        for (String studyUid : studyUids) {
-            if (studyUid == null || studyUid.isBlank()) {
-                continue;
-            }
-            try {
-                if (web != null) {
+        List<SeriesRefRow> refs = new ArrayList<>();
+        if (web != null) {
+            for (String studyUid : new LinkedHashSet<>(studyUids)) {
+                if (studyUid == null || studyUid.isBlank()) {
+                    continue;
+                }
+                try {
                     for (Attributes seAttr : web.searchSeries(studyUid, Map.of())) {
                         String uid = seAttr.getString(Tag.SeriesInstanceUID);
                         if (uid != null) {
-                            refs.add(new SeriesRef(studyUid, uid));
+                            refs.add(new SeriesRefRow(studyUid, uid, -1));
                         }
                     }
-                } else {
-                    for (DicomInstanceRepository.SeriesSummary se : repo.findSeriesSummaries(studyUid)) {
-                        refs.add(new SeriesRef(studyUid, se.getSeriesInstanceUid()));
-                    }
+                } catch (Exception e) {
+                    addError(errors, errorTotal, "study " + studyUid + ": " + e.getMessage());
                 }
-            } catch (Exception e) {
-                errors.add("study " + studyUid + ": " + e.getMessage());
             }
+        } else {
+            refs = seriesRefs(studyUids.stream().filter(u -> u != null && !u.isBlank()).toList());
         }
         progress.total(refs.size());
 
         int done = 0;
-        for (SeriesRef ref : refs) {
+        // 窓ごとに並列で読み、結果は元の順で集める（一致一覧の並びが探索のたびに変わらない）。
+        for (int from = 0; from < refs.size(); from += WINDOW) {
             if (progress.cancelled()) {
                 throw new CancelledException();
             }
-            try {
-                Sample sample = web != null ? sampleWeb(web, ref) : sampleLocal(ref);
-                if (sample == null) {
-                    errors.add("series " + ref.seriesUid() + ": 読める画像がありません");
-                } else if (SeriesConditionEvaluator.matches(sample.header(), conditions, planes)) {
-                    matched.add(toMatch(sample.header(), ref.studyUid(), ref.seriesUid(), sample.instances(),
-                            conditions));
-                    studies.add(ref.studyUid());
-                }
-            } catch (Exception e) {
-                // 1 シリーズの失敗で全体を止めない。
-                errors.add("series " + ref.seriesUid() + ": " + e.getMessage());
+            List<SeriesRefRow> window = refs.subList(from, Math.min(refs.size(), from + WINDOW));
+            List<java.util.concurrent.Future<Outcome>> futures = new ArrayList<>();
+            for (SeriesRefRow ref : window) {
+                futures.add(readers.submit(() -> evaluate(web, ref, conditions, planes)));
             }
-            progress.advance(++done);
+            for (java.util.concurrent.Future<Outcome> f : futures) {
+                Outcome o;
+                try {
+                    o = f.get();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    throw new CancelledException();
+                } catch (java.util.concurrent.ExecutionException e) {
+                    o = new Outcome(null, "series: " + e.getCause());
+                }
+                if (o.error() != null) {
+                    addError(errors, errorTotal, o.error());
+                } else if (o.match() != null) {
+                    matched.add(o.match());
+                    studies.add(o.match().studyUid());
+                }
+                progress.advance(++done);
+            }
         }
-        return new VerifyResult(matched, studies.size(), matched.size(), errors);
+        return new VerifyResult(matched, studies.size(), matched.size(), errors, errorTotal[0]);
     }
 
-    /** 通常画像の読めるヘッダを探す。無ければ画像でないものの読めるヘッダ（それしかないシリーズ用）。 */
-    private Sample sampleLocal(SeriesRef ref) {
-        List<DicomInstance> insts = repo.findBySeries(ref.studyUid(), ref.seriesUid());
-        if (insts.isEmpty()) {
+    /** 応答が肥大しないよう、読めなかった理由は先頭 MAX_ERRORS 件だけ持ち、総数は別に数える。 */
+    private static void addError(List<String> errors, int[] total, String msg) {
+        total[0]++;
+        if (errors.size() < MAX_ERRORS) {
+            errors.add(msg);
+        }
+    }
+
+    private Outcome evaluate(WebDicomDataService web, SeriesRefRow ref, List<SearchCondition> conditions,
+                             List<String> planes) {
+        try {
+            Sample sample = web != null ? sampleWeb(web, ref) : sampleLocal(ref);
+            if (sample == null) {
+                return new Outcome(null, "series " + ref.seriesUid() + ": 読める画像がありません");
+            }
+            if (SeriesConditionEvaluator.matches(sample.header(), conditions, planes)) {
+                return new Outcome(toMatch(sample.header(), ref.studyUid(), ref.seriesUid(), sample.instances(),
+                        conditions), null);
+            }
+            return new Outcome(null, null);
+        } catch (Exception e) {
+            // 1 シリーズの失敗で全体を止めない。
+            return new Outcome(null, "series " + ref.seriesUid() + ": " + e.getMessage());
+        }
+    }
+
+    /**
+     * 通常画像の読めるヘッダを探す。候補は DB から先頭数件だけ引く（1000 枚のシリーズの実体を全部読まない）。
+     * 通常画像が無ければ、画像でないものの読めるヘッダ（それしかないシリーズ用）。
+     */
+    private Sample sampleLocal(SeriesRefRow ref) {
+        List<DicomInstance> cands = repo.findCandidates(ref.studyUid(), ref.seriesUid(),
+                org.springframework.data.domain.PageRequest.of(0, MAX_HEADER_ATTEMPTS));
+        if (cands.isEmpty()) {
             return null;
         }
         Attributes fallback = null;
-        int attempts = 0;
-        for (DicomInstance inst : insts) {
-            if (attempts >= MAX_HEADER_ATTEMPTS) {
-                break;
-            }
-            attempts++;
+        for (DicomInstance inst : cands) {
             Attributes h = readHeader(inst);
             if (h == null) {
                 continue;
             }
             if (!isNonImageSop(inst.getSopClassUid()) && isPlainImageHeader(h)) {
-                return new Sample(h, insts.size());
+                return new Sample(h, (int) ref.instances());
             }
             if (fallback == null) {
                 fallback = h;
             }
         }
-        return fallback == null ? null : new Sample(fallback, insts.size());
+        return fallback == null ? null : new Sample(fallback, (int) ref.instances());
     }
 
-    private Sample sampleWeb(WebDicomDataService web, SeriesRef ref) {
+    private Sample sampleWeb(WebDicomDataService web, SeriesRefRow ref) {
         List<Attributes> insts = web.seriesMetadata(ref.studyUid(), ref.seriesUid());
         if (insts == null || insts.isEmpty()) {
             return null;
@@ -343,13 +459,11 @@ public class SeriesExtractService {
         return copyToFolder(studyUids, conditions, planes, destination, sequentialRename, Progress.NONE);
     }
 
-    /** 進捗は「検証したシリーズ数」＋「コピーしたシリーズ数」を合わせて数える（総数は検証の総数の 2 倍に近い）。 */
+    /** 探索してからコピーする。進捗は「探索したシリーズ数」＋「コピーしたシリーズ数」を合わせて数える（総数は探索の 2 倍）。 */
     public CopyResult copyToFolder(List<String> studyUids, List<SearchCondition> conditions, List<String> planes,
                                    String destination, boolean sequentialRename, Progress progress)
             throws IOException {
-        if (webProvider.getIfAvailable() != null) {
-            throw new IllegalStateException("フォルダコピーは standalone 専用です（web は ZIP を使用）。");
-        }
+        requireStandalone();
         Path dest = validateDestination(destination);
         int[] scanTotal = {0};
         VerifyResult vr = verify(studyUids, conditions, planes, new Progress() {
@@ -369,6 +483,43 @@ public class SeriesExtractService {
                 return progress.cancelled();
             }
         });
+        return copyMatches(vr, conditions, dest, sequentialRename, new Progress() {
+            @Override
+            public void total(int n) {
+            }
+
+            @Override
+            public void advance(int processed) {
+                int m = Math.max(1, vr.matched().size());
+                progress.advance(scanTotal[0] + (int) Math.round((double) processed / m * scanTotal[0]));
+            }
+
+            @Override
+            public boolean cancelled() {
+                return progress.cancelled();
+            }
+        });
+    }
+
+    private void requireStandalone() {
+        if (webProvider.getIfAvailable() != null) {
+            throw new IllegalStateException("フォルダコピーは standalone 専用です（web は ZIP を使用）。");
+        }
+    }
+
+    /**
+     * 探索済みの一覧をコピーする（検証のあとに再探索しない。プレビューで見たものと同じものが出る）。
+     * progress は total=一致件数、advance=コピー済みのシリーズ数。
+     */
+    public CopyResult copyMatches(VerifyResult vr, List<SearchCondition> conditions, String destination,
+                                  boolean sequentialRename, Progress progress) throws IOException {
+        requireStandalone();
+        return copyMatches(vr, conditions, validateDestination(destination), sequentialRename, progress);
+    }
+
+    private CopyResult copyMatches(VerifyResult vr, List<SearchCondition> conditions, Path dest,
+                                   boolean sequentialRename, Progress progress) throws IOException {
+        progress.total(vr.matched().size());
         List<String> errors = new ArrayList<>(vr.errors());
 
         // フォルダ名の衝突回避（連番 OFF 時）。連番 ON はあとで 001.. にリネーム。
@@ -407,8 +558,7 @@ public class SeriesExtractService {
                 errors.add("copy " + m.seriesUid() + ": " + e.getMessage());
             }
             copiedSeries++;
-            // 一致が 0 件以外なら、コピー側の進捗を総数の後半へ割り当てる。
-            progress.advance(scanTotal[0] + (int) Math.round((double) copiedSeries / vr.matched().size() * scanTotal[0]));
+            progress.advance(copiedSeries);
         }
 
         List<String> folderNames = new ArrayList<>();
