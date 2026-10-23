@@ -248,6 +248,8 @@ export interface SeriesAxesDto {
   t: SeriesAxisDto | null;
   /** 画像スタック（ホイール送り／Grid／プリフェッチの単位）をどの軸に割り当てるか。 */
   stackAxis: "z" | "t";
+  /** true なら frame>=0 のセルを `&frame=N+1` のローダー切り出しで読む（Enhanced 多フレーム）。 */
+  loaderFrames?: boolean;
 }
 
 export interface TagInfo {
