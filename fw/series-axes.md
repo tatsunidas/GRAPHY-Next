@@ -33,7 +33,7 @@ x,y（画像内）に Z・C・T を加えた 5 次元。**T と C は「同じ 3
 ## 2. 形式ごとの割り当て（現状のコード）
 `axes=null` は既定（Z/C/T、kind=slice、stackAxis=z）。展開器の振り分けは standalone（`DicomStorageService`）と
 web（`SeriesLayoutAssembler.fromAttributes`）の**2 か所に同じ順**で入れる（片方だけだと単体テストは通るが実機で 1 枚になる）。
-順序: mosaic（standalone のみ）→ ParametricMap → SEG → NM → XA → IVUS → 従来経路。
+順序: mosaic（standalone のみ）→ ParametricMap → SEG → NM → XA → IVUS → US → 従来経路。
 
 | 形式 | 経路 | Z | C | T | stackAxis |
 |---|---|---|---|---|---|
@@ -42,6 +42,7 @@ web（`SeriesLayoutAssembler.fromAttributes`）の**2 か所に同じ順**で入
 | US 単フレーム・SC | 従来経路 | 同上 | - | - | z |
 | XA / XRF / Enhanced XA・XRF | `XaFrameExpander` | **Shot**（1 SOP = 1 Shot） | 1 | **Frame**（実在するフレームのみ） | t |
 | IVUS / IVOCT | `IvusFrameExpander` | **Pullback** | 1 | Frame | t |
+| US マルチフレーム（SOP 3.1、または 6.1 で複数フレーム。IVUS を除く） | `UsFrameExpander`（時間のシネのみ。下記） | **Shot**（1 SOP = 1 Shot） | 1 | **Frame** | t |
 | NM 断層 | `NmFrameExpander` | フレーム | 1 | 位相 | z |
 | SEG | `SegFrameExpander` | フレームごとの IPP | セグメント | 1 | z |
 | Parametric Map | `ParametricMapFrameExpander` | IPP の投影 | AcquisitionNumber | TemporalPositionIndex | z |
@@ -52,8 +53,12 @@ web（`SeriesLayoutAssembler.fromAttributes`）の**2 か所に同じ順**で入
 | WSI（タイル）・RT Dose | 専用の扱いなし（従来経路） | - | - | - | - |
 
 ## 3. 既知の穴（2026-10-23 時点の調査）
-- **Enhanced CT/MR/PET のマルチフレーム（1 SOP に多数フレーム）と US マルチフレームには展開器が無く、先頭フレームしか出ない**
-  （`DicomStorageService` の `TODO #8`、`IvusFrameExpander` の javadoc）。対応を計画中。
+- **Enhanced CT/MR/PET のマルチフレーム（1 SOP に多数フレーム）には展開器が無く、先頭フレームしか出ない**
+  （`DicomStorageService` の `TODO #8`）。対応を計画中（US マルチフレームは `UsFrameExpander` で対応済み）。
+- **US の展開は「時間のシネ」だけ。** フリーハンド 3D のスイープ（フレームが空間位置の並び）も同じ IOD に入るため、
+  空間の手がかり（FIP が Frame Time / Frame Time Vector を含まない、ImagePositionPatient・ImageOrientationPatient・
+  Per-Frame Functional Groups がある）があるシリーズは展開せず、従来経路（先頭 1 枚）に落とす。
+  スイープの実データでの確認は未了。Enhanced US Volume は Z/C/T で、未対応。
 - Enhanced 系の DimensionIndexValues / StackID はどこでも読んでいない。
 - 1 スライス = 1 ファイルの Enhanced／マルチフレーム（MR の VSRAD など）は、同じ SeriesInstanceUID に入っていて、
   現状は従来経路で読めている。展開器を足すときに回帰させないこと。

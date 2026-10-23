@@ -103,6 +103,7 @@ import { installDebugApi, countStackSwap } from "./debugApi";
 import { matchesCombo, matchesShortcut } from "../shortcuts/registry";
 import { apiBase, fetchSeriesLayout, type Instance } from "../api";
 import { classifySeriesDisplay, isVideoInstance } from "./seriesRenderable";
+import { isUsCine } from "./cineKind";
 import { registerViewerTargetInfo } from "./viewerCommands";
 import { fetchSettings } from "../settings/settingsApi";
 import { useI18n } from "../i18n/i18n";
@@ -310,6 +311,8 @@ export function SeriesViewer({
   // tIdx 状態＝ラン選択、という**役割の入れ替え**だけで既存の送り機構がそのまま効く。
   const axes: { z: AxisSpec; c: AxisSpec; t: AxisSpec } = layout.axes ?? DEFAULT_AXES;
   const isFrameStack = layout.stackAxis === "t" && typeof layout.tStack === "function";
+  /** US（心エコー等）のシネ。XA 用の操作行（DSA・XA 解析など）は出さない。 */
+  const usCine = isFrameStack && isUsCine(axes.z.kind, instances);
   /** スタック軸の提示（スライダーのラベル・種別）。 */
   const stackAxisSpec = isFrameStack ? axes.t : axes.z;
   /** スタック以外のもう 1 本（frame-stack ならラン、通常なら T=時相）。 */
@@ -1526,7 +1529,7 @@ export function SeriesViewer({
               />
             )}
             {/* DSA（サブトラクション）: フレーム軸（XA/XRF）のときだけ。fw/angio-design.md §6 */}
-            {isFrameStack && (
+            {isFrameStack && !usCine && (
               <>
                 <div style={row}>
                   <Check
