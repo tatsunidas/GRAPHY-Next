@@ -38,7 +38,7 @@ web（`SeriesLayoutAssembler.fromAttributes`）の**2 か所に同じ順**で入
 | 形式 | 経路 | Z | C | T | stackAxis |
 |---|---|---|---|---|---|
 | CT/MR/PET（1 SOP = 1 スライス） | 従来経路 | 空間位置 | Echo/b 値など | Temporal/Trigger | z |
-| CR/DX/MG/口内法（1 SOP = 1 フレーム） | 従来経路 | InstanceNumber 等（IPP が無い）。表記は "Z" | - | - | z |
+| CR/DX/MG/口内法（1 SOP = 1 フレーム。SOP クラスで判定） | 従来経路＋`SeriesLayoutAssembler.projectionAxes` | InstanceNumber 等（IPP が無い）。**表記は "Shot"（kind=shot）**。スタック軸は z のまま | - | - | z |
 | US 単フレーム・SC | 従来経路 | 同上 | - | - | z |
 | XA / XRF / Enhanced XA・XRF | `XaFrameExpander` | **Shot**（1 SOP = 1 Shot） | 1 | **Frame**（実在するフレームのみ） | t |
 | IVUS / IVOCT | `IvusFrameExpander` | **Pullback** | 1 | Frame | t |
