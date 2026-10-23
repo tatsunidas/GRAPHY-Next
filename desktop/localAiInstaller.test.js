@@ -184,3 +184,23 @@ test("validateManifest: reasoning は on/off/auto だけ・既定モデルが一
   assert.ok(p.some((x) => x.endsWith("bad-reasoning")));
   assert.ok(p.includes("manifest:bad-default-model"));
 });
+
+test("validateManifest: sttModels は mmproj も検査する（負例: 許可外 URL・sha 不正・同名ファイル・既定なし・id 衝突）", () => {
+  const real = JSON.parse(fs.readFileSync(path.join(__dirname, "localAiManifest.json"), "utf8"));
+  assert.ok(Array.isArray(real.sttModels) && real.sttModels.length >= 1, "同梱のマニフェストに音声入力のモデルがある");
+  assert.deepEqual(I.validateManifest(real), []);
+  const bad = JSON.parse(JSON.stringify(real));
+  bad.sttModels[0].mmproj.url = "https://evil.example/m.gguf";
+  bad.sttModels[0].mmproj.sha256 = "zz";
+  bad.sttModels[1].mmproj.file = bad.sttModels[1].file;
+  bad.sttModels[1].id = real.models[0].id;
+  bad.defaultSttModelId = "nope";
+  const p = I.validateManifest(bad);
+  for (const code of ["mmproj:url-not-allowed", "mmproj:bad-sha256", "same-file", "bad-id", "manifest:bad-default-stt-model"]) {
+    assert.ok(p.some((x) => x.includes(code)), code + " in " + JSON.stringify(p));
+  }
+  const none = JSON.parse(JSON.stringify(real));
+  delete none.sttModels;
+  delete none.defaultSttModelId;
+  assert.deepEqual(I.validateManifest(none), [], "音声入力が無いマニフェストも有効（任意）");
+});

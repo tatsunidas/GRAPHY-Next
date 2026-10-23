@@ -87,7 +87,7 @@ import {
   thickSlabImageId,
 } from "./thickSlab";
 import { SLAB_PROJECTIONS, defaultSlabThickness, type SlabProjection } from "./slabPresets";
-import { imageIdForInstance, sopUidFromImageId, type ViewerMode } from "./imageId";
+import { imageIdForInstance, sopUidFromImageId, xaSourceUrlOf, type ViewerMode } from "./imageId";
 import { XaPresentationDialog } from "./XaPresentationDialog";
 import type { PresentationPlan } from "./xaPresentationApply";
 import {
@@ -104,10 +104,12 @@ import { installDebugApi, countStackSwap } from "./debugApi";
 import { matchesCombo, matchesShortcut } from "../shortcuts/registry";
 import { apiBase, fetchSeriesLayout, type Instance } from "../api";
 import { classifySeriesDisplay, isVideoInstance } from "./seriesRenderable";
+import { isUsCine } from "./cineKind";
 import { registerViewerTargetInfo } from "./viewerCommands";
 import { fetchSettings } from "../settings/settingsApi";
 import { useI18n } from "../i18n/i18n";
 import { LoadingSpinner } from "./LoadingSpinner";
+import { IndexJump } from "./IndexJump";
 // 副作用インポート: このウィンドウが保持するマスクを、他ウィンドウからのウィンドウ間同期要求
 // （BroadcastChannel）に応答できるよう即座に待ち受け開始する（`fw/mask-driven-pipelines-gap-analysis.md` 課題#1）。
 import "./maskBridge";
@@ -327,6 +329,8 @@ export function SeriesViewer({
   // tIdx 状態＝ラン選択、という**役割の入れ替え**だけで既存の送り機構がそのまま効く。
   const axes: { z: AxisSpec; c: AxisSpec; t: AxisSpec } = layout.axes ?? DEFAULT_AXES;
   const isFrameStack = layout.stackAxis === "t" && typeof layout.tStack === "function";
+  /** US（心エコー等）のシネ。XA 用の操作行（DSA・XA 解析など）は出さない。 */
+  const usCine = isFrameStack && isUsCine(axes.z.kind, instances);
   /** スタック軸の提示（スライダーのラベル・種別）。 */
   const stackAxisSpec = isFrameStack ? axes.t : axes.z;
   /** スタック以外のもう 1 本（frame-stack ならラン、通常なら T=時相）。 */
@@ -580,17 +584,24 @@ export function SeriesViewer({
   const [xaPrewarmedKey, setXaPrewarmedKey] = useState<string | null>(null);
   const isFrameStackRef = useRef(isFrameStack);
   isFrameStackRef.current = isFrameStack;
+  // Enhanced 多フレーム（loaderFrames）も同じ `&frame=` 経路なので、同じ温めが要る。
+  const prewarmNeeded = isFrameStack || layout.loaderFrames === true;
   useEffect(() => {
-    if (!isFrameStack) {
+    if (!prewarmNeeded) {
       setXaCineSource(null);
       return;
     }
     const first = zStack[0];
     if (!first) return;
+    // XA は 1 インスタンスに全フレームがある。Enhanced のスタックは複数ファイルにまたがり得るので、
+    // 取得元（dataSet キャッシュのキー）ごとに 1 回ずつ温める。ブランク（frame= を持たない）は除く。
+    const sources = isFrameStack
+      ? [first]
+      : [...new Map(zStack.filter((id) => id.includes("frame=")).map((id) => [xaSourceUrlOf(id), id])).values()];
     let cancelled = false;
-    prewarmXaDataset(first)
+    Promise.all(sources.map((id) => prewarmXaDataset(id)))
       .then(() => {
-        if (!cancelled) setXaCineSource(readXaCineSource(first));
+        if (!cancelled) setXaCineSource(isFrameStack ? readXaCineSource(first) : null);
       })
       .catch(() => {
         // 取得できなくても既定 fps で再生はできる（描画は通常の imageLoader が再試行する）。
@@ -604,7 +615,7 @@ export function SeriesViewer({
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isFrameStack, zStackKey]);
+  }, [prewarmNeeded, isFrameStack, zStackKey]);
 
   /**
    * プリウォームが終わるまでフレームを渡さない。
@@ -619,7 +630,7 @@ export function SeriesViewer({
    * （1 フレーム目の QCA が 2 フレーム目の値を返した）。`isXaDatasetReady` は
    * このために用意してあったのに、どこからも呼ばれていなかった。
    */
-  const xaReady = !isFrameStack || xaPrewarmedKey === zStackKey;
+  const xaReady = !prewarmNeeded || xaPrewarmedKey === zStackKey;
   const displayImageIds = xaReady ? rawDisplayImageIds : EMPTY_IMAGE_IDS;
 
   // シリーズ/ランが変わったら DSA は解除する（別ランのマスクを引きずらない）。
@@ -1469,6 +1480,17 @@ export function SeriesViewer({
           )}
         </button>
       )}
+      {/* パネルを畳んでいても、ラン（XA の撮影）が複数あることが分かり、切り替えられるようにする。 */}
+      {layoutReady && chrome && !showControls && otherCount > 1 && (
+        <DimSlider
+          label={axisLabel(t, otherAxisSpec)}
+          dim={otherAxisSpec.dim}
+          idx={otherIdx}
+          count={otherCount}
+          onChange={setTIdx}
+          testId="dim-slider-other-compact"
+        />
+      )}
       {/* 畳んでいる間も**マウントしたまま隠す**（display:none）。アンマウントすると CineControls の再生が止まる。 */}
       <div style={showControls ? controls : { ...controls, display: "none" }} data-testid="series-controls">
         {/* GridView の操作バー（W/L・Pan・Zoom はドラッグ、回転/反転/Fit はボタン。全セルにリンク）。 */}
@@ -1544,7 +1566,7 @@ export function SeriesViewer({
               />
             )}
             {/* DSA（サブトラクション）: フレーム軸（XA/XRF）のときだけ。fw/angio-design.md §6 */}
-            {isFrameStack && (
+            {isFrameStack && !usCine && (
               <>
                 <div style={row}>
                   <Check
@@ -2181,6 +2203,7 @@ function DimSlider({
         onChange={(e) => onChange(Number(e.target.value))}
         style={{ flex: 1 }}
       />
+      <IndexJump count={count} onJump={onChange} testId={testId ? `${testId}-jump` : undefined} />
       {trailing}
     </div>
   );

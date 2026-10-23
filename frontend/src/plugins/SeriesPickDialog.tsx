@@ -15,6 +15,7 @@ import { fetchSeries, fetchStudies, type Series, type Study, type StudyFilters }
 import { useI18n } from "../i18n/i18n";
 import { MODALITY_OPTIONS } from "../mainscreen/SearchPanel";
 import { TriCheckbox } from "../mainscreen/TriCheckbox";
+import { imageCount } from "../imageCount";
 import { isEligible, pickKey, studyState, toResult, toggleSeries, toggleStudy, type PickedSeries } from "./seriesPickLogic";
 
 const SEARCH_DEBOUNCE_MS = 250;
@@ -190,7 +191,7 @@ export function SeriesPickDialog({
                   <span style={{ minWidth: 90 }}>{showDate(st.studyDate)}</span>
                   <span style={{ flex: 1, color: "#445" }}>{st.studyDescription ?? ""}</span>
                   <span style={{ color: "#667" }}>{(st.modalities ?? (st.modality ? [st.modality] : [])).join("/")}</span>
-                  <span style={{ color: "#667", minWidth: 70, textAlign: "right" }}>{t("pickSeries.images", { n: st.numberOfInstances })}</span>
+                  <span style={{ color: "#667", minWidth: 70, textAlign: "right" }}>{t("pickSeries.images", { n: imageCount(st) })}</span>
                 </div>
                 {open && (
                   <div style={{ paddingLeft: 52, paddingBottom: 6 }}>
@@ -211,7 +212,7 @@ export function SeriesPickDialog({
                           <span style={{ minWidth: 36 }}>#{s.seriesNumber ?? "–"}</span>
                           <span style={{ minWidth: 40 }}>{s.modality ?? "?"}</span>
                           <span style={{ flex: 1 }}>{s.seriesDescription ?? ""}</span>
-                          <span style={{ color: "#667" }}>{t("pickSeries.images", { n: s.numberOfInstances })}</span>
+                          <span style={{ color: "#667" }}>{t("pickSeries.images", { n: imageCount(s) })}</span>
                         </label>
                       );
                     })}

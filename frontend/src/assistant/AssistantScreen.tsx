@@ -13,6 +13,10 @@ import { MarkdownPreviewBoundary } from "../report/MarkdownEditor";
 import { chatReducer, initialChatState, type UiAction, type UiImage, type UiMessage } from "./chatState";
 import { buildTools } from "./actions/registry";
 import { runToolLoop } from "./toolLoop";
+import { RobotPanel, type RobotPlan } from "./robot/RobotPanel";
+import { buildRobotTools } from "./robot/planModel";
+import { MacroPanel, type MacroApi } from "./macros/MacroPanel";
+import { candidatesFromActions } from "./macros/macroModel";
 import { DOC_CHUNKS } from "./docsBundle";
 import { searchDocs } from "./docsIndex";
 import { buildSystemPrompt } from "./systemPrompt";
@@ -20,6 +24,8 @@ import { AttachError, MAX_ATTACHMENTS, classify } from "./attachments/limits";
 import { composeUserText, ingest, type Attachment, type IngestDeps } from "./attachments";
 import { loadPdfjs } from "./attachments/pdfLoader";
 import { extractVideoFrames } from "./attachments/video";
+import { MAX_RECORD_SEC } from "./voice/voiceFlow";
+import { useVoiceInput } from "./voice/useVoiceInput";
 
 const INGEST_DEPS: IngestDeps = { loadPdfjs, extractVideo: extractVideoFrames };
 
@@ -63,6 +69,9 @@ export function AssistantScreen() {
   const [askConfirm, setAskConfirm] = useState(false);
   const confirmedRef = useRef(false);
   const [note, setNote] = useState<string | null>(null);
+  const [macroOpen, setMacroOpen] = useState(false);
+  const [robot, setRobot] = useState(false);
+  const [plan, setPlan] = useState<RobotPlan | null>(null);
   const [resolved, setResolved] = useState<AiResolveResult | null>(null);
   const sessionId = useMemo(newSessionId, []);
   const bufRef = useRef("");
@@ -73,6 +82,7 @@ export function AssistantScreen() {
 
   const bridge = desktop();
   const available = !!bridge?.aiChat;
+  const voice = useVoiceInput({ t, setInput, setNote });
 
   useEffect(() => {
     document.title = t("assistant.title");
@@ -167,7 +177,7 @@ export function AssistantScreen() {
     // ツールを送るのは、使える口があり、提供元がツール呼び出しに対応するとき（toolMode:none は案内のみ）。
     const canOperate = !!bridge.assistantViewerCmd && !!resolved?.ok && resolved.toolMode !== "none";
     const req: AiChatMessage[] = [
-      { role: "system", text: buildSystemPrompt(locale, hits, { canOperate }) },
+      { role: "system", text: buildSystemPrompt(locale, hits, { canOperate, robot }) },
       ...history,
       { role: "user", text: composed.text, images: allImages.length ? allImages.map((i) => ({ base64: i.base64, mimeType: i.mimeType })) : undefined },
     ];
@@ -180,7 +190,10 @@ export function AssistantScreen() {
     abortedRef.current = false;
     const viewer = (cmd: { kind: "action" | "getState"; id?: string; params?: unknown }) =>
       bridge.assistantViewerCmd!(sessionId, cmd);
-    const result = await runToolLoop(req, canOperate ? buildTools() : [], {
+    if (robot) setPlan(null);
+    const result = await runToolLoop(req, canOperate ? (robot ? buildRobotTools() : buildTools()) : [], {
+      mode: robot ? "robot" : "chat",
+      onPlan: (p) => setPlan(p),
       chat: (messages, tools) => bridge.aiChat!({ sessionId, messages, tools: tools.length ? tools : undefined, stream: true }),
       viewer,
       onAction: (action) => dispatch({ type: "actionAdd", action }),
@@ -198,7 +211,7 @@ export function AssistantScreen() {
       flush();
     }
     dispatch({ type: "done", result });
-  }, [input, images, attachments, ingesting, resolved, t, state.pending, state.messages, bridge, locale, sessionId, flush]);
+  }, [input, images, attachments, ingesting, resolved, t, state.pending, state.messages, bridge, locale, sessionId, flush, robot]);
 
   const stop = useCallback(() => {
     abortedRef.current = true;
@@ -220,6 +233,29 @@ export function AssistantScreen() {
     },
     [bridge, sessionId],
   );
+
+  // マクロの口。保存は main（形と大きさの検証）、再生は send と同じ viewer 中継（2D 窓が毎回検証）。
+  const macroApi = useMemo<MacroApi | null>(() => {
+    if (!bridge?.assistantMacrosList || !bridge.assistantMacrosSave || !bridge.assistantMacrosDelete || !bridge.assistantViewerCmd) return null;
+    return {
+      list: () => bridge.assistantMacrosList!(),
+      save: (m) => bridge.assistantMacrosSave!(m),
+      remove: (id) => bridge.assistantMacrosDelete!(id),
+      viewer: (cmd) => bridge.assistantViewerCmd!(sessionId, cmd),
+    };
+  }, [bridge, sessionId]);
+  const robotApi = useMemo(
+    () =>
+      bridge?.assistantViewerCmd
+        ? {
+            viewer: (cmd: { kind: "action"; id: string; params: Record<string, unknown> }) => bridge.assistantViewerCmd!(sessionId, cmd),
+            save: bridge.assistantMacrosSave,
+            journal: bridge.assistantJournalList,
+          }
+        : null,
+    [bridge, sessionId],
+  );
+  const macroCandidates = useMemo(() => candidatesFromActions(state.messages.flatMap((m) => m.actions ?? [])), [state.messages]);
 
   const onPaste = (e: ClipboardEvent) => {
     const files = Array.from(e.clipboardData.files);
@@ -244,6 +280,16 @@ export function AssistantScreen() {
         <span style={S.via} data-testid="assistant-via">
           {resolved?.ok ? `${resolved.label} · ${resolved.model}` : ""}
         </span>
+        {robotApi && (
+          <button style={{ ...S.linkBtn, fontWeight: robot ? 700 : 400 }} onClick={() => setRobot((v) => !v)} aria-pressed={robot} data-testid="assistant-robot-toggle">
+            {t("assistant.robot.button")}
+          </button>
+        )}
+        {macroApi && (
+          <button style={S.linkBtn} onClick={() => setMacroOpen((v) => !v)} data-testid="assistant-macro-toggle">
+            {t("assistant.macro.button")}
+          </button>
+        )}
         <button style={S.linkBtn} disabled={busy || !state.messages.length} onClick={() => dispatch({ type: "clear" })}>
           {t("assistant.clear")}
         </button>
@@ -261,6 +307,9 @@ export function AssistantScreen() {
         )}
       </div>
 
+      {robot && resolved?.ok && resolved.toolMode === "none" && <div style={S.note}>{t("assistant.robot.noTools")}</div>}
+      {robot && robotApi && <RobotPanel plan={plan} api={robotApi} t={t} onDiscard={() => setPlan(null)} />}
+      {macroOpen && macroApi && <MacroPanel api={macroApi} candidates={macroCandidates} busy={busy} t={t} />}
       {note && <div style={S.note}>{note}</div>}
       {attachments.length > 0 && !(resolved?.ok && resolved.local) && (
         <div style={S.note} data-testid="assistant-attach-dest">
@@ -316,6 +365,48 @@ export function AssistantScreen() {
           ))}
         </div>
       )}
+      {voice.available && voice.phase === "confirm" && voice.readiness.kind === "ready" ? (
+        <div style={S.confirm} data-testid="assistant-voice-confirm">
+          <span style={{ flex: "1 1 100%" }}>{t("assistant.voice.confirm", { host: voice.readiness.host })}</span>
+          <button style={S.btnPrimary} onClick={() => void voice.answerConfirm(true)} data-testid="assistant-voice-confirm-yes">
+            {t("assistant.voice.confirmYes")}
+          </button>
+          <button style={S.btn} onClick={() => void voice.answerConfirm(false)} data-testid="assistant-voice-confirm-no">
+            {t("assistant.voice.confirmNo")}
+          </button>
+        </div>
+      ) : voice.available ? (
+        <div style={S.voiceRow} data-testid="assistant-voice-status">
+          {voice.phase === "recording" ? (
+            <>
+              <span style={S.recording} data-testid="assistant-voice-recording">
+                ● {t("assistant.voice.recording", { sec: voice.elapsed, max: MAX_RECORD_SEC })}
+              </span>
+              <button style={S.btnRec} onClick={() => void voice.toggle()} data-testid="assistant-voice-stop">
+                ■ {t("assistant.voice.stop")}
+              </button>
+              <button style={S.btn} onClick={voice.cancel} data-testid="assistant-voice-cancel">
+                {t("assistant.voice.cancel")}
+              </button>
+            </>
+          ) : voice.phase === "transcribing" ? (
+            <>
+              <span style={S.dim} data-testid="assistant-voice-transcribing">{t("assistant.voice.transcribing")}</span>
+              <button style={S.btn} onClick={voice.cancel} data-testid="assistant-voice-cancel">
+                {t("assistant.voice.cancel")}
+              </button>
+            </>
+          ) : voice.readiness.kind === "ready" ? (
+            <span style={S.dim} data-testid="assistant-voice-dest">
+              🎙 {voice.readiness.local ? t("assistant.voice.destLocal") : t("assistant.voice.dest", { host: voice.readiness.host })}
+            </span>
+          ) : (
+            <span style={S.dim} data-testid="assistant-voice-unavailable">
+              🎙 {voice.readiness.kind === "noKey" ? t("assistant.voice.notReady", { label: voice.readiness.label }) : t("assistant.voice.noProvider")}
+            </span>
+          )}
+        </div>
+      ) : null}
       <div style={S.inputRow}>
         <textarea
           style={S.textarea}
@@ -348,6 +439,18 @@ export function AssistantScreen() {
           <button style={S.btn} disabled={notReady || busy} onClick={() => fileRef.current?.click()} data-testid="assistant-attach">
             {t("assistant.attach")}
           </button>
+          {voice.available ? (
+            <button
+              style={S.btn}
+              disabled={notReady || busy || voice.phase !== "idle" || voice.readiness.kind !== "ready"}
+              onClick={() => void voice.toggle()}
+              title={t("assistant.voice.start")}
+              aria-label={t("assistant.voice.start")}
+              data-testid="assistant-voice"
+            >
+              🎙
+            </button>
+          ) : null}
           {busy ? (
             <button style={S.btn} onClick={stop} data-testid="assistant-stop">
               {t("assistant.stop")}
@@ -482,5 +585,8 @@ const S: Record<string, React.CSSProperties> = {
   textarea: { flex: 1, minWidth: 0, resize: "none", background: "#2b2d31", color: "inherit", border: "1px solid #3a3b3f", borderRadius: 8, padding: 8, font: "inherit" },
   btnCol: { display: "flex", flexDirection: "column", gap: 6 },
   btn: { padding: "4px 10px", borderRadius: 6, border: "1px solid #5f6368", background: "transparent", color: "inherit", cursor: "pointer" },
+  voiceRow: { display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", padding: "2px 12px", fontSize: 12 },
+  recording: { color: "#f28b82" },
+  btnRec: { padding: "4px 10px", borderRadius: 6, border: "none", background: "#c5221f", color: "#fff", cursor: "pointer" },
   btnPrimary: { padding: "4px 10px", borderRadius: 6, border: "none", background: "#2f5fa8", color: "#fff", cursor: "pointer" },
 };

@@ -88,7 +88,7 @@ export interface SecretSetResult extends SecretStatus {
 
 /** Gemini 中継の要求。解釈は一切せず、生 JSON がそのまま返る。 */
 /** 用途。**提供元ではなくこれで頼む**（設計: fw/ai-routing-design.md §2）。 */
-export type AiCapability = "image-to-image" | "image-to-text" | "text-to-text";
+export type AiCapability = "image-to-image" | "image-to-text" | "text-to-text" | "speech-to-text";
 
 export interface AiGenerateRequest {
   /** 用途。main 側が応答の種類を決める。 */
@@ -271,6 +271,20 @@ export interface AiChatRequest {
  * <p>`degraded` は自動フォールバックでローカルへ落ちたとき。**画面に必ず出す**（精度が落ちている）。
  * `droppedImages` は送れずに落とした画像の数（黙って欠損させない）。
  */
+export interface AiTranscribeRequest {
+  audio: { base64: string; mimeType: string };
+  language?: string;
+}
+export type AiTranscribeResult =
+  | {
+      ok: true;
+      text: string;
+      /** ローカルへ縮退したとき。 */
+      degraded?: boolean;
+      provenance: { providerId: string; model: string; endpointHost: string; local: boolean; plaintext?: boolean; fallbackFrom?: string };
+    }
+  | { ok: false; error: string; status?: number; kind?: string };
+
 export type AiChatResult =
   | {
       ok: true;
@@ -325,6 +339,16 @@ export interface AiLocalStatus {
   registered?: boolean;
   isDefault?: boolean;
   isFallback?: boolean;
+  /** 音声入力（文字起こし）。任意で導入する。 */
+  stt?: {
+    models: { id: string; label: string; size: number; license: string; licenseUrl?: string; note?: string }[];
+    defaultModelId: string | null;
+    installed: boolean;
+    id: string | null;
+    running: boolean;
+    registered: boolean;
+    isDefault: boolean;
+  };
 }
 export type AiLocalResult = { ok: true; [k: string]: unknown } | { ok: false; error: string };
 export type AiLocalEvent =
@@ -474,6 +498,13 @@ export interface GraphyDesktop {
   aiChat?: (req: AiChatRequest) => Promise<AiChatResult>;
   aiChatCancel?: (sessionId: string) => Promise<{ ok: boolean; error?: string }>;
   /**
+   * 音声の文字起こし(アシスタント窓だけ。それ以外は `forbidden`)。送信先は main が決める
+   * (`aiResolve("speech-to-text")` で事前に見られる)。録音は保存されない。
+   */
+  aiTranscribe?: (req: AiTranscribeRequest) => Promise<AiTranscribeResult>;
+  /** マイクの利用可否(macOS は OS の許可ダイアログを出す)。アシスタント窓だけ。 */
+  assistantMicAccess?: () => Promise<{ ok: boolean; status?: string; error?: string }>;
+  /**
    * 2D ビューアへの表示操作（アシスタント窓から。**それ以外は main が `forbidden`**）。
    * 操作の中身の検証は 2D 窓が行う。窓が無ければ `no-viewer`。
    */
@@ -481,9 +512,21 @@ export interface GraphyDesktop {
     sessionId: string,
     cmd: { kind: "action" | "getState"; id?: string; params?: unknown },
   ) => Promise<import("./assistant/actions/registry").ActionResult>;
+  /** マクロ（表示操作の並び）の保存。アシスタント窓だけ（それ以外は main が `forbidden`）。形と大きさだけ main が検証する。 */
+  assistantJournalList?: () => Promise<{
+    ok: boolean;
+    entries?: { ts: string; id: string; params?: Record<string, unknown>; ok: boolean; error?: string }[];
+    error?: string;
+  }>;
+  assistantMacrosList?: () => Promise<{ ok: boolean; macros?: import("./assistant/macros/macroModel").Macro[]; error?: string }>;
+  assistantMacrosSave?: (macro: {
+    name: string;
+    steps: import("./assistant/macros/macroModel").MacroStep[];
+  }) => Promise<{ ok: boolean; macro?: import("./assistant/macros/macroModel").Macro; error?: string }>;
+  assistantMacrosDelete?: (id: string) => Promise<{ ok: boolean; error?: string }>;
   /** 2D 窓側: main が中継してきた命令を受ける。購読解除の関数を返す。 */
   onViewerCmd?: (
-    cb: (cmd: { reqId: string; kind: "action" | "getState"; id?: string; params?: unknown; includeLabels?: boolean }) => void,
+    cb: (cmd: { reqId: string; kind: "action" | "getState"; id?: string; params?: unknown; includeLabels?: boolean; approved?: boolean }) => void,
   ) => () => void;
   /** 2D 窓側: 命令の結果を返す（main は命令を送った窓からのものだけ受理する）。 */
   viewerCmdResult?: (reqId: string, result: import("./assistant/actions/registry").ActionResult) => void;
@@ -496,7 +539,9 @@ export interface GraphyDesktop {
   /** main がファイル選択を出す。`allowUnverified` は公式一覧にない GGUF を、検証なしで受け付けるとき。 */
   aiLocalImport?: (allowUnverified?: boolean) => Promise<AiLocalResult>;
   /** 起動して /health を確かめる。 */
-  aiLocalCheck?: () => Promise<{ ok: boolean; startedMs?: number; error?: string }>;
+  aiLocalCheck?: (role?: "llm" | "stt") => Promise<{ ok: boolean; startedMs?: number; error?: string }>;
+  /** 音声入力のモデルだけを外す(確認ダイアログは main が出す)。 */
+  aiLocalRemoveStt?: () => Promise<AiLocalResult>;
   aiLocalRole?: (role: { fallback?: boolean; makeDefault?: boolean }) => Promise<AiLocalResult>;
   aiLocalRemove?: () => Promise<AiLocalResult>;
   onAiLocalEvent?: (cb: (ev: AiLocalEvent) => void) => () => void;

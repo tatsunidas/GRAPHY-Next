@@ -60,12 +60,12 @@ class XaFrameExpanderTest {
     }
 
     @Test
-    void axes_labelsAreRunAndFrame_andStackIsT() {
+    void axes_labelsAreShotAndFrame_andStackIsT() {
         SeriesLayout l = XaFrameExpander.layout(List.of(run(XA, "1.1", 1, 30)));
         assertNotNull(l.axes());
         // UI に「Z」と出さないための提示（fw/angio-design.md §5.7）。
-        assertEquals("Run", l.axes().z().label());
-        assertEquals("run", l.axes().z().kind());
+        assertEquals("Shot", l.axes().z().label());
+        assertEquals("shot", l.axes().z().kind());
         assertEquals("Frame", l.axes().t().label());
         assertEquals("frame", l.axes().t().kind());
         // スタック軸が T でないと、フレーム送りのたびに setStack が走る。
@@ -73,19 +73,21 @@ class XaFrameExpanderTest {
     }
 
     @Test
-    void multipleRuns_shortRunHoldsLastFrame() {
+    void multipleShots_shortShotKeepsOnlyItsOwnFrames() {
         SeriesLayout l = XaFrameExpander.layout(List.of(
                 run(XA, "1.1", 1, 5),
                 run(XA, "1.2", 2, 3)));
         assertNotNull(l);
         assertEquals(2, l.nZ());
         assertEquals(5, l.nT(), "nT は最大フレーム数");
-        assertEquals(10, l.cells().size());
-        // 短いラン(z=1, 3 フレーム)は t>=3 で最終フレーム(2)に留まる（ブランクを挟まない）。
+        // 5 + 3 = 8 セル。短いショット(z=1, 3 フレーム)を最終フレームで埋めない（実フレーム数と一致する）。
+        assertEquals(8, l.cells().size());
+        long shot0 = l.cells().stream().filter(c -> c.z() == 0).count();
+        long shot1 = l.cells().stream().filter(c -> c.z() == 1).count();
+        assertEquals(5, shot0);
+        assertEquals(3, shot1);
         for (SeriesLayout.Cell c : l.cells()) {
-            if (c.z() == 1) {
-                assertEquals(Math.min(c.t(), 2), c.frame());
-            }
+            assertEquals(c.t(), c.frame(), "t とフレーム番号は 1:1");
         }
     }
 
