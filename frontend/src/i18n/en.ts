@@ -1547,6 +1547,7 @@ export const en: Record<string, string> = {
   "page.next": "Next",
   "page.indicator": "{{from}}–{{to}} of {{total}} (page {{page}}/{{pages}})",
   "series.title": "Series ({{name}})",
+  "series.titleNone": "Series",
   "series.empty": "No series.",
   "series.nonImage": "This series is not an image ({{kind}}). It cannot be shown in the 2D viewer.",
   "instance.count": "{{n}} instance(s)",

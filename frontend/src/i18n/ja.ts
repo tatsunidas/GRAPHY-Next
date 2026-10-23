@@ -1548,6 +1548,7 @@ export const ja: Record<string, string> = {
   "page.next": "次へ",
   "page.indicator": "{{from}}〜{{to}} / 全{{total}}件（{{page}}/{{pages}}ページ）",
   "series.title": "シリーズ（{{name}}）",
+  "series.titleNone": "シリーズ",
   "series.empty": "シリーズがありません。",
   // ピクセルを持たない SOP クラス（RTSTRUCT / SR / 表示状態 …）を画像として開こうとしたとき。
   "series.nonImage": "このシリーズは画像ではありません（{{kind}}）。2D ビューアでは表示できません。",
