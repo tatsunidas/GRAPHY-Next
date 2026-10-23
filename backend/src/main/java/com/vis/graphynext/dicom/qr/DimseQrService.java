@@ -60,14 +60,17 @@ public class DimseQrService {
     private final DicomStorageService storage;
     private final com.vis.graphynext.dicom.DicomLocalAeService localAe;
     private final com.vis.graphynext.dicom.DicomTlsService tlsService;
+    private final org.springframework.beans.factory.ObjectProvider<com.vis.graphynext.anonymize.ReceiveAnonymizer> anonymizer;
 
     public DimseQrService(Dcm4cheTools tools, DicomStorageService storage,
                           com.vis.graphynext.dicom.DicomLocalAeService localAe,
-                          com.vis.graphynext.dicom.DicomTlsService tlsService) {
+                          com.vis.graphynext.dicom.DicomTlsService tlsService,
+                          org.springframework.beans.factory.ObjectProvider<com.vis.graphynext.anonymize.ReceiveAnonymizer> anonymizer) {
         this.tools = tools;
         this.storage = storage;
         this.localAe = localAe;
         this.tlsService = tlsService;
+        this.anonymizer = anonymizer;
     }
 
     /**
@@ -155,10 +158,13 @@ public class DimseQrService {
             List<Path> files = walk.filter(Files::isRegularFile).toList();
             for (Path f : files) {
                 try {
-                    storage.ingest(f);
+                    // 受信時の匿名化がオンなら、C-STORE と同じく保管前に匿名化する（拒否・失敗したものは取り込まない）。
+                    var anon = anonymizer.getIfAvailable();
+                    Path toIngest = anon == null ? f : anon.process(f, calledAet);
+                    storage.ingest(toIngest);
                     count++;
                 } catch (Exception e) {
-                    log.warn("取得ファイルの取り込みに失敗: {} ({})", f, e.toString());
+                    log.warn("取得ファイルの取り込みに失敗: {} ({})", f.getFileName(), e.getClass().getSimpleName());
                 }
             }
         } finally {

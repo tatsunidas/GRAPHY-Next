@@ -29,18 +29,21 @@ public class DicomScpLifecycle implements SmartLifecycle {
     private final DicomScpServer server;
 
     public DicomScpLifecycle(DicomProperties props, DicomStorageService storage, DicomTlsService tlsService,
-                             DicomLocalAeService localAe) {
+                             DicomLocalAeService localAe,
+                             com.vis.graphynext.anonymize.ReceiveAnonymizer anonymizer) {
         this.server = new DicomScpServer(
                 localAe.aeTitle(),
                 localAe.bindAddress(),
                 localAe.scpPort());
 
         Path tempDir = Paths.get(props.getStorageDir(), "incoming");
+        // 落ちたときに残った受信の一時ファイル（匿名化前の原本のことがある）は、受信を始める前に消す。
+        anonymizer.sweepIncoming(tempDir);
         // all-storage("*") は使わず、設定リソースに明示列挙した SOP クラスのみ受理する。
         List<TransferCapability> storageCaps =
                 StorageSopClasses.scpCapabilities(props.getStorageSopClassesResource());
         server.addService(
-                new DicomStoreScp(storage, tempDir),
+                new DicomStoreScp(storage, tempDir, anonymizer),
                 storageCaps.toArray(TransferCapability[]::new));
 
         // TLS が設定済み（GUI 保存 or application.yml）なら、平文に加えて TLS リスナーも有効化する。

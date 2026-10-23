@@ -4,6 +4,7 @@
  */
 package com.vis.graphynext.dicom.store;
 
+import com.vis.graphynext.anonymize.ReceiveAnonymizer;
 import org.dcm4che3.data.Attributes;
 import org.dcm4che3.data.Tag;
 import org.dcm4che3.io.DicomOutputStream;
@@ -28,11 +29,18 @@ public class DicomStoreScp extends BasicCStoreSCP {
 
     private final DicomStorageService storage;
     private final Path tempDir;
+    /** 受信時の匿名化。null なら何もしない（従来どおり）。 */
+    private final ReceiveAnonymizer anonymizer;
 
     public DicomStoreScp(DicomStorageService storage, Path tempDir) {
+        this(storage, tempDir, null);
+    }
+
+    public DicomStoreScp(DicomStorageService storage, Path tempDir, ReceiveAnonymizer anonymizer) {
         super("*"); // 任意の Storage SOP Class を受け付ける
         this.storage = storage;
         this.tempDir = tempDir;
+        this.anonymizer = anonymizer;
     }
 
     @Override
@@ -51,15 +59,29 @@ public class DicomStoreScp extends BasicCStoreSCP {
             data.copyTo(out);
         }
 
+        Path toIngest = temp;
         try {
-            storage.ingest(temp);
-        } catch (Exception e) {
-            try {
-                Files.deleteIfExists(temp);
-            } catch (IOException ignore) {
-                // ベストエフォート
+            if (anonymizer != null) {
+                // 原本は保管庫に入れない。匿名化できない・断るものは失敗を返す（一時ファイルは anonymizer が消す）。
+                toIngest = anonymizer.process(temp, as.getCallingAET());
             }
+            storage.ingest(toIngest);
+        } catch (ReceiveAnonymizer.Rejected e) {
+            deleteQuietly(temp);
+            deleteQuietly(toIngest);
+            throw new DicomServiceException(Status.ProcessingFailure, e.reason());
+        } catch (Exception e) {
+            deleteQuietly(temp);
+            deleteQuietly(toIngest);
             throw new DicomServiceException(Status.ProcessingFailure, e);
+        }
+    }
+
+    private static void deleteQuietly(Path p) {
+        try {
+            Files.deleteIfExists(p);
+        } catch (IOException ignore) {
+            // ベストエフォート
         }
     }
 }

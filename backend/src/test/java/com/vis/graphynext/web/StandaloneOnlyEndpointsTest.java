@@ -34,7 +34,9 @@ class StandaloneOnlyEndpointsTest {
             ImportWatchController.class,
             com.vis.graphynext.microscopy.MicroscopyImportController.class,
             com.vis.graphynext.microscopy.PluginMicroscopyController.class,
-            com.vis.graphynext.dbadmin.TagEditController.class);
+            com.vis.graphynext.dbadmin.TagEditController.class,
+            com.vis.graphynext.dicom.ReceiveAnonymizeController.class,
+            com.vis.graphynext.dicom.ReceiveAnonymizeInternalController.class);
 
     @Test
     void ローカルのファイルを読み書きするコントローラは_standalone_だけ() {
