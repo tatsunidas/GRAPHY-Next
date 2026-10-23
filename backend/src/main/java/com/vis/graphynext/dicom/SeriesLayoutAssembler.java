@@ -68,6 +68,12 @@ public final class SeriesLayoutAssembler {
         if (ivus != null) {
             return ivus;
         }
+        // US（心エコー等）のマルチフレーム・シネは ショット=Z・フレーム=T に展開する（standalone と同一ロジック）。
+        // 🔴 IVUS の後ろに置く（IVUS を奪わない）。ここを通さないと先頭フレームしか出ない。
+        SeriesLayout us = UsFrameExpander.layout(instances);
+        if (us != null) {
+            return us;
+        }
 
         List<SeriesLayoutBuilder.FrameMeta> frames = new ArrayList<>();
         double[] seriesIop = null;

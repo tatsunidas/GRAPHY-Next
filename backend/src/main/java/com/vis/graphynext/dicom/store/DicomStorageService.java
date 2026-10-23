@@ -434,6 +434,12 @@ public class DicomStorageService {
         if (ivus != null) {
             return ivus;
         }
+        // US（心エコー等）のマルチフレーム・シネは ショット=Z・フレーム=T に展開する（IVUS の後ろ。web の
+        // SeriesLayoutAssembler にも同じものを繋いである）。
+        com.vis.graphynext.dicom.SeriesLayout us = usLayoutIfApplicable(insts);
+        if (us != null) {
+            return us;
+        }
         java.util.List<SeriesLayoutBuilder.FrameMeta> frames = new java.util.ArrayList<>();
         // Fusion 空間メタ収集
         double[] seriesIop = null;
@@ -567,6 +573,21 @@ public class DicomStorageService {
             log.debug("NM tomo series: slices={} phases={}", nm.nZ(), nm.nT());
         }
         return nm;
+    }
+
+    private com.vis.graphynext.dicom.SeriesLayout usLayoutIfApplicable(java.util.List<DicomInstance> insts) {
+        java.util.List<Attributes> headers = new java.util.ArrayList<>();
+        for (DicomInstance inst : insts) {
+            Attributes ds = readHeaderQuietly(inst);
+            if (ds != null) {
+                headers.add(ds);
+            }
+        }
+        com.vis.graphynext.dicom.SeriesLayout us = com.vis.graphynext.dicom.UsFrameExpander.layout(headers);
+        if (us != null) {
+            log.debug("US cine series: shots={} frames={}", us.nZ(), us.nT());
+        }
+        return us;
     }
 
     private com.vis.graphynext.dicom.SeriesLayout xaLayoutIfApplicable(java.util.List<DicomInstance> insts) {
