@@ -7,15 +7,48 @@ package com.vis.graphynext.dicom;
 import java.util.List;
 
 /**
- * シリーズの 5 次元（x,y は画像内）＝ Z(空間スライス) × C(チャンネル相当) × T(時間) 構造。
+ * シリーズの軸モデル。<b>この型が「軸の意味」の定義の正本</b>（詳細・形式ごとの割り当て表は
+ * {@code fw/series-axes.md}）。
  *
- * <p>DICOM 準拠の導出（{@link SeriesLayoutBuilder}）:
+ * <h3>2 つのモデル</h3>
+ * <b>(1) Z / C / T ＝ ボリュームデータ用。</b>x,y（画像内）に Z・C・T を加えた 5 次元。
+ * <ul>
+ *   <li><b>Z</b>: 空間スライス位置。ImagePositionPatient を ImageOrientationPatient の法線へ投影した距離
+ *       （無ければ SliceLocation / InstanceNumber）。患者座標の 3 次元位置を持つ。</li>
+ *   <li><b>T</b>: 同じ空間位置を繰り返し撮った時間（TemporalPositionIdentifier / TriggerTime）。</li>
+ *   <li><b>C</b>: 同じ空間位置の別の収集条件（EchoNumbers / DiffusionBValue / EchoTime など。
+ *       DICOM の「channel」は WSI のみのため、放射線では追加次元として解釈）。</li>
+ * </ul>
+ * T と C は<b>「同じ 3D 位置を繰り返し撮影している」ことが前提</b>。導出は {@link SeriesLayoutBuilder}。
+ *
+ * <p><b>(2) Shot / Frame ＝ 投影・シネ用（体積ではない画像）。</b>空間位置の繰り返しを前提としない。
+ * <ul>
+ *   <li><b>Shot</b>: 撮影の単位（1 回の曝射・1 本のシネ・1 方向）。{@code kind="shot"}。
+ *       撮影同士に空間的な関係は無い（XA の 2 方向、複数本のシネなど）。内部では Z 軸に載せる
+ *       （{@link Axes} が UI に "Z" と出さない）。</li>
+ *   <li><b>Frame</b>: 1 つの Shot の中の、時間順に並んだフレーム。{@code kind="frame"}。
+ *       単一フレームの画像は Frame = 1。内部では T 軸に載せ、スタック軸（{@code stackAxis="t"}）にする。
+ *       Shot ごとにフレーム数が違ってよい（セルは実在するフレームの分だけ作る）。</li>
+ *   <li>Shot × Frame の形式は XA / XRF（{@link XaFrameExpander}）。今後、フレームが時間順の列である
+ *       US のシネなどに広げる。</li>
+ * </ul>
+ * 血管内画像（IVUS / OCT）は Frame に加えて、カテーテルのプルバック軸（{@code kind="pullback"}）を持つ。
+ *
+ * <h3>どちらを使うか</h3>
+ * 患者座標に位置を持つ（体積として再構成・MPR・参照線・Sync が意味を持つ）ものは Z/C/T、
+ * 位置の繰り返しを前提にできない投影像・シネは Shot × Frame。CR / DX は 1 SOP = 1 フレームの投影像で
+ * 本来は Shot だが、運用上は従来の Z スタック（ホイール送り）に載っている（軸の表記だけ Z）。
+ *
+ * <h3>各軸の kind</h3>
+ * {@link Axis#kind()} は UI の機能の可否を決める。{@code "slice"} のときだけ ThickSlab・Sync・参照線・MPR が
+ * 有効になる（それ以外は空間スライス軸ではない）。
+ *
+ * <h3>導出の概要（{@link SeriesLayoutBuilder}、従来経路）</h3>
  * <ul>
  *   <li>Z: ImagePositionPatient を ImageOrientationPatient 法線へ投影した距離（無ければ
  *       SliceLocation/InstanceNumber）。</li>
  *   <li>T: TemporalPositionIdentifier / TriggerTime。</li>
- *   <li>C: EchoNumbers / DiffusionBValue / EchoTime（DICOM の「channel」は WSI のみのため、
- *       放射線では追加次元として解釈）。</li>
+ *   <li>C: EchoNumbers / DiffusionBValue / EchoTime。</li>
  * </ul>
  *
  * @param cDimension             C 次元の由来（"Echo"/"Bvalue" 等。単一次元なら null）
@@ -95,8 +128,9 @@ public record SeriesLayout(
     /**
      * 1 つの軸の提示。
      *
-     * @param label UI に出すラベル（"Z" / "Run" / "Frame" 等）
-     * @param kind  軸の種別（"slice" / "run" / "frame" / "echo" / "bvalue" / "temporal" / "generic"）。
+     * @param label UI に出すラベル（"Z" / "Shot" / "Frame" 等）
+     * @param kind  軸の種別（"slice" / "shot" / "frame" / "pullback" / "echo" / "bvalue" / "temporal" /
+     *              "generic"）。
      *              UI はこれを見て ThickSlab・Sync・参照線など「空間スライス軸を前提とする機能」の
      *              有効/無効を決める。
      */
@@ -115,8 +149,15 @@ public record SeriesLayout(
      * @param stackAxis 画像スタック（= Cornerstone StackViewport の imageIds ＝ホイール送り／
      *                  Grid 表示／プリフェッチの単位）をどの軸に割り当てるか。{@code "z"}（既定）か {@code "t"}。
      *                  XA シネは {@code "t"}（フレーム送りのたびに setStack が走るのを避ける）。
+     * @param loaderFrames true なら frame&gt;=0 のセルを、サーバー切り出しでなく {@code &frame=N+1} のローダー切り出しで読む
+     *                  （Enhanced 多フレーム: 値の変換・位置・窓が Functional Groups にあり、ローダーが合成する。
+     *                  圧縮転送構文でも読める）。{@code stackAxis="t"} は常にローダー切り出し。
      */
-    public record Axes(Axis z, Axis c, Axis t, String stackAxis) {
+    public record Axes(Axis z, Axis c, Axis t, String stackAxis, boolean loaderFrames) {
+        /** ローダー切り出しを使わない（XA・US・IVUS など、{@code loaderFrames} を意識しない展開器用）。 */
+        public Axes(Axis z, Axis c, Axis t, String stackAxis) {
+            this(z, c, t, stackAxis, false);
+        }
     }
 
     /** 空間メタなしのレイアウト（{@link SeriesLayoutBuilder} の返り値用）。 */

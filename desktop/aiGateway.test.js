@@ -1052,3 +1052,191 @@ test("🔴 prepare フックが失敗したら送らない（負例）／クラ�
     assert.deepEqual(g.calls.map((c) => c.host), ["api.example.test"], "準備に失敗したローカルへは送っていない");
   } finally { g.aiGateway.setPrepareHook(null); g.restore(); }
 });
+
+// ── 音声の文字起こし（speech-to-text） ─────────────────────────────────────
+
+const WAV = Buffer.concat([Buffer.from("RIFF"), Buffer.alloc(4), Buffer.from("WAVEfmt "), Buffer.from("PCMDATA-MARKER")]);
+const AUDIO = { base64: WAV.toString("base64"), mimeType: "audio/wav" };
+const STT_LOCAL = {
+  id: "local-stt", label: "ローカル音声", kind: "openai", endpoint: "http://127.0.0.1:8099", auth: "none",
+  models: { "speech-to-text": "qwen3-asr" }, paths: { "speech-to-text": "/v1/chat/completions" },
+};
+const STT_CLOUD_OPENAI = {
+  id: "oa", label: "OpenAI 互換", kind: "openai", endpoint: "https://api.example.test",
+  models: { "text-to-text": "m", "speech-to-text": "whisper-1" },
+};
+const STT_CLOUD_GEMINI = {
+  id: "gm", label: "Gemini", kind: "gemini", endpoint: "https://g.example.test",
+  models: { "speech-to-text": "gemini-2.5-flash" },
+};
+
+/** 生の本文（multipart でも読める）を記録する差し替え。`reply(target, path, call)` が応答。 */
+function sttGateway(config, reply, keys) {
+  const g = freshGateway(freshDir(), config);
+  for (const [id, key] of Object.entries(keys || {})) g.secretStore.setSecret(`ai.provider.${id}.apiKey`, key);
+  const aiHttp = require("./aiHttp");
+  const original = aiHttp.post;
+  const calls = [];
+  aiHttp.post = async (target, p, headers, body) => {
+    calls.push({ host: target.display, path: p, headers, raw: body });
+    return reply(target, p, calls[calls.length - 1]);
+  };
+  return { ...g, calls, restore: () => { aiHttp.post = original; g.aiGateway.setPrepareHook(null); } };
+}
+const STT_OK = (text) => ({ statusCode: 200, text: "", json: { choices: [{ message: { content: text } }] } });
+
+test("文字起こし: ローカル(chat 形式)は input_audio で送り、先頭の language 表記を取り除く", async () => {
+  const g = sttGateway({ providers: [STT_LOCAL], defaults: { "speech-to-text": "local-stt" } }, () => STT_OK("language Japanese<asr_text>肺結節の大きさを測定してください。"));
+  try {
+    const r = await g.aiGateway.transcribe({ audio: AUDIO, language: "ja" });
+    assert.equal(r.ok, true);
+    assert.equal(r.text, "肺結節の大きさを測定してください。");
+    assert.equal(r.provenance.local, true);
+    assert.equal(g.calls[0].path, "/v1/chat/completions");
+    const body = JSON.parse(g.calls[0].raw.toString("utf8"));
+    assert.equal(body.messages[0].content[0].type, "input_audio");
+    assert.equal(body.messages[0].content[0].input_audio.data, AUDIO.base64);
+    assert.equal(body.messages[0].content[0].input_audio.format, "wav");
+    assert.equal(Object.keys(g.calls[0].headers).some((k) => /authorization|api-key/i.test(k)), false);
+  } finally { g.restore(); }
+});
+
+test("文字起こし: OpenAI 互換は multipart の /v1/audio/transcriptions（鍵を付け、音声はバイト列で入る）", async () => {
+  const g = sttGateway({ providers: [STT_CLOUD_OPENAI], defaults: { "speech-to-text": "oa" } }, () => ({ statusCode: 200, text: "", json: { text: "hello" } }), { oa: "KEY-1" });
+  try {
+    const r = await g.aiGateway.transcribe({ audio: { ...AUDIO, mimeType: "audio/wav;codecs=1" }, language: "en" });
+    assert.equal(r.ok, true);
+    assert.equal(r.text, "hello");
+    assert.equal(r.provenance.local, false);
+    assert.equal(g.calls[0].path, "/v1/audio/transcriptions");
+    assert.match(g.calls[0].headers["Content-Type"], /^multipart\/form-data; boundary=/);
+    assert.equal(g.calls[0].headers.Authorization, "Bearer KEY-1");
+    const raw = g.calls[0].raw;
+    assert.ok(raw.includes(WAV), "音声が生のバイト列で入る");
+    const text = raw.toString("latin1");
+    assert.match(text, /name="model"\r\n\r\nwhisper-1/);
+    assert.match(text, /name="language"\r\n\r\nen/);
+    assert.match(text, /name="file"; filename="audio\.wav"/);
+  } finally { g.restore(); }
+});
+
+test("文字起こし: Gemini は音声を inline_data で送り、書き起こしだけを頼む", async () => {
+  const g = sttGateway({ providers: [STT_CLOUD_GEMINI], defaults: { "speech-to-text": "gm" } },
+    () => ({ statusCode: 200, text: "", json: { candidates: [{ content: { parts: [{ text: "こんにちは" }] } }] } }), { gm: "GK" });
+  try {
+    const r = await g.aiGateway.transcribe({ audio: AUDIO });
+    assert.equal(r.ok, true);
+    assert.equal(r.text, "こんにちは");
+    const body = JSON.parse(g.calls[0].raw.toString("utf8"));
+    assert.equal(body.contents[0].parts[1].inline_data.mime_type, "audio/wav");
+    assert.equal(body.contents[0].parts[1].inline_data.data, AUDIO.base64);
+    assert.match(body.contents[0].parts[0].text, /verbatim/);
+    assert.equal(body.generationConfig.temperature, 0);
+    assert.match(g.calls[0].path, /models\/gemini-2\.5-flash:generateContent$/);
+  } finally { g.restore(); }
+});
+
+test("🔴 文字起こしの入力検査（負例）: 空・過大・音声以外の MIME・不正な言語は送らない", async () => {
+  const g = sttGateway({ providers: [STT_LOCAL], defaults: { "speech-to-text": "local-stt" } }, () => STT_OK("届いてはいけない"));
+  try {
+    const cases = [
+      [{}, "empty-audio"],
+      [{ audio: { base64: "", mimeType: "audio/wav" } }, "empty-audio"],
+      [{ audio: { base64: "A".repeat(g.aiGateway.MAX_AUDIO_BYTES + 1), mimeType: "audio/wav" } }, "audio-too-large"],
+      [{ audio: { base64: "QQ==", mimeType: "text/html" } }, "unsupported-audio-type"],
+      [{ audio: { base64: "QQ==", mimeType: "image/png" } }, "unsupported-audio-type"],
+      [{ audio: AUDIO, language: "ja; rm -rf" }, "invalid-language"],
+    ];
+    for (const [req, err] of cases) assert.equal((await g.aiGateway.transcribe(req)).error, err, err);
+    assert.equal(g.calls.length, 0, "検査で落ちたものは 1 件も送っていない");
+  } finally { g.restore(); }
+});
+
+test("🔴 文字起こし: 提供元が無い／鍵が無い／Azure／generate 経由は送らない", async () => {
+  const none = sttGateway({ providers: [CHAT_CLOUD] }, () => STT_OK("x"));
+  try {
+    assert.equal((await none.aiGateway.transcribe({ audio: AUDIO })).error, "no-provider-for-capability", "既定でクラウドへ音声を出さない");
+    assert.equal(none.aiGateway.resolveCapability("speech-to-text").ok, false);
+    assert.equal((await none.aiGateway.generate({ capability: "speech-to-text", prompt: "x", imageBase64: "QQ==" })).error, "unsupported-capability");
+    assert.equal(none.calls.length, 0);
+  } finally { none.restore(); }
+
+  const nokey = sttGateway({ providers: [STT_CLOUD_OPENAI], defaults: { "speech-to-text": "oa" } }, () => STT_OK("x"));
+  try {
+    assert.equal((await nokey.aiGateway.transcribe({ audio: AUDIO })).error, "no-api-key");
+    assert.equal(nokey.calls.length, 0);
+  } finally { nokey.restore(); }
+
+  const azure = sttGateway({ providers: [{ ...STT_CLOUD_OPENAI, id: "az", kind: "azure-openai" }], defaults: { "speech-to-text": "az" } }, () => STT_OK("x"), { az: "K" });
+  try {
+    assert.equal((await azure.aiGateway.transcribe({ audio: AUDIO })).error, "unsupported-capability");
+    assert.equal(azure.calls.length, 0);
+  } finally { azure.restore(); }
+});
+
+test("🔴 文字起こし: 空の認識結果・読めない応答は成功にしない／エラー文に鍵が出ない", async () => {
+  const g = sttGateway({ providers: [STT_LOCAL], defaults: { "speech-to-text": "local-stt" } }, () => STT_OK("language Japanese<asr_text>"));
+  try {
+    const r = await g.aiGateway.transcribe({ audio: AUDIO });
+    assert.equal(r.ok, false);
+    assert.equal(r.error, "empty-transcript");
+  } finally { g.restore(); }
+  const key = "sk-secretkey1234567890";
+  const e = sttGateway({ providers: [STT_CLOUD_OPENAI], defaults: { "speech-to-text": "oa" } },
+    () => ({ statusCode: 401, json: { error: { message: `bad key ${key}` } }, text: "" }), { oa: key });
+  try {
+    const r = await e.aiGateway.transcribe({ audio: AUDIO });
+    assert.equal(r.ok, false);
+    assert.equal(JSON.stringify(r).includes(key), false);
+  } finally { e.restore(); }
+});
+
+test("文字起こし: 既定がクラウドで落ちたときだけ、ローカル判定の宛先へ縮退する／ローカル既定からクラウドへは出ない", async () => {
+  const cfg = {
+    providers: [STT_CLOUD_OPENAI, STT_CLOUD_GEMINI, STT_LOCAL],
+    defaults: { "speech-to-text": "oa" },
+    fallbacks: { "speech-to-text": ["gm", "local-stt"] }, // gm は検査で落ちる
+  };
+  const g = sttGateway(cfg, (t) => (t.hostname === "127.0.0.1" ? STT_OK("language English<asr_text>local") : { statusCode: 503, json: null, text: "down" }), { oa: "K", gm: "G" });
+  try {
+    const r = await g.aiGateway.transcribe({ audio: AUDIO });
+    assert.equal(r.ok, true);
+    assert.equal(r.text, "local");
+    assert.equal(r.degraded, true);
+    assert.equal(r.provenance.fallbackFrom, "oa");
+    assert.deepEqual(g.calls.map((c) => c.host), ["api.example.test", "127.0.0.1:8099"]);
+  } finally { g.restore(); }
+
+  const l = sttGateway({ providers: [STT_LOCAL, STT_CLOUD_OPENAI], defaults: { "speech-to-text": "local-stt" }, fallbacks: { "speech-to-text": ["oa"] } },
+    () => { throw new Error("connect ECONNREFUSED"); }, { oa: "K" });
+  try {
+    const r = await l.aiGateway.transcribe({ audio: AUDIO });
+    assert.equal(r.ok, false);
+    assert.deepEqual(l.calls.map((c) => c.host), ["127.0.0.1:8099"], "ローカルが落ちてもクラウドへは出ない");
+  } finally { l.restore(); }
+});
+
+test("🔴 文字起こし: prepare フックが失敗したら送らない", async () => {
+  const g = sttGateway({ providers: [STT_LOCAL], defaults: { "speech-to-text": "local-stt" } }, () => STT_OK("届いてはいけない"));
+  try {
+    g.aiGateway.setPrepareHook(async () => ({ ok: false, error: "local-llm:not-installed" }));
+    const r = await g.aiGateway.transcribe({ audio: AUDIO });
+    assert.equal(r.ok, false);
+    assert.equal(r.error, "local-llm:not-installed");
+    assert.equal(g.calls.length, 0);
+  } finally { g.restore(); }
+});
+
+test("文字起こしの接続テスト: 送るのは無音の WAV だけ（利用者の音声は使えない）", async () => {
+  const g = sttGateway({ providers: [STT_LOCAL], defaults: { "speech-to-text": "local-stt" } }, () => STT_OK("language English<asr_text>"));
+  try {
+    const t = await g.aiGateway.testConnection({ providerId: "local-stt", capability: "speech-to-text" });
+    assert.equal(t.ok, true);
+    assert.equal(t.verdict, "reachable");
+    const body = JSON.parse(g.calls[0].raw.toString("utf8"));
+    const wav = Buffer.from(body.messages[0].content[0].input_audio.data, "base64");
+    assert.equal(wav.subarray(0, 4).toString(), "RIFF");
+    assert.equal(wav.length, 44 + 9600);
+    assert.ok(wav.subarray(44).every((b) => b === 0), "無音");
+  } finally { g.restore(); }
+});

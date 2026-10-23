@@ -38,7 +38,9 @@ public interface DicomInstanceRepository extends JpaRepository<DicomInstance, St
                    max(i.studyDate) as studyDate,
                    max(i.studyDescription) as studyDescription,
                    max(i.modality) as modality,
-                   count(i) as numberOfInstances
+                   count(i) as numberOfInstances,
+                   sum(i.numberOfFrames) as framesSum,
+                   count(i.numberOfFrames) as framesKnown
             from DicomInstance i
             where (:patientId is null or lower(i.patientId) like lower(concat('%', :patientId, '%')))
               and (:patientName is null or lower(i.patientName) like lower(concat('%', :patientName, '%')))
@@ -84,7 +86,9 @@ public interface DicomInstanceRepository extends JpaRepository<DicomInstance, St
                    max(i.seriesNumber) as seriesNumber,
                    max(i.seriesDescription) as seriesDescription,
                    max(i.sopClassUid) as sopClassUid,
-                   count(i) as numberOfInstances
+                   count(i) as numberOfInstances,
+                   sum(i.numberOfFrames) as framesSum,
+                   count(i.numberOfFrames) as framesKnown
             from DicomInstance i
             where i.studyInstanceUid = :studyUid
             group by i.seriesInstanceUid
@@ -160,6 +164,9 @@ public interface DicomInstanceRepository extends JpaRepository<DicomInstance, St
 
     List<DicomInstance> findByPatientId(String patientId);
 
+    /** NumberOfFrames を保存する前に取り込んだ行（起動時の埋め直し用）。 */
+    List<DicomInstance> findByNumberOfFramesIsNull();
+
     List<DicomInstance> findByStudyInstanceUid(String studyUid);
 
     /** スタディ単位のローカル保存インスタンス数（QR の保存済み判定）。 */
@@ -234,6 +241,12 @@ public interface DicomInstanceRepository extends JpaRepository<DicomInstance, St
         String getModality();
 
         long getNumberOfInstances();
+
+        /** フレーム数の合計。NumberOfFrames が未取得（null）の行は含まれない（全行が取得済みかは {@link #getFramesKnown()}）。 */
+        Long getFramesSum();
+
+        /** NumberOfFrames が取得済みの行数。{@code getNumberOfInstances()} と等しいときだけ合計が全体を表す。 */
+        long getFramesKnown();
     }
 
     /** findSeriesSummaries の射影。 */
@@ -253,5 +266,11 @@ public interface DicomInstanceRepository extends JpaRepository<DicomInstance, St
         String getSopClassUid();
 
         long getNumberOfInstances();
+
+        /** フレーム数の合計。NumberOfFrames が未取得（null）の行は含まれない（全行が取得済みかは {@link #getFramesKnown()}）。 */
+        Long getFramesSum();
+
+        /** NumberOfFrames が取得済みの行数。{@code getNumberOfInstances()} と等しいときだけ合計が全体を表す。 */
+        long getFramesKnown();
     }
 }

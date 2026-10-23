@@ -7,7 +7,8 @@
  * 🔴 前提: Colab にログイン済み（computeColabCheck を一度通してある）。利用者の Colab の枠を数分〜十数分使い、最後に解放する。
  *
  * 確かめること:
- *   1. 「実行」1 回・同意 1 回で、計算機の上でモデルの説明を読み、判定し、推論まで走る
+ *   1. 「実行」1 回で、まず画像を送らない事前チェック（同意 1 回目。Colab は枠なしで通る）、続いて本処理（同意 2 回目）が走り、
+ *      計算機の上でモデルの説明を読み、判定し、推論まで走る
  *   2. ラベル名・ライセンスが返る・CT に「使える」と判定される・GPU T4 で走る
  *   3. SEG（H22）で保存され、ラベル名どおりのセグメントが DB にある・脾臓が患者の左側にある（向きの確認）
  *   4. 監査ログ: 送信 1 回・実行 ok
@@ -139,9 +140,15 @@ async function main(): Promise<void> {
     console.log(`\n[2] 実行: ${BUNDLE}（Colab の T4）`);
     const t1 = Date.now();
     await viewer.getByTestId("monai-run").click();
+    // 事前チェック（画像を送らない）。Colab は何も確かめず通る
+    const pw = await consentWindow(driver, 300_000);
+    const pcode = (await pw.locator("#code").textContent()) ?? "";
+    check(pcode.includes("outputs/env.json") && !pcode.includes("monai.bundle"), "事前チェックの同意画面: コードは環境の確認だけ");
+    await pw.getByTestId("consent-ack").check();
+    await pw.getByTestId("consent-send").click();
     const w = await consentWindow(driver, 300_000);
     const sha = await approvedSha(w);
-    check(sha.length === 64, "同意画面は 1 回だけ・npz 1 件と SHA-256", sha);
+    check(sha.length === 64, "本処理の同意画面: npz 1 件と SHA-256", sha);
     await approve(driver, "1-consent.png");
     await waitPhaseIdle(viewer, 3_600_000);
     let s = await state(viewer);
@@ -196,9 +203,10 @@ async function main(): Promise<void> {
     console.log("\n[5] 監査");
     const events = fs.readFileSync(AUDIT, "utf8").trim().split("\n").map((l) => JSON.parse(l));
     const fin = events.filter((e: { event: string }) => e.event === "compute-finished");
-    check(fin.length === 1 && fin[0].outcome === "ok", "監査: 実行が ok", fin);
+    check(fin.length === 2 && fin.every((e: { outcome: string }) => e.outcome === "ok"), "監査: 実行は 2 回（事前チェック・本処理）とも ok", fin);
     const consumed = events.filter((e: { event: string }) => e.event === "egress-consumed");
-    check(consumed.length === 1 && consumed[0]?.datasets?.length === 1, "監査: 送信は 1 回（npz 1 件）", consumed.map((e: { datasets: unknown[] }) => e.datasets.length));
+    check(consumed.filter((e: { datasets: unknown[] }) => e.datasets.length === 1).length === 1 && consumed.filter((e: { datasets: unknown[] }) => e.datasets.length === 0).length === 1,
+      "監査: 画像を送ったのは本処理の 1 回（npz 1 件）だけ。事前チェックは 0 件", consumed.map((e: { datasets: unknown[] }) => e.datasets.length));
     // --- 6. 窓を閉じると、本体が「解放しますか」を聞く（H61） ---
     console.log("\n[6] 閉じて解放");
     const runtimeOf = () => viewer.evaluate(async (id) => {
@@ -209,7 +217,7 @@ async function main(): Promise<void> {
     await viewer.locator(".graphy-plugin-window__close").click();
     await viewer.getByTestId("compute-release-confirm").waitFor({ state: "visible", timeout: 30_000 });
     const msg = ((await viewer.getByTestId("compute-release-confirm").textContent()) ?? "").replace(/\s+/g, " ");
-    check(/T4/.test(msg) && /解放/.test(msg), "本体の確認に「T4 ランタイムを解放しますか」と出る", msg);
+    check(/T4/.test(msg) && /解放|release/i.test(msg), "本体の確認に「T4 ランタイムを解放しますか」と出る（日本語・英語のどちらでも）", msg);
     await viewer.screenshot({ path: path.join(OUT_DIR, "5-release-confirm.png") });
     await viewer.getByTestId("compute-release-ok").click();
     await viewer.waitForFunction(() => !!(window as unknown as { __monaiState?: { release?: unknown } }).__monaiState?.release, null, { timeout: 120_000 });

@@ -118,6 +118,7 @@ public class DicomStorageService {
         entity.setSeriesNumber(ds.getInt(Tag.SeriesNumber, 0));
         entity.setSeriesDescription(ds.getString(Tag.SeriesDescription));
         entity.setInstanceNumber(ds.getInt(Tag.InstanceNumber, 0));
+        entity.setNumberOfFrames(framesOf(ds));
         entity.setSizeBytes(Files.size(dest));
         entity.setUri(layout.toStored(dest));
         DicomInstance saved;
@@ -290,8 +291,46 @@ public class DicomStorageService {
                         x.getStudyDate(), x.getStudyDescription(), x.getModality(),
                         x.getNumberOfInstances(),
                         byStudy.getOrDefault(x.getStudyInstanceUid(), java.util.List.of())
-                                .stream().distinct().sorted().toList()))
+                                .stream().distinct().sorted().toList(),
+                        totalFrames(x.getFramesSum(), x.getFramesKnown(), x.getNumberOfInstances())))
                 .toList();
+    }
+
+    /**
+     * フレーム数の合計。NumberOfFrames が未取得の行が 1 つでもあれば null（不明）。
+     * 取得済みの行だけを足すと実際より少ない数が出る。1 や 0 で埋めない。
+     */
+    static Long totalFrames(Long sum, long known, long instances) {
+        return known == instances ? sum : null;
+    }
+
+    /** NumberOfFrames（無い・不正は単一フレームとして 1）。 */
+    static int framesOf(Attributes ds) {
+        return Math.max(1, ds.getInt(Tag.NumberOfFrames, 1));
+    }
+
+    /**
+     * NumberOfFrames を保存する前に取り込んだ行を、保存済みのファイルのヘッダから埋める。
+     * ヘッダを読めない行は null のまま残す（0 や 1 で埋めない）。戻り値は埋めた行数。
+     */
+    @Transactional
+    public int backfillNumberOfFrames() {
+        int filled = 0;
+        int unreadable = 0;
+        for (DicomInstance inst : repo.findByNumberOfFramesIsNull()) {
+            Attributes ds = readHeaderQuietly(inst);
+            if (ds == null) {
+                unreadable++;
+                continue;
+            }
+            inst.setNumberOfFrames(framesOf(ds));
+            repo.save(inst);
+            filled++;
+        }
+        if (filled > 0 || unreadable > 0) {
+            log.info("NumberOfFrames の埋め直し: 埋めた {} 件・読めず null のまま {} 件", filled, unreadable);
+        }
+        return filled;
     }
 
     /** スタディ内のシリーズ一覧。 */
@@ -300,7 +339,8 @@ public class DicomStorageService {
         return repo.findSeriesSummaries(studyUid).stream()
                 .map(s -> new com.vis.graphynext.dicom.SeriesDto(
                         s.getSeriesInstanceUid(), s.getModality(), s.getSeriesNumber(),
-                        s.getSeriesDescription(), s.getSopClassUid(), s.getNumberOfInstances()))
+                        s.getSeriesDescription(), s.getSopClassUid(), s.getNumberOfInstances(),
+                        totalFrames(s.getFramesSum(), s.getFramesKnown(), s.getNumberOfInstances())))
                 .toList();
     }
 
@@ -394,6 +434,18 @@ public class DicomStorageService {
         if (ivus != null) {
             return ivus;
         }
+        // US（心エコー等）のマルチフレーム・シネは ショット=Z・フレーム=T に展開する（IVUS の後ろ。web の
+        // SeriesLayoutAssembler にも同じものを繋いである）。
+        com.vis.graphynext.dicom.SeriesLayout us = usLayoutIfApplicable(insts);
+        if (us != null) {
+            return us;
+        }
+        // Enhanced CT/MR/PET のマルチフレームは Z/C/T のボリュームに展開する（web の SeriesLayoutAssembler にも
+        // 同じものを繋いである）。全 SOP が 1 フレームなら null で従来経路へ。
+        com.vis.graphynext.dicom.SeriesLayout enhanced = enhancedLayoutIfApplicable(insts);
+        if (enhanced != null) {
+            return enhanced;
+        }
         java.util.List<SeriesLayoutBuilder.FrameMeta> frames = new java.util.ArrayList<>();
         // Fusion 空間メタ収集
         double[] seriesIop = null;
@@ -419,7 +471,7 @@ public class DicomStorageService {
             java.util.Map<String, Double> dims = new java.util.HashMap<>();
             // T(時間): クラシック単一フレームは TemporalPositionIdentifier(0020,0100) を優先し、
             // 無ければ TemporalPositionIndex(0020,9128) をフォールバックで読む（両対応）。
-            // ※ Enhanced 多フレーム（1 インスタンスに多数フレーム）の per-frame Index 解析は TODO #8。
+            // ※ Enhanced 多フレーム（1 インスタンスに多数フレーム）は EnhancedMultiframeExpander が先に取る。
             putFirstPresent(dims, "Temporal", ds, Tag.TemporalPositionIdentifier, Tag.TemporalPositionIndex);
             putIfPresent(dims, "Trigger", ds, Tag.TriggerTime);
             // C(チャンネル)=同一位置・同一時相で見ているものが違う: Echo/b値/EchoTime/位相成分。
@@ -495,7 +547,9 @@ public class DicomStorageService {
                 basic.nZ(), basic.nC(), basic.nT(),
                 basic.cDimension(), basic.tDimension(), basic.cells(),
                 seriesIop, seriesPxRow, seriesPxCol, seriesWidth, seriesHeight,
-                zSpatials, seriesFor, seriesPixelFormat, null);
+                zSpatials, seriesFor, seriesPixelFormat,
+                com.vis.graphynext.dicom.SeriesLayoutAssembler.projectionAxes(
+                        insts.stream().map(DicomInstance::getSopClassUid).toList()));
     }
 
     /**
@@ -527,6 +581,37 @@ public class DicomStorageService {
             log.debug("NM tomo series: slices={} phases={}", nm.nZ(), nm.nT());
         }
         return nm;
+    }
+
+    private com.vis.graphynext.dicom.SeriesLayout enhancedLayoutIfApplicable(java.util.List<DicomInstance> insts) {
+        java.util.List<Attributes> headers = new java.util.ArrayList<>();
+        for (DicomInstance inst : insts) {
+            Attributes ds = readHeaderQuietly(inst);
+            if (ds != null) {
+                headers.add(ds);
+            }
+        }
+        com.vis.graphynext.dicom.SeriesLayout enhanced =
+                com.vis.graphynext.dicom.EnhancedMultiframeExpander.layout(headers);
+        if (enhanced != null) {
+            log.debug("Enhanced multiframe series: nZ={} nC={} nT={}", enhanced.nZ(), enhanced.nC(), enhanced.nT());
+        }
+        return enhanced;
+    }
+
+    private com.vis.graphynext.dicom.SeriesLayout usLayoutIfApplicable(java.util.List<DicomInstance> insts) {
+        java.util.List<Attributes> headers = new java.util.ArrayList<>();
+        for (DicomInstance inst : insts) {
+            Attributes ds = readHeaderQuietly(inst);
+            if (ds != null) {
+                headers.add(ds);
+            }
+        }
+        com.vis.graphynext.dicom.SeriesLayout us = com.vis.graphynext.dicom.UsFrameExpander.layout(headers);
+        if (us != null) {
+            log.debug("US cine series: shots={} frames={}", us.nZ(), us.nT());
+        }
+        return us;
     }
 
     private com.vis.graphynext.dicom.SeriesLayout xaLayoutIfApplicable(java.util.List<DicomInstance> insts) {

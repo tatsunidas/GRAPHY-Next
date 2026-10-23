@@ -16,6 +16,7 @@
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useI18n } from "../i18n/i18n";
+import { IndexJump } from "./IndexJump";
 import { reportXaCineStats } from "./debugApi";
 import {
   cineDurationMs,
@@ -198,6 +199,15 @@ export default function CineControls({
         <span style={counter} data-testid="cine-indicator">
           {index + 1}/{count}
         </span>
+        <IndexJump
+          count={count}
+          disabled={locked}
+          testId="cine-jump"
+          onJump={(i) => {
+            stop();
+            onIndex(i);
+          }}
+        />
       </div>
       <div style={row}>
         <button type="button" style={btn} disabled={disabled} onClick={() => step(-1)} title={t("cine.prevFrame")}>

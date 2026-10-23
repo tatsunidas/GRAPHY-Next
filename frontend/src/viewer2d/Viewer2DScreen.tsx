@@ -41,10 +41,17 @@ import {
   queryViewerTargetInfo,
 } from "../viewer/viewerCommands";
 import {
+  addPolygonPoint,
   annotationAtClientPoint,
   annotationByUid,
+  canEditPoints,
   canSplineFit,
+  continuePolyline,
+  hasPointAt,
+  isOpenPolyline,
   isSplineFitted,
+  joinPolylines,
+  removePolygonPoint,
   renderAnnotations,
   selectedAnnotations,
   setSplineFitOn,
@@ -907,7 +914,19 @@ function TileGrid({
     return () => window.removeEventListener("mousedown", down, true);
   }, []);
   /** ROI の上での右クリックメニュー（スプライン Fit）。null=非表示。 */
-  const [roiMenu, setRoiMenu] = useState<{ x: number; y: number; uid: string; fitted: boolean; splineable: boolean; measure: boolean; convertible: boolean } | null>(null);
+  const [roiMenu, setRoiMenu] = useState<{
+    x: number; y: number; uid: string; fitted: boolean; splineable: boolean; measure: boolean; convertible: boolean;
+    /** 点の追加・削除ができる（ポリゴン / ポリゴンライン）。 */
+    editable: boolean;
+    /** 右クリック位置に制御点がある（「この点を削除」を有効にする）。 */
+    atPoint: boolean;
+    /** 開いたポリゴンライン（「続きを描く」の対象）。 */
+    openLine: boolean;
+    /** 選択中の開いたポリゴンラインがちょうど 2 本（「つなぐ」を有効にする）。 */
+    joinable: boolean;
+  } | null>(null);
+  // 右クリックした ROI を描いているキャンバス（点の追加・削除・続きを描くで使う）。
+  const roiMenuHostRef = useRef<HTMLDivElement | null>(null);
   const openFrameMenu = useCallback((e: React.MouseEvent, tileId: string) => {
     // 画像キャンバス上は cornerstone の右ドラッグ Zoom を優先し、原則メニューを出さない。
     // **ただし ROI の上だけは例外**（その ROI への操作を出す。空きスペースでは従来どおり Zoom）。
@@ -918,6 +937,8 @@ function TileGrid({
       // ROI の上ならメニューを出す（複製はどの ROI でもできるので、スプライン可否では絞らない）。
       if (hit?.annotationUID) {
         e.preventDefault();
+        roiMenuHostRef.current = host;
+        const selected = selectedAnnotations();
         setRoiMenu({
           x: e.clientX,
           y: e.clientY,
@@ -926,6 +947,10 @@ function TileGrid({
           splineable: canSplineFit(hit),
           measure: annotationRoiKind(hit) === "measure",
           convertible: canConvertMeasureToRoi(hit?.metadata?.toolName),
+          editable: canEditPoints(hit),
+          atPoint: host ? hasPointAt(hit, host, e.clientX, e.clientY) : false,
+          openLine: isOpenPolyline(hit),
+          joinable: selected.length === 2 && selected.every(isOpenPolyline),
         });
         return;
       }
@@ -1663,6 +1688,11 @@ function TileGrid({
         if (toastTimer.current) window.clearTimeout(toastTimer.current);
         toastTimer.current = window.setTimeout(() => setToast(null), 2500);
       },
+      // 選択中の開いたポリゴンライン 2 本を 1 本につなぐ。断るときは理由を出す。
+      joinPolylines: () => {
+        const r = joinPolylines(selectedAnnotations());
+        notify(t(r === "ok" ? "viewer2d.roi.join.done" : r === "image" ? "viewer2d.roi.join.image" : "viewer2d.roi.join.hint"));
+      },
       openLut: () => setLutOpen(true),
       // コントラスト調整（W/L）: 対象タイル群の現在 VOI を先頭タイルから読み、ダイアログを開く。
       openWindowLevel: () => {
@@ -2101,6 +2131,72 @@ function TileGrid({
             >
               <span style={{ width: 14, display: "inline-block" }}>{roiMenu.fitted ? "✓" : ""}</span>
               {t("viewer2d.roi.splineFit.menu")}
+            </button>
+          )}
+          {roiMenu.editable && (
+            <>
+              <button
+                style={ctxMenuItem}
+                data-testid="roi-ctx-add-point"
+                onClick={() => {
+                  const ann = annotationByUid(roiMenu.uid);
+                  const host = roiMenuHostRef.current;
+                  const r = ann && host ? addPolygonPoint(ann, host, roiMenu.x, roiMenu.y) : "unsupported";
+                  if (r !== "ok") notify(t(r === "far" ? "viewer2d.roi.addPoint.far" : "viewer2d.roi.points.unsupported"));
+                  setRoiMenu(null);
+                }}
+              >
+                <span style={{ width: 14, display: "inline-block" }} />
+                {t("viewer2d.roi.addPoint")}
+              </button>
+              <button
+                style={roiMenu.atPoint ? ctxMenuItem : { ...ctxMenuItem, opacity: 0.4, cursor: "not-allowed" }}
+                data-testid="roi-ctx-remove-point"
+                disabled={!roiMenu.atPoint}
+                title={roiMenu.atPoint ? undefined : t("viewer2d.roi.removePoint.noHandle")}
+                onClick={() => {
+                  const ann = annotationByUid(roiMenu.uid);
+                  const host = roiMenuHostRef.current;
+                  const r = ann && host ? removePolygonPoint(ann, host, roiMenu.x, roiMenu.y) : "unsupported";
+                  if (r === "min") notify(t("viewer2d.roi.removePoint.min"));
+                  else if (r !== "ok") notify(t("viewer2d.roi.removePoint.noHandle"));
+                  setRoiMenu(null);
+                }}
+              >
+                <span style={{ width: 14, display: "inline-block" }} />
+                {t("viewer2d.roi.removePoint")}
+              </button>
+            </>
+          )}
+          {roiMenu.openLine && (
+            <button
+              style={ctxMenuItem}
+              data-testid="roi-ctx-continue"
+              onClick={() => {
+                const ann = annotationByUid(roiMenu.uid);
+                const host = roiMenuHostRef.current;
+                if (!(ann && host && continuePolyline(ann, host))) notify(t("viewer2d.roi.continue.failed"));
+                else notify(t("viewer2d.roi.continue.started"));
+                setRoiMenu(null);
+              }}
+            >
+              <span style={{ width: 14, display: "inline-block" }} />
+              {t("viewer2d.roi.continue")}
+            </button>
+          )}
+          {roiMenu.openLine && (
+            <button
+              style={roiMenu.joinable ? ctxMenuItem : { ...ctxMenuItem, opacity: 0.4, cursor: "not-allowed" }}
+              data-testid="roi-ctx-join"
+              disabled={!roiMenu.joinable}
+              title={roiMenu.joinable ? undefined : t("viewer2d.roi.join.hint")}
+              onClick={() => {
+                actions.joinPolylines();
+                setRoiMenu(null);
+              }}
+            >
+              <span style={{ width: 14, display: "inline-block" }} />
+              {t("viewer2d.roi.join")}
             </button>
           )}
         </div>

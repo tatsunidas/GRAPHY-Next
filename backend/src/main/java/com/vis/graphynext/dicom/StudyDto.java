@@ -11,7 +11,7 @@ import java.util.List;
  */
 public record StudyDto(String studyInstanceUid, String patientId, String patientName,
                        String studyDate, String studyDescription, String modality,
-                       long numberOfInstances, List<String> modalities) {
+                       long numberOfInstances, List<String> modalities, Long numberOfFrames) {
 
     /**
      * {@code modalities} が分からない経路向け（{@code modality} 1 つを列挙とみなす）。
@@ -24,6 +24,14 @@ public record StudyDto(String studyInstanceUid, String patientId, String patient
                     long numberOfInstances) {
         this(studyInstanceUid, patientId, patientName, studyDate, studyDescription, modality,
                 numberOfInstances,
-                modality == null || modality.isBlank() ? List.of() : List.of(modality));
+                modality == null || modality.isBlank() ? List.of() : List.of(modality), null);
+    }
+
+    /** フレーム数が分からない経路向け（QR・web など。{@code numberOfFrames} は null＝不明）。 */
+    public StudyDto(String studyInstanceUid, String patientId, String patientName,
+                    String studyDate, String studyDescription, String modality,
+                    long numberOfInstances, List<String> modalities) {
+        this(studyInstanceUid, patientId, patientName, studyDate, studyDescription, modality,
+                numberOfInstances, modalities, null);
     }
 }

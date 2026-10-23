@@ -71,14 +71,14 @@ describe("XA シネのレイアウト", () => {
       { c: 0, z: 0, t: 1, sopInstanceUid: "1.1", frame: 1 },
       { c: 0, z: 0, t: 2, sopInstanceUid: "1.1", frame: 2 },
     ],
-    axes: { z: { label: "Run", kind: "run" }, c: null, t: { label: "Frame", kind: "frame" }, stackAxis: "t" },
+    axes: { z: { label: "Shot", kind: "shot" }, c: null, t: { label: "Frame", kind: "frame" }, stackAxis: "t" },
   });
 
   it("stackAxis と軸ラベルが引き継がれる", () => {
     const l = buildLayoutFromDto(xa, "standalone", "S", "SE")!;
     expect(l.stackAxis).toBe("t");
-    expect(l.axes?.z.label).toBe("Run");
-    expect(l.axes?.z.kind).toBe("run");
+    expect(l.axes?.z.label).toBe("Shot");
+    expect(l.axes?.z.kind).toBe("shot");
     expect(l.axes?.t.label).toBe("Frame");
     expect(l.axes?.t.kind).toBe("frame");
   });
@@ -121,5 +121,30 @@ describe("XA フレームの imageId", () => {
 
   it("負のフレームでも 1 未満にならない", () => {
     expect(imageIdForXaFrame("standalone", "1.2.3", -3)).toMatch(/&frame=1$/);
+  });
+});
+
+describe("Enhanced 多フレーム（loaderFrames）", () => {
+  const enh = dto({
+    nZ: 2,
+    cells: [
+      { c: 0, z: 0, t: 0, sopInstanceUid: "1.1", frame: 0 },
+      { c: 0, z: 1, t: 0, sopInstanceUid: "1.1", frame: 1 },
+    ],
+    axes: { z: null, c: null, t: null, stackAxis: "z", loaderFrames: true },
+  });
+
+  it("Z スタックのまま、フレームはローダー切り出しの imageId になる", () => {
+    const l = buildLayoutFromDto(enh, "standalone", "S", "SE")!;
+    expect(l.stackAxis).toBe("z");
+    const ids = l.zStack(0, 0);
+    expect(ids[0]).toContain("/api/instances/1.1/file&frame=1");
+    expect(ids[1]).toContain("&frame=2");
+    expect(ids.some((id) => id?.includes("/frames/"))).toBe(false);
+  });
+
+  it("loaderFrames が無ければ従来どおりサーバー切り出し（/frames/）", () => {
+    const l = buildLayoutFromDto({ ...enh, axes: null }, "standalone", "S", "SE")!;
+    expect(l.zStack(0, 0)[1]).toContain("/frames/1/file");
   });
 });
