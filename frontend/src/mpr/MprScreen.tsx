@@ -24,6 +24,8 @@ import {
 import { ensureCornerstoneInitialized } from "../viewer/cornerstoneSetup";
 import { getAppliedVolumeMaxMb, isCacheSizeExceeded } from "../viewer/volumeMemory";
 import { confirmVolumeMemory } from "../viewer/volumeMemoryGuard";
+import { rangedStackIds } from "../viewer/rangedStack";
+import type { ZRange } from "../viewer/virtualLayout";
 import { useDeviceClass } from "../mobile/useDeviceClass";
 import { imageIdForInstance, imageIdsForLayoutStack } from "../viewer/imageId";
 import { formatNumber } from "../viewer/roiStatsText";
@@ -71,6 +73,8 @@ const VIEWPORT_IDS: MprViewportIds = {
 interface MprContext {
   study: Study;
   series?: Series;
+  /** 範囲つきで開いたタイルから起動したとき、ボリュームをこの範囲だけで組む。 */
+  range?: ZRange;
   ts: number;
 }
 
@@ -203,10 +207,22 @@ export function MprScreen({ status }: { status: AppStatus | null }) {
         setMessage(t("volume.tooFine", { voxel: String(finestVoxelMm(guardLayout)?.toPrecision(3)), min: String(MIN_SLAB_MM) }));
         return;
       }
-      let imageIds = guardLayout
-        ? imageIdsForLayoutStack(guardLayout.cells, mode, 0, 0, ctx.study.studyInstanceUid, series.seriesInstanceUid)
-        : [];
-      if (imageIds.length < 3 && (!guardLayout || (guardLayout.nC <= 1 && guardLayout.nT <= 1))) {
+      let imageIds: string[];
+      if (ctx.range) {
+        // 範囲つき: 全体に黙って戻さない（フォールバックもしない）。
+        const ranged = rangedStackIds(guardLayout, mode, ctx.study.studyInstanceUid, series.seriesInstanceUid, 0, 0, ctx.range);
+        if (!ranged.ok) {
+          setPhase("error");
+          setMessage(t(`series.range.fail.${ranged.reason}`));
+          return;
+        }
+        imageIds = ranged.imageIds;
+      } else {
+        imageIds = guardLayout
+          ? imageIdsForLayoutStack(guardLayout.cells, mode, 0, 0, ctx.study.studyInstanceUid, series.seriesInstanceUid)
+          : [];
+      }
+      if (!ctx.range && imageIds.length < 3 && (!guardLayout || (guardLayout.nC <= 1 && guardLayout.nT <= 1))) {
         const instances = await fetchInstances(ctx.study.studyInstanceUid, series.seriesInstanceUid);
         imageIds = instances.map((i) =>
           imageIdForInstance(mode, i.sopInstanceUid, ctx.study.studyInstanceUid, series.seriesInstanceUid),
