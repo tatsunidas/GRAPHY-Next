@@ -139,7 +139,7 @@ export function buildLayoutDto(hs: HeaderInfo[]): SeriesLayoutDto {
       cDimension: null, tDimension: null, imageOrientationPatient: null, pixelSpacingRow: 0, pixelSpacingCol: 0,
       imageWidth: runs[0].cols, imageHeight: runs[0].rows, frameOfReferenceUID: null,
       nZ: runs.length, nC: 1, nT, cells, zSpatial: null,
-      axes: { z: { label: "Run", kind: "run" }, c: null, t: { label: "Frame", kind: "frame" }, stackAxis: "t" },
+      axes: { z: { label: "Shot", kind: "shot" }, c: null, t: { label: "Frame", kind: "frame" }, stackAxis: "t" },
     };
   }
 

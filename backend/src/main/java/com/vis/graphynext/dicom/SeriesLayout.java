@@ -149,8 +149,15 @@ public record SeriesLayout(
      * @param stackAxis 画像スタック（= Cornerstone StackViewport の imageIds ＝ホイール送り／
      *                  Grid 表示／プリフェッチの単位）をどの軸に割り当てるか。{@code "z"}（既定）か {@code "t"}。
      *                  XA シネは {@code "t"}（フレーム送りのたびに setStack が走るのを避ける）。
+     * @param loaderFrames true なら frame&gt;=0 のセルを、サーバー切り出しでなく {@code &frame=N+1} のローダー切り出しで読む
+     *                  （Enhanced 多フレーム: 値の変換・位置・窓が Functional Groups にあり、ローダーが合成する。
+     *                  圧縮転送構文でも読める）。{@code stackAxis="t"} は常にローダー切り出し。
      */
-    public record Axes(Axis z, Axis c, Axis t, String stackAxis) {
+    public record Axes(Axis z, Axis c, Axis t, String stackAxis, boolean loaderFrames) {
+        /** ローダー切り出しを使わない（XA・US・IVUS など、{@code loaderFrames} を意識しない展開器用）。 */
+        public Axes(Axis z, Axis c, Axis t, String stackAxis) {
+            this(z, c, t, stackAxis, false);
+        }
     }
 
     /** 空間メタなしのレイアウト（{@link SeriesLayoutBuilder} の返り値用）。 */

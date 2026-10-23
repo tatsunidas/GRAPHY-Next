@@ -86,7 +86,7 @@ import {
   thickSlabImageId,
 } from "./thickSlab";
 import { SLAB_PROJECTIONS, defaultSlabThickness, type SlabProjection } from "./slabPresets";
-import { imageIdForInstance, sopUidFromImageId, type ViewerMode } from "./imageId";
+import { imageIdForInstance, sopUidFromImageId, xaSourceUrlOf, type ViewerMode } from "./imageId";
 import { XaPresentationDialog } from "./XaPresentationDialog";
 import type { PresentationPlan } from "./xaPresentationApply";
 import {
@@ -566,17 +566,24 @@ export function SeriesViewer({
   const [xaPrewarmedKey, setXaPrewarmedKey] = useState<string | null>(null);
   const isFrameStackRef = useRef(isFrameStack);
   isFrameStackRef.current = isFrameStack;
+  // Enhanced 多フレーム（loaderFrames）も同じ `&frame=` 経路なので、同じ温めが要る。
+  const prewarmNeeded = isFrameStack || layout.loaderFrames === true;
   useEffect(() => {
-    if (!isFrameStack) {
+    if (!prewarmNeeded) {
       setXaCineSource(null);
       return;
     }
     const first = zStack[0];
     if (!first) return;
+    // XA は 1 インスタンスに全フレームがある。Enhanced のスタックは複数ファイルにまたがり得るので、
+    // 取得元（dataSet キャッシュのキー）ごとに 1 回ずつ温める。ブランク（frame= を持たない）は除く。
+    const sources = isFrameStack
+      ? [first]
+      : [...new Map(zStack.filter((id) => id.includes("frame=")).map((id) => [xaSourceUrlOf(id), id])).values()];
     let cancelled = false;
-    prewarmXaDataset(first)
+    Promise.all(sources.map((id) => prewarmXaDataset(id)))
       .then(() => {
-        if (!cancelled) setXaCineSource(readXaCineSource(first));
+        if (!cancelled) setXaCineSource(isFrameStack ? readXaCineSource(first) : null);
       })
       .catch(() => {
         // 取得できなくても既定 fps で再生はできる（描画は通常の imageLoader が再試行する）。
@@ -590,7 +597,7 @@ export function SeriesViewer({
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isFrameStack, zStackKey]);
+  }, [prewarmNeeded, isFrameStack, zStackKey]);
 
   /**
    * プリウォームが終わるまでフレームを渡さない。
@@ -605,7 +612,7 @@ export function SeriesViewer({
    * （1 フレーム目の QCA が 2 フレーム目の値を返した）。`isXaDatasetReady` は
    * このために用意してあったのに、どこからも呼ばれていなかった。
    */
-  const xaReady = !isFrameStack || xaPrewarmedKey === zStackKey;
+  const xaReady = !prewarmNeeded || xaPrewarmedKey === zStackKey;
   const displayImageIds = xaReady ? rawDisplayImageIds : EMPTY_IMAGE_IDS;
 
   // シリーズ/ランが変わったら DSA は解除する（別ランのマスクを引きずらない）。

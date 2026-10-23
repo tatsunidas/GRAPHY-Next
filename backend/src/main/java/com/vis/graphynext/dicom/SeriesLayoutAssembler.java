@@ -74,6 +74,12 @@ public final class SeriesLayoutAssembler {
         if (us != null) {
             return us;
         }
+        // Enhanced CT/MR/PET のマルチフレームは Z/C/T のボリュームに展開する（standalone と同一ロジック）。
+        // 🔴 全 SOP が 1 フレームの Enhanced（VSRAD 型）は null で従来経路に落ちる（回帰させない）。
+        SeriesLayout enhanced = EnhancedMultiframeExpander.layout(instances);
+        if (enhanced != null) {
+            return enhanced;
+        }
 
         List<SeriesLayoutBuilder.FrameMeta> frames = new ArrayList<>();
         double[] seriesIop = null;

@@ -52,6 +52,11 @@ export interface SeriesLayout {
    * どの軸に割り当てるか。既定 `"z"`。XA シネは `"t"`（フレーム送りのたびに setStack が走るのを防ぐ）。
    */
   stackAxis?: "z" | "t";
+  /**
+   * true なら、スタックの画像は `&frame=N` のローダー切り出し（Enhanced 多フレーム）。dataSet を先に温める必要がある
+   * （`xaCine.prewarmXaDataset`）。XA シネ（stackAxis="t"）は常にそうなので、これは Z スタックの Enhanced 用。
+   */
+  loaderFrames?: boolean;
   /** 指定 (z, c) に対する T スタック（imageId 配列, t 昇順）。`stackAxis="t"` のとき使う。 */
   tStack?(z: number, c: number): string[];
   /** 指定 Z の物理座標 IPP（無ければ null）。シリーズ Sync の座標同期に使う。 */
@@ -89,7 +94,8 @@ export function buildLayoutFromDto(
   );
   // XA シネ（stackAxis="t"）の frame は「同一ファイル内のフレーム番号」なので、サーバ切り出しではなく
   // **ローダ内フレーム指定**の imageId を組む（Part-10 の取得を 1 回で済ませる。fw/angio-design.md §5.3）。
-  const xaCine = dto.axes?.stackAxis === "t";
+  // Enhanced 多フレーム（loaderFrames）も同じ: 値の変換・位置・窓は Functional Groups にあり、ローダが合成する。
+  const xaCine = dto.axes?.stackAxis === "t" || dto.axes?.loaderFrames === true;
   for (const cell of dto.cells) {
     // モザイクは frame>=0 → タイル imageId、非モザイクは whole-image imageId。
     // web は WADO-RS が study/series/sop を要するため study/series を渡す。
@@ -146,6 +152,7 @@ export function buildLayoutFromDto(
     },
     axes: axesFromDto(dto),
     stackAxis: dto.axes?.stackAxis === "t" ? "t" : "z",
+    loaderFrames: dto.axes?.loaderFrames === true,
     ippAt: (z) => ippByZ.get(z) ?? null,
     normal,
   };
