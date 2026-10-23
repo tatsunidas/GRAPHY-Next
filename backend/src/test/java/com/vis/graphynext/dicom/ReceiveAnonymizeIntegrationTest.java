@@ -345,6 +345,32 @@ class ReceiveAnonymizeIntegrationTest {
     }
 
     @Test
+    void cleanPixelData_isNotAllowed_butOtherCleanOptionsAre() throws Exception {
+        // 負例: 受信時は画素を消さないので、CleanPixelData は設定として認めない（保存前の検査・受信・状態の 3 経路）
+        String bad = "{\"options\":[\"CleanPixelData\"]}";
+        assertThrows(Exception.class, () -> anonymizer.validate(bad));
+        settings.putAll(Map.of(ReceiveAnonymizer.PROFILE_KEY, bad));
+        assertFalse(anonymizer.status().profileValid());
+        Path incoming = tmp.resolve("in-pixel");
+        int port = freePort();
+        DicomScpServer scp = start(anonymizer, incoming, port);
+        try {
+            assertFalse(send(port, write(ct(PID, "1.2.826.13.1", "1.2.826.13.1.1", "1.2.826.13.1.1.1"))).success(),
+                    "CleanPixelData が入った設定のときは、画素が消えたと誤解させないよう受けない");
+        } finally {
+            scp.stop();
+        }
+        assertEquals(0, storage.findMatches(null, "1.2.826.13.1", null, null).size());
+        assertEquals(0, fileCount(incoming));
+
+        // 正例: 他のクリーン系は通る
+        String ok = "{\"options\":[\"CleanDescriptors\",\"CleanGraphics\"]}";
+        anonymizer.validate(ok);
+        settings.putAll(Map.of(ReceiveAnonymizer.PROFILE_KEY, ok));
+        assertTrue(anonymizer.status().profileValid());
+    }
+
+    @Test
     void disabled_behavesAsBefore_andSwitchesWithoutRestart() throws Exception {
         int port = freePort();
         DicomScpServer scp = start(anonymizer, tmp.resolve("in-off"), port);
