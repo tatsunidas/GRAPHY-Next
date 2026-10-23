@@ -1594,7 +1594,8 @@ export const en: Record<string, string> = {
   "cine.fpsSource.recommendedDisplayFrameRate": "Frame rate from RecommendedDisplayFrameRate (0008,2144)",
   "cine.fpsSource.default": "No frame-rate tag present; playing at the default 15 fps",
   // Axis labels (values supplied by the backend SeriesLayout.axes)
-  "series.axis.Run": "Run",
+  "series.axis.Shot": "Shot",
+  "series.jump.title": "Jump to a number (1–{{max}}, press Enter)",
   "series.axis.Frame": "Frame",
   // Radiation dose report (RDSR. fw/angio-design.md §14.2)
   "dose.title": "Radiation Dose Report (RDSR)",

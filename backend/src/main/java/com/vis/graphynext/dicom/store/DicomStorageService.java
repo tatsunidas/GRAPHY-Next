@@ -118,6 +118,7 @@ public class DicomStorageService {
         entity.setSeriesNumber(ds.getInt(Tag.SeriesNumber, 0));
         entity.setSeriesDescription(ds.getString(Tag.SeriesDescription));
         entity.setInstanceNumber(ds.getInt(Tag.InstanceNumber, 0));
+        entity.setNumberOfFrames(framesOf(ds));
         entity.setSizeBytes(Files.size(dest));
         entity.setUri(layout.toStored(dest));
         DicomInstance saved;
@@ -290,8 +291,46 @@ public class DicomStorageService {
                         x.getStudyDate(), x.getStudyDescription(), x.getModality(),
                         x.getNumberOfInstances(),
                         byStudy.getOrDefault(x.getStudyInstanceUid(), java.util.List.of())
-                                .stream().distinct().sorted().toList()))
+                                .stream().distinct().sorted().toList(),
+                        totalFrames(x.getFramesSum(), x.getFramesKnown(), x.getNumberOfInstances())))
                 .toList();
+    }
+
+    /**
+     * フレーム数の合計。NumberOfFrames が未取得の行が 1 つでもあれば null（不明）。
+     * 取得済みの行だけを足すと実際より少ない数が出る。1 や 0 で埋めない。
+     */
+    static Long totalFrames(Long sum, long known, long instances) {
+        return known == instances ? sum : null;
+    }
+
+    /** NumberOfFrames（無い・不正は単一フレームとして 1）。 */
+    static int framesOf(Attributes ds) {
+        return Math.max(1, ds.getInt(Tag.NumberOfFrames, 1));
+    }
+
+    /**
+     * NumberOfFrames を保存する前に取り込んだ行を、保存済みのファイルのヘッダから埋める。
+     * ヘッダを読めない行は null のまま残す（0 や 1 で埋めない）。戻り値は埋めた行数。
+     */
+    @Transactional
+    public int backfillNumberOfFrames() {
+        int filled = 0;
+        int unreadable = 0;
+        for (DicomInstance inst : repo.findByNumberOfFramesIsNull()) {
+            Attributes ds = readHeaderQuietly(inst);
+            if (ds == null) {
+                unreadable++;
+                continue;
+            }
+            inst.setNumberOfFrames(framesOf(ds));
+            repo.save(inst);
+            filled++;
+        }
+        if (filled > 0 || unreadable > 0) {
+            log.info("NumberOfFrames の埋め直し: 埋めた {} 件・読めず null のまま {} 件", filled, unreadable);
+        }
+        return filled;
     }
 
     /** スタディ内のシリーズ一覧。 */
@@ -300,7 +339,8 @@ public class DicomStorageService {
         return repo.findSeriesSummaries(studyUid).stream()
                 .map(s -> new com.vis.graphynext.dicom.SeriesDto(
                         s.getSeriesInstanceUid(), s.getModality(), s.getSeriesNumber(),
-                        s.getSeriesDescription(), s.getSopClassUid(), s.getNumberOfInstances()))
+                        s.getSeriesDescription(), s.getSopClassUid(), s.getNumberOfInstances(),
+                        totalFrames(s.getFramesSum(), s.getFramesKnown(), s.getNumberOfInstances())))
                 .toList();
     }
 

@@ -71,14 +71,14 @@ describe("XA シネのレイアウト", () => {
       { c: 0, z: 0, t: 1, sopInstanceUid: "1.1", frame: 1 },
       { c: 0, z: 0, t: 2, sopInstanceUid: "1.1", frame: 2 },
     ],
-    axes: { z: { label: "Run", kind: "run" }, c: null, t: { label: "Frame", kind: "frame" }, stackAxis: "t" },
+    axes: { z: { label: "Shot", kind: "shot" }, c: null, t: { label: "Frame", kind: "frame" }, stackAxis: "t" },
   });
 
   it("stackAxis と軸ラベルが引き継がれる", () => {
     const l = buildLayoutFromDto(xa, "standalone", "S", "SE")!;
     expect(l.stackAxis).toBe("t");
-    expect(l.axes?.z.label).toBe("Run");
-    expect(l.axes?.z.kind).toBe("run");
+    expect(l.axes?.z.label).toBe("Shot");
+    expect(l.axes?.z.kind).toBe("shot");
     expect(l.axes?.t.label).toBe("Frame");
     expect(l.axes?.t.kind).toBe("frame");
   });

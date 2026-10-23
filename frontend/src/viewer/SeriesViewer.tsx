@@ -107,6 +107,7 @@ import { registerViewerTargetInfo } from "./viewerCommands";
 import { fetchSettings } from "../settings/settingsApi";
 import { useI18n } from "../i18n/i18n";
 import { LoadingSpinner } from "./LoadingSpinner";
+import { IndexJump } from "./IndexJump";
 // 副作用インポート: このウィンドウが保持するマスクを、他ウィンドウからのウィンドウ間同期要求
 // （BroadcastChannel）に応答できるよう即座に待ち受け開始する（`fw/mask-driven-pipelines-gap-analysis.md` 課題#1）。
 import "./maskBridge";
@@ -2162,6 +2163,7 @@ function DimSlider({
         onChange={(e) => onChange(Number(e.target.value))}
         style={{ flex: 1 }}
       />
+      <IndexJump count={count} onJump={onChange} testId={testId ? `${testId}-jump` : undefined} />
       {trailing}
     </div>
   );

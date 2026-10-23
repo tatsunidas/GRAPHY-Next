@@ -1596,7 +1596,8 @@ export const ja: Record<string, string> = {
   "cine.fpsSource.recommendedDisplayFrameRate": "フレームレートの根拠: RecommendedDisplayFrameRate (0008,2144)",
   "cine.fpsSource.default": "フレームレートのタグが無いため既定値（15 fps）で再生しています",
   // 軸ラベル（backend の SeriesLayout.axes が供給する値の訳）
-  "series.axis.Run": "ラン",
+  "series.axis.Shot": "ショット",
+  "series.jump.title": "番号を指定して移動（1〜{{max}}、Enter で移動）",
   "series.axis.Frame": "フレーム",
   // 被ばく線量レポート（RDSR。fw/angio-design.md §14.2）
   "dose.title": "被ばく線量レポート（RDSR）",

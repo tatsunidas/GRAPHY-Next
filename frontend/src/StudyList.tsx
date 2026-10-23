@@ -19,6 +19,7 @@ import { useI18n } from "./i18n/i18n";
 import { SeriesViewer } from "./viewer/SeriesViewer";
 import { useToolPanelDefault } from "./viewer/toolPanelDefault";
 import { seriesHeadingName } from "./seriesHeading";
+import { imageCount } from "./imageCount";
 import { classifySeriesRenderability, type SeriesRenderability } from "./viewer/seriesRenderable";
 import { VideoViewer } from "./viewer/VideoViewer";
 import { type ViewerMode } from "./viewer/imageId";
@@ -37,7 +38,7 @@ const STUDY_SORT: Record<string, Accessor<Study>> = {
   studyDate: (s) => s.studyDate,
   studyDescription: (s) => s.studyDescription,
   modality: (s) => studyModalities(s),
-  numberOfInstances: (s) => s.numberOfInstances,
+  numberOfInstances: (s) => imageCount(s),
 };
 
 export function StudyList({
@@ -134,7 +135,7 @@ export function StudyList({
                   <Td>{formatDate(s.studyDate)}</Td>
                   <Td>{s.studyDescription || "—"}</Td>
                   <Td>{studyModalities(s) || "—"}</Td>
-                  <Td>{s.numberOfInstances}</Td>
+                  <Td>{imageCount(s)}</Td>
                   <Td><ReportBadge count={reportCounts[s.studyInstanceUid]} /></Td>
                 </tr>
               );
@@ -242,7 +243,7 @@ function SeriesNavigator({
                   <Td>{se.seriesNumber ?? "—"}</Td>
                   <Td>{se.modality || "—"}</Td>
                   <Td>{se.seriesDescription || "—"}</Td>
-                  <Td>{se.numberOfInstances}</Td>
+                  <Td>{imageCount(se)}</Td>
                 </tr>
               );
             })}

@@ -54,6 +54,12 @@ public class DicomInstance {
     // インスタンス
     private Integer instanceNumber;
 
+    /**
+     * NumberOfFrames（単一フレームは 1）。「枚数」の集計用。この列を足す前に保存した行は null
+     * （起動時に {@link DicomStorageService#backfillNumberOfFrames()} が埋める。読めない行は null のまま）。
+     */
+    private Integer numberOfFrames;
+
     /** 保存した DICOM ファイルのバイトサイズ（容量統計用）。 */
     private Long sizeBytes;
 
@@ -190,6 +196,14 @@ public class DicomInstance {
 
     public void setInstanceNumber(Integer v) {
         this.instanceNumber = v;
+    }
+
+    public Integer getNumberOfFrames() {
+        return numberOfFrames;
+    }
+
+    public void setNumberOfFrames(Integer v) {
+        this.numberOfFrames = v;
     }
 
     public Long getSizeBytes() {
