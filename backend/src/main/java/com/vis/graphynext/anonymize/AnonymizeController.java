@@ -317,6 +317,11 @@ public class AnonymizeController {
         validateDateOptions(req);
     }
 
+    /** 受信時の匿名化のプロファイル検査。対象スタディは持たないので、日付の排他だけを見る。 */
+    static void validateProfile(AnonRequest req) {
+        validateDateOptions(req);
+    }
+
     /**
      * 日付オプションの排他を検査する。
      *
