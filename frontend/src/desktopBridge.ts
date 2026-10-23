@@ -513,6 +513,11 @@ export interface GraphyDesktop {
     cmd: { kind: "action" | "getState"; id?: string; params?: unknown },
   ) => Promise<import("./assistant/actions/registry").ActionResult>;
   /** マクロ（表示操作の並び）の保存。アシスタント窓だけ（それ以外は main が `forbidden`）。形と大きさだけ main が検証する。 */
+  assistantJournalList?: () => Promise<{
+    ok: boolean;
+    entries?: { ts: string; id: string; params?: Record<string, unknown>; ok: boolean; error?: string }[];
+    error?: string;
+  }>;
   assistantMacrosList?: () => Promise<{ ok: boolean; macros?: import("./assistant/macros/macroModel").Macro[]; error?: string }>;
   assistantMacrosSave?: (macro: {
     name: string;

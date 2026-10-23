@@ -30,7 +30,7 @@ const messages = require("./startupMessages");
 const secretStore = require("./secretStore");
 const aiGateway = require("./aiGateway");
 const { isAssistantSender } = require("./assistantSender");
-const { createRelay, createJournal } = require("./viewerRelay");
+const { createRelay, createJournal, readJournal } = require("./viewerRelay");
 const { createStore: createMacroStore } = require("./assistantMacros");
 const aiProviders = require("./aiProviders");
 const computeEndpoints = require("./computeEndpoints");
@@ -1277,6 +1277,9 @@ ipcMain.handle("graphy:assistant-viewer-cmd", (e, sessionId, cmd) => {
 });
 // マクロ（表示操作の並び）の保存。形と大きさだけ main が見る（assistantMacros.js）。再生時の検証は 2D 窓が毎回行う。
 const macroStore = createMacroStore({ file: path.join(app.getPath("userData"), "assistant-macros.json") });
+ipcMain.handle("graphy:assistant-journal-list", (e) =>
+  isAssistantSender(e) ? readJournal({ file: path.join(app.getPath("userData"), "assistant-journal.jsonl") }) : { ok: false, error: "forbidden" },
+);
 ipcMain.handle("graphy:assistant-macros-list", (e) => (isAssistantSender(e) ? macroStore.list() : { ok: false, error: "forbidden" }));
 ipcMain.handle("graphy:assistant-macros-save", (e, m) => (isAssistantSender(e) ? macroStore.save(m) : { ok: false, error: "forbidden" }));
 ipcMain.handle("graphy:assistant-macros-delete", (e, id) => (isAssistantSender(e) ? macroStore.remove(id) : { ok: false, error: "forbidden" }));
