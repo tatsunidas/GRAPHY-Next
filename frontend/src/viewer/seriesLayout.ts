@@ -10,7 +10,7 @@ export type AxisKind = SeriesAxisDto["kind"];
 
 /** 1 つの軸の提示（`fw/angio-design.md` §5.7）。 */
 export interface AxisSpec {
-  /** UI ラベル（"Z" / "Run" / "Frame"）。 */
+  /** UI ラベル（"Z" / "Shot" / "Frame"）。 */
   label: string;
   kind: AxisKind;
   /** DICOM 由来の副題（"Echo"/"Temporal" 等。ラベルの後ろに括弧書きで出す）。 */

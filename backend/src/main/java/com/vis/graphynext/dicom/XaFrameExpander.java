@@ -15,23 +15,25 @@ import java.util.Set;
 /**
  * XA / XRF の古典マルチフレーム（シネ）を ZCT レイアウトへ展開する（fw/angio-design.md §5.2）。
  *
- * <p><b>展開の形</b>: 1 インスタンス = 1 ラン（撮影）で、その中に {@code NumberOfFrames} 枚の
+ * <p><b>展開の形</b>: 1 インスタンス = 1 ショット（撮影）で、その中に {@code NumberOfFrames} 枚の
  * フレームが入っている。これを
  * <ul>
- *   <li><b>Z 軸 = ラン</b>（nZ = インスタンス数。UI ラベルは "Run"）</li>
+ *   <li><b>Z 軸 = ショット</b>（nZ = インスタンス数。UI ラベルは "Shot"）</li>
  *   <li><b>T 軸 = フレーム</b>（nT = 最大フレーム数。UI ラベルは "Frame"）</li>
  *   <li><b>stackAxis = "t"</b>（＝フレーム列を Cornerstone のスタックにする）</li>
  * </ul>
- * として載せる。Z にランを載せるのはデータ構造の都合であり、<b>UI に "Z" とは出さない</b>
+ * として載せる。Z にショットを載せるのはデータ構造の都合であり、<b>UI に "Z" とは出さない</b>
  * （{@link SeriesLayout.Axes} が提示を供給する）。
  *
  * <p><b>stackAxis="t" の理由</b>: スタックは Cornerstone StackViewport の imageIds ＝ホイール送り・
  * プリフェッチ・Grid の単位である。従来どおり Z をスタックにすると、XA では
  * <b>フレームを送るたびに setStack が走り 30fps に届かない</b>（ホイール送りも死ぬ）。
  *
- * <p><b>フレーム数がランごとに違う場合</b>: nT は最大値にし、足りないランは
- * <b>そのランの最終フレームを指すセルで埋める</b>。ブランク画像を挟むと再生中に黒画面が
- * 点滅するため。UI から見ると「短いランは最終フレームで止まる」ように見える。
+ * <p><b>フレーム数がショットごとに違う場合</b>: nT は最大値にするが、セルは<b>各ショットの実フレーム数
+ * だけ</b>作る（短いショットを最終フレームで埋めない）。frontend のフレーム列（{@code tStack}）は
+ * 存在するセルだけを並べるので、89 フレームのショットは 89 枚、93 フレームのショットは 93 枚になる。
+ * 以前は黒画面の点滅を避けて最終フレームで埋めていたが、フレーム数が実際と違って見える
+ * （末尾に同じ画像が並ぶ）ため止めた。
  *
  * <p><b>幾何は付けない</b>: 投影像には患者座標の断面が無いため IOP / ZSpatial / FrameOfReference は
  * 付与しない（＝シリーズ Sync・参照線・MPR が誤って有効化されない）。空間校正は
@@ -105,15 +107,13 @@ public final class XaFrameExpander {
             nT = Math.max(nT, Math.max(1, ds.getInt(Tag.NumberOfFrames, 1)));
         }
 
-        List<SeriesLayout.Cell> cells = new ArrayList<>(nZ * nT);
+        List<SeriesLayout.Cell> cells = new ArrayList<>();
         for (int z = 0; z < nZ; z++) {
             Attributes ds = runs.get(z);
             String sop = ds.getString(Tag.SOPInstanceUID);
             int frames = Math.max(1, ds.getInt(Tag.NumberOfFrames, 1));
-            for (int t = 0; t < nT; t++) {
-                // 短いランは最終フレームで止める（ブランクを挟まない）。
-                int frame = Math.min(t, frames - 1);
-                cells.add(new SeriesLayout.Cell(0, z, t, sop, frame));
+            for (int t = 0; t < frames; t++) {
+                cells.add(new SeriesLayout.Cell(0, z, t, sop, t));
             }
         }
 
@@ -122,7 +122,7 @@ public final class XaFrameExpander {
         int rows = first.getInt(Tag.Rows, 0);
 
         SeriesLayout.Axes axes = new SeriesLayout.Axes(
-                new SeriesLayout.Axis("Run", "run"),
+                new SeriesLayout.Axis("Shot", "shot"),
                 null,
                 new SeriesLayout.Axis("Frame", "frame"),
                 "t");

@@ -32,7 +32,10 @@ export interface Study {
    * （CT/PT/NM を持つスタディが "PT" だけに見えていた）。表示にはこちらを使う。
    */
   modalities?: string[] | null;
+  /** SOP インスタンス数。「枚数」の表示には {@link imageCount}（フレーム総数）を使う。 */
   numberOfInstances: number;
+  /** フレーム総数。分からない（未取得・web）ときは null。 */
+  numberOfFrames?: number | null;
 }
 
 export interface Series {
@@ -45,7 +48,10 @@ export interface Series {
    * （`viewer/seriesRenderable.ts`）。**web（QIDO）では取れないことがある**ので null 可。
    */
   sopClassUid: string | null;
+  /** SOP インスタンス数。「枚数」の表示には {@link imageCount}（フレーム総数）を使う。 */
   numberOfInstances: number;
+  /** フレーム総数。分からない（未取得・web）ときは null。 */
+  numberOfFrames?: number | null;
 }
 
 export interface Instance {
@@ -225,10 +231,10 @@ export interface SeriesLayoutDto {
 
 /** 1 つの軸の提示（UI ラベルと種別）。 */
 export interface SeriesAxisDto {
-  /** UI に出すラベル（"Z" / "Run" / "Frame" 等）。 */
+  /** UI に出すラベル（"Z" / "Shot" / "Frame" 等）。 */
   label: string;
   /** 軸の種別。UI は空間スライス軸前提の機能（ThickSlab/Sync/参照線）の可否をこれで決める。 */
-  kind: "slice" | "run" | "frame" | "echo" | "bvalue" | "temporal" | "pullback" | "generic";
+  kind: "slice" | "shot" | "frame" | "echo" | "bvalue" | "temporal" | "pullback" | "generic";
 }
 
 /** 軸の提示モデル（`fw/angio-design.md` §5.7）。 */
