@@ -20,6 +20,11 @@ export interface ActionDef {
   description: string;
   params: Record<string, ParamSpec>;
   required: readonly string[];
+  /**
+   * `write` はデータを変える操作。**モデルは直接呼べない**（tools に載せない）。計画（ロボット・マクロ）に入れることはできるが、
+   * 実行のたびに main の確認ダイアログで利用者の承認を取る（承認なしでは 2D 窓も実行しない）。省略は `display`。
+   */
+  effect?: "display" | "write";
 }
 
 /** `setTool` で選べる表示系ツール（シンボル名。実 ID への写像は 2D 窓の実行器が持つ）。 */
@@ -36,7 +41,8 @@ export type ActionId =
   | "invert"
   | "goToSlice"
   | "setLayout"
-  | "setTool";
+  | "setTool"
+  | "clearMeasurements";
 
 export const ACTIONS: readonly ActionDef[] = [
   {
@@ -82,9 +88,22 @@ export const ACTIONS: readonly ActionDef[] = [
     params: { tool: { type: "enum", values: DISPLAY_TOOLS, description: "Tool name." } },
     required: ["tool"],
   },
+  {
+    id: "clearMeasurements",
+    description:
+      "DESTRUCTIVE and cannot be undone: delete ALL measurement annotations (length, angle, etc.) on the viewer. Locked ones are kept. The user must approve each run in a confirmation dialog. Only use when the user explicitly asks to delete measurements.",
+    params: {},
+    required: [],
+    effect: "write",
+  },
 ];
 
 const BY_ID = new Map<string, ActionDef>(ACTIONS.map((a) => [a.id, a]));
+
+/** データを変える操作か（承認が要る・モデルは直接呼べない）。 */
+export function isWriteAction(id: unknown): boolean {
+  return typeof id === "string" && BY_ID.get(id)?.effect === "write";
+}
 
 export function isActionId(id: unknown): id is ActionId {
   return typeof id === "string" && BY_ID.has(id);
@@ -152,7 +171,7 @@ export function buildTools(): ToolDef[] {
         "Read the current state of the 2D viewer (tiles, modality, slice index/count, window/level, zoom, rotation, layout, active tool). Call this before operating. Contains no patient identifiers.",
       parameters: { type: "object", properties: {}, required: [] },
     },
-    ...ACTIONS.map((a) => ({ name: a.id, description: a.description, parameters: schemaOf(a) })),
+    ...ACTIONS.filter((a) => a.effect !== "write").map((a) => ({ name: a.id, description: a.description, parameters: schemaOf(a) })),
     {
       name: PROPOSE_TOOL,
       description:

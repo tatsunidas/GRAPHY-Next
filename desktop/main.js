@@ -1261,6 +1261,12 @@ ipcMain.handle("graphy:ai-chat-cancel", (e, sessionId) => {
 // アシスタント窓 → 2D ビューア窓の表示操作の中継（desktop/viewerRelay.js）。
 // 送れるのはアシスタント窓だけ。宛先は main が決める（#2dviewer の窓だけ）。操作の許可リストと引数の検証は
 // 受信側の 2D 窓が行う。履歴は userData/assistant-journal.jsonl（数値・列挙の引数だけ。患者情報は入らない）。
+const WRITE_CONFIRM_TEXT = {
+  clearMeasurements: {
+    message: "2D ビューアの計測線（長さ・角度など）をすべて消します。",
+    detail: "元に戻せません。ロックされた計測は残ります。実行しますか？",
+  },
+};
 const viewerRelay = createRelay({
   resolveTarget: () => {
     const w = viewerWins.get("2dviewer");
@@ -1273,7 +1279,24 @@ ipcMain.handle("graphy:assistant-viewer-cmd", (e, sessionId, cmd) => {
   // seriesLabel（自由記述）を状態に含めてよいのは、会話の宛先がローカルと判定できるときだけ。判定は main が行う。
   const dest = aiGateway.resolveCapability("text-to-text");
   const includeLabels = !!(dest && dest.ok && dest.local === true);
-  return viewerRelay.relay(sessionId, cmd && typeof cmd === "object" ? { ...cmd, includeLabels } : cmd);
+  const win = BrowserWindow.fromWebContents(e.sender);
+  return viewerRelay.relay(sessionId, cmd && typeof cmd === "object" ? { ...cmd, includeLabels } : cmd, {
+    // 🔴 データを変える操作は、実行のたびにここ（main の描くダイアログ）で承認を取る。文面は main が持つ（レンダラの値は使わない）。
+    confirm: async (id) => {
+      const text = WRITE_CONFIRM_TEXT[id];
+      if (!text || !win || win.isDestroyed()) return false;
+      const r = await dialog.showMessageBox(win, {
+        type: "warning",
+        buttons: ["実行する", "取り消す"],
+        defaultId: 1,
+        cancelId: 1,
+        title: "アシスタントの操作の確認",
+        message: text.message,
+        detail: text.detail,
+      });
+      return r.response === 0;
+    },
+  });
 });
 // マクロ（表示操作の並び）の保存。形と大きさだけ main が見る（assistantMacros.js）。再生時の検証は 2D 窓が毎回行う。
 const macroStore = createMacroStore({ file: path.join(app.getPath("userData"), "assistant-macros.json") });

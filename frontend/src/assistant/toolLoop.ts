@@ -9,6 +9,7 @@ import {
   GET_STATE_TOOL,
   PROPOSE_TOOL,
   isActionId,
+  isWriteAction,
   validateAction,
   validateProposal,
   type ActionResult,
@@ -67,6 +68,8 @@ async function runOne(call: AiToolCall, deps: LoopDeps): Promise<string> {
     return JSON.stringify({ ok: true, note: "shown to the user; nothing was executed" });
   }
   if (!isActionId(call.name)) return JSON.stringify({ ok: false, error: "unknown-tool" });
+  // データを変える操作はモデルが直接実行できない（tools に載せていないが、呼ばれても実行しない）。
+  if (isWriteAction(call.name)) return JSON.stringify({ ok: false, error: "not-allowed-for-model" });
   // 送る前に自分でも検証する（落ちた引数は 2D 窓へ届けない）。受信側でも再検証される。
   const v = validateAction(call.name, call.args);
   if (!v.ok) {

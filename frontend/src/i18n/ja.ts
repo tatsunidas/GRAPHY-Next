@@ -165,6 +165,8 @@ export const ja: Record<string, string> = {
   "assistant.noDesktop": "AI アシスタントはデスクトップ版でのみ使えます。",
   "assistant.act.getState": "ビューアの状態を確認",
   "assistant.act.setWindowLevel": "ウィンドウ幅/レベルを設定",
+  "assistant.act.clearMeasurements": "計測線をすべて消す",
+  "assistant.robot.writeMark": "⚠ 元に戻せません・実行時に確認ダイアログが出ます",
   "assistant.act.resetWindow": "ウィンドウを既定に戻す",
   "assistant.act.applyWlPreset": "W/L プリセットを適用",
   "assistant.act.rotate90": "90°回転",

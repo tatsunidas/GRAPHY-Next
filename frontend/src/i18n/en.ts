@@ -165,6 +165,8 @@ export const en: Record<string, string> = {
   "assistant.noDesktop": "The AI Assistant is available in the desktop app only.",
   "assistant.act.getState": "Read viewer state",
   "assistant.act.setWindowLevel": "Set window/level",
+  "assistant.act.clearMeasurements": "Delete all measurements",
+  "assistant.robot.writeMark": "⚠ Cannot be undone · a confirmation dialog appears when it runs",
   "assistant.act.resetWindow": "Reset window to default",
   "assistant.act.applyWlPreset": "Apply W/L preset",
   "assistant.act.rotate90": "Rotate 90°",
