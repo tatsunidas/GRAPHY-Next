@@ -123,6 +123,8 @@ import { RoiManagerPanel } from "./RoiManagerPanel";
 import { GLAM_CTX_KEY } from "../radiomics/GlamAnalysisScreen";
 import { ROI_FEATURE_CTX_KEY } from "../radiomics/RoiFeatureScreen";
 import { useI18n } from "../i18n/i18n";
+import { OpenRangeDialog } from "./OpenRangeDialog";
+import { tileIdFor, type ZRange } from "../viewer/virtualLayout";
 import { desktop } from "../desktopBridge";
 import { closeAllPluginWindows } from "../plugins/pluginWindowApi";
 import { mountSeriesPanel, closeAllSeriesPanels, PluginSeriesPanels } from "../plugins/pluginSeriesPanelApi";
@@ -155,6 +157,8 @@ interface Tile {
   instances: Instance[];
   syncEnabled: boolean; // シリーズ Sync 参加フラグ
   fusion?: FusionOverlay; // Fusion オーバーレイ（設定時）
+  /** 範囲つきで開いたタイル（シリーズの一部だけ）。無ければ全体。 */
+  range?: ZRange;
 }
 
 interface PatientSession {
@@ -392,8 +396,8 @@ export function Viewer2DScreen({ status }: { status: AppStatus | null }) {
 
   // ── タイル操作 ────────────────────────────────────────────
 
-  const addTile = useCallback(async (study: Study, series: Series) => {
-    const tileId = `${study.studyInstanceUid}|${series.seriesInstanceUid}`;
+  const addTile = useCallback(async (study: Study, series: Series, range?: ZRange) => {
+    const tileId = tileIdFor(study.studyInstanceUid, series.seriesInstanceUid, range);
     const pKey = derivePatientKey(study);
 
     let instances: Instance[] = [];
@@ -414,7 +418,7 @@ export function Viewer2DScreen({ status }: { status: AppStatus | null }) {
       emitToast(t("series.nonImage", { kind: kind.kind ?? "" }));
       return;
     }
-    const tile: Tile = { id: tileId, study, series, instances, syncEnabled: false };
+    const tile: Tile = { id: tileId, study, series, instances, syncEnabled: false, ...(range ? { range } : {}) };
 
     setPatients((prev) => {
       const idx = prev.findIndex((p) => p.patientKey === pKey);
@@ -552,6 +556,35 @@ export function Viewer2DScreen({ status }: { status: AppStatus | null }) {
     );
   }, []);
 
+  /** 開いているタイルの範囲を変える（undefined で全体）。ID が変わるので同じ ID が既にあれば何もしない。 */
+  const setTileRange = useCallback((patientKey: string, tileId: string, range: ZRange | undefined) => {
+    setPatients((prev) =>
+      prev.map((p) => {
+        if (p.patientKey !== patientKey) return p;
+        const cur = p.tiles.find((tl) => tl.id === tileId);
+        if (!cur) return p;
+        const newId = tileIdFor(cur.study.studyInstanceUid, cur.series.seriesInstanceUid, range);
+        if (newId !== tileId && p.tiles.some((tl) => tl.id === newId)) return p;
+        const soloTileId = p.soloTileId === tileId ? newId : p.soloTileId;
+        return {
+          ...p,
+          soloTileId,
+          tiles: p.tiles.map((tl) => {
+            if (tl.id !== tileId) return tl;
+            const { range: _drop, ...rest } = tl;
+            void _drop;
+            return { ...rest, id: newId, ...(range ? { range } : {}) };
+          }),
+        };
+      }),
+    );
+  }, []);
+
+  /** 範囲ダイアログの対象。tileId があれば既存タイルの範囲変更、無ければ新規に範囲つきで開く。 */
+  const [rangeDlg, setRangeDlg] = useState<
+    { study: Study; series: Series; patientKey?: string; tileId?: string; initial?: ZRange } | null
+  >(null);
+
   /** タイルの Fusion オーバーレイを設定または解除する。 */
   const setTileFusion = useCallback(
     (patientKey: string, tileId: string, overlay: FusionOverlay | undefined) => {
@@ -658,6 +691,7 @@ export function Viewer2DScreen({ status }: { status: AppStatus | null }) {
         <StudyBrowser
           patients={patients}
           onAdd={addTile}
+          onOpenRange={(study, series) => setRangeDlg({ study, series })}
           initialPatientId={initialPatientId}
           initialPatientName={initialPatientName}
           initialStudyUid={initialStudyUid}
@@ -686,6 +720,9 @@ export function Viewer2DScreen({ status }: { status: AppStatus | null }) {
                   onSwap={swapTiles}
                   onSetSync={setTileSync}
                   onSetFusion={setTileFusion}
+                  onTileRangeEdit={(patientKey, tile) =>
+                    setRangeDlg({ study: tile.study, series: tile.series, patientKey, tileId: tile.id, initial: tile.range })}
+                  onTileRangeClear={(patientKey, tileId) => setTileRange(patientKey, tileId, undefined)}
                 />
               )}
             </>
@@ -693,6 +730,22 @@ export function Viewer2DScreen({ status }: { status: AppStatus | null }) {
         </div>
       </div>
       <CopyImageAskHost />
+      {rangeDlg && (
+        <OpenRangeDialog
+          mode={mode}
+          studyUid={rangeDlg.study.studyInstanceUid}
+          seriesUid={rangeDlg.series.seriesInstanceUid}
+          title={`#${rangeDlg.series.seriesNumber ?? "?"} ${rangeDlg.series.modality ?? ""} ${rangeDlg.series.seriesDescription ?? ""}`.trim()}
+          initial={rangeDlg.initial}
+          onClose={() => setRangeDlg(null)}
+          onOpen={(range) => {
+            const d = rangeDlg;
+            setRangeDlg(null);
+            if (d.patientKey && d.tileId) setTileRange(d.patientKey, d.tileId, range);
+            else void addTile(d.study, d.series, range);
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -749,6 +802,8 @@ function TileGrid({
   onSwap,
   onSetSync,
   onSetFusion,
+  onTileRangeEdit,
+  onTileRangeClear,
 }: {
   patient: PatientSession;
   mode: "standalone" | "web";
@@ -761,6 +816,8 @@ function TileGrid({
   onSwap: (patientKey: string, fromId: string, toId: string) => void;
   onSetSync: (patientKey: string, tileId: string, enabled: boolean) => void;
   onSetFusion: (patientKey: string, tileId: string, overlay: FusionOverlay | undefined) => void;
+  onTileRangeEdit: (patientKey: string, tile: Tile) => void;
+  onTileRangeClear: (patientKey: string, tileId: string) => void;
 }) {
   const { t } = useI18n();
   const n = patient.tiles.length;
@@ -1962,6 +2019,8 @@ function TileGrid({
             onRemove={() => onRemoveTile(patient.patientKey, tile.id)}
             onSyncToggle={() => onSetSync(patient.patientKey, tile.id, !tile.syncEnabled)}
             onFusionChange={(overlay) => onSetFusion(patient.patientKey, tile.id, overlay)}
+            onRangeEdit={() => onTileRangeEdit(patient.patientKey, tile)}
+            onRangeClear={() => onTileRangeClear(patient.patientKey, tile.id)}
             onDimChange={(c, tIdx, z) => tileDimsRef.current.set(tile.id, { c, t: tIdx, z })}
             onDrop={handleDrop}
           />,
@@ -2232,6 +2291,8 @@ function TileCell({
   onRemove,
   onSyncToggle,
   onFusionChange,
+  onRangeEdit,
+  onRangeClear,
   onDimChange,
   onDrop,
 }: {
@@ -2256,6 +2317,8 @@ function TileCell({
   onRemove: () => void;
   onSyncToggle: () => void;
   onFusionChange: (overlay: FusionOverlay | undefined) => void;
+  onRangeEdit: () => void;
+  onRangeClear: () => void;
   onDimChange: (c: number, t: number, z: number) => void;
   onDrop: (targetTileId: string, zone: "before" | "after" | "center" | "none") => void;
 }) {
@@ -2737,6 +2800,9 @@ function TileCell({
           // タスク・ランチャー（A13-2）の依頼を引き受けるのは**このタイルだけ**
           // （StudyList のプレビューに取られないようにする）。
           acceptsTaskLaunch
+          range={tile.range}
+          onRangeEdit={onRangeEdit}
+          onRangeClear={onRangeClear}
         />
       </div>
 
@@ -3317,12 +3383,14 @@ function AdjustNumber({
 function StudyBrowser({
   patients,
   onAdd,
+  onOpenRange,
   initialPatientId,
   initialPatientName,
   initialStudyUid,
 }: {
   patients: PatientSession[];
   onAdd: (study: Study, series: Series) => void;
+  onOpenRange: (study: Study, series: Series) => void;
   initialPatientId?: string | null;
   initialPatientName?: string | null;
   initialStudyUid?: string | null;
@@ -3437,6 +3505,7 @@ function StudyBrowser({
             study={s}
             loadedTileIds={loadedTileIds}
             onAdd={onAdd}
+            onOpenRange={onOpenRange}
             autoOpen={s.studyInstanceUid === initialStudyUid}
           />
         ))}
@@ -3450,13 +3519,16 @@ function StudyNode({
   study,
   loadedTileIds,
   onAdd,
+  onOpenRange,
   autoOpen = false,
 }: {
   study: Study;
   loadedTileIds: Set<string>;
   onAdd: (study: Study, series: Series) => void;
+  onOpenRange: (study: Study, series: Series) => void;
   autoOpen?: boolean;
 }) {
+  const { t } = useI18n();
   const [open, setOpen] = useState(autoOpen);
   const [series, setSeries] = useState<Series[] | null>(null);
 
@@ -3564,6 +3636,14 @@ function StudyNode({
                 title={loaded ? "表示中" : "タイルに追加"}
               >
                 {loaded ? "✓" : "＋"}
+              </button>
+              <button
+                onClick={() => onOpenRange(study, se)}
+                style={addBtn}
+                data-testid="series-open-range"
+                title={t("openRange.menu")}
+              >
+                ⋯
               </button>
             </div>
           );
