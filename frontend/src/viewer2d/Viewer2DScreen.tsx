@@ -41,10 +41,17 @@ import {
   queryViewerTargetInfo,
 } from "../viewer/viewerCommands";
 import {
+  addPolygonPoint,
   annotationAtClientPoint,
   annotationByUid,
+  canEditPoints,
   canSplineFit,
+  continuePolyline,
+  hasPointAt,
+  isOpenPolyline,
   isSplineFitted,
+  joinPolylines,
+  removePolygonPoint,
   renderAnnotations,
   selectedAnnotations,
   setSplineFitOn,
@@ -123,6 +130,8 @@ import { RoiManagerPanel } from "./RoiManagerPanel";
 import { GLAM_CTX_KEY } from "../radiomics/GlamAnalysisScreen";
 import { ROI_FEATURE_CTX_KEY } from "../radiomics/RoiFeatureScreen";
 import { useI18n } from "../i18n/i18n";
+import { OpenRangeDialog } from "./OpenRangeDialog";
+import { tileIdFor, type ZRange } from "../viewer/virtualLayout";
 import { desktop } from "../desktopBridge";
 import { closeAllPluginWindows } from "../plugins/pluginWindowApi";
 import { mountSeriesPanel, closeAllSeriesPanels, PluginSeriesPanels } from "../plugins/pluginSeriesPanelApi";
@@ -155,6 +164,8 @@ interface Tile {
   instances: Instance[];
   syncEnabled: boolean; // シリーズ Sync 参加フラグ
   fusion?: FusionOverlay; // Fusion オーバーレイ（設定時）
+  /** 範囲つきで開いたタイル（シリーズの一部だけ）。無ければ全体。 */
+  range?: ZRange;
 }
 
 interface PatientSession {
@@ -392,8 +403,8 @@ export function Viewer2DScreen({ status }: { status: AppStatus | null }) {
 
   // ── タイル操作 ────────────────────────────────────────────
 
-  const addTile = useCallback(async (study: Study, series: Series) => {
-    const tileId = `${study.studyInstanceUid}|${series.seriesInstanceUid}`;
+  const addTile = useCallback(async (study: Study, series: Series, range?: ZRange) => {
+    const tileId = tileIdFor(study.studyInstanceUid, series.seriesInstanceUid, range);
     const pKey = derivePatientKey(study);
 
     let instances: Instance[] = [];
@@ -414,7 +425,7 @@ export function Viewer2DScreen({ status }: { status: AppStatus | null }) {
       emitToast(t("series.nonImage", { kind: kind.kind ?? "" }));
       return;
     }
-    const tile: Tile = { id: tileId, study, series, instances, syncEnabled: false };
+    const tile: Tile = { id: tileId, study, series, instances, syncEnabled: false, ...(range ? { range } : {}) };
 
     setPatients((prev) => {
       const idx = prev.findIndex((p) => p.patientKey === pKey);
@@ -552,6 +563,35 @@ export function Viewer2DScreen({ status }: { status: AppStatus | null }) {
     );
   }, []);
 
+  /** 開いているタイルの範囲を変える（undefined で全体）。ID が変わるので同じ ID が既にあれば何もしない。 */
+  const setTileRange = useCallback((patientKey: string, tileId: string, range: ZRange | undefined) => {
+    setPatients((prev) =>
+      prev.map((p) => {
+        if (p.patientKey !== patientKey) return p;
+        const cur = p.tiles.find((tl) => tl.id === tileId);
+        if (!cur) return p;
+        const newId = tileIdFor(cur.study.studyInstanceUid, cur.series.seriesInstanceUid, range);
+        if (newId !== tileId && p.tiles.some((tl) => tl.id === newId)) return p;
+        const soloTileId = p.soloTileId === tileId ? newId : p.soloTileId;
+        return {
+          ...p,
+          soloTileId,
+          tiles: p.tiles.map((tl) => {
+            if (tl.id !== tileId) return tl;
+            const { range: _drop, ...rest } = tl;
+            void _drop;
+            return { ...rest, id: newId, ...(range ? { range } : {}) };
+          }),
+        };
+      }),
+    );
+  }, []);
+
+  /** 範囲ダイアログの対象。tileId があれば既存タイルの範囲変更、無ければ新規に範囲つきで開く。 */
+  const [rangeDlg, setRangeDlg] = useState<
+    { study: Study; series: Series; patientKey?: string; tileId?: string; initial?: ZRange } | null
+  >(null);
+
   /** タイルの Fusion オーバーレイを設定または解除する。 */
   const setTileFusion = useCallback(
     (patientKey: string, tileId: string, overlay: FusionOverlay | undefined) => {
@@ -658,6 +698,7 @@ export function Viewer2DScreen({ status }: { status: AppStatus | null }) {
         <StudyBrowser
           patients={patients}
           onAdd={addTile}
+          onOpenRange={(study, series) => setRangeDlg({ study, series })}
           initialPatientId={initialPatientId}
           initialPatientName={initialPatientName}
           initialStudyUid={initialStudyUid}
@@ -686,6 +727,9 @@ export function Viewer2DScreen({ status }: { status: AppStatus | null }) {
                   onSwap={swapTiles}
                   onSetSync={setTileSync}
                   onSetFusion={setTileFusion}
+                  onTileRangeEdit={(patientKey, tile) =>
+                    setRangeDlg({ study: tile.study, series: tile.series, patientKey, tileId: tile.id, initial: tile.range })}
+                  onTileRangeClear={(patientKey, tileId) => setTileRange(patientKey, tileId, undefined)}
                 />
               )}
             </>
@@ -693,6 +737,22 @@ export function Viewer2DScreen({ status }: { status: AppStatus | null }) {
         </div>
       </div>
       <CopyImageAskHost />
+      {rangeDlg && (
+        <OpenRangeDialog
+          mode={mode}
+          studyUid={rangeDlg.study.studyInstanceUid}
+          seriesUid={rangeDlg.series.seriesInstanceUid}
+          title={`#${rangeDlg.series.seriesNumber ?? "?"} ${rangeDlg.series.modality ?? ""} ${rangeDlg.series.seriesDescription ?? ""}`.trim()}
+          initial={rangeDlg.initial}
+          onClose={() => setRangeDlg(null)}
+          onOpen={(range) => {
+            const d = rangeDlg;
+            setRangeDlg(null);
+            if (d.patientKey && d.tileId) setTileRange(d.patientKey, d.tileId, range);
+            else void addTile(d.study, d.series, range);
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -749,6 +809,8 @@ function TileGrid({
   onSwap,
   onSetSync,
   onSetFusion,
+  onTileRangeEdit,
+  onTileRangeClear,
 }: {
   patient: PatientSession;
   mode: "standalone" | "web";
@@ -761,6 +823,8 @@ function TileGrid({
   onSwap: (patientKey: string, fromId: string, toId: string) => void;
   onSetSync: (patientKey: string, tileId: string, enabled: boolean) => void;
   onSetFusion: (patientKey: string, tileId: string, overlay: FusionOverlay | undefined) => void;
+  onTileRangeEdit: (patientKey: string, tile: Tile) => void;
+  onTileRangeClear: (patientKey: string, tileId: string) => void;
 }) {
   const { t } = useI18n();
   const n = patient.tiles.length;
@@ -850,7 +914,19 @@ function TileGrid({
     return () => window.removeEventListener("mousedown", down, true);
   }, []);
   /** ROI の上での右クリックメニュー（スプライン Fit）。null=非表示。 */
-  const [roiMenu, setRoiMenu] = useState<{ x: number; y: number; uid: string; fitted: boolean; splineable: boolean; measure: boolean; convertible: boolean } | null>(null);
+  const [roiMenu, setRoiMenu] = useState<{
+    x: number; y: number; uid: string; fitted: boolean; splineable: boolean; measure: boolean; convertible: boolean;
+    /** 点の追加・削除ができる（ポリゴン / ポリゴンライン）。 */
+    editable: boolean;
+    /** 右クリック位置に制御点がある（「この点を削除」を有効にする）。 */
+    atPoint: boolean;
+    /** 開いたポリゴンライン（「続きを描く」の対象）。 */
+    openLine: boolean;
+    /** 選択中の開いたポリゴンラインがちょうど 2 本（「つなぐ」を有効にする）。 */
+    joinable: boolean;
+  } | null>(null);
+  // 右クリックした ROI を描いているキャンバス（点の追加・削除・続きを描くで使う）。
+  const roiMenuHostRef = useRef<HTMLDivElement | null>(null);
   const openFrameMenu = useCallback((e: React.MouseEvent, tileId: string) => {
     // 画像キャンバス上は cornerstone の右ドラッグ Zoom を優先し、原則メニューを出さない。
     // **ただし ROI の上だけは例外**（その ROI への操作を出す。空きスペースでは従来どおり Zoom）。
@@ -861,6 +937,8 @@ function TileGrid({
       // ROI の上ならメニューを出す（複製はどの ROI でもできるので、スプライン可否では絞らない）。
       if (hit?.annotationUID) {
         e.preventDefault();
+        roiMenuHostRef.current = host;
+        const selected = selectedAnnotations();
         setRoiMenu({
           x: e.clientX,
           y: e.clientY,
@@ -869,6 +947,10 @@ function TileGrid({
           splineable: canSplineFit(hit),
           measure: annotationRoiKind(hit) === "measure",
           convertible: canConvertMeasureToRoi(hit?.metadata?.toolName),
+          editable: canEditPoints(hit),
+          atPoint: host ? hasPointAt(hit, host, e.clientX, e.clientY) : false,
+          openLine: isOpenPolyline(hit),
+          joinable: selected.length === 2 && selected.every(isOpenPolyline),
         });
         return;
       }
@@ -1606,6 +1688,11 @@ function TileGrid({
         if (toastTimer.current) window.clearTimeout(toastTimer.current);
         toastTimer.current = window.setTimeout(() => setToast(null), 2500);
       },
+      // 選択中の開いたポリゴンライン 2 本を 1 本につなぐ。断るときは理由を出す。
+      joinPolylines: () => {
+        const r = joinPolylines(selectedAnnotations());
+        notify(t(r === "ok" ? "viewer2d.roi.join.done" : r === "image" ? "viewer2d.roi.join.image" : "viewer2d.roi.join.hint"));
+      },
       openLut: () => setLutOpen(true),
       // コントラスト調整（W/L）: 対象タイル群の現在 VOI を先頭タイルから読み、ダイアログを開く。
       openWindowLevel: () => {
@@ -1645,7 +1732,7 @@ function TileGrid({
         const tile = patient.tiles.find((tl) => tl.id === tid);
         if (!tile) { comingSoon(t("main.toolbar.viewer3d")); return; }
         const dims = tileDimsRef.current.get(tile.id);
-        const ctx = { study: tile.study, series: tile.series, c: dims?.c ?? 0, t: dims?.t ?? 0, ts: Date.now() };
+        const ctx = { study: tile.study, series: tile.series, c: dims?.c ?? 0, t: dims?.t ?? 0, range: tile.range, ts: Date.now() };
         localStorage.setItem("graphy-viewer3d-ctx", JSON.stringify(ctx));
         const d = desktop();
         if (d?.openViewer) void d.openViewer("viewer3d");
@@ -1656,7 +1743,7 @@ function TileGrid({
         const tid = resolveTargets()[0];
         const tile = patient.tiles.find((tl) => tl.id === tid);
         if (!tile) { comingSoon(t("main.toolbar.mpr")); return; }
-        const ctx = { study: tile.study, series: tile.series, ts: Date.now() };
+        const ctx = { study: tile.study, series: tile.series, range: tile.range, ts: Date.now() };
         localStorage.setItem("graphy-mpr-ctx", JSON.stringify(ctx));
         const d = desktop();
         if (d?.openViewer) void d.openViewer("mpr");
@@ -1667,7 +1754,7 @@ function TileGrid({
         const tid = resolveTargets()[0];
         const tile = patient.tiles.find((tl) => tl.id === tid);
         if (!tile) { comingSoon(t("main.toolbar.slicer")); return; }
-        const ctx = { study: tile.study, series: tile.series, ts: Date.now() };
+        const ctx = { study: tile.study, series: tile.series, range: tile.range, ts: Date.now() };
         localStorage.setItem("graphy-slicer-ctx", JSON.stringify(ctx));
         const d = desktop();
         if (d?.openViewer) void d.openViewer("slicer");
@@ -1962,6 +2049,8 @@ function TileGrid({
             onRemove={() => onRemoveTile(patient.patientKey, tile.id)}
             onSyncToggle={() => onSetSync(patient.patientKey, tile.id, !tile.syncEnabled)}
             onFusionChange={(overlay) => onSetFusion(patient.patientKey, tile.id, overlay)}
+            onRangeEdit={() => onTileRangeEdit(patient.patientKey, tile)}
+            onRangeClear={() => onTileRangeClear(patient.patientKey, tile.id)}
             onDimChange={(c, tIdx, z) => tileDimsRef.current.set(tile.id, { c, t: tIdx, z })}
             onDrop={handleDrop}
           />,
@@ -2042,6 +2131,72 @@ function TileGrid({
             >
               <span style={{ width: 14, display: "inline-block" }}>{roiMenu.fitted ? "✓" : ""}</span>
               {t("viewer2d.roi.splineFit.menu")}
+            </button>
+          )}
+          {roiMenu.editable && (
+            <>
+              <button
+                style={ctxMenuItem}
+                data-testid="roi-ctx-add-point"
+                onClick={() => {
+                  const ann = annotationByUid(roiMenu.uid);
+                  const host = roiMenuHostRef.current;
+                  const r = ann && host ? addPolygonPoint(ann, host, roiMenu.x, roiMenu.y) : "unsupported";
+                  if (r !== "ok") notify(t(r === "far" ? "viewer2d.roi.addPoint.far" : "viewer2d.roi.points.unsupported"));
+                  setRoiMenu(null);
+                }}
+              >
+                <span style={{ width: 14, display: "inline-block" }} />
+                {t("viewer2d.roi.addPoint")}
+              </button>
+              <button
+                style={roiMenu.atPoint ? ctxMenuItem : { ...ctxMenuItem, opacity: 0.4, cursor: "not-allowed" }}
+                data-testid="roi-ctx-remove-point"
+                disabled={!roiMenu.atPoint}
+                title={roiMenu.atPoint ? undefined : t("viewer2d.roi.removePoint.noHandle")}
+                onClick={() => {
+                  const ann = annotationByUid(roiMenu.uid);
+                  const host = roiMenuHostRef.current;
+                  const r = ann && host ? removePolygonPoint(ann, host, roiMenu.x, roiMenu.y) : "unsupported";
+                  if (r === "min") notify(t("viewer2d.roi.removePoint.min"));
+                  else if (r !== "ok") notify(t("viewer2d.roi.removePoint.noHandle"));
+                  setRoiMenu(null);
+                }}
+              >
+                <span style={{ width: 14, display: "inline-block" }} />
+                {t("viewer2d.roi.removePoint")}
+              </button>
+            </>
+          )}
+          {roiMenu.openLine && (
+            <button
+              style={ctxMenuItem}
+              data-testid="roi-ctx-continue"
+              onClick={() => {
+                const ann = annotationByUid(roiMenu.uid);
+                const host = roiMenuHostRef.current;
+                if (!(ann && host && continuePolyline(ann, host))) notify(t("viewer2d.roi.continue.failed"));
+                else notify(t("viewer2d.roi.continue.started"));
+                setRoiMenu(null);
+              }}
+            >
+              <span style={{ width: 14, display: "inline-block" }} />
+              {t("viewer2d.roi.continue")}
+            </button>
+          )}
+          {roiMenu.openLine && (
+            <button
+              style={roiMenu.joinable ? ctxMenuItem : { ...ctxMenuItem, opacity: 0.4, cursor: "not-allowed" }}
+              data-testid="roi-ctx-join"
+              disabled={!roiMenu.joinable}
+              title={roiMenu.joinable ? undefined : t("viewer2d.roi.join.hint")}
+              onClick={() => {
+                actions.joinPolylines();
+                setRoiMenu(null);
+              }}
+            >
+              <span style={{ width: 14, display: "inline-block" }} />
+              {t("viewer2d.roi.join")}
             </button>
           )}
         </div>
@@ -2232,6 +2387,8 @@ function TileCell({
   onRemove,
   onSyncToggle,
   onFusionChange,
+  onRangeEdit,
+  onRangeClear,
   onDimChange,
   onDrop,
 }: {
@@ -2256,6 +2413,8 @@ function TileCell({
   onRemove: () => void;
   onSyncToggle: () => void;
   onFusionChange: (overlay: FusionOverlay | undefined) => void;
+  onRangeEdit: () => void;
+  onRangeClear: () => void;
   onDimChange: (c: number, t: number, z: number) => void;
   onDrop: (targetTileId: string, zone: "before" | "after" | "center" | "none") => void;
 }) {
@@ -2737,6 +2896,9 @@ function TileCell({
           // タスク・ランチャー（A13-2）の依頼を引き受けるのは**このタイルだけ**
           // （StudyList のプレビューに取られないようにする）。
           acceptsTaskLaunch
+          range={tile.range}
+          onRangeEdit={onRangeEdit}
+          onRangeClear={onRangeClear}
         />
       </div>
 
@@ -3317,12 +3479,14 @@ function AdjustNumber({
 function StudyBrowser({
   patients,
   onAdd,
+  onOpenRange,
   initialPatientId,
   initialPatientName,
   initialStudyUid,
 }: {
   patients: PatientSession[];
   onAdd: (study: Study, series: Series) => void;
+  onOpenRange: (study: Study, series: Series) => void;
   initialPatientId?: string | null;
   initialPatientName?: string | null;
   initialStudyUid?: string | null;
@@ -3437,6 +3601,7 @@ function StudyBrowser({
             study={s}
             loadedTileIds={loadedTileIds}
             onAdd={onAdd}
+            onOpenRange={onOpenRange}
             autoOpen={s.studyInstanceUid === initialStudyUid}
           />
         ))}
@@ -3450,13 +3615,16 @@ function StudyNode({
   study,
   loadedTileIds,
   onAdd,
+  onOpenRange,
   autoOpen = false,
 }: {
   study: Study;
   loadedTileIds: Set<string>;
   onAdd: (study: Study, series: Series) => void;
+  onOpenRange: (study: Study, series: Series) => void;
   autoOpen?: boolean;
 }) {
+  const { t } = useI18n();
   const [open, setOpen] = useState(autoOpen);
   const [series, setSeries] = useState<Series[] | null>(null);
 
@@ -3564,6 +3732,14 @@ function StudyNode({
                 title={loaded ? "表示中" : "タイルに追加"}
               >
                 {loaded ? "✓" : "＋"}
+              </button>
+              <button
+                onClick={() => onOpenRange(study, se)}
+                style={addBtn}
+                data-testid="series-open-range"
+                title={t("openRange.menu")}
+              >
+                ⋯
               </button>
             </div>
           );

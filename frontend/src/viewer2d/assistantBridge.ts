@@ -10,6 +10,7 @@ import type { SeriesCommands } from "../viewer/seriesCommands";
 import {
   DISPLAY_TOOLS,
   GET_STATE_TOOL,
+  isWriteAction,
   projectState,
   validateAction,
   type ActionResult,
@@ -48,6 +49,8 @@ export interface BridgeCommand {
   params?: unknown;
   /** ローカル宛のときだけ true（seriesLabel を含める）。 */
   includeLabels?: boolean;
+  /** main が利用者の承認を取ったあとにだけ付ける。データを変える操作はこれが無いと実行しない。 */
+  approved?: boolean;
 }
 
 /** タイル群の現在状態（識別子を含み得る生の値）。必ず projectState を通してから外へ出す。 */
@@ -86,6 +89,7 @@ export function executeCommand(deps: BridgeDeps, cmd: BridgeCommand): ActionResu
   if (cmd.id === GET_STATE_TOOL) return { ok: false, error: "unknown-action" };
   const v = validateAction(cmd.id, cmd.params);
   if (!v.ok) return v;
+  if (isWriteAction(cmd.id) && cmd.approved !== true) return { ok: false, error: "approval-required" };
   const targets = deps.targets();
   if (targets.length === 0) return { ok: false, error: "no-tile" };
   const first = targets[0];
@@ -152,6 +156,10 @@ export function executeCommand(deps: BridgeDeps, cmd: BridgeCommand): ActionResu
       deps.setTool(deps.toolId(p.tool as DisplayTool));
       break;
     }
+    case "clearMeasurements":
+      // 取り消せない（ROI/計測は 2D の undo の対象外）。inverse は返さない。
+      deps.run(targets, (x) => x.clearAnnotations("measure"));
+      break;
     default:
       return { ok: false, error: "unknown-action" };
   }

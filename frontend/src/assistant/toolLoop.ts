@@ -9,12 +9,15 @@ import {
   GET_STATE_TOOL,
   PROPOSE_TOOL,
   isActionId,
+  isWriteAction,
   validateAction,
   validateProposal,
   type ActionResult,
   type ToolDef,
 } from "./actions/registry";
 import type { UiAction, UiProposal } from "./chatState";
+import { PLAN_TOOL, validatePlan } from "./robot/planModel";
+import type { MacroStep } from "./macros/macroModel";
 
 /**
  * 1 質問あたりの往復の上限。暴走（同じ操作を延々と繰り返す）を止めるための目安で、データから決めた値ではない。
@@ -28,6 +31,10 @@ export interface LoopDeps {
   onAction(a: UiAction): void;
   onActionUpdate(id: string, patch: Partial<UiAction>): void;
   onProposal(p: UiProposal): void;
+  /** ロボットモード: 検証済みの計画（実行は利用者の承認後。ここでは何も実行しない）。 */
+  onPlan?(p: { id: string; title: string; steps: MacroStep[] }): void;
+  /** "robot" のとき操作を直接実行せず、計画だけ受け付ける。 */
+  mode?: "chat" | "robot";
   onRoundDone(text?: string): void;
   /** 中止されたか（中止後は次の往復・操作をしない）。 */
   aborted(): boolean;
@@ -39,6 +46,15 @@ function toToolText(r: ActionResult): string {
 }
 
 async function runOne(call: AiToolCall, deps: LoopDeps): Promise<string> {
+  if (deps.mode === "robot" && call.name !== GET_STATE_TOOL) {
+    // ロボットでは計画の提示だけ。tools に載せていない名前（操作の直呼び・propose_steps）は実行しない。
+    if (call.name !== PLAN_TOOL) return JSON.stringify({ ok: false, error: "not-allowed-in-robot-mode" });
+    if (call.argsError) return JSON.stringify({ ok: false, error: `bad-arguments: ${call.argsError}` });
+    const v = validatePlan(call.args);
+    if (!v.ok) return JSON.stringify({ ok: false, error: v.error });
+    deps.onPlan?.({ id: call.id, title: v.title, steps: v.steps });
+    return JSON.stringify({ ok: true, note: "plan shown to the user; nothing was executed until they approve" });
+  }
   if (call.argsError) return JSON.stringify({ ok: false, error: `bad-arguments: ${call.argsError}` });
   if (call.name === GET_STATE_TOOL) {
     const r = await deps.viewer({ kind: "getState" });
@@ -52,6 +68,8 @@ async function runOne(call: AiToolCall, deps: LoopDeps): Promise<string> {
     return JSON.stringify({ ok: true, note: "shown to the user; nothing was executed" });
   }
   if (!isActionId(call.name)) return JSON.stringify({ ok: false, error: "unknown-tool" });
+  // データを変える操作はモデルが直接実行できない（tools に載せていないが、呼ばれても実行しない）。
+  if (isWriteAction(call.name)) return JSON.stringify({ ok: false, error: "not-allowed-for-model" });
   // 送る前に自分でも検証する（落ちた引数は 2D 窓へ届けない）。受信側でも再検証される。
   const v = validateAction(call.name, call.args);
   if (!v.ok) {

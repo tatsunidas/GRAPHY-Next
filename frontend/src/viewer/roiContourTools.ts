@@ -26,6 +26,7 @@
 import {
   PlanarFreehandROITool,
   SplineROITool,
+  AnnotationTool,
   ToolGroupManager,
   annotation as csAnnotation,
 } from "@cornerstonejs/tools";
@@ -35,7 +36,7 @@ import {
   triggerAnnotationRenderForViewportIds,
 } from "@cornerstonejs/tools/utilities";
 import { drawing as csDrawing } from "@cornerstonejs/tools";
-import { getRenderingEngines } from "@cornerstonejs/core";
+import { getEnabledElement, getRenderingEngines } from "@cornerstonejs/core";
 
 /**
  * 直線補間（＝ポリゴン）。Cornerstone の `SplineTypesEnum.Linear` と同じ値。
@@ -442,4 +443,280 @@ export function openContour(annotation: any): void {
   }
   annotation.data.isOpenContour = true;
   annotation.invalidated = true;
+}
+
+// ---------------------------------------------------------------------------------------------
+// 点の追加・削除 / 続きを描く / つなぐ（ポリゴン系＝SplineROITool 派生のみ）
+//
+// 制御点の正は `data.handles.points`（描画のたびに `contour.polyline` と補間が作り直される）。
+// フリーハンド・フリーラインは点が密なので対象外。
+// ---------------------------------------------------------------------------------------------
+
+/** 点の編集（追加・削除）ができる ROI か（ポリゴン / ポリゴンライン）。 */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function canEditPoints(annotation: any): boolean {
+  const tool = annotation?.metadata?.toolName as string | undefined;
+  return !!tool && supportsSplineFit(tool) && Array.isArray(annotation?.data?.handles?.points);
+}
+
+/** 開いたポリゴンライン（続きを描く・つなぐの対象）か。 */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function isOpenPolyline(annotation: any): boolean {
+  return (
+    annotation?.metadata?.toolName === CONTOUR_TOOL_NAMES.polyline &&
+    Array.isArray(annotation?.data?.handles?.points) &&
+    annotation?.data?.contour?.closed !== true
+  );
+}
+
+/** 制御点の最小数（ポリゴン 3、ポリゴンライン 2）。 */
+export function minControlPoints(closed: boolean): number {
+  return closed ? 3 : 2;
+}
+
+/** 点（canvas px）がハンドルに当たったとみなす距離。 */
+export const POINT_HIT_PX = 10;
+/** 「点を追加」で、線からこれ以上離れた位置は断る距離（canvas px）。 */
+export const ADD_POINT_MAX_PX = 20;
+
+/**
+ * 折れ線上で `p` に最も近い位置を返す。閉じているときは終点→始点の辺も数える。純関数。
+ * `t` は辺 `segIndex`（pts[segIndex]→pts[segIndex+1]、閉の最終辺は pts[n-1]→pts[0]）上の 0〜1。
+ */
+export function closestOnPolyline(
+  pts: readonly (readonly number[])[],
+  p: readonly number[],
+  closed: boolean,
+): { segIndex: number; t: number; distance: number } | null {
+  const n = pts.length;
+  if (n < 2) return null;
+  const segCount = closed ? n : n - 1;
+  let best: { segIndex: number; t: number; distance: number } | null = null;
+  for (let i = 0; i < segCount; i++) {
+    const a = pts[i];
+    const b = pts[(i + 1) % n];
+    let dd = 0;
+    let ap = 0;
+    for (let k = 0; k < a.length; k++) {
+      const d = b[k] - a[k];
+      dd += d * d;
+      ap += (p[k] - a[k]) * d;
+    }
+    const t = dd > 0 ? Math.min(1, Math.max(0, ap / dd)) : 0;
+    let dist2 = 0;
+    for (let k = 0; k < a.length; k++) {
+      const q = a[k] + (b[k] - a[k]) * t;
+      dist2 += (p[k] - q) * (p[k] - q);
+    }
+    const distance = Math.sqrt(dist2);
+    if (!best || distance < best.distance) best = { segIndex: i, t, distance };
+  }
+  return best;
+}
+
+/** 辺 `segIndex` の `t` の位置に点を挿入した新しい配列。純関数。 */
+export function insertPointAt(pts: readonly number[][], segIndex: number, t: number): number[][] {
+  const n = pts.length;
+  const a = pts[segIndex];
+  const b = pts[(segIndex + 1) % n];
+  const q = a.map((v, k) => v + (b[k] - v) * t);
+  const out = pts.map((x) => [...x]);
+  out.splice(segIndex + 1, 0, q);
+  return out;
+}
+
+/** `index` の点を除いた新しい配列。最小点数を下回るときは null。純関数。 */
+export function removePointAt(pts: readonly number[][], index: number, closed: boolean): number[][] | null {
+  if (index < 0 || index >= pts.length) return null;
+  if (pts.length - 1 < minControlPoints(closed)) return null;
+  return pts.filter((_, i) => i !== index).map((x) => [...x]);
+}
+
+/** `p` に最も近い点の番号（`maxDist` 以内。無ければ -1）。純関数。 */
+export function nearestPointIndex(pts: readonly (readonly number[])[], p: readonly number[], maxDist: number): number {
+  let best = -1;
+  let bestD = maxDist;
+  for (let i = 0; i < pts.length; i++) {
+    let d2 = 0;
+    for (let k = 0; k < p.length; k++) d2 += (pts[i][k] - p[k]) * (pts[i][k] - p[k]);
+    const d = Math.sqrt(d2);
+    if (d <= bestD) {
+      bestD = d;
+      best = i;
+    }
+  }
+  return best;
+}
+
+/**
+ * 開いた折れ線 2 本を 1 本につなぐ。純関数。
+ * 4 通りの端点距離（a 始/終 × b 始/終）で最も近い組を選び、a→b の順に向きをそろえて連結する。
+ * 接する 2 点が同じ位置なら 1 点にまとめる。
+ */
+export function mergeOpenPolylines(a: readonly number[][], b: readonly number[][]): number[][] {
+  const dist = (p: readonly number[], q: readonly number[]) => Math.hypot(...p.map((v, k) => v - q[k]));
+  const aEnd = a[a.length - 1];
+  const bEnd = b[b.length - 1];
+  const cands = [
+    { d: dist(aEnd, b[0]), flipA: false, flipB: false },
+    { d: dist(aEnd, bEnd), flipA: false, flipB: true },
+    { d: dist(a[0], b[0]), flipA: true, flipB: false },
+    { d: dist(a[0], bEnd), flipA: true, flipB: true },
+  ];
+  const best = cands.reduce((m, c) => (c.d < m.d ? c : m));
+  const aa = (best.flipA ? [...a].reverse() : [...a]).map((x) => [...x]);
+  const bb = (best.flipB ? [...b].reverse() : [...b]).map((x) => [...x]);
+  if (best.d === 0) bb.shift();
+  return [...aa, ...bb];
+}
+
+function viewportOf(element: HTMLDivElement) {
+  return getEnabledElement(element)?.viewport ?? null;
+}
+
+/** 点の編集の結果。ok 以外は画面に理由を出す。 */
+export type PointEditResult = "ok" | "unsupported" | "far" | "noHandle" | "min";
+
+/** 変更を元に戻せるよう、注釈メモで挟んで制御点を差し替える。 */
+function replaceControlPoints(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  annotation: any,
+  element: HTMLDivElement,
+  points: number[][],
+): void {
+  const tool = defaultResolveTool(annotation.metadata.toolName);
+  try {
+    AnnotationTool.createAnnotationMemo(element, annotation);
+  } catch {
+    // メモを作れなくても編集は進める（元に戻せないだけ）
+  }
+  annotation.data.handles.points = points;
+  annotation.invalidated = true;
+  try {
+    tool?.doneEditMemo?.();
+  } catch {
+    // 同上
+  }
+  renderAnnotations();
+}
+
+/** 画面座標を、要素内の canvas 座標へ。 */
+function clientToCanvas(element: HTMLDivElement, clientX: number, clientY: number): [number, number] {
+  const rect = element.getBoundingClientRect();
+  return [clientX - rect.left, clientY - rect.top];
+}
+
+/** 制御点を canvas 座標へ写す。 */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function controlPointsOnCanvas(annotation: any, vp: NonNullable<ReturnType<typeof viewportOf>>): number[][] {
+  return (annotation.data.handles.points as number[][]).map(
+    (w) => vp.worldToCanvas(w as [number, number, number]) as number[],
+  );
+}
+
+/** クリック位置（画面座標）に最も近い辺上へ制御点を足す。 */
+export function addPolygonPoint(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  annotation: any,
+  element: HTMLDivElement,
+  clientX: number,
+  clientY: number,
+): PointEditResult {
+  if (!canEditPoints(annotation)) return "unsupported";
+  const vp = viewportOf(element);
+  if (!vp) return "unsupported";
+  const closed = annotation.data.contour?.closed === true;
+  const hit = closestOnPolyline(
+    controlPointsOnCanvas(annotation, vp),
+    clientToCanvas(element, clientX, clientY),
+    closed,
+  );
+  if (!hit || hit.distance > ADD_POINT_MAX_PX) return "far";
+  replaceControlPoints(annotation, element, insertPointAt(annotation.data.handles.points, hit.segIndex, hit.t));
+  return "ok";
+}
+
+/** クリック位置（画面座標）の下にある制御点を消す。 */
+export function removePolygonPoint(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  annotation: any,
+  element: HTMLDivElement,
+  clientX: number,
+  clientY: number,
+): PointEditResult {
+  if (!canEditPoints(annotation)) return "unsupported";
+  const vp = viewportOf(element);
+  if (!vp) return "unsupported";
+  const closed = annotation.data.contour?.closed === true;
+  const index = nearestPointIndex(
+    controlPointsOnCanvas(annotation, vp),
+    clientToCanvas(element, clientX, clientY),
+    POINT_HIT_PX,
+  );
+  if (index < 0) return "noHandle";
+  const next = removePointAt(annotation.data.handles.points, index, closed);
+  if (!next) return "min";
+  replaceControlPoints(annotation, element, next);
+  return "ok";
+}
+
+/** 右クリック位置の下に制御点があるか（メニューの「この点を削除」の有効判定）。 */
+export function hasPointAt(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  annotation: any,
+  element: HTMLDivElement,
+  clientX: number,
+  clientY: number,
+): boolean {
+  if (!canEditPoints(annotation)) return false;
+  const vp = viewportOf(element);
+  if (!vp) return false;
+  return (
+    nearestPointIndex(controlPointsOnCanvas(annotation, vp), clientToCanvas(element, clientX, clientY), POINT_HIT_PX) >= 0
+  );
+}
+
+/**
+ * 確定済みの開いたポリゴンラインを、末尾から描き継ぐ。
+ *
+ * <p>スプラインツール自身の描画状態を立て直す（`editData` / `isDrawing` / `_activateDraw`）。
+ * 以後のクリックは `handles.points` の末尾へ足され、ダブルクリックで再び確定する
+ * （確定後は {@link forceOpenAfterFinish} が開いたままに戻す）。
+ * 🔴 上流の private メソッドに依存する（`@cornerstonejs/tools` を上げたらここを確認）。
+ *
+ * @returns 描画を再開できたら true
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function continuePolyline(annotation: any, element: HTMLDivElement): boolean {
+  if (!isOpenPolyline(annotation)) return false;
+  const vp = viewportOf(element);
+  const tool = defaultResolveTool(annotation.metadata.toolName);
+  if (!vp || typeof tool?._activateDraw !== "function") return false;
+  if (tool.isDrawing) return false;
+  tool.editData = { annotation, viewportIdsToRender: [vp.id], newAnnotation: false };
+  tool.isDrawing = true;
+  annotation.highlighted = true;
+  tool._activateDraw(element);
+  renderAnnotations();
+  return true;
+}
+
+/** つなぐの結果。 */
+export type JoinResult = "ok" | "count" | "kind" | "image";
+
+/**
+ * 選択中の開いたポリゴンライン 2 本を 1 本につなぐ。1 本目へ点を集め、2 本目は消す。
+ * 同じ画像上の 2 本だけ。フリーラインなど別の種類が混じるときは断る。
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function joinPolylines(annotations: any[]): JoinResult {
+  if (annotations.length !== 2) return "count";
+  const [a, b] = annotations;
+  if (!isOpenPolyline(a) || !isOpenPolyline(b)) return "kind";
+  if (a.metadata?.referencedImageId !== b.metadata?.referencedImageId) return "image";
+  a.data.handles.points = mergeOpenPolylines(a.data.handles.points, b.data.handles.points);
+  a.invalidated = true;
+  csAnnotation.state.removeAnnotation(b.annotationUID);
+  renderAnnotations();
+  return "ok";
 }

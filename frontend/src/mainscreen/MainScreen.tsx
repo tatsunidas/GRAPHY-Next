@@ -11,6 +11,8 @@ import { runImportJob } from "./importJob";
 import { importedStudiesView, type ImportedView } from "./importedView";
 import { useI18n } from "../i18n/i18n";
 import { StudyList } from "../StudyList";
+import { PreviewDock } from "./PreviewDock";
+import { LIST_LAYOUT_STORAGE_KEY, isPaneLayout, parseListLayout, type ListLayout } from "./listLayout";
 import { MenuBar } from "./MenuBar";
 import { Toolbar, type ToolKind } from "./Toolbar";
 import { SearchPanel } from "./SearchPanel";
@@ -62,6 +64,26 @@ export function MainScreen({
   // null = まだ検索していない。SearchPanel が初期条件(今日)で onSearch を呼ぶと埋まる。
   const [filters, setFilters] = useState<StudyFilters | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
+  // 下部のプレビュー枠の DOM。閉じている間は null（StudyList はプレビューを描かない）。
+  const [dockHost, setDockHost] = useState<HTMLElement | null>(null);
+  // 一覧の表示形式（table=従来 / split=上下 2 ペイン / side=左右 2 ペイン / tree=選んだ検査の直下にシリーズ）。選択は保存する。
+  const [listLayout, setListLayout] = useState<ListLayout>(() => {
+    try {
+      return parseListLayout(localStorage.getItem(LIST_LAYOUT_STORAGE_KEY));
+    } catch {
+      return "table";
+    }
+  });
+  const changeListLayout = (l: ListLayout) => {
+    setListLayout(l);
+    try {
+      localStorage.setItem(LIST_LAYOUT_STORAGE_KEY, l);
+    } catch {
+      // 保存できなくても表示は切り替わる
+    }
+  };
+  // 上下 2 ペインの下のペイン（シリーズ一覧の描画先）。split・side でないときは存在しない。
+  const [seriesPane, setSeriesPane] = useState<HTMLElement | null>(null);
   const importWatch = useImportWatchStatus(isStandalone);
   const receiveAnon = useReceiveAnonStatus(isStandalone);
   const computeJobsStatus = useComputeJobsStatus(isStandalone);
@@ -441,6 +463,8 @@ export function MainScreen({
         {/* status（isDemo）は非同期取得のため、確定後に isDemo が変わったら SearchPanel を
             再マウントして初期日付(1900/01/01〜当日)を再計算させる。 */}
         <SearchPanel key={String(isDemo)} onSearch={onSearch} isDemo={isDemo} />
+        <div style={centerColumn}>
+        <div style={listArea(listLayout)}>
         <div style={treeArea}>
           {importedView && (
             <div style={importedBanner} data-testid="imported-view-banner">
@@ -467,7 +491,19 @@ export function MainScreen({
             mode={isStandalone ? "standalone" : "web"}
             onSelectStudy={(s) => { setSelectedStudy(s); setSelectedSeries(null); }}
             onSelectSeries={setSelectedSeries}
+            previewHost={dockHost}
+            layout={listLayout}
+            onLayoutChange={changeListLayout}
+            seriesHost={isPaneLayout(listLayout) ? seriesPane : undefined}
           />
+        </div>
+        {isPaneLayout(listLayout) && (
+          <div ref={setSeriesPane} data-testid="series-pane" style={seriesPaneStyle(listLayout)}>
+            {!selectedStudy && <div style={{ padding: "8px 18px", fontSize: 13, color: "#888" }}>{t("main.layout.pickStudy")}</div>}
+          </div>
+        )}
+        </div>
+        <PreviewDock onHost={setDockHost} />
         </div>
       </div>
       <StatusBar
@@ -573,7 +609,19 @@ const shell: React.CSSProperties = {
   background: "#fff",
 };
 const middle: React.CSSProperties = { flex: 1, display: "flex", minHeight: 0 };
+// 一覧（スクロール）と、その下に固定するプレビューのドックを縦に並べる列。
+const centerColumn: React.CSSProperties = { flex: 1, display: "flex", flexDirection: "column", minWidth: 0, minHeight: 0 };
 const treeArea: React.CSSProperties = { flex: 1, overflow: "auto", padding: "8px 18px" };
+// 検査の表とシリーズのペインを並べる領域。上下は縦、左右は横。
+const listArea = (l: ListLayout): React.CSSProperties => ({
+  flex: 1, display: "flex", flexDirection: l === "side" ? "row" : "column", minWidth: 0, minHeight: 0,
+});
+// シリーズのペイン。上下: 検査の表の下に固定し、中身に合わせた高さで最大 35%（超えたら中でスクロール）。
+// 左右: 検査の表の右に、幅 40%・縦スクロール。
+const seriesPaneStyle = (l: ListLayout): React.CSSProperties =>
+  l === "side"
+    ? { flex: "0 0 40%", minWidth: 0, overflow: "auto", borderLeft: "1px solid #cdd5de" }
+    : { flex: "none", maxHeight: "35%", overflow: "auto", borderTop: "1px solid #cdd5de" };
 const dropOverlay: React.CSSProperties = {
   position: "absolute",
   inset: 0,
