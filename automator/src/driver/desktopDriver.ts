@@ -115,7 +115,8 @@ export class DesktopDriver implements Driver {
       ["run", "dev", "--", "--port", String(this.ports.vite), "--strictPort"],
       // detached: npm→node(vite) をプロセスグループリーダー化し、stop() の killProcessTree が
       // 負pid(グループ)で子孫ごと殺せるようにする（里子化した vite の残留とハングを防ぐ）。
-      { cwd: FRONTEND_DIR, stdio: ["ignore", "pipe", "pipe"], detached: process.platform !== "win32" },
+      // win32: Node ≥ 20.12 は .cmd を shell 無しで spawn すると EINVAL で落ちる。
+      { cwd: FRONTEND_DIR, stdio: ["ignore", "pipe", "pipe"], detached: process.platform !== "win32", shell: process.platform === "win32" },
     );
     this.viteProc.stdout?.on("data", () => {});
     this.viteProc.stderr?.on("data", () => {});
