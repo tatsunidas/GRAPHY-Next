@@ -10,6 +10,7 @@ import { applyTransform, readTransform, FIT_TRANSFORM } from "./transform";
 import { ToolIcon } from "../icons/ToolIcon";
 import { UI_ICON_FILES } from "../icons/toolIcons";
 import { buildSeriesLayout, buildLayoutFromDto, DEFAULT_AXES, type AxisSpec, type SeriesLayout } from "./seriesLayout";
+import { describeKept, restrictLayout, type ZRange } from "./virtualLayout";
 import CineControls from "./CineControls";
 import { VideoViewer } from "./VideoViewer";
 import { XaAnalysisDialog } from "./XaAnalysisDialog";
@@ -150,6 +151,9 @@ export function SeriesViewer({
   renderFusionOverlay,
   acceptsTaskLaunch = false,
   chrome = true,
+  range,
+  onRangeEdit,
+  onRangeClear,
 }: {
   instances: Instance[];
   mode: ViewerMode;
@@ -195,6 +199,12 @@ export function SeriesViewer({
   acceptsTaskLaunch?: boolean;
   /** false で Viewer2D の状態バー・操作バーを隠す（ポータブル版が自前の UI を使う）。既定 true。 */
   chrome?: boolean;
+  /** 開く範囲（法線方向の mm か Z 番号）。指定すると全体のうち範囲の断面だけを表示する（DB・ファイルは変えない）。 */
+  range?: ZRange;
+  /** 範囲つきで開いているときの「範囲を変える」。 */
+  onRangeEdit?: () => void;
+  /** 範囲つきで開いているときの「全体を開く」。 */
+  onRangeClear?: () => void;
 }) {
   const { t } = useI18n();
   // ツールパネルの開閉。未制御のときは親の showControls を初期値・追従元にし（一括開閉は親が上書き）、
@@ -266,10 +276,18 @@ export function SeriesViewer({
   }, [layoutReady, studyUid, seriesUid]);
 
   // 表示用レイアウト = 既定順に Z 並べ替えを適用（C/T 割当は保持）。
-  const layout = useMemo(() => {
+  const sortedLayout = useMemo(() => {
     if (!sortMode || !sortMeta) return baseLayout;
     return applySortToLayout(baseLayout, computeZOrder(sortMeta, sortMode));
   }, [baseLayout, sortMode, sortMeta]);
+  // 範囲つきで開く: 並べ替え（全 Z の添字基準）のあとに mm 区間で絞る。レイアウト解決前は IPP が無いので掛けない。
+  const restricted = useMemo(
+    () => (range && layoutReady ? restrictLayout(sortedLayout, range) : null),
+    [range, layoutReady, sortedLayout],
+  );
+  const rangeFailure = restricted && !restricted.ok ? restricted.reason : null;
+  const layout = restricted && restricted.ok ? restricted.layout : sortedLayout;
+  const rangeInfo = restricted && restricted.ok ? describeKept(restricted.keptZ, restricted.total) : null;
 
   const [z, setZ] = useState(0);
   const [c, setC] = useState(0);
@@ -1406,12 +1424,24 @@ export function SeriesViewer({
       data-testid="series-viewer-root"
       style={fillHeight ? { ...root, flex: 1, display: "flex", flexDirection: "column", minHeight: 0 } : root}
     >
+      {rangeInfo && (
+        <div data-testid="series-range-banner" style={rangeBanner}>
+          <span>{t("series.range.banner", { from: rangeInfo.from, to: rangeInfo.to, total: rangeInfo.total })}</span>
+          {onRangeEdit && <button type="button" onClick={onRangeEdit}>{t("series.range.edit")}</button>}
+          {onRangeClear && <button type="button" onClick={onRangeClear}>{t("series.range.clear")}</button>}
+        </div>
+      )}
       {!layoutReady ? (
         // レイアウト解決までは Viewer をマウントしない（モザイク等の生画像フラッシュ防止）。
         // この間はスライス送り操作が画面に反映されないため、円形スピナーでロード中と分かるようにする。
         <div style={layoutPending}>
           <LoadingSpinner size={32} />
           <div>{t("common.loading")}</div>
+        </div>
+      ) : rangeFailure ? (
+        <div style={layoutPending} data-testid="series-range-error">
+          <div>{t(`series.range.fail.${rangeFailure}`)}</div>
+          {onRangeClear && <button type="button" onClick={onRangeClear}>{t("series.range.clear")}</button>}
         </div>
       ) : gridOn ? (
         <div style={gridScroll}>
@@ -2222,6 +2252,10 @@ const controlsToggle: React.CSSProperties = {
   cursor: "pointer",
 };
 // レイアウト解決待ちのプレースホルダ（Viewer と同じ黒背景。生モザイクを描かないためのゲート）。
+const rangeBanner: React.CSSProperties = {
+  display: "flex", alignItems: "center", gap: 8, padding: "2px 8px", fontSize: 12,
+  background: "#fff6e0", borderBottom: "1px solid #e8d49a", color: "#6b4a00", flex: "none",
+};
 const layoutPending: React.CSSProperties = {
   flex: 1,
   minHeight: 240,
