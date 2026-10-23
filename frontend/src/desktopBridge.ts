@@ -512,6 +512,13 @@ export interface GraphyDesktop {
     sessionId: string,
     cmd: { kind: "action" | "getState"; id?: string; params?: unknown },
   ) => Promise<import("./assistant/actions/registry").ActionResult>;
+  /** マクロ（表示操作の並び）の保存。アシスタント窓だけ（それ以外は main が `forbidden`）。形と大きさだけ main が検証する。 */
+  assistantMacrosList?: () => Promise<{ ok: boolean; macros?: import("./assistant/macros/macroModel").Macro[]; error?: string }>;
+  assistantMacrosSave?: (macro: {
+    name: string;
+    steps: import("./assistant/macros/macroModel").MacroStep[];
+  }) => Promise<{ ok: boolean; macro?: import("./assistant/macros/macroModel").Macro; error?: string }>;
+  assistantMacrosDelete?: (id: string) => Promise<{ ok: boolean; error?: string }>;
   /** 2D 窓側: main が中継してきた命令を受ける。購読解除の関数を返す。 */
   onViewerCmd?: (
     cb: (cmd: { reqId: string; kind: "action" | "getState"; id?: string; params?: unknown; includeLabels?: boolean }) => void,

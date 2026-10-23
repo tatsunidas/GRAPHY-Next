@@ -31,6 +31,7 @@ const secretStore = require("./secretStore");
 const aiGateway = require("./aiGateway");
 const { isAssistantSender } = require("./assistantSender");
 const { createRelay, createJournal } = require("./viewerRelay");
+const { createStore: createMacroStore } = require("./assistantMacros");
 const aiProviders = require("./aiProviders");
 const computeEndpoints = require("./computeEndpoints");
 const localPython = require("./localPython");
@@ -1274,6 +1275,11 @@ ipcMain.handle("graphy:assistant-viewer-cmd", (e, sessionId, cmd) => {
   const includeLabels = !!(dest && dest.ok && dest.local === true);
   return viewerRelay.relay(sessionId, cmd && typeof cmd === "object" ? { ...cmd, includeLabels } : cmd);
 });
+// マクロ（表示操作の並び）の保存。形と大きさだけ main が見る（assistantMacros.js）。再生時の検証は 2D 窓が毎回行う。
+const macroStore = createMacroStore({ file: path.join(app.getPath("userData"), "assistant-macros.json") });
+ipcMain.handle("graphy:assistant-macros-list", (e) => (isAssistantSender(e) ? macroStore.list() : { ok: false, error: "forbidden" }));
+ipcMain.handle("graphy:assistant-macros-save", (e, m) => (isAssistantSender(e) ? macroStore.save(m) : { ok: false, error: "forbidden" }));
+ipcMain.handle("graphy:assistant-macros-delete", (e, id) => (isAssistantSender(e) ? macroStore.remove(id) : { ok: false, error: "forbidden" }));
 ipcMain.on("graphy:viewer-cmd-result", (e, reqId, result) => {
   viewerRelay.handleResult(e.sender, reqId, result);
 });
