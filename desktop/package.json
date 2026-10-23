@@ -20,7 +20,7 @@
     "appId": "com.vis.graphynext",
     "productName": "GRAPHY-Next",
     "afterPack": "scripts/afterPack.js",
-    "files": ["main.js", "preload.js", "windowState.js", "windowGeometry.js", "splash.html", "splash-preload.js", "startupMessages.js", "secretStore.js", "aiGateway.js", "aiHttp.js", "aiProviders.js", "assistantSender.js", "viewerRelay.js", "localAiArchive.js", "localAiInstaller.js", "localAiManifest.json", "localLlm.js", "computeEndpoints.js", "localPython.js", "localJupyter.js", "dbFolders.js", "devDataDir.js", "renderPrefs.js", "gpuMemory.js", "tlsPasswords.js", "portWait.js", "computeBridge.js", "computeConsent.js", "computeConsent-preload.js", "computeConsent.html", "computeConsent-view.js", "computeConsent-rows.js", "computeKeepAwake.js", "colabAuth.js", "colabApi.js", "colabRuntimes.js", "computeDefault.js", "colab-oauth-client.json", "gdriveAuth.js", "gdriveFolder.js", "gdriveMode.js", "gdrivePicker.js", "gdrive-oauth-client.json", "aiAdapters/*.js", "!**/*.test.js", "config.json", "renderer/**"],
+    "files": ["main.js", "preload.js", "windowState.js", "windowGeometry.js", "splash.html", "splash-preload.js", "startupMessages.js", "secretStore.js", "aiGateway.js", "aiHttp.js", "aiProviders.js", "assistantSender.js", "mediaPermission.js", "viewerRelay.js", "localAiArchive.js", "localAiInstaller.js", "localAiManifest.json", "localLlm.js", "computeEndpoints.js", "localPython.js", "localJupyter.js", "dbFolders.js", "devDataDir.js", "renderPrefs.js", "gpuMemory.js", "tlsPasswords.js", "portWait.js", "computeBridge.js", "computeConsent.js", "computeConsent-preload.js", "computeConsent.html", "computeConsent-view.js", "computeConsent-rows.js", "computeKeepAwake.js", "colabAuth.js", "colabApi.js", "colabRuntimes.js", "computeDefault.js", "colab-oauth-client.json", "gdriveAuth.js", "gdriveFolder.js", "gdriveMode.js", "gdrivePicker.js", "gdrive-oauth-client.json", "aiAdapters/*.js", "!**/*.test.js", "config.json", "renderer/**"],
     "extraResources": [
       { "from": "resources/backend", "to": "backend" },
       { "from": "resources/jre", "to": "jre" },
@@ -36,7 +36,7 @@
     },
     "deb": { "afterInstall": "build/linux/after-install.sh", "afterRemove": "build/linux/after-remove.sh" },
     "win": { "target": ["nsis"] },
-    "mac": { "target": ["dmg"], "identity": null, "artifactName": "${productName}-${version}-${arch}.${ext}" },
+    "mac": { "target": ["dmg"], "identity": null, "extendInfo": { "NSMicrophoneUsageDescription": "アシスタントの音声入力でマイクを使います。録音は保存されません。 / Used for voice input in the assistant. Recordings are not saved." }, "artifactName": "${productName}-${version}-${arch}.${ext}" },
     "nsis": {
       "oneClick": false,
       "perMachine": false,

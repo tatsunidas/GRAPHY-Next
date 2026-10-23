@@ -25,9 +25,11 @@ const KIND_AZURE = "azure-openai";
 const DEFAULT_AZURE_API_VERSION = "2024-10-21";
 
 /** 扱える用途。**画像生成は multipart なので経路が違う**（下記）。 */
-const SUPPORTED = new Set(["image-to-image", "image-to-text", "text-to-text"]);
+const SUPPORTED = new Set(["image-to-image", "image-to-text", "text-to-text", "speech-to-text"]);
 
-function supports(capability) {
+function supports(capability, provider) {
+  // Azure の文字起こしはデプロイ単位のパスと api-version が絡む。実機で確かめられないので今回は扱わない。
+  if (capability === "speech-to-text" && provider && effectiveStyle({ provider }) === "azure-deployment") return false;
   return SUPPORTED.has(capability);
 }
 
@@ -162,6 +164,71 @@ function buildImageEdit(req) {
     headers: wire.mergeHeaders(own, req.provider && req.provider.headers),
     body: Buffer.concat(parts),
   };
+}
+
+/** 音声ファイルの拡張子（multipart のファイル名用。内容の判別は相手が中身で行う）。 */
+function audioExt(mimeType) {
+  const sub = String(mimeType || "").split("/")[1] || "wav";
+  const base = sub.split(";")[0].replace(/^x-/, "");
+  return /^[a-z0-9]{1,5}$/.test(base) ? base : "wav";
+}
+
+/**
+ * 音声 → 文字。
+ *
+ * <p>🔑 **経路は 2 通り。** 公開 API 互換は `/v1/audio/transcriptions`（multipart）。
+ * ローカルの llama-server は音声を chat completions の `input_audio` で受けるので、
+ * 提供元の `paths["speech-to-text"]` が `…/chat/completions` ならそちらの形で組む
+ * （スキーマに項目を足さず、既存の「パスの上書き」に乗せた）。
+ */
+function buildTranscribeRequest(req) {
+  const override = req.provider && req.provider.paths && req.provider.paths["speech-to-text"];
+  const own = authHeaders(req);
+  if (typeof override === "string" && /\/chat\/completions$/.test(override)) {
+    const body = {
+      model: req.model,
+      messages: [{ role: "user", content: [{ type: "input_audio", input_audio: { data: req.audio.base64, format: audioExt(req.audio.mimeType) } }] }],
+      temperature: 0,
+      max_tokens: 1024,
+    };
+    return {
+      path: override,
+      headers: wire.mergeHeaders({ "Content-Type": "application/json", ...own }, req.provider && req.provider.headers),
+      body: Buffer.from(JSON.stringify(body), "utf8"),
+    };
+  }
+  const boundary = `----GraphyNext${Date.now().toString(16)}${Math.random().toString(16).slice(2)}`;
+  const parts = [textField(boundary, "model", req.model), textField(boundary, "response_format", "json")];
+  if (req.language) parts.push(textField(boundary, "language", req.language));
+  parts.push(
+    Buffer.from(
+      `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="audio.${audioExt(req.audio.mimeType)}"\r\n` +
+        `Content-Type: ${req.audio.mimeType}\r\n\r\n`,
+      "utf8",
+    ),
+    Buffer.from(req.audio.base64, "base64"),
+    Buffer.from(`\r\n--${boundary}--\r\n`, "utf8"),
+  );
+  return {
+    path: wire.pathFor(req.provider, "speech-to-text", "/v1/audio/transcriptions"),
+    headers: wire.mergeHeaders({ "Content-Type": `multipart/form-data; boundary=${boundary}`, ...own }, req.provider && req.provider.headers),
+    body: Buffer.concat(parts),
+  };
+}
+
+/** Qwen3-ASR が先頭に付ける `language Japanese<asr_text>` を取り除く。 */
+const ASR_PREFIX_RE = /^\s*language\s+[^<\n]{0,40}<asr_text>/i;
+
+/** 文字起こしの応答 → `{text}`。transcriptions の `{text}` も chat の `choices[0].message.content` も読む。 */
+function parseTranscript(json) {
+  if (!json || typeof json !== "object") return {};
+  let text = typeof json.text === "string" ? json.text : null;
+  if (text == null) {
+    const c = Array.isArray(json.choices) && json.choices[0] && json.choices[0].message && json.choices[0].message.content;
+    if (typeof c === "string") text = c;
+  }
+  text = (text || "").replace(ASR_PREFIX_RE, "").trim();
+  return text ? { text } : {};
 }
 
 /**
@@ -434,6 +501,8 @@ module.exports = {
   supports,
   buildRequest,
   buildChatRequest,
+  buildTranscribeRequest,
+  parseTranscript,
   normalizeChat,
   createStreamParser,
   buildListRequest,

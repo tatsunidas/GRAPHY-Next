@@ -118,7 +118,7 @@ async function generate(req) {
   // 🔴 **宛先とモデルは本体が決める。** プラグインが名指ししてきても、用途が来ていれば
   //    レジストリの解決を優先する——宛先を呼び出し側に決めさせない（設計 §3.1）。
   // 会話は `chat()` の仕事（画像 1 枚の単発とは経路も錠も別）。
-  if (req.capability === "text-to-text") return { ok: false, error: "unsupported-capability", kind: "capability" };
+  if (req.capability === "text-to-text" || req.capability === "speech-to-text") return { ok: false, error: "unsupported-capability", kind: "capability" };
   const plan = resolvePlan(req);
   if (!plan.ok) return plan;
   const { provider, adapter, model } = plan;
@@ -196,7 +196,7 @@ function resolvePlan(req) {
     if (!r.ok) return { ok: false, error: r.error, kind: "capability" };
     const adapter = ADAPTERS[r.provider.kind];
     if (!adapter) return { ok: false, error: "unknown-provider-kind", kind: "capability" };
-    if (!adapter.supports(capability)) return { ok: false, error: "unsupported-capability", kind: "capability" };
+    if (!adapter.supports(capability, r.provider)) return { ok: false, error: "unsupported-capability", kind: "capability" };
     return { ok: true, provider: r.provider, adapter, model: r.model };
   }
   // 旧来の呼び出し（0.3.0 のプラグイン）。モデルは呼び出し側の指定を使うが、
@@ -307,6 +307,16 @@ function resolveCapability(capability) {
 const TEST_IMAGE_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4//8/AAX+Av4N70a4AAAAAElFTkSuQmCC";
 const TEST_IMAGE_MIME = "image/png";
+/** 送る音声。**0.3 秒の無音**（16 kHz mono 16 bit の WAV、9644 バイト）。患者の音声は使わない。 */
+const TEST_AUDIO_BASE64 = (() => {
+  const n = 4800;
+  const b = Buffer.alloc(44 + n * 2);
+  b.write("RIFF", 0); b.writeUInt32LE(36 + n * 2, 4); b.write("WAVEfmt ", 8);
+  b.writeUInt32LE(16, 16); b.writeUInt16LE(1, 20); b.writeUInt16LE(1, 22);
+  b.writeUInt32LE(16000, 24); b.writeUInt32LE(32000, 28); b.writeUInt16LE(2, 32); b.writeUInt16LE(16, 34);
+  b.write("data", 36); b.writeUInt32LE(n * 2, 40);
+  return b.toString("base64");
+})();
 /** 送る指示。**短く・当たり障りがなく・返答の形が読みやすいもの。** */
 const TEST_PROMPT = "Reply with OK.";
 /** 連続で押されたときの最短間隔。課金と相手への負荷を抑える。 */
@@ -356,7 +366,7 @@ async function testConnection(args) {
   const model = provider.models[capability];
   if (!model) return { ok: false, verdict: "config", error: "no-provider-for-capability" };
   const adapter = ADAPTERS[provider.kind];
-  if (!adapter || !adapter.supports(capability)) {
+  if (!adapter || !adapter.supports(capability, provider)) {
     return { ok: false, verdict: "config", error: "unsupported-capability" };
   }
   const apiKey = secretForProvider(provider.id);
@@ -374,7 +384,11 @@ async function testConnection(args) {
   const apiVersion = resolveApiVersion(provider, adapter, {});
   const target = targetOf(provider);
   // 🔑 **`generate()` と同じ組み立てを通す。** 別経路で組むと、設定の効き方を確かめられない。
-  const built = adapter.buildRequest({
+  //    音声は 0.3 秒の無音（患者の音声は使わない）を送る。
+  const stt = capability === "speech-to-text";
+  const built = stt ? adapter.buildTranscribeRequest({
+    model, apiVersion, apiKey, provider, audio: { base64: TEST_AUDIO_BASE64, mimeType: "audio/wav" },
+  }) : adapter.buildRequest({
     capability,
     model,
     apiVersion,
@@ -404,6 +418,11 @@ async function testConnection(args) {
         requestLine, headerNames, bodyPreview, plaintext: target.plaintext || undefined,
         error: mask(msg, apiKey),
       };
+    }
+    // 無音の文字起こしは空になりうる。「読めた（形が合っている）」を見るので、空でも到達したことにする。
+    if (stt && res.json) {
+      const tr = adapter.parseTranscript(res.json);
+      return { ok: true, verdict: "reachable", text: mask(tr.text || "", apiKey).slice(0, 200), status: 200, elapsedMs, requestLine, headerNames, bodyPreview, plaintext: target.plaintext || undefined };
     }
     const norm = res.json ? adapter.normalize(res.json) : {};
     const base = {
@@ -613,6 +632,104 @@ function httpFailure(res, apiKey, streamed) {
   return { ok: false, error: mask(msg, apiKey), status: res.statusCode, verdict: verdictForStatus(res.statusCode), streamed };
 }
 
+// ── 音声の文字起こし（speech-to-text） ─────────────────────────────────────
+//
+// 🔴 **録音は保存しない・ログに出さない。** 受けた base64 はこの関数の中で電文に組み込み、
+//    送って終わり（失敗時のメッセージにも本文は入れない）。音声には患者の氏名や ID が話されうる。
+// 🔑 宛先の決め方は会話と同じ（本体が `resolveChain` で決め、フォールバックはローカル判定の宛先だけ）。
+//    画面は送る前に `aiResolve("speech-to-text")` で宛先を表示している。
+
+/** 音声 1 本の上限（base64 の文字数）。16 kHz mono 16 bit の WAV で約 5 分。暴走防止の値で、調整値ではない。 */
+const MAX_AUDIO_BYTES = 14 * 1024 * 1024;
+const AUDIO_MIME_RE = /^audio\/(wav|x-wav|wave|mpeg|mp3|webm|ogg|mp4|flac|x-flac)$/;
+const LANGUAGE_RE = /^[a-z]{2,3}(-[A-Za-z]{2,4})?$/;
+let transcribing = false;
+
+function validateTranscribeRequest(req) {
+  const a = req && req.audio;
+  if (!a || typeof a.base64 !== "string" || a.base64.length === 0) return "empty-audio";
+  if (a.base64.length > MAX_AUDIO_BYTES) return "audio-too-large";
+  const mime = typeof a.mimeType === "string" ? a.mimeType.split(";")[0].trim().toLowerCase() : "";
+  if (!AUDIO_MIME_RE.test(mime)) return "unsupported-audio-type";
+  if (req.language != null && (typeof req.language !== "string" || !LANGUAGE_RE.test(req.language))) return "invalid-language";
+  return null;
+}
+
+/** @param {{audio: {base64: string, mimeType: string}, language?: string}} req */
+async function transcribe(req) {
+  const invalid = validateTranscribeRequest(req);
+  if (invalid) return { ok: false, error: invalid };
+  const resolved = aiProviders.resolveChain("speech-to-text");
+  if (!resolved.ok) return { ok: false, error: resolved.error, kind: "capability" };
+  if (transcribing) return { ok: false, error: "busy" };
+  transcribing = true;
+  const audio = { base64: req.audio.base64, mimeType: req.audio.mimeType.split(";")[0].trim().toLowerCase() };
+  const primary = resolved.chain[0].provider;
+  let lastFailure = null;
+  try {
+    for (let i = 0; i < resolved.chain.length; i++) {
+      let { provider } = resolved.chain[i];
+      const prep = prepareHook ? await prepareHook(provider) : { ok: true };
+      let attempt;
+      if (prep && prep.ok === false) {
+        attempt = { ok: false, error: prep.error || "local-unavailable", verdict: "network" };
+      } else {
+        provider = aiProviders.byId(provider.id) || provider;
+        attempt = await transcribeOnce(provider, audio, req.language);
+      }
+      if (attempt.ok) {
+        if (i > 0) { attempt.degraded = true; attempt.provenance.fallbackFrom = primary.id; }
+        return attempt;
+      }
+      lastFailure = attempt;
+      if (!isRetriable(attempt)) break;
+    }
+    const { verdict, ...failure } = lastFailure;
+    return failure;
+  } finally {
+    transcribing = false;
+  }
+}
+
+async function transcribeOnce(provider, audio, language) {
+  const adapter = ADAPTERS[provider.kind];
+  const model = provider.models["speech-to-text"];
+  if (!adapter || !model || !adapter.supports("speech-to-text", provider) || !adapter.buildTranscribeRequest) {
+    return { ok: false, error: "unsupported-capability", kind: "capability", verdict: "config" };
+  }
+  const apiKey = secretForProvider(provider.id);
+  if (!apiKey && provider.auth !== "none") return { ok: false, error: "no-api-key", verdict: "no-api-key" };
+  if (!validModel(model, adapter.modelInPath(provider))) return { ok: false, error: "invalid-model", verdict: "config" };
+  const apiVersion = resolveApiVersion(provider, adapter, {});
+  if (!validApiVersion(apiVersion)) return { ok: false, error: "invalid-api-version", verdict: "config" };
+  const target = targetOf(provider);
+  const built = adapter.buildTranscribeRequest({ model, apiVersion, apiKey, provider, audio, language });
+  if (built.body.length > MAX_CHAT_BODY_BYTES) return { ok: false, error: "request-too-large", verdict: "config" };
+  const provenance = {
+    providerId: provider.id, kind: provider.kind, model, endpointHost: target.display,
+    local: aiProviders.isLocalProvider(provider),
+    ...(target.plaintext ? { plaintext: true } : {}),
+  };
+  try {
+    const res = await aiHttp.post(target, built.path, built.headers, built.body);
+    if (res.statusCode !== 200) {
+      const msg = (res.json && res.json.error && res.json.error.message) || res.text || `HTTP ${res.statusCode}`;
+      console.error(`[ai] ${provider.id} 文字起こしのエラー ${res.statusCode}:`, mask(msg, apiKey));
+      return { ok: false, error: mask(msg, apiKey), status: res.statusCode, verdict: verdictForStatus(res.statusCode) };
+    }
+    if (!res.json) return { ok: false, error: "invalid-json", status: 200, verdict: "unreadable-response" };
+    const norm = adapter.parseTranscript(res.json);
+    if (norm.blockReason) return { ok: false, error: `blocked:${norm.blockReason}`, status: 200, verdict: "blocked" };
+    // 🔴 空の結果を成功にしない（無音・設定誤り・別の API を指している、のどれかが利用者に見えなくなる）。
+    if (!norm.text) return { ok: false, error: "empty-transcript", status: 200, verdict: "unreadable-response" };
+    return { ok: true, text: norm.text, provenance };
+  } catch (e) {
+    const message = mask(e && e.message, apiKey);
+    console.error(`[ai] ${provider.id} 文字起こしの送信に失敗:`, message);
+    return { ok: false, error: message, verdict: verdictForError(message) };
+  }
+}
+
 /** 実行中の会話を中断する。無ければ何もしない。 */
 function cancelChat(sessionId) {
   const c = chatSessions.get(String(sessionId || ""));
@@ -706,8 +823,10 @@ module.exports = {
   setPrepareHook,
   generate,
   chat,
+  transcribe,
   cancelChat,
   MAX_CHAT_BODY_BYTES,
+  MAX_AUDIO_BYTES,
   resolveCapability,
   testConnection,
   listModels,

@@ -68,6 +68,26 @@ function validateManifest(m) {
     }
   }
   if (!Array.isArray(m.models) || !m.models.some((x) => x && x.id === m.defaultModelId)) problems.push("manifest:bad-default-model");
+  // 音声入力のモデル（任意）。本体 GGUF と、音声を読む mmproj の 2 ファイルで 1 組。
+  if (m.sttModels != null) {
+    if (!Array.isArray(m.sttModels) || m.sttModels.length === 0) problems.push("sttModels:empty");
+    else {
+      const seen = new Set((m.models || []).map((x) => x && x.id));
+      for (const md of m.sttModels) {
+        const id = md && typeof md.id === "string" ? md.id : "?";
+        if (!/^[a-z0-9-]{1,48}$/.test(id) || seen.has(id)) problems.push(`stt:${id}:bad-id`);
+        seen.add(id);
+        problems.push(...validateAsset(md, `stt:${id}`));
+        problems.push(...validateAsset(md && md.mmproj, `stt:${id}:mmproj`));
+        for (const [what, f] of [["file", md && md.file], ["mmproj-file", md && md.mmproj && md.mmproj.file]]) {
+          if (typeof f !== "string" || !/^[A-Za-z0-9._-]+\.gguf$/.test(f)) problems.push(`stt:${id}:bad-${what}`);
+        }
+        if (md && md.file && md.mmproj && md.file === md.mmproj.file) problems.push(`stt:${id}:same-file`);
+        if (!md || typeof md.license !== "string" || !md.license) problems.push(`stt:${id}:no-license`);
+      }
+    }
+    if (!Array.isArray(m.sttModels) || !m.sttModels.some((x) => x && x.id === m.defaultSttModelId)) problems.push("manifest:bad-default-stt-model");
+  }
   return problems;
 }
 

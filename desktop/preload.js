@@ -74,6 +74,8 @@ contextBridge.exposeInMainWorld("graphyDesktop", {
   aiResolve: (capability) => ipcRenderer.invoke("graphy:ai-resolve", capability),
   // 会話。アシスタント窓（#assistant）以外から呼ぶと main が forbidden を返す。
   aiChat: (req) => ipcRenderer.invoke("graphy:ai-chat", req),
+  assistantMicAccess: () => ipcRenderer.invoke("graphy:assistant-mic-access"),
+  aiTranscribe: (req) => ipcRenderer.invoke("graphy:ai-transcribe", req),
   aiChatCancel: (sessionId) => ipcRenderer.invoke("graphy:ai-chat-cancel", sessionId),
   // ストリームの差分。購読解除の関数を返す。
   onAiChatEvent: (cb) => {
@@ -95,7 +97,8 @@ contextBridge.exposeInMainWorld("graphyDesktop", {
   aiLocalInstall: (modelId) => ipcRenderer.invoke("graphy:ai-local-install", { modelId }),
   aiLocalCancel: () => ipcRenderer.invoke("graphy:ai-local-cancel"),
   aiLocalImport: (allowUnverified) => ipcRenderer.invoke("graphy:ai-local-import", { allowUnverified: !!allowUnverified }),
-  aiLocalCheck: () => ipcRenderer.invoke("graphy:ai-local-check"),
+  aiLocalCheck: (role) => ipcRenderer.invoke("graphy:ai-local-check", role),
+  aiLocalRemoveStt: () => ipcRenderer.invoke("graphy:ai-local-remove-stt"),
   aiLocalRole: (role) => ipcRenderer.invoke("graphy:ai-local-role", role),
   aiLocalRemove: () => ipcRenderer.invoke("graphy:ai-local-remove"),
   onAiLocalEvent: (cb) => {
