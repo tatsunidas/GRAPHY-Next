@@ -438,6 +438,8 @@ export interface GraphyDesktop {
   tlsPasswordSet?: (which: "keyStore" | "trustStore", value: string) => Promise<{ ok: boolean; persisted?: "keychain" | "plaintext"; reason?: string }>;
   /** TLS のパスワードが設定済みか・キーチェーンが使えるか（値は返らない）。 */
   tlsPasswordStatus?: () => Promise<{ encryptionAvailable: boolean; keyStore: boolean; trustStore: boolean }>;
+  /** 受信時の匿名化の仮名の鍵を、保存ダイアログで選んだ場所へ書き出す（鍵の中身は返らない）。 */
+  receiveAnonKeyExport?: () => Promise<{ ok: boolean; canceled?: boolean; reason?: string }>;
   /**
    * プラグイン導入の同意を変える。有効にするときは main が確認ダイアログを出す。
    * 汎用の設定の API ではこのキーを書けない（main だけが通れる口で保存する）。

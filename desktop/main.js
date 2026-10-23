@@ -1191,6 +1191,27 @@ ipcMain.handle("graphy:tls-password-set", (_e, payload) =>
 ipcMain.handle("graphy:tls-password-status", () =>
   tlsPasswords.status({ statusOf: secretStore.statusOf, encryptionAvailable: secretStore.encryptionAvailable() }));
 
+// 受信時の匿名化の仮名の鍵のバックアップ。鍵は再識別に使えるので、レンダラーへは返さず、
+// 保存ダイアログ（上書き確認は OS 任せ）で選ばれた場所へ main が直接書く（所有者だけが読める権限）。
+ipcMain.handle("graphy:receive-anon-key-export", async (e) => {
+  const r = await computeBridge.call("GET", "/api/internal/dicom/receive-anonymize/key");
+  if (!r.ok || !r.body || typeof r.body.key !== "string") return { ok: false, reason: "key-unavailable" };
+  const win = BrowserWindow.fromWebContents(e.sender) || BrowserWindow.getFocusedWindow();
+  const pick = await dialog.showSaveDialog(win, {
+    title: "仮名の鍵を書き出す",
+    defaultPath: "receive-anon.key",
+    filters: [{ name: "Key", extensions: ["key"] }],
+  });
+  if (pick.canceled || !pick.filePath) return { ok: false, canceled: true };
+  try {
+    fs.writeFileSync(pick.filePath, Buffer.from(r.body.key, "base64"), { mode: 0o600 });
+    return { ok: true };
+  } catch (err) {
+    console.error("[receive-anon] 鍵の書き出しに失敗:", err.code || "error"); // 鍵・パスの中身は出さない
+    return { ok: false, reason: "write-failed" };
+  }
+});
+
 /** backend が応答するようになってから 1 回だけ行う処理。 */
 function afterBackendReady() {
   // 外部の計算機の接続先を backend へ（失敗してもアプリの起動は止めない）

@@ -16,6 +16,7 @@ import { Toolbar, type ToolKind } from "./Toolbar";
 import { SearchPanel } from "./SearchPanel";
 import { StatusBar } from "./StatusBar";
 import { useImportWatchStatus } from "./useImportWatchStatus";
+import { useReceiveAnonStatus } from "./useReceiveAnonStatus";
 import { useComputeJobsStatus } from "./useComputeJobsStatus";
 import { TagExtractorDialog } from "./TagExtractorDialog";
 import { SeriesExtractorDialog } from "./SeriesExtractorDialog";
@@ -62,6 +63,7 @@ export function MainScreen({
   const [filters, setFilters] = useState<StudyFilters | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
   const importWatch = useImportWatchStatus(isStandalone);
+  const receiveAnon = useReceiveAnonStatus(isStandalone);
   const computeJobsStatus = useComputeJobsStatus(isStandalone);
   // 取り込み直後は、一覧を「いま取り込んだ検査」に絞る（既定の検索条件「今日」では過去の検査が出ないため）。
   const [importedView, setImportedView] = useState<ImportedView | null>(null);
@@ -472,6 +474,7 @@ export function MainScreen({
         status={status}
         error={error}
         importWatch={importWatch.view}
+        receiveAnon={receiveAnon}
         computeJobs={computeJobsStatus.counts}
         keepAwake={computeJobsStatus.keepAwake}
         onOpenComputeJobs={() => handleOpenViewer("computejobs")}
