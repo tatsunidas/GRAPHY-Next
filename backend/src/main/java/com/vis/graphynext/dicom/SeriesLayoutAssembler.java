@@ -6,6 +6,7 @@ package com.vis.graphynext.dicom;
 
 import org.dcm4che3.data.Attributes;
 import org.dcm4che3.data.Tag;
+import org.dcm4che3.data.UID;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -188,7 +189,36 @@ public final class SeriesLayoutAssembler {
                 basic.nZ(), basic.nC(), basic.nT(),
                 basic.cDimension(), basic.tDimension(), basic.cells(),
                 seriesIop, seriesPxRow, seriesPxCol, seriesWidth, seriesHeight,
-                zSpatials, seriesFor, seriesPixelFormat, null);
+                zSpatials, seriesFor, seriesPixelFormat,
+                projectionAxes(instances.stream().map(ds -> ds == null ? null : ds.getString(Tag.SOPClassUID)).toList()));
+    }
+
+    /** 1 SOP = 1 フレームの投影像（単純 X 線・マンモ・口内法）。体積ではないので軸は Shot（Z/C/T ではない）。 */
+    private static final Set<String> PROJECTION_STILL_SOP_CLASSES = Set.of(
+            UID.ComputedRadiographyImageStorage,
+            UID.DigitalXRayImageStorageForPresentation,
+            UID.DigitalXRayImageStorageForProcessing,
+            UID.DigitalMammographyXRayImageStorageForPresentation,
+            UID.DigitalMammographyXRayImageStorageForProcessing,
+            UID.DigitalIntraOralXRayImageStorageForPresentation,
+            UID.DigitalIntraOralXRayImageStorageForProcessing);
+
+    /**
+     * CR/DX/MG/口内法だけのシリーズなら、Z 軸を「Shot」（kind=shot）で提示する。ラベルと種別だけを変え、
+     * スタック軸は z のまま（ホイール送りは従来どおり）。kind が slice でなくなるので ThickSlab・Sync・参照線・
+     * MPR は無効になる（これらは IPP を持たず、元々意味が無い）。1 つでも別の SOP が混じれば null（従来の Z/C/T）。
+     * 判定は SOP クラスで、standalone（DicomStorageService）と web の両方がこれを呼ぶ。
+     */
+    public static SeriesLayout.Axes projectionAxes(java.util.Collection<String> sopClassUids) {
+        if (sopClassUids == null || sopClassUids.isEmpty()) {
+            return null;
+        }
+        for (String uid : sopClassUids) {
+            if (uid == null || !PROJECTION_STILL_SOP_CLASSES.contains(uid)) {
+                return null;
+            }
+        }
+        return new SeriesLayout.Axes(new SeriesLayout.Axis("Shot", "shot"), null, null, "z");
     }
 
     // ── standalone(DicomStorageService) の classic 経路と同一ロジックのヘルパ ─────────────

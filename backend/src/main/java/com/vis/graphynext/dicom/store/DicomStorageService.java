@@ -547,7 +547,9 @@ public class DicomStorageService {
                 basic.nZ(), basic.nC(), basic.nT(),
                 basic.cDimension(), basic.tDimension(), basic.cells(),
                 seriesIop, seriesPxRow, seriesPxCol, seriesWidth, seriesHeight,
-                zSpatials, seriesFor, seriesPixelFormat, null);
+                zSpatials, seriesFor, seriesPixelFormat,
+                com.vis.graphynext.dicom.SeriesLayoutAssembler.projectionAxes(
+                        insts.stream().map(DicomInstance::getSopClassUid).toList()));
     }
 
     /**
