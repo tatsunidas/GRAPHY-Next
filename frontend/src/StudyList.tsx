@@ -18,6 +18,7 @@ import { useInstances } from "./hooks/useInstances";
 import { useI18n } from "./i18n/i18n";
 import { SeriesViewer } from "./viewer/SeriesViewer";
 import { useToolPanelDefault } from "./viewer/toolPanelDefault";
+import { seriesHeadingName } from "./seriesHeading";
 import { classifySeriesRenderability, type SeriesRenderability } from "./viewer/seriesRenderable";
 import { VideoViewer } from "./viewer/VideoViewer";
 import { type ViewerMode } from "./viewer/imageId";
@@ -193,6 +194,8 @@ function SeriesNavigator({
   const { series, error } = useSeries(study.studyInstanceUid);
   const [selectedSeries, setSelectedSeries] = useState<Series | null>(null);
 
+  const headingName = seriesHeadingName(selectedSeries);
+
   const handleSelectSeries = (se: Series | null) => {
     setSelectedSeries(se);
     onSelectSeries?.(se);
@@ -206,7 +209,7 @@ function SeriesNavigator({
   return (
     <div style={{ marginTop: 16, padding: "12px 14px", background: "#f7f9fb", borderRadius: 6 }}>
       <h3 style={{ fontSize: 15, margin: "0 0 8px" }}>
-        {t("series.title", { name: study.patientName || study.patientId || study.studyInstanceUid })}
+        {headingName ? t("series.title", { name: headingName }) : t("series.titleNone")}
       </h3>
       {error && <div style={{ color: "#b00020" }}>{error}</div>}
       {!error && !series && <div>{t("common.loading")}</div>}

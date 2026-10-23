@@ -1439,6 +1439,17 @@ export function SeriesViewer({
           )}
         </button>
       )}
+      {/* パネルを畳んでいても、ラン（XA の撮影）が複数あることが分かり、切り替えられるようにする。 */}
+      {layoutReady && chrome && !showControls && otherCount > 1 && (
+        <DimSlider
+          label={axisLabel(t, otherAxisSpec)}
+          dim={otherAxisSpec.dim}
+          idx={otherIdx}
+          count={otherCount}
+          onChange={setTIdx}
+          testId="dim-slider-other-compact"
+        />
+      )}
       {/* 畳んでいる間も**マウントしたまま隠す**（display:none）。アンマウントすると CineControls の再生が止まる。 */}
       <div style={showControls ? controls : { ...controls, display: "none" }} data-testid="series-controls">
         {/* GridView の操作バー（W/L・Pan・Zoom はドラッグ、回転/反転/Fit はボタン。全セルにリンク）。 */}
