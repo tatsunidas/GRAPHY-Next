@@ -2,7 +2,7 @@
  * Copyright (c) Visionary Imaging Services, Inc. All rights reserved.
  * Author: Tatsuaki Kobayashi
  */
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   instanceDocumentUrl,
@@ -20,6 +20,7 @@ import { useI18n } from "./i18n/i18n";
 import { SeriesViewer } from "./viewer/SeriesViewer";
 import { useToolPanelDefault } from "./viewer/toolPanelDefault";
 import { seriesHeadingName } from "./seriesHeading";
+import { LIST_LAYOUTS, isTreeOpen, pickFirstImageSeries, type ListLayout } from "./mainscreen/listLayout";
 import { imageCount } from "./imageCount";
 import { classifySeriesRenderability, type SeriesRenderability } from "./viewer/seriesRenderable";
 import { VideoViewer } from "./viewer/VideoViewer";
@@ -50,6 +51,9 @@ export function StudyList({
   onSelectStudy,
   onSelectSeries,
   previewHost,
+  layout,
+  onLayoutChange,
+  seriesHost,
 }: {
   filters?: StudyFilters | null;
   reloadKey?: number;
@@ -63,6 +67,14 @@ export function StudyList({
    * null はドックが閉じている状態で、プレビューは描かない（読み込まない）。
    */
   previewHost?: HTMLElement | null;
+  /** 一覧の表示形式。undefined なら切り替えを出さず従来の表（table）。 */
+  layout?: ListLayout;
+  onLayoutChange?: (l: ListLayout) => void;
+  /**
+   * シリーズ一覧の描画先（上下 2 ペインのときの下のペイン）。undefined なら一覧の末尾に置く（従来どおり）。
+   * null はペインがまだ無い間で、シリーズ一覧は描かない。
+   */
+  seriesHost?: HTMLElement | null;
 }) {
   const { t } = useI18n();
   // 取得は hooks/useStudies に集約（モバイルシェルと共有。fw/mobile-ui-design.md §3.5）。
@@ -96,12 +108,38 @@ export function StudyList({
   const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE));
   const current = Math.min(page, pageCount - 1);
   const pageStudies = studies ? sortedStudies.slice(current * PAGE_SIZE, current * PAGE_SIZE + PAGE_SIZE) : [];
+  // ツリー: 選んだ検査の行の直下にシリーズを開く。選んだ検査が別のページにあるときは行が無いので、末尾に出す。
+  const treeOpen = isTreeOpen(layout ?? "table", selectedStudy?.studyInstanceUid, pageStudies.map((s) => s.studyInstanceUid));
 
   return (
     <section style={{ marginTop: 28 }}>
       <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 8 }}>
         <h2 style={{ fontSize: 18, margin: 0 }}>{t("study.list.title")}</h2>
-        {studies && <span style={{ fontSize: 13, color: "#5a6672" }}>{t("study.list.total", { n: total })}</span>}
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          {layout && onLayoutChange && (
+            <div role="group" aria-label={t("main.layout.label")} style={{ display: "flex" }}>
+              {LIST_LAYOUTS.map((l, i) => (
+                <button
+                  key={l}
+                  type="button"
+                  data-testid={`list-layout-${l}`}
+                  aria-pressed={layout === l}
+                  onClick={() => onLayoutChange(l)}
+                  style={{
+                    ...pageBtn,
+                    borderRadius: i === 0 ? "6px 0 0 6px" : i === LIST_LAYOUTS.length - 1 ? "0 6px 6px 0" : 0,
+                    marginLeft: i === 0 ? 0 : -1,
+                    background: layout === l ? "#e1ecf6" : "#fff",
+                    fontWeight: layout === l ? 600 : 400,
+                  }}
+                >
+                  {t(`main.layout.${l}`)}
+                </button>
+              ))}
+            </div>
+          )}
+          {studies && <span style={{ fontSize: 13, color: "#5a6672" }}>{t("study.list.total", { n: total })}</span>}
+        </div>
       </div>
 
       {connecting && <div style={{ color: "#888" }}>{t("app.connecting")}</div>}
@@ -127,8 +165,8 @@ export function StudyList({
             {pageStudies.map((s) => {
               const selected = s.studyInstanceUid === selectedStudy?.studyInstanceUid;
               return (
+                <Fragment key={s.studyInstanceUid}>
                 <tr
-                  key={s.studyInstanceUid}
                   data-testid={`study-row-${s.studyInstanceUid}`}
                   onClick={() => handleSelectStudy(selected ? null : s)}
                   style={{
@@ -145,6 +183,21 @@ export function StudyList({
                   <Td>{imageCount(s)}</Td>
                   <Td><ReportBadge count={reportCounts[s.studyInstanceUid]} /></Td>
                 </tr>
+                {selected && treeOpen && (
+                  <tr data-testid="series-tree-row">
+                    <td colSpan={7} style={{ padding: 0 }}>
+                      <SeriesNavigator
+                        key={s.studyInstanceUid}
+                        study={s}
+                        mode={mode}
+                        onSelectSeries={onSelectSeries}
+                        previewHost={previewHost}
+                        tree
+                      />
+                    </td>
+                  </tr>
+                )}
+                </Fragment>
               );
             })}
           </tbody>
@@ -175,7 +228,16 @@ export function StudyList({
         </div>
       )}
 
-      {selectedStudy && <SeriesNavigator study={selectedStudy} mode={mode} onSelectSeries={onSelectSeries} previewHost={previewHost} />}
+      {selectedStudy && !treeOpen && (
+        <SeriesNavigator
+          key={selectedStudy.studyInstanceUid}
+          study={selectedStudy}
+          mode={mode}
+          onSelectSeries={onSelectSeries}
+          previewHost={previewHost}
+          seriesHost={seriesHost}
+        />
+      )}
     </section>
   );
 }
@@ -194,10 +256,16 @@ function SeriesNavigator({
   mode,
   onSelectSeries,
   previewHost,
+  seriesHost,
+  tree = false,
 }: {
   study: Study;
+  /** ツリー形式: 検査の行の直下に子ノードとして描く。 */
+  tree?: boolean;
   mode: ViewerMode;
   onSelectSeries?: (s: Series | null) => void;
+  /** シリーズ一覧の描画先。要素のとき（上下 2 ペイン）は、検査を選んだら最初の画像シリーズを自動で選ぶ。 */
+  seriesHost?: HTMLElement | null;
   /**
    * シリーズプレビューの描画先（メイン画面下部のドック）。undefined なら一覧の末尾に置く（従来どおり）。
    * null はドックが閉じている状態で、プレビューは描かない（読み込まない）。
@@ -220,8 +288,26 @@ function SeriesNavigator({
     setSelectedSeries(null);
   }, [study.studyInstanceUid]);
 
-  return (
-    <div style={{ marginTop: 16, padding: "12px 14px", background: "#f7f9fb", borderRadius: 6 }}>
+  // 上下 2 ペインのときは、検査を選んだら最初の画像シリーズを開く（スクロールもクリックも要らない）。
+  // 1 検査につき 1 回だけ（利用者が選択を外したあとに勝手に選び直さない）。親が key で検査ごとに作り直す。
+  const autoPicked = useRef(false);
+  useEffect(() => {
+    if (!(seriesHost || tree) || !series || autoPicked.current) return;
+    autoPicked.current = true;
+    const first = pickFirstImageSeries(series);
+    if (first) handleSelectSeries(first);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [seriesHost, tree, series]);
+
+  // 上下 2 ペイン: ペインが出来るまで（null）は描かない。ペインがあれば portal で描く。undefined は従来どおり一覧の末尾。
+  if (seriesHost === null) return null;
+  const panelStyle: React.CSSProperties = tree
+    ? { margin: "2px 0 8px 22px", padding: "6px 12px", background: "#f7f9fb", borderLeft: "3px solid #9fbfdc" }
+    : seriesHost
+      ? { padding: "8px 14px", background: "#f7f9fb" }
+      : { marginTop: 16, padding: "12px 14px", background: "#f7f9fb", borderRadius: 6 };
+  const panel = (
+    <div data-testid="series-panel" style={panelStyle}>
       <h3 style={{ fontSize: 15, margin: "0 0 8px" }}>
         {headingName ? t("series.title", { name: headingName }) : t("series.titleNone")}
       </h3>
@@ -269,6 +355,7 @@ function SeriesNavigator({
       )}
     </div>
   );
+  return seriesHost ? createPortal(panel, seriesHost) : panel;
 }
 
 /** instances 未取得の間は「開ける」として扱い、ビューア表示は hasImages 側で抑える。 */
