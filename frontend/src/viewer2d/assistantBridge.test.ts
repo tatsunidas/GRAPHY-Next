@@ -45,8 +45,8 @@ describe("validateAction", () => {
       ["flipH", { extra: 1 }],
     ] as const) expect(validateAction(id, a).ok, `${id} ${JSON.stringify(a)}`).toBe(false);
   });
-  it("data-changing ids are not in the registry", () => {
-    for (const id of ["saveSegmentation", "clearRois", "clearMeasurements", "saveDerivedSeries", "deleteStudy", "getState", "fit", "__proto__"])
+  it("data-changing ids are not in the registry (clearMeasurements は effect:write として別に入れた。承認が要る)", () => {
+    for (const id of ["saveSegmentation", "clearRois", "saveDerivedSeries", "deleteStudy", "getState", "fit", "__proto__"])
       expect(validateAction(id, {})).toEqual({ ok: false, error: "unknown-action" });
   });
   it("tools list has every action plus getState and propose_steps, with valid names", () => {

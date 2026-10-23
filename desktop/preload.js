@@ -85,6 +85,11 @@ contextBridge.exposeInMainWorld("graphyDesktop", {
   },
   // アシスタント窓から 2D ビューアへの表示操作（アシスタント窓以外は main が forbidden）。
   assistantViewerCmd: (sessionId, cmd) => ipcRenderer.invoke("graphy:assistant-viewer-cmd", sessionId, cmd),
+  // マクロの保存（アシスタント窓以外は main が forbidden）。
+  assistantJournalList: () => ipcRenderer.invoke("graphy:assistant-journal-list"),
+  assistantMacrosList: () => ipcRenderer.invoke("graphy:assistant-macros-list"),
+  assistantMacrosSave: (macro) => ipcRenderer.invoke("graphy:assistant-macros-save", macro),
+  assistantMacrosDelete: (id) => ipcRenderer.invoke("graphy:assistant-macros-delete", id),
   // 2D ビューア窓側: main が中継してきた命令を受け、結果を返す。受けた命令は 2D 窓が許可リストで再検証する。
   onViewerCmd: (cb) => {
     const handler = (_e, cmd) => cb(cmd);

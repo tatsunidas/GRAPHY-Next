@@ -18,7 +18,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.annotation.Profile;
+import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Service;
 
 import java.io.IOException;
@@ -95,6 +97,7 @@ public class ImportWatchService {
     private final SettingsService settings;
     private final StorageLayout layout;
     private final Clock clock;
+    private final boolean autoRun;
     private ScheduledExecutorService executor;
 
     /** 前回の走査で見た未処理ファイルの（大きさ, 更新時刻）。同じなら今回は「止まった」とみなす。 */
@@ -125,14 +128,29 @@ public class ImportWatchService {
         this.settings = settings;
         this.layout = layout;
         this.clock = clock;
-        if (autoRun) {
-            executor = Executors.newSingleThreadScheduledExecutor(r -> {
-                Thread t = new Thread(r, "import-watch");
-                t.setDaemon(true);
-                return t;
-            });
-            executor.scheduleWithFixedDelay(this::tickSafe, TICK_MS, TICK_MS, TimeUnit.MILLISECONDS);
+        this.autoRun = autoRun;
+    }
+
+    /**
+     * 周期処理は起動が終わってから始める。コンストラクタで始めると、起動中の別の bean（DicomScpLifecycle など）と
+     * {@link SettingsService} のロックと Spring の bean 生成ロックを逆順に取り合い、起動が止まることがある
+     * （遅い Intel Mac で実測。スレッドダンプで main と import-watch のデッドロックを確認）。
+     */
+    @EventListener(ApplicationReadyEvent.class)
+    void start() {
+        if (!autoRun || executor != null) {
+            return;
         }
+        executor = Executors.newSingleThreadScheduledExecutor(r -> {
+            Thread t = new Thread(r, "import-watch");
+            t.setDaemon(true);
+            return t;
+        });
+        executor.scheduleWithFixedDelay(this::tickSafe, TICK_MS, TICK_MS, TimeUnit.MILLISECONDS);
+    }
+
+    boolean running() {
+        return executor != null;
     }
 
     @PreDestroy

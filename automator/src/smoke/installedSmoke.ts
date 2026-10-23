@@ -489,6 +489,108 @@ async function voiceSection(app: ElectronApplication, main: Page): Promise<void>
   }
 }
 
+/**
+ * [10] アシスタントのマクロ: 配布物の中で 保存 → 窓を閉じて開き直しても残る → 再生は 2D 窓が無ければ理由つきで止まる →
+ * 他の窓からは forbidden。assistantMacros.js が配布物に同梱されているか（build.files）もここで分かる。
+ */
+async function macroSection(app: ElectronApplication, main: Page): Promise<void> {
+  type MB = {
+    assistantMacrosList: () => Promise<{ ok: boolean; macros?: { id: string; name: string }[]; error?: string }>;
+    assistantMacrosSave: (m: unknown) => Promise<{ ok: boolean; macro?: { id: string }; error?: string }>;
+    assistantMacrosDelete: (id: string) => Promise<{ ok: boolean; error?: string }>;
+    assistantViewerCmd: (s: string, c: unknown) => Promise<{ ok: boolean; error?: string }>;
+  };
+  const open = async (): Promise<Page | null> => {
+    const domClick = (tid: string) => main.waitForSelector(`[data-testid="${tid}"]`, { timeout: 20_000 }).then((h) => h.evaluate((el) => (el as HTMLElement).click()));
+    await domClick("mainscreen-menu-system");
+    await domClick("menu-item-assistant");
+    return findWindow(app, (u) => u.includes("#assistant"), 30_000);
+  };
+  let win: Page | null = null;
+  let savedId = "";
+  try {
+    win = await open();
+    check(!!win, "[10] アシスタント窓が開く");
+    if (!win) return;
+    const save = await win.evaluate(() => (window as unknown as { graphyDesktop: MB }).graphyDesktop.assistantMacrosSave({ name: "smoke-macro", steps: [{ id: "invert", params: {} }] }));
+    savedId = save.macro?.id ?? "";
+    check(save.ok === true && !!savedId, "[10] ★マクロを保存できる（配布物の main が assistantMacros.js を読み込めている）", save);
+    const bad = await win.evaluate(() => (window as unknown as { graphyDesktop: MB }).graphyDesktop.assistantMacrosSave({ name: "", steps: [] }));
+    check(bad.ok === false && bad.error === "bad-macro", "[10] 負例: 名前も操作も無いマクロは保存されない", bad);
+    const forb = await main.evaluate(() => (window as unknown as { graphyDesktop: MB }).graphyDesktop.assistantMacrosList());
+    check(forb.ok === false && forb.error === "forbidden", "[10] 🔴 メイン窓からは forbidden", forb);
+    await win.close().catch(() => undefined);
+    win = await open();
+    if (!win) return check(false, "[10] アシスタント窓を開き直せない");
+    const list = await win.evaluate(() => (window as unknown as { graphyDesktop: MB }).graphyDesktop.assistantMacrosList());
+    check(list.ok === true && !!list.macros?.some((m) => m.id === savedId && m.name === "smoke-macro"), "[10] ★開き直してもマクロが残る", list);
+    const run = await win.evaluate(() => (window as unknown as { graphyDesktop: MB }).graphyDesktop.assistantViewerCmd("smoke", { kind: "action", id: "invert", params: {} }));
+    check(run.ok === false && run.error === "no-viewer", "[10] 2D 窓が無いと再生の操作は no-viewer で止まる", run);
+  } finally {
+    if (win && savedId) await win.evaluate((id) => (window as unknown as { graphyDesktop: MB }).graphyDesktop.assistantMacrosDelete(id), savedId).catch(() => undefined);
+    await win?.close().catch(() => undefined);
+  }
+}
+
+async function robotSection(app: ElectronApplication, main: Page): Promise<void> {
+  type JB = { assistantJournalList: () => Promise<{ ok: boolean; entries?: unknown[]; error?: string }> };
+  const domClick = (page: Page, tid: string) => page.waitForSelector(`[data-testid="${tid}"]`, { timeout: 20_000 }).then((h) => h.evaluate((el) => (el as HTMLElement).click()));
+  let win: Page | null = null;
+  try {
+    await domClick(main, "mainscreen-menu-system");
+    await domClick(main, "menu-item-assistant");
+    win = await findWindow(app, (u) => u.includes("#assistant"), 30_000);
+    check(!!win, "[11] アシスタント窓が開く");
+    if (!win) return;
+    const j = await win.evaluate(() => (window as unknown as { graphyDesktop: JB }).graphyDesktop.assistantJournalList());
+    check(j.ok === true && Array.isArray(j.entries), "[11] ★操作履歴を読める（配布物の main が readJournal を読み込めている）", j);
+    const forb = await main.evaluate(() => (window as unknown as { graphyDesktop: JB }).graphyDesktop.assistantJournalList());
+    check(forb.ok === false && forb.error === "forbidden", "[11] 🔴 メイン窓からは forbidden", forb);
+    await domClick(win, "assistant-robot-toggle");
+    await win.waitForSelector('[data-testid="assistant-robot-empty"]', { timeout: 10_000 });
+    check(true, "[11] ロボットモードに入ると計画パネル（空）が出る");
+  } finally {
+    await win?.close().catch(() => undefined);
+  }
+}
+
+async function writeApprovalSection(app: ElectronApplication, main: Page): Promise<void> {
+  type VB = { assistantViewerCmd: (s: string, c: unknown) => Promise<{ ok: boolean; error?: string }> };
+  const domClick = (page: Page, tid: string) => page.waitForSelector(`[data-testid="${tid}"]`, { timeout: 20_000 }).then((h) => h.evaluate((el) => (el as HTMLElement).click()));
+  let win: Page | null = null;
+  try {
+    // main の確認ダイアログ（データを変える操作の承認）を「取り消す」で返すスタブにする。
+    await app.evaluate(({ dialog }) => {
+      const g = globalThis as unknown as { __wdlg: number; __origMsgBox: unknown };
+      g.__wdlg = 0;
+      g.__origMsgBox = dialog.showMessageBox;
+      (dialog as unknown as { showMessageBox: unknown }).showMessageBox = async () => {
+        g.__wdlg++;
+        return { response: 1, checkboxChecked: false };
+      };
+    });
+    await domClick(main, "mainscreen-menu-system");
+    await domClick(main, "menu-item-assistant");
+    win = await findWindow(app, (u) => u.includes("#assistant"), 30_000);
+    check(!!win, "[12] アシスタント窓が開く");
+    if (!win) return;
+    const forb = await main.evaluate(() => (window as unknown as { graphyDesktop: VB }).graphyDesktop.assistantViewerCmd("smoke", { kind: "action", id: "clearMeasurements", params: {} }));
+    check(forb.ok === false && forb.error === "forbidden", "[12] 🔴 メイン窓からの中継は forbidden", forb);
+    const r = await win.evaluate(() => (window as unknown as { graphyDesktop: VB }).graphyDesktop.assistantViewerCmd("smoke", { kind: "action", id: "clearMeasurements", params: {}, approved: true }));
+    const n = await app.evaluate(() => (globalThis as unknown as { __wdlg: number }).__wdlg);
+    check(r.ok === false && r.error === "declined" && n === 1, "[12] ★承認の関門が配布物の main で働く（approved を偽っても確認ダイアログが出て、取り消しで declined）", { r, dialogs: n });
+  } finally {
+    await win?.close().catch(() => undefined);
+    // 後続の検査へスタブを持ち越さない。
+    await app
+      .evaluate(({ dialog }) => {
+        const g = globalThis as unknown as { __origMsgBox?: typeof dialog.showMessageBox };
+        if (g.__origMsgBox) (dialog as unknown as { showMessageBox: unknown }).showMessageBox = g.__origMsgBox;
+      })
+      .catch(() => undefined);
+  }
+}
+
 async function main(): Promise<void> {
   if (process.platform === "darwin" && process.env.CI !== "true") {
     throw new Error("macOS は実プロファイルを隔離できないので、CI（CI=true）以外では実行しません。");
@@ -581,6 +683,9 @@ async function main(): Promise<void> {
     // メニューの操作はメイン画面が出ている今のうちに行う（後の節で設定画面などへ遷移する）。
     await attachmentSection(app, main).catch((e) => check(false, "[8] PDF 添付の検査が完走しなかった", String(e).slice(0, 300)));
     await voiceSection(app, main).catch((e) => check(false, "[9] 音声入力の検査が完走しなかった", String(e).slice(0, 300)));
+    await macroSection(app, main).catch((e) => check(false, "[10] マクロの検査が完走しなかった", String(e).slice(0, 300)));
+    await robotSection(app, main).catch((e) => check(false, "[11] ロボットモードの検査が完走しなかった", String(e).slice(0, 300)));
+    await writeApprovalSection(app, main).catch((e) => check(false, "[12] 承認つき操作の検査が完走しなかった", String(e).slice(0, 300)));
     await main.screenshot({ path: path.join(OUT, "1-main.png") }).catch(() => {});
 
     // ── 5. 動画を取り込んで開く ─────────────────────────────

@@ -212,6 +212,8 @@ export interface ViewerActions {
    * 描画モードではないので ROI Tools 側に置いている。
    */
   splineFitSelection(): void;
+  /** 選択中の開いたポリゴンライン 2 本を 1 本につなぐ。 */
+  joinPolylines(): void;
   /** ROI マネージャ（右パネル）の表示切替。 */
   toggleRoiManager(): void;
   /** LUT 選択ダイアログを開く（適用は選択時に対象タイルへ）。 */
