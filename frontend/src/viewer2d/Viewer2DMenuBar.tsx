@@ -382,6 +382,7 @@ export function Viewer2DMenuBar({
         { label: t("roiMgr.title"), onClick: actions.toggleRoiManager },
         // スプライン Fit は**描画モードではなく選択中 ROI への操作**なので ROI Tools 側に置く。
         { label: t("viewer2d.roi.splineFit"), onClick: actions.splineFitSelection },
+        { label: t("viewer2d.roi.join"), onClick: actions.joinPolylines },
         // 複製（同じ形の ROI をもう 1 つ）。貼り付け先は**現在表示中のスライス**。
         // 対象が無いときは実行側が理由をトーストで出す（項目を隠して迷わせない）。
         { label: t("viewer2d.roi.copy"), onClick: () => actions.copyRoi() },
