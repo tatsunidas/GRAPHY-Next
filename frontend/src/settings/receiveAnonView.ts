@@ -47,7 +47,8 @@ export const RECEIVE_CLEAN_OPTS: AnonOption[] = ["CleanGraphics", "CleanStructur
 /** 画面に出さないオプション（既存の設定に入っていても保存時に落とさず、そのまま送り返す）。 */
 export function hiddenOptions(options: string[]): string[] {
   const shown = new Set<string>([...RECEIVE_RETAIN_OPTS, ...RECEIVE_CLEAN_OPTS]);
-  return options.filter((o) => !shown.has(o));
+  // CleanPixelData は受信時には実現できず backend が拒否する。送り返すと既存の設定が画面から直せなくなるので落とす。
+  return options.filter((o) => !shown.has(o) && o !== "CleanPixelData");
 }
 
 export type BarTone = "ok" | "warn" | "error";
@@ -83,7 +84,7 @@ export function validateForm(f: { enabled: boolean; wasEnabled: boolean; confirm
   return null;
 }
 
-/** 保存する本文。画面に出さない項目（保持タグ・置換・非表示のオプション）は読んだ値をそのまま送る。 */
+/** 保存する本文。画面に出さない項目（保持タグ・置換・非表示のオプション。CleanPixelData は除く）は読んだ値をそのまま送る。 */
 export function buildBody(
   base: ReceiveAnonProfile | null,
   shownOptions: string[],

@@ -67,9 +67,9 @@ describe("buildBody", () => {
     customReplacements: { "00080080": "Z" },
   };
   it("画面に出さない項目（非表示のオプション・保持タグ・置換）をそのまま送り返す", () => {
-    expect(hiddenOptions(base.options)).toEqual(["CleanPixelData"]);
+    expect(hiddenOptions(["RetainSafePrivate", "CleanRecognizableVisualFeatures", "CleanPixelData"])).toEqual(["CleanRecognizableVisualFeatures"]);
     const b = buildBody(base, ["CleanDescriptors"], "ANON-", "");
-    expect(b.options).toEqual(["CleanDescriptors", "CleanPixelData"]);
+    expect(b.options).toEqual(["CleanDescriptors"]); // CleanPixelData は落とす
     expect(b.manualRetainTags).toEqual(["00091001"]);
     expect(b.customReplacements).toEqual({ "00080080": "Z" });
   });
