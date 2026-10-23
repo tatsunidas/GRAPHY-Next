@@ -561,8 +561,9 @@ async function writeApprovalSection(app: ElectronApplication, main: Page): Promi
   try {
     // main の確認ダイアログ（データを変える操作の承認）を「取り消す」で返すスタブにする。
     await app.evaluate(({ dialog }) => {
-      const g = globalThis as unknown as { __wdlg: number };
+      const g = globalThis as unknown as { __wdlg: number; __origMsgBox: unknown };
       g.__wdlg = 0;
+      g.__origMsgBox = dialog.showMessageBox;
       (dialog as unknown as { showMessageBox: unknown }).showMessageBox = async () => {
         g.__wdlg++;
         return { response: 1, checkboxChecked: false };
@@ -580,6 +581,13 @@ async function writeApprovalSection(app: ElectronApplication, main: Page): Promi
     check(r.ok === false && r.error === "declined" && n === 1, "[12] ★承認の関門が配布物の main で働く（approved を偽っても確認ダイアログが出て、取り消しで declined）", { r, dialogs: n });
   } finally {
     await win?.close().catch(() => undefined);
+    // 後続の検査へスタブを持ち越さない。
+    await app
+      .evaluate(({ dialog }) => {
+        const g = globalThis as unknown as { __origMsgBox?: typeof dialog.showMessageBox };
+        if (g.__origMsgBox) (dialog as unknown as { showMessageBox: unknown }).showMessageBox = g.__origMsgBox;
+      })
+      .catch(() => undefined);
   }
 }
 
