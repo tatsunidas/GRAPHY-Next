@@ -14,7 +14,9 @@ import org.dcm4che3.io.DicomInputStream.IncludeBulkData;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.io.IOException;
 import java.io.OutputStream;
@@ -170,12 +172,17 @@ public class ReceiveAnonymizer {
         return MAPPER.readValue(json, Profile.class);
     }
 
-    /** プロファイルから設定を作る（未知のオプション・日付の排他違反は例外）。 */
+    /** プロファイルから設定を作る（未知のオプション・日付の排他違反・受信時に実現できないオプションは 400 の例外）。 */
     AnonymizeConfig configOf(Profile p) {
         var req = new AnonymizeController.AnonRequest(null, p.options(), null, null, null,
                 p.manualRetainTags(), p.customReplacements(), false, null);
         AnonymizeController.validateProfile(req);
-        return AnonymizeController.toConfig(req);
+        AnonymizeConfig cfg = AnonymizeController.toConfig(req);
+        // 受信時は画素を触らない。入れたまま受けると「文字を消した」と誤解させるので、設定として認めない。
+        if (cfg.hasOption(AnonymizeConfig.Option.CleanPixelData)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "受信時の匿名化では CleanPixelData は使えません（画素は変更しません）");
+        }
+        return cfg;
     }
 
     /** 保存前の検査（REST から）。不正なら例外。 */
