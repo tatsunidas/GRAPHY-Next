@@ -4,9 +4,11 @@
  *
  * 実行:  cd automator && GRAPHY_CXR_PYBIN=<torch・torchvision・transformers==4.46.3・jupyter_server・ipykernel の入った venv の bin> \
  *          GRAPHY_AUTOMATOR_HTTP_PORT=18890 GRAPHY_AUTOMATOR_SCP_PORT=18891 GRAPHY_AUTOMATOR_VITE_PORT=18893 \
- *          npx tsx src/spike/computeCxrReportCheck.ts [ok|bad-version]
- *   ok          : 版が揃った環境で、本物の DX 1 枚から所見と印象が出る（正例）
- *   bad-version : transformers が別の版の環境では、理由を出して止まり、結果は出ない（負例）
+ *          npx tsx src/spike/computeCxrReportCheck.ts [ok|bad-version|missing-deps]
+ *   ok           : 版が揃った環境で、事前チェックを通り、本物の DX 1 枚から所見と印象が出る（正例）
+ *   bad-version  : transformers が別の版の環境では、事前チェックが理由と導入コマンドを出して止まり、本処理は出ない（負例）
+ *   missing-deps : torch などが無い環境で、事前チェックが不足を出す → 入れた（.pth で完全な venv の site-packages を見せる）あと
+ *                  本体を再起動せずに［再確認］で通り、実行できる。GRAPHY_CXR_FULLBIN に完全な venv の bin を指定する
  *   起動前に frontend/node_modules/.vite を消すこと。Linux 専用。重みは Hugging Face のキャッシュに既にあること
  *   （初回の取得は検証しない）。
  */
@@ -61,7 +63,10 @@ async function main(): Promise<void> {
     await resetDb(driver.ports.http);
     await importFixtureCategory(driver.ports.http, "cxr-dx");
     await page.reload({ waitUntil: "domcontentloaded" });
-    await page.getByTestId("search-patientid-input").waitFor({ state: "visible", timeout: 60_000 });
+    await page.getByTestId("search-patientid-input").waitFor({ state: "visible", timeout: 60_000 }).catch(async (e) => {
+      await page.screenshot({ path: path.join(OUT_DIR, "fail-start.png") });
+      throw e;
+    });
     await driver.app.evaluate(({ dialog }) => {
       dialog.showMessageBoxSync = (() => 0) as typeof dialog.showMessageBoxSync;
     });
@@ -95,8 +100,60 @@ async function main(): Promise<void> {
     const disclaimer = (await viewer.getByTestId("cxr-disclaimer").textContent()) ?? "";
     check(/診断.*使わない/.test(disclaimer), "免責が実行前から出ている", disclaimer);
 
-    console.log("\n[2] 実行（同意 1 回）");
+    // 画像を送らない事前チェック（コードだけのジョブ）の同意を済ませる
+    const approveProbe = async (): Promise<void> => {
+      const pw = await consentWindow(driver, 120_000);
+      const pcode = (await pw.locator("#code").textContent()) ?? "";
+      check(pcode.includes("stage('probe'") && !pcode.includes("load_image('inputs/0.npz')"), "事前チェックの同意画面: コードは環境の確認だけ（画像を読まない）");
+      await pw.getByTestId("consent-ack").check();
+      await pw.getByTestId("consent-send").click();
+    };
+
+    console.log("\n[2] 実行: 事前チェック（同意 1 回目・画像なし）");
     await viewer.getByTestId("cxr-run").click();
+    await approveProbe();
+    if (MODE !== "ok") {
+      await viewer.getByTestId("cxr-env").waitFor({ state: "visible", timeout: 120_000 });
+      const box = (await viewer.getByTestId("cxr-env").textContent()) ?? "";
+      const cmd = await viewer.getByTestId("cxr-env-command").inputValue();
+      await viewer.screenshot({ path: path.join(OUT_DIR, "viewer-env-panel.png") });
+      const st0 = await state(viewer);
+      check(st0.phase === "idle" && !(await viewer.getByTestId("cxr-result").isVisible()), "不足のとき本処理は出ない（結果の欄も出ない）", st0.phase);
+      check(st0.env?.python?.startsWith(bin.replace(/\/bin$/, "")), "使われる Python が検査した venv のもの", st0.env?.python);
+      if (MODE === "bad-version") {
+        check(/transformers.*4\.57/.test(box) && /4\.46\.3/.test(box), "入っている版と必要な版が枠に出る", box.slice(0, 300));
+        check(new RegExp(`-m pip install transformers==4\\.46\\.3$`).test(cmd), "導入コマンドは transformers==4.46.3 だけ", cmd);
+        console.log(`  導入コマンド: ${cmd}`);
+      } else {
+        check(/torch.*入っていません/.test(box) && /transformers.*入っていません/.test(box), "入っていないものが枠に出る", box.slice(0, 300));
+        check(/-m pip install torch torchvision transformers==4\.46\.3/.test(cmd), "導入コマンドに不足が揃っている", cmd);
+        console.log(`  導入コマンド: ${cmd}`);
+        const full = process.env.GRAPHY_CXR_FULLBIN;
+        if (!full) throw new Error("missing-deps には GRAPHY_CXR_FULLBIN が要る");
+        const sites = (dir: string) => fs.readdirSync(path.join(dir, "..", "lib")).filter((d) => d.startsWith("python")).map((d) => path.join(dir, "..", "lib", d, "site-packages"));
+        fs.writeFileSync(path.join(sites(bin)[0], "zz-installed.pth"), sites(full)[0] + "\n");
+        console.log("\n[2b] 導入したことにして（本体は再起動しない）［再確認］");
+        await viewer.getByTestId("cxr-env-recheck").click();
+        await approveProbe();
+        await viewer.waitForFunction(
+          () => /環境は整いました/.test(document.querySelector('[data-testid="cxr-status"]')?.textContent ?? ""),
+          null,
+          { timeout: 120_000 },
+        );
+        check(!(await viewer.getByTestId("cxr-env").isVisible()), "再確認で枠が消える（本体の再起動なし）");
+        await viewer.screenshot({ path: path.join(OUT_DIR, "viewer-env-fixed.png") });
+        await viewer.getByTestId("cxr-run").click();
+      }
+    }
+    if (MODE === "bad-version") {
+      const events0 = fs.readFileSync(AUDIT, "utf8").trim().split("\n").map((l) => JSON.parse(l));
+      check(events0.filter((e: { event: string }) => e.event === "egress-requested").length === 1, "監査: 送信の要求は事前チェックの 1 件だけ（画像は出ていない）");
+      if (summary() > 0) process.exitCode = 1;
+      return;
+    }
+
+    console.log("\n[2c] 本処理（同意 2 回目・画像あり）");
+    if (MODE === "ok") await viewer.getByTestId("cxr-run").waitFor({ state: "visible" });
     const win = await consentWindow(driver, 120_000);
     const note = (await win.getByTestId("consent-note").textContent()) ?? "";
     const code = (await win.locator("#code").textContent()) ?? "";
@@ -117,7 +174,7 @@ async function main(): Promise<void> {
     await viewer.screenshot({ path: path.join(OUT_DIR, "viewer-result.png") });
 
     console.log("\n[3] 結果");
-    if (MODE === "ok") {
+    {
       check(st.phase === "done", "最後まで走る", { phase: st.phase, error: st.error, status: st.status });
       const rep = st.report ?? {};
       check(typeof rep.findings === "string" && rep.findings.length > 20 && typeof rep.impression === "string" && rep.impression.length > 10, "所見と印象の文が返る", rep);
@@ -140,10 +197,6 @@ async function main(): Promise<void> {
       await viewer.waitForTimeout(500);
       check((await state(viewer)).cam?.shown === null, "「消す」で重ねが外れる");
       await viewer.screenshot({ path: path.join(OUT_DIR, "viewer-cam-off.png") });
-    } else {
-      check(st.phase === "failed", "版違いで止まる", { phase: st.phase, status: st.status });
-      check(/transformers 4\.57/.test(st.status ?? "") && /4\.46\.3/.test(st.status ?? ""), "止めた理由に入っている版と必要な版が出る", st.status);
-      check((await viewer.getByTestId("cxr-result").count()) === 0 || (await viewer.getByTestId("cxr-result").evaluate((e) => (e as HTMLElement).style.display)) === "none", "結果の欄は出ない");
     }
     const events = fs.readFileSync(AUDIT, "utf8").trim().split("\n").map((l) => JSON.parse(l));
     const req = events.find((e: { event: string }) => e.event === "egress-requested");
