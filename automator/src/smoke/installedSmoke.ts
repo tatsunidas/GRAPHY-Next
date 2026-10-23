@@ -554,6 +554,35 @@ async function robotSection(app: ElectronApplication, main: Page): Promise<void>
   }
 }
 
+async function writeApprovalSection(app: ElectronApplication, main: Page): Promise<void> {
+  type VB = { assistantViewerCmd: (s: string, c: unknown) => Promise<{ ok: boolean; error?: string }> };
+  const domClick = (page: Page, tid: string) => page.waitForSelector(`[data-testid="${tid}"]`, { timeout: 20_000 }).then((h) => h.evaluate((el) => (el as HTMLElement).click()));
+  let win: Page | null = null;
+  try {
+    // main の確認ダイアログ（データを変える操作の承認）を「取り消す」で返すスタブにする。
+    await app.evaluate(({ dialog }) => {
+      const g = globalThis as unknown as { __wdlg: number };
+      g.__wdlg = 0;
+      (dialog as unknown as { showMessageBox: unknown }).showMessageBox = async () => {
+        g.__wdlg++;
+        return { response: 1, checkboxChecked: false };
+      };
+    });
+    await domClick(main, "mainscreen-menu-system");
+    await domClick(main, "menu-item-assistant");
+    win = await findWindow(app, (u) => u.includes("#assistant"), 30_000);
+    check(!!win, "[12] アシスタント窓が開く");
+    if (!win) return;
+    const forb = await main.evaluate(() => (window as unknown as { graphyDesktop: VB }).graphyDesktop.assistantViewerCmd("smoke", { kind: "action", id: "clearMeasurements", params: {} }));
+    check(forb.ok === false && forb.error === "forbidden", "[12] 🔴 メイン窓からの中継は forbidden", forb);
+    const r = await win.evaluate(() => (window as unknown as { graphyDesktop: VB }).graphyDesktop.assistantViewerCmd("smoke", { kind: "action", id: "clearMeasurements", params: {}, approved: true }));
+    const n = await app.evaluate(() => (globalThis as unknown as { __wdlg: number }).__wdlg);
+    check(r.ok === false && r.error === "declined" && n === 1, "[12] ★承認の関門が配布物の main で働く（approved を偽っても確認ダイアログが出て、取り消しで declined）", { r, dialogs: n });
+  } finally {
+    await win?.close().catch(() => undefined);
+  }
+}
+
 async function main(): Promise<void> {
   if (process.platform === "darwin" && process.env.CI !== "true") {
     throw new Error("macOS は実プロファイルを隔離できないので、CI（CI=true）以外では実行しません。");
@@ -648,6 +677,7 @@ async function main(): Promise<void> {
     await voiceSection(app, main).catch((e) => check(false, "[9] 音声入力の検査が完走しなかった", String(e).slice(0, 300)));
     await macroSection(app, main).catch((e) => check(false, "[10] マクロの検査が完走しなかった", String(e).slice(0, 300)));
     await robotSection(app, main).catch((e) => check(false, "[11] ロボットモードの検査が完走しなかった", String(e).slice(0, 300)));
+    await writeApprovalSection(app, main).catch((e) => check(false, "[12] 承認つき操作の検査が完走しなかった", String(e).slice(0, 300)));
     await main.screenshot({ path: path.join(OUT, "1-main.png") }).catch(() => {});
 
     // ── 5. 動画を取り込んで開く ─────────────────────────────

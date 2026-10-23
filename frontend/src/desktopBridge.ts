@@ -526,7 +526,7 @@ export interface GraphyDesktop {
   assistantMacrosDelete?: (id: string) => Promise<{ ok: boolean; error?: string }>;
   /** 2D 窓側: main が中継してきた命令を受ける。購読解除の関数を返す。 */
   onViewerCmd?: (
-    cb: (cmd: { reqId: string; kind: "action" | "getState"; id?: string; params?: unknown; includeLabels?: boolean }) => void,
+    cb: (cmd: { reqId: string; kind: "action" | "getState"; id?: string; params?: unknown; includeLabels?: boolean; approved?: boolean }) => void,
   ) => () => void;
   /** 2D 窓側: 命令の結果を返す（main は命令を送った窓からのものだけ受理する）。 */
   viewerCmdResult?: (reqId: string, result: import("./assistant/actions/registry").ActionResult) => void;

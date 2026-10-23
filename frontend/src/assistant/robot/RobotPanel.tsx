@@ -5,7 +5,7 @@
 // ロボットモードの計画パネル（アシスタント窓）。モデルが出した計画を利用者が確認・絞り込んで「実行」するまで、
 // 何も動かさない。実行は S5a のマクロと同じ runMacro（全ステップを先に検証・失敗で停止・中止・逆順の取り消し）。
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
-import type { InverseStep } from "../actions/registry";
+import { isWriteAction, type InverseStep } from "../actions/registry";
 import { MAX_NAME, checkSteps, type MacroStep } from "../macros/macroModel";
 import { stepLabel, type MacroApi } from "../macros/MacroPanel";
 import { runMacro, undoRun } from "../macros/runMacro";
@@ -117,6 +117,7 @@ export function RobotPanel({ plan, api, t, onDiscard }: { plan: RobotPlan | null
                 data-testid="assistant-robot-pick"
               />
               {i + 1}. {stepLabel(t, s)}
+              {isWriteAction(s.id) && <span style={P.warn} data-testid="assistant-robot-write-mark">{t("assistant.robot.writeMark")}</span>}
             </label>
           ))}
           <div style={P.row}>
@@ -163,4 +164,5 @@ const P: Record<string, CSSProperties> = {
   stop: { padding: "4px 12px", borderRadius: 6, border: "none", background: "#c5221f", color: "#fff", cursor: "pointer", fontWeight: 600 },
   err: { color: "#f28b82", overflowWrap: "anywhere" },
   ok: { color: "#81c995" },
+  warn: { color: "#fdd663", fontSize: 11 },
 };

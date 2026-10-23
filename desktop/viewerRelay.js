@@ -20,6 +20,13 @@ const DEFAULT_TIMEOUT_MS = 5000;
 
 const KINDS = new Set(["action", "getState"]);
 
+/**
+ * データを変える操作（frontend/src/assistant/actions/registry.ts の `effect: "write"` と同じ集合）。
+ * 🔴 実行のたびに main が利用者の承認を取る。承認の関門は**ここ（main の描くダイアログ）**で、レンダラが渡す値は信用しない:
+ *    承認フラグ `approved` は main が承認後にだけ付け、レンダラが付けてきた値は捨てる。
+ */
+const WRITE_ACTIONS = new Set(["clearMeasurements"]);
+
 /** ジャーナルの上限。1 世代だけ残して上書きする。暫定値（利用実績で見直す）。 */
 const DEFAULT_JOURNAL_MAX_BYTES = 1024 * 1024;
 
@@ -88,7 +95,27 @@ function readJournal({ file, limit = 50 }) {
 function createRelay({ resolveTarget, journal = () => {}, timeoutMs = DEFAULT_TIMEOUT_MS, newId = () => crypto.randomBytes(12).toString("hex") }) {
   const pending = new Map();
 
-  function relay(sessionId, cmd) {
+  /**
+   * @param {{confirm?: (id: string) => Promise<boolean>}} [opts] write 操作の承認を取る関数（main が窓を束ねて渡す）。
+   */
+  async function relay(sessionId, cmd, opts = {}) {
+    if (cmd && typeof cmd === "object" && cmd.kind === "action" && WRITE_ACTIONS.has(cmd.id)) {
+      let approved = false;
+      try {
+        approved = typeof opts.confirm === "function" && (await opts.confirm(cmd.id)) === true;
+      } catch {
+        approved = false;
+      }
+      if (!approved) {
+        journal({ sessionId: String(sessionId || "").slice(0, 64), kind: "action", id: cmd.id, params: journalParams(cmd.params), ok: false, error: "declined" });
+        return { ok: false, error: "declined" };
+      }
+      return relayInner(sessionId, cmd, true);
+    }
+    return relayInner(sessionId, cmd, false);
+  }
+
+  function relayInner(sessionId, cmd, approved) {
     if (!cmd || typeof cmd !== "object" || !KINDS.has(cmd.kind)) return Promise.resolve({ ok: false, error: "bad-command" });
     if (cmd.kind === "action" && (typeof cmd.id !== "string" || cmd.id.length > 64)) return Promise.resolve({ ok: false, error: "bad-command" });
     const target = resolveTarget();
@@ -113,7 +140,7 @@ function createRelay({ resolveTarget, journal = () => {}, timeoutMs = DEFAULT_TI
         },
       });
       try {
-        target.send("graphy:viewer-cmd", { reqId, kind: cmd.kind, id: cmd.id, params: cmd.params, includeLabels: cmd.includeLabels === true });
+        target.send("graphy:viewer-cmd", { reqId, kind: cmd.kind, id: cmd.id, params: cmd.params, includeLabels: cmd.includeLabels === true, approved: approved === true });
       } catch {
         pending.delete(reqId);
         clearTimeout(timer);
@@ -135,4 +162,4 @@ function createRelay({ resolveTarget, journal = () => {}, timeoutMs = DEFAULT_TI
   return { relay, handleResult, pendingCount: () => pending.size };
 }
 
-module.exports = { createRelay, createJournal, journalParams, readJournal, DEFAULT_TIMEOUT_MS };
+module.exports = { WRITE_ACTIONS, createRelay, createJournal, journalParams, readJournal, DEFAULT_TIMEOUT_MS };
