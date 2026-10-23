@@ -458,14 +458,23 @@ async function voiceSection(app: ElectronApplication, main: Page): Promise<void>
       await new Promise((r) => setTimeout(r, 2000));
       await win.getByTestId("assistant-voice-stop").evaluate((el) => (el as HTMLElement).click());
       const input = win.getByTestId("assistant-input");
-      const got = await win.waitForFunction(() => (document.querySelector('[data-testid="assistant-input"]') as HTMLTextAreaElement | null)?.value.includes("スモーク音声"), undefined, { timeout: 30_000 }).then(() => true, () => false);
-      if (!got) console.log(`  [情報] 画面の文言: ${JSON.stringify((await win.locator("body").innerText().catch(() => "")).slice(0, 400))}`);
-      check(got, "[9] ★録音 → 16 kHz WAV → 文字起こしの要求 → 入力欄に文字が入る（配布物）", (await input.inputValue().catch(() => "")).slice(0, 80));
-      const w = received[0];
-      const ok = !!w && w.subarray(0, 4).toString() === "RIFF" && w.readUInt32LE(24) === 16000 && w.readUInt16LE(22) === 1 && w.readUInt16LE(34) === 16;
-      let peak = 0;
-      if (w) for (let i = 44; i + 1 < w.length; i += 2) peak = Math.max(peak, Math.abs(w.readInt16LE(i)));
-      check(ok && peak > 2000, "[9] 送られた音声は 16 kHz・mono・16 bit の WAV で、無音ではない", { bytes: w?.length, peak });
+      const fakeSilent = "peak" in probe && probe.peak === 0;
+      if (fakeSilent) {
+        // macOS ランナーでは Chromium の偽マイク(ファイル入力)が無音で、アプリの外側(AnalyserNode)でも peak 0 だった（2026-10-23 の dry run）。
+        // 音の中身の検査はできないので、合格にせず未達として記録し、代わりに「無音は送らず理由を出す」アプリ側の挙動を確かめる。
+        console.log("  [未達] [9] 偽マイクが無音の OS のため、録音内容(16 kHz WAV・440 Hz)の検査は実行していない（Linux・Windows では実行済み）");
+        const said = await win.getByText(/No speech was recognized|音声が聞き取れませんでした/).first().waitFor({ state: "visible", timeout: 30_000 }).then(() => true, () => false);
+        check(said && received.length === 0, "[9] 🔴 無音の録音は文字起こしへ送らず、理由が画面に出る（無音ガード）", { said, requests: received.length });
+      } else {
+        const got = await win.waitForFunction(() => (document.querySelector('[data-testid="assistant-input"]') as HTMLTextAreaElement | null)?.value.includes("スモーク音声"), undefined, { timeout: 30_000 }).then(() => true, () => false);
+        if (!got) console.log(`  [情報] 画面の文言: ${JSON.stringify((await win.locator("body").innerText().catch(() => "")).slice(0, 400))}`);
+        check(got, "[9] ★録音 → 16 kHz WAV → 文字起こしの要求 → 入力欄に文字が入る（配布物）", (await input.inputValue().catch(() => "")).slice(0, 80));
+        const w = received[0];
+        const ok = !!w && w.subarray(0, 4).toString() === "RIFF" && w.readUInt32LE(24) === 16000 && w.readUInt16LE(22) === 1 && w.readUInt16LE(34) === 16;
+        let peak = 0;
+        if (w) for (let i = 44; i + 1 < w.length; i += 2) peak = Math.max(peak, Math.abs(w.readInt16LE(i)));
+        check(ok && peak > 2000, "[9] 送られた音声は 16 kHz・mono・16 bit の WAV で、無音ではない", { bytes: w?.length, peak });
+      }
     }
     const perm = await win.evaluate(async () => {
       try { (await navigator.mediaDevices.getUserMedia({ video: true })).getTracks().forEach((t) => t.stop()); return "granted"; } catch (e) { return (e as Error).name; }
