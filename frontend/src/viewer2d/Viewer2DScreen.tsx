@@ -1732,7 +1732,7 @@ function TileGrid({
         const tile = patient.tiles.find((tl) => tl.id === tid);
         if (!tile) { comingSoon(t("main.toolbar.viewer3d")); return; }
         const dims = tileDimsRef.current.get(tile.id);
-        const ctx = { study: tile.study, series: tile.series, c: dims?.c ?? 0, t: dims?.t ?? 0, ts: Date.now() };
+        const ctx = { study: tile.study, series: tile.series, c: dims?.c ?? 0, t: dims?.t ?? 0, range: tile.range, ts: Date.now() };
         localStorage.setItem("graphy-viewer3d-ctx", JSON.stringify(ctx));
         const d = desktop();
         if (d?.openViewer) void d.openViewer("viewer3d");
@@ -1743,7 +1743,7 @@ function TileGrid({
         const tid = resolveTargets()[0];
         const tile = patient.tiles.find((tl) => tl.id === tid);
         if (!tile) { comingSoon(t("main.toolbar.mpr")); return; }
-        const ctx = { study: tile.study, series: tile.series, ts: Date.now() };
+        const ctx = { study: tile.study, series: tile.series, range: tile.range, ts: Date.now() };
         localStorage.setItem("graphy-mpr-ctx", JSON.stringify(ctx));
         const d = desktop();
         if (d?.openViewer) void d.openViewer("mpr");
@@ -1754,7 +1754,7 @@ function TileGrid({
         const tid = resolveTargets()[0];
         const tile = patient.tiles.find((tl) => tl.id === tid);
         if (!tile) { comingSoon(t("main.toolbar.slicer")); return; }
-        const ctx = { study: tile.study, series: tile.series, ts: Date.now() };
+        const ctx = { study: tile.study, series: tile.series, range: tile.range, ts: Date.now() };
         localStorage.setItem("graphy-slicer-ctx", JSON.stringify(ctx));
         const d = desktop();
         if (d?.openViewer) void d.openViewer("slicer");

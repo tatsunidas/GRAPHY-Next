@@ -31,6 +31,8 @@ import {
   isCacheSizeExceeded,
 } from "../viewer/volumeMemory";
 import { confirmVolumeMemory } from "../viewer/volumeMemoryGuard";
+import { rangedStackIds } from "../viewer/rangedStack";
+import type { ZRange } from "../viewer/virtualLayout";
 import { MIN_SLAB_MM, finestVoxelMm, tooFineForVolumeRendering } from "../viewer/volumeScale";
 import { useDeviceClass } from "../mobile/useDeviceClass";
 import { imageIdForInstance, imageIdForCell } from "../viewer/imageId";
@@ -83,6 +85,8 @@ interface Viewer3DContext {
   c?: number;
   /** 起動元 2D Viewer タイルで表示中だったタイムフレームインデックス（無ければ 0）。 */
   t?: number;
+  /** 範囲つきで開いたタイルから起動したとき、ボリュームをこの範囲だけで組む。 */
+  range?: ZRange;
   ts: number;
 }
 
@@ -268,14 +272,31 @@ export function Viewer3DScreen({ status }: { status: AppStatus | null }) {
         const t0 = Math.min(Math.max(0, ctx.t ?? 0), Math.max(0, layout.nT - 1));
         guardLayout = layout;
         if (seriesRef.current) seriesRef.current = { ...seriesRef.current, c: c0, t: t0 };
-        imageIds = imageIdsForCT(layout, mode2, c0, t0, ctx.study.studyInstanceUid, series.seriesInstanceUid);
-        if (imageIds.length < 3 && layout.nC <= 1 && layout.nT <= 1) {
+        if (ctx.range) {
+          // 範囲つき: 全体に黙って戻さない（フォールバックもしない）。
+          const ranged = rangedStackIds(layout, mode2, ctx.study.studyInstanceUid, series.seriesInstanceUid, c0, t0, ctx.range);
+          if (!ranged.ok) {
+            setPhase("error");
+            setMessage(t(`series.range.fail.${ranged.reason}`));
+            return;
+          }
+          imageIds = ranged.imageIds;
+        } else {
+          imageIds = imageIdsForCT(layout, mode2, c0, t0, ctx.study.studyInstanceUid, series.seriesInstanceUid);
+        }
+        if (!ctx.range && imageIds.length < 3 && layout.nC <= 1 && layout.nT <= 1) {
           const instances = await fetchInstances(ctx.study.studyInstanceUid, series.seriesInstanceUid);
           imageIds = instances.map((i) =>
             imageIdForInstance(mode2, i.sopInstanceUid, ctx.study.studyInstanceUid, series.seriesInstanceUid),
           );
         }
       } catch {
+        if (ctx.range) {
+          // 範囲つきでレイアウトが取れないときは、全体を組まずに止める。
+          setPhase("error");
+          setMessage(t("series.range.fail.invalid"));
+          return;
+        }
         const instances = await fetchInstances(ctx.study.studyInstanceUid, series.seriesInstanceUid);
         imageIds = instances.map((i) =>
           imageIdForInstance(mode2, i.sopInstanceUid, ctx.study.studyInstanceUid, series.seriesInstanceUid),

@@ -25,6 +25,8 @@ import { createWheelStepper } from "../viewer/wheelScroll";
 import { matchesShortcut } from "../shortcuts/registry";
 import { getAppliedVolumeMaxMb, isCacheSizeExceeded } from "../viewer/volumeMemory";
 import { confirmVolumeMemory } from "../viewer/volumeMemoryGuard";
+import { rangedStackIds } from "../viewer/rangedStack";
+import type { ZRange } from "../viewer/virtualLayout";
 import {
   teardownSlicer,
   displayReconStack,
@@ -73,6 +75,8 @@ interface SlicerContext {
   /** マルチC/T シリーズをソースにする場合の表示中インデックス（任意）。無ければ 0。 */
   c?: number;
   t?: number;
+  /** 範囲つきで開いたタイルから起動したとき、ボリュームをこの範囲だけで組む。 */
+  range?: ZRange;
   ts: number;
 }
 
@@ -203,6 +207,7 @@ export function SlicerScreen({ status }: { status: AppStatus | null }) {
   const reconSeqRef = useRef(0);
   const srcStudyRef = useRef<string>("");
   const srcSeriesRef = useRef<string>("");
+  const srcRangeRef = useRef<ZRange | null>(null);
   const srcDescRef = useRef<string>("");
   const genResultRef = useRef<GenResult | null>(null);
   const layoutRef = useRef<SeriesLayoutDto | null>(null);
@@ -332,8 +337,20 @@ export function SlicerScreen({ status }: { status: AppStatus | null }) {
         t0 = Math.min(Math.max(0, ctx.t ?? 0), Math.max(0, layout.nT - 1));
         setCSel(c0);
         setTSel(t0);
-        imageIds = imageIdsForCT(layout, mode, c0, t0, ctx.study.studyInstanceUid, series.seriesInstanceUid);
-        if (imageIds.length < 3) {
+        srcRangeRef.current = ctx.range ?? null;
+        if (ctx.range) {
+          // 範囲つき: 全体に黙って戻さない（フォールバックもしない）。
+          const ranged = rangedStackIds(layout, mode, ctx.study.studyInstanceUid, series.seriesInstanceUid, c0, t0, ctx.range);
+          if (!ranged.ok) {
+            setPhase("error");
+            setMessage(t(`series.range.fail.${ranged.reason}`));
+            return;
+          }
+          imageIds = ranged.imageIds;
+        } else {
+          imageIds = imageIdsForCT(layout, mode, c0, t0, ctx.study.studyInstanceUid, series.seriesInstanceUid);
+        }
+        if (!ctx.range && imageIds.length < 3) {
           const instances = await fetchInstances(ctx.study.studyInstanceUid, series.seriesInstanceUid);
           imageIds = instances.map((i) =>
             imageIdForInstance(mode, i.sopInstanceUid, ctx.study.studyInstanceUid, series.seriesInstanceUid),
@@ -341,6 +358,12 @@ export function SlicerScreen({ status }: { status: AppStatus | null }) {
         }
       } catch {
         layoutRef.current = null;
+        if (ctx.range) {
+          // 範囲つきでレイアウトが取れないときは、全体を組まずに止める。
+          setPhase("error");
+          setMessage(t("series.range.fail.invalid"));
+          return;
+        }
         const instances = await fetchInstances(ctx.study.studyInstanceUid, series.seriesInstanceUid);
         imageIds = instances.map((i) =>
           imageIdForInstance(mode, i.sopInstanceUid, ctx.study.studyInstanceUid, series.seriesInstanceUid),
@@ -715,7 +738,15 @@ export function SlicerScreen({ status }: { status: AppStatus | null }) {
     async (cIdx: number, tIdx: number) => {
       const layout = layoutRef.current;
       if (!layout) return;
-      const ids = imageIdsForCT(layout, mode, cIdx, tIdx, srcStudyRef.current ?? "", srcSeriesRef.current ?? "");
+      const rangeNow = srcRangeRef.current;
+      let ids: string[];
+      if (rangeNow) {
+        const ranged = rangedStackIds(layout, mode, srcStudyRef.current ?? "", srcSeriesRef.current ?? "", cIdx, tIdx, rangeNow);
+        if (!ranged.ok) return;
+        ids = ranged.imageIds;
+      } else {
+        ids = imageIdsForCT(layout, mode, cIdx, tIdx, srcStudyRef.current ?? "", srcSeriesRef.current ?? "");
+      }
       if (ids.length < 3) return;
       // C/T 切替もボリュームを組み直すので、起動時と同じくメモリ量を先に確認する。
       // キャンセル時は現在の表示をそのまま残す（状態を変えない）。

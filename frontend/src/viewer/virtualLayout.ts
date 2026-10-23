@@ -148,8 +148,12 @@ const fmt = (x: number) => String(Number(x.toFixed(3)));
 
 /** タイル ID。範囲が無ければ従来どおり `${study}|${series}`、あれば範囲を足す（同じシリーズでも範囲が違えば別タイル）。 */
 export function tileIdFor(study: string, series: string, range?: ZRange | null): string {
-  if (!range) return `${study}|${series}`;
+  return range ? `${study}|${series}|${rangeKey(range)}` : `${study}|${series}`;
+}
+
+/** 範囲を一意に表す短い文字列（タイル ID・起動コンテキストの同一性判定に使う）。 */
+export function rangeKey(range: ZRange): string {
   return range.kind === "mm"
-    ? `${study}|${series}|${fmt(Math.min(range.fromMm, range.toMm))}-${fmt(Math.max(range.fromMm, range.toMm))}mm`
-    : `${study}|${series}|#${range.from + 1}-${range.to + 1}`;
+    ? `${fmt(Math.min(range.fromMm, range.toMm))}-${fmt(Math.max(range.fromMm, range.toMm))}mm`
+    : `#${range.from + 1}-${range.to + 1}`;
 }
