@@ -13,6 +13,8 @@ import { MarkdownPreviewBoundary } from "../report/MarkdownEditor";
 import { chatReducer, initialChatState, type UiAction, type UiImage, type UiMessage } from "./chatState";
 import { buildTools } from "./actions/registry";
 import { runToolLoop } from "./toolLoop";
+import { MacroPanel, type MacroApi } from "./macros/MacroPanel";
+import { candidatesFromActions } from "./macros/macroModel";
 import { DOC_CHUNKS } from "./docsBundle";
 import { searchDocs } from "./docsIndex";
 import { buildSystemPrompt } from "./systemPrompt";
@@ -65,6 +67,7 @@ export function AssistantScreen() {
   const [askConfirm, setAskConfirm] = useState(false);
   const confirmedRef = useRef(false);
   const [note, setNote] = useState<string | null>(null);
+  const [macroOpen, setMacroOpen] = useState(false);
   const [resolved, setResolved] = useState<AiResolveResult | null>(null);
   const sessionId = useMemo(newSessionId, []);
   const bufRef = useRef("");
@@ -224,6 +227,18 @@ export function AssistantScreen() {
     [bridge, sessionId],
   );
 
+  // マクロの口。保存は main（形と大きさの検証）、再生は send と同じ viewer 中継（2D 窓が毎回検証）。
+  const macroApi = useMemo<MacroApi | null>(() => {
+    if (!bridge?.assistantMacrosList || !bridge.assistantMacrosSave || !bridge.assistantMacrosDelete || !bridge.assistantViewerCmd) return null;
+    return {
+      list: () => bridge.assistantMacrosList!(),
+      save: (m) => bridge.assistantMacrosSave!(m),
+      remove: (id) => bridge.assistantMacrosDelete!(id),
+      viewer: (cmd) => bridge.assistantViewerCmd!(sessionId, cmd),
+    };
+  }, [bridge, sessionId]);
+  const macroCandidates = useMemo(() => candidatesFromActions(state.messages.flatMap((m) => m.actions ?? [])), [state.messages]);
+
   const onPaste = (e: ClipboardEvent) => {
     const files = Array.from(e.clipboardData.files);
     if (files.length) {
@@ -247,6 +262,11 @@ export function AssistantScreen() {
         <span style={S.via} data-testid="assistant-via">
           {resolved?.ok ? `${resolved.label} · ${resolved.model}` : ""}
         </span>
+        {macroApi && (
+          <button style={S.linkBtn} onClick={() => setMacroOpen((v) => !v)} data-testid="assistant-macro-toggle">
+            {t("assistant.macro.button")}
+          </button>
+        )}
         <button style={S.linkBtn} disabled={busy || !state.messages.length} onClick={() => dispatch({ type: "clear" })}>
           {t("assistant.clear")}
         </button>
@@ -264,6 +284,7 @@ export function AssistantScreen() {
         )}
       </div>
 
+      {macroOpen && macroApi && <MacroPanel api={macroApi} candidates={macroCandidates} busy={busy} t={t} />}
       {note && <div style={S.note}>{note}</div>}
       {attachments.length > 0 && !(resolved?.ok && resolved.local) && (
         <div style={S.note} data-testid="assistant-attach-dest">
