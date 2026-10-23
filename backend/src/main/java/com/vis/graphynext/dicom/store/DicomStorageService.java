@@ -440,6 +440,12 @@ public class DicomStorageService {
         if (us != null) {
             return us;
         }
+        // Enhanced CT/MR/PET のマルチフレームは Z/C/T のボリュームに展開する（web の SeriesLayoutAssembler にも
+        // 同じものを繋いである）。全 SOP が 1 フレームなら null で従来経路へ。
+        com.vis.graphynext.dicom.SeriesLayout enhanced = enhancedLayoutIfApplicable(insts);
+        if (enhanced != null) {
+            return enhanced;
+        }
         java.util.List<SeriesLayoutBuilder.FrameMeta> frames = new java.util.ArrayList<>();
         // Fusion 空間メタ収集
         double[] seriesIop = null;
@@ -465,7 +471,7 @@ public class DicomStorageService {
             java.util.Map<String, Double> dims = new java.util.HashMap<>();
             // T(時間): クラシック単一フレームは TemporalPositionIdentifier(0020,0100) を優先し、
             // 無ければ TemporalPositionIndex(0020,9128) をフォールバックで読む（両対応）。
-            // ※ Enhanced 多フレーム（1 インスタンスに多数フレーム）の per-frame Index 解析は TODO #8。
+            // ※ Enhanced 多フレーム（1 インスタンスに多数フレーム）は EnhancedMultiframeExpander が先に取る。
             putFirstPresent(dims, "Temporal", ds, Tag.TemporalPositionIdentifier, Tag.TemporalPositionIndex);
             putIfPresent(dims, "Trigger", ds, Tag.TriggerTime);
             // C(チャンネル)=同一位置・同一時相で見ているものが違う: Echo/b値/EchoTime/位相成分。
@@ -573,6 +579,22 @@ public class DicomStorageService {
             log.debug("NM tomo series: slices={} phases={}", nm.nZ(), nm.nT());
         }
         return nm;
+    }
+
+    private com.vis.graphynext.dicom.SeriesLayout enhancedLayoutIfApplicable(java.util.List<DicomInstance> insts) {
+        java.util.List<Attributes> headers = new java.util.ArrayList<>();
+        for (DicomInstance inst : insts) {
+            Attributes ds = readHeaderQuietly(inst);
+            if (ds != null) {
+                headers.add(ds);
+            }
+        }
+        com.vis.graphynext.dicom.SeriesLayout enhanced =
+                com.vis.graphynext.dicom.EnhancedMultiframeExpander.layout(headers);
+        if (enhanced != null) {
+            log.debug("Enhanced multiframe series: nZ={} nC={} nT={}", enhanced.nZ(), enhanced.nC(), enhanced.nT());
+        }
+        return enhanced;
     }
 
     private com.vis.graphynext.dicom.SeriesLayout usLayoutIfApplicable(java.util.List<DicomInstance> insts) {

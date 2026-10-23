@@ -123,3 +123,28 @@ describe("XA フレームの imageId", () => {
     expect(imageIdForXaFrame("standalone", "1.2.3", -3)).toMatch(/&frame=1$/);
   });
 });
+
+describe("Enhanced 多フレーム（loaderFrames）", () => {
+  const enh = dto({
+    nZ: 2,
+    cells: [
+      { c: 0, z: 0, t: 0, sopInstanceUid: "1.1", frame: 0 },
+      { c: 0, z: 1, t: 0, sopInstanceUid: "1.1", frame: 1 },
+    ],
+    axes: { z: null, c: null, t: null, stackAxis: "z", loaderFrames: true },
+  });
+
+  it("Z スタックのまま、フレームはローダー切り出しの imageId になる", () => {
+    const l = buildLayoutFromDto(enh, "standalone", "S", "SE")!;
+    expect(l.stackAxis).toBe("z");
+    const ids = l.zStack(0, 0);
+    expect(ids[0]).toContain("/api/instances/1.1/file&frame=1");
+    expect(ids[1]).toContain("&frame=2");
+    expect(ids.some((id) => id?.includes("/frames/"))).toBe(false);
+  });
+
+  it("loaderFrames が無ければ従来どおりサーバー切り出し（/frames/）", () => {
+    const l = buildLayoutFromDto({ ...enh, axes: null }, "standalone", "S", "SE")!;
+    expect(l.zStack(0, 0)[1]).toContain("/frames/1/file");
+  });
+});
