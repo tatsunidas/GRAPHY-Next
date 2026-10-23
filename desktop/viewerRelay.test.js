@@ -3,7 +3,7 @@ const assert = require("node:assert");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
-const { createRelay, createJournal, journalParams } = require("./viewerRelay");
+const { createRelay, createJournal, journalParams, readJournal } = require("./viewerRelay");
 
 function fakeTarget() {
   const sent = [];
@@ -79,4 +79,24 @@ test("journal write failure does not throw", () => {
   const j = createJournal({ file: path.join(blocker, "sub", "j.jsonl") });
   assert.doesNotThrow(() => j({ a: 1 }));
   fs.rmSync(dir, { recursive: true });
+});
+
+test("readJournal: 新しい順・件数上限・壊れた行と未知のフィールドは落とす。ファイル無しは空", () => {
+  const fs = require("node:fs");
+  const os = require("node:os");
+  const path = require("node:path");
+  const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "jr-")), "j.jsonl");
+  assert.deepStrictEqual(readJournal({ file }), { ok: true, entries: [] });
+  const lines = [
+    JSON.stringify({ ts: "t1", id: "invert", params: {}, ok: true }),
+    "{ broken",
+    JSON.stringify({ ts: "t2", id: "goToSlice", params: { index: 3, o: { x: 1 } }, ok: false, error: "out-of-range", sessionId: "secret-session" }),
+    JSON.stringify({ ts: "t3", noId: true }),
+  ];
+  fs.writeFileSync(file, lines.join("\n") + "\n");
+  const r = readJournal({ file });
+  assert.deepStrictEqual(r.entries.map((e) => e.id), ["goToSlice", "invert"]);
+  assert.deepStrictEqual(r.entries[0], { ts: "t2", id: "goToSlice", params: { index: 3 }, ok: false, error: "out-of-range" });
+  assert.equal("sessionId" in r.entries[0], false);
+  assert.equal(readJournal({ file, limit: 1 }).entries.length, 1);
 });

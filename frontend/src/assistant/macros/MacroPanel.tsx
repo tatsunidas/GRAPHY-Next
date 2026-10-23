@@ -18,7 +18,7 @@ export interface MacroApi {
   viewer: (cmd: { kind: "action"; id: string; params: Record<string, unknown> }) => Promise<ActionResult>;
 }
 
-function stepLabel(t: T, s: MacroStep): string {
+export function stepLabel(t: T, s: MacroStep): string {
   const p = Object.entries(s.params).map(([k, v]) => `${k}=${String(v)}`).join(" ");
   return `${t(`assistant.act.${s.id}`)}${p ? ` ${p}` : ""}`;
 }

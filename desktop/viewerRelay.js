@@ -51,6 +51,35 @@ function createJournal({ file, maxBytes = DEFAULT_JOURNAL_MAX_BYTES, now = Date.
   };
 }
 
+/** 履歴パネル用。新しい順に最大 limit 件。壊れた行は飛ばし、既知のフィールドだけ返す。 */
+function readJournal({ file, limit = 50 }) {
+  let text = "";
+  try {
+    text = fs.readFileSync(file, "utf8");
+  } catch {
+    return { ok: true, entries: [] };
+  }
+  const out = [];
+  const lines = text.split("\n");
+  for (let i = lines.length - 1; i >= 0 && out.length < limit; i--) {
+    if (!lines[i]) continue;
+    try {
+      const e = JSON.parse(lines[i]);
+      if (!e || typeof e !== "object" || typeof e.id !== "string") continue;
+      out.push({
+        ts: typeof e.ts === "string" ? e.ts.slice(0, 40) : "",
+        id: e.id.slice(0, 64),
+        params: journalParams(e.params),
+        ok: e.ok === true,
+        error: typeof e.error === "string" ? e.error.slice(0, 80) : undefined,
+      });
+    } catch {
+      /* 壊れた行 */
+    }
+  }
+  return { ok: true, entries: out };
+}
+
 /**
  * @param {object} o
  * @param {() => ({send: (ch: string, p: unknown) => void, isDestroyed: () => boolean}|null)} o.resolveTarget 2D 窓の webContents（無ければ null）
@@ -106,4 +135,4 @@ function createRelay({ resolveTarget, journal = () => {}, timeoutMs = DEFAULT_TI
   return { relay, handleResult, pendingCount: () => pending.size };
 }
 
-module.exports = { createRelay, createJournal, journalParams, DEFAULT_TIMEOUT_MS };
+module.exports = { createRelay, createJournal, journalParams, readJournal, DEFAULT_TIMEOUT_MS };

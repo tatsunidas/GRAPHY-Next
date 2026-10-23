@@ -532,6 +532,28 @@ async function macroSection(app: ElectronApplication, main: Page): Promise<void>
   }
 }
 
+async function robotSection(app: ElectronApplication, main: Page): Promise<void> {
+  type JB = { assistantJournalList: () => Promise<{ ok: boolean; entries?: unknown[]; error?: string }> };
+  const domClick = (page: Page, tid: string) => page.waitForSelector(`[data-testid="${tid}"]`, { timeout: 20_000 }).then((h) => h.evaluate((el) => (el as HTMLElement).click()));
+  let win: Page | null = null;
+  try {
+    await domClick(main, "mainscreen-menu-system");
+    await domClick(main, "menu-item-assistant");
+    win = await findWindow(app, (u) => u.includes("#assistant"), 30_000);
+    check(!!win, "[11] アシスタント窓が開く");
+    if (!win) return;
+    const j = await win.evaluate(() => (window as unknown as { graphyDesktop: JB }).graphyDesktop.assistantJournalList());
+    check(j.ok === true && Array.isArray(j.entries), "[11] ★操作履歴を読める（配布物の main が readJournal を読み込めている）", j);
+    const forb = await main.evaluate(() => (window as unknown as { graphyDesktop: JB }).graphyDesktop.assistantJournalList());
+    check(forb.ok === false && forb.error === "forbidden", "[11] 🔴 メイン窓からは forbidden", forb);
+    await domClick(win, "assistant-robot-toggle");
+    await win.waitForSelector('[data-testid="assistant-robot-empty"]', { timeout: 10_000 });
+    check(true, "[11] ロボットモードに入ると計画パネル（空）が出る");
+  } finally {
+    await win?.close().catch(() => undefined);
+  }
+}
+
 async function main(): Promise<void> {
   if (process.platform === "darwin" && process.env.CI !== "true") {
     throw new Error("macOS は実プロファイルを隔離できないので、CI（CI=true）以外では実行しません。");
@@ -625,6 +647,7 @@ async function main(): Promise<void> {
     await attachmentSection(app, main).catch((e) => check(false, "[8] PDF 添付の検査が完走しなかった", String(e).slice(0, 300)));
     await voiceSection(app, main).catch((e) => check(false, "[9] 音声入力の検査が完走しなかった", String(e).slice(0, 300)));
     await macroSection(app, main).catch((e) => check(false, "[10] マクロの検査が完走しなかった", String(e).slice(0, 300)));
+    await robotSection(app, main).catch((e) => check(false, "[11] ロボットモードの検査が完走しなかった", String(e).slice(0, 300)));
     await main.screenshot({ path: path.join(OUT, "1-main.png") }).catch(() => {});
 
     // ── 5. 動画を取り込んで開く ─────────────────────────────
