@@ -237,7 +237,11 @@ export interface SeriesAxisDto {
   kind: "slice" | "shot" | "frame" | "echo" | "bvalue" | "temporal" | "pullback" | "generic";
 }
 
-/** 軸の提示モデル（`fw/angio-design.md` §5.7）。 */
+/**
+ * 軸の提示モデル（`fw/angio-design.md` §5.7）。
+ * Z/T/C はボリューム用、Shot/Frame は投影・シネ用（XA では z=Shot、t=Frame）。
+ * 定義の正本は backend の `SeriesLayout.java` のクラス javadoc と `fw/series-axes.md`。
+ */
 export interface SeriesAxesDto {
   z: SeriesAxisDto | null;
   c: SeriesAxisDto | null;

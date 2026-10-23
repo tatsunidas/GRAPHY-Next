@@ -25,8 +25,12 @@ export const DEFAULT_AXES: { z: AxisSpec; c: AxisSpec; t: AxisSpec } = {
 };
 
 /**
- * シリーズの 5 次元（x,y は画像内）＝ Z(スライス) × C(チャンネル) × T(時間/フレーム) 構造。
+ * シリーズの 5 次元（x,y は画像内）＝ Z(スライス) × C(チャンネル) × T(時間) 構造。
  * GRAPHY Praparat の ZCT インデックスモデルに対応。
+ *
+ * Z/T/C は**ボリュームデータ用**。XA・シネ（Shot × Frame）は同じ型の Z/T に載せるが、意味は
+ * 「Z = Shot（撮影）、T = Frame（時間順フレーム）」で、軸の提示（{@link AxisSpec}）で区別する。
+ * 定義の正本は backend の `SeriesLayout.java` のクラス javadoc と `fw/series-axes.md`。
  */
 export interface SeriesLayout {
   nZ: number;
