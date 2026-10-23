@@ -11,6 +11,7 @@ import { runImportJob } from "./importJob";
 import { importedStudiesView, type ImportedView } from "./importedView";
 import { useI18n } from "../i18n/i18n";
 import { StudyList } from "../StudyList";
+import { PreviewDock } from "./PreviewDock";
 import { MenuBar } from "./MenuBar";
 import { Toolbar, type ToolKind } from "./Toolbar";
 import { SearchPanel } from "./SearchPanel";
@@ -61,6 +62,8 @@ export function MainScreen({
   // null = まだ検索していない。SearchPanel が初期条件(今日)で onSearch を呼ぶと埋まる。
   const [filters, setFilters] = useState<StudyFilters | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
+  // 下部のプレビュー枠の DOM。閉じている間は null（StudyList はプレビューを描かない）。
+  const [dockHost, setDockHost] = useState<HTMLElement | null>(null);
   const importWatch = useImportWatchStatus(isStandalone);
   const computeJobsStatus = useComputeJobsStatus(isStandalone);
   // 取り込み直後は、一覧を「いま取り込んだ検査」に絞る（既定の検索条件「今日」では過去の検査が出ないため）。
@@ -439,6 +442,7 @@ export function MainScreen({
         {/* status（isDemo）は非同期取得のため、確定後に isDemo が変わったら SearchPanel を
             再マウントして初期日付(1900/01/01〜当日)を再計算させる。 */}
         <SearchPanel key={String(isDemo)} onSearch={onSearch} isDemo={isDemo} />
+        <div style={centerColumn}>
         <div style={treeArea}>
           {importedView && (
             <div style={importedBanner} data-testid="imported-view-banner">
@@ -465,7 +469,10 @@ export function MainScreen({
             mode={isStandalone ? "standalone" : "web"}
             onSelectStudy={(s) => { setSelectedStudy(s); setSelectedSeries(null); }}
             onSelectSeries={setSelectedSeries}
+            previewHost={dockHost}
           />
+        </div>
+        <PreviewDock onHost={setDockHost} />
         </div>
       </div>
       <StatusBar
@@ -570,6 +577,8 @@ const shell: React.CSSProperties = {
   background: "#fff",
 };
 const middle: React.CSSProperties = { flex: 1, display: "flex", minHeight: 0 };
+// 一覧（スクロール）と、その下に固定するプレビューのドックを縦に並べる列。
+const centerColumn: React.CSSProperties = { flex: 1, display: "flex", flexDirection: "column", minWidth: 0, minHeight: 0 };
 const treeArea: React.CSSProperties = { flex: 1, overflow: "auto", padding: "8px 18px" };
 const dropOverlay: React.CSSProperties = {
   position: "absolute",

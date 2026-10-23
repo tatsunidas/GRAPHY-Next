@@ -3,6 +3,7 @@
  * Author: Tatsuaki Kobayashi
  */
 import { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   instanceDocumentUrl,
   ENCAPSULATED_PDF_SOP_CLASS,
@@ -48,6 +49,7 @@ export function StudyList({
   mode,
   onSelectStudy,
   onSelectSeries,
+  previewHost,
 }: {
   filters?: StudyFilters | null;
   reloadKey?: number;
@@ -56,6 +58,11 @@ export function StudyList({
   mode: ViewerMode;
   onSelectStudy?: (s: Study | null) => void;
   onSelectSeries?: (s: Series | null) => void;
+  /**
+   * シリーズプレビューの描画先（メイン画面下部のドック）。undefined なら一覧の末尾に置く（従来どおり）。
+   * null はドックが閉じている状態で、プレビューは描かない（読み込まない）。
+   */
+  previewHost?: HTMLElement | null;
 }) {
   const { t } = useI18n();
   // 取得は hooks/useStudies に集約（モバイルシェルと共有。fw/mobile-ui-design.md §3.5）。
@@ -168,7 +175,7 @@ export function StudyList({
         </div>
       )}
 
-      {selectedStudy && <SeriesNavigator study={selectedStudy} mode={mode} onSelectSeries={onSelectSeries} />}
+      {selectedStudy && <SeriesNavigator study={selectedStudy} mode={mode} onSelectSeries={onSelectSeries} previewHost={previewHost} />}
     </section>
   );
 }
@@ -186,10 +193,16 @@ function SeriesNavigator({
   study,
   mode,
   onSelectSeries,
+  previewHost,
 }: {
   study: Study;
   mode: ViewerMode;
   onSelectSeries?: (s: Series | null) => void;
+  /**
+   * シリーズプレビューの描画先（メイン画面下部のドック）。undefined なら一覧の末尾に置く（従来どおり）。
+   * null はドックが閉じている状態で、プレビューは描かない（読み込まない）。
+   */
+  previewHost?: HTMLElement | null;
 }) {
   const { t } = useI18n();
   const { series, error } = useSeries(study.studyInstanceUid);
@@ -252,7 +265,7 @@ function SeriesNavigator({
       )}
 
       {selectedSeries && (
-        <InstanceList study={study} series={selectedSeries} mode={mode} />
+        <InstanceList study={study} series={selectedSeries} mode={mode} previewHost={previewHost} />
       )}
     </div>
   );
@@ -261,7 +274,17 @@ function SeriesNavigator({
 /** instances 未取得の間は「開ける」として扱い、ビューア表示は hasImages 側で抑える。 */
 const RENDERABLE_UNKNOWN: SeriesRenderability = { renderable: true, kind: null, by: null };
 
-function InstanceList({ study, series, mode }: { study: Study; series: Series; mode: ViewerMode }) {
+function InstanceList({
+  study,
+  series,
+  mode,
+  previewHost,
+}: {
+  study: Study;
+  series: Series;
+  mode: ViewerMode;
+  previewHost?: HTMLElement | null;
+}) {
   const { t } = useI18n();
   const { instances, error } = useInstances(study.studyInstanceUid, series.seriesInstanceUid);
 
@@ -278,6 +301,18 @@ function InstanceList({ study, series, mode }: { study: Study; series: Series; m
   // <video> 再生）で表示する。
   const isVideo = hasImages && isVideoInstance(instances![0]);
   const toolPanelDefault = useToolPanelDefault();
+  // web はピクセルを BFF(WADO-RS)経由で取得して表示（standalone と同一の StackViewport 経路）。
+  const viewer =
+    hasImages && instances ? (
+      <SeriesViewer
+        instances={instances}
+        mode={mode}
+        studyUid={study.studyInstanceUid}
+        seriesUid={series.seriesInstanceUid}
+        fillHeight
+        showControls={toolPanelDefault ?? false}
+      />
+    ) : null;
 
   return (
     <div style={{ marginTop: 10, color: "#445" }}>
@@ -342,19 +377,12 @@ function InstanceList({ study, series, mode }: { study: Study; series: Series; m
       )}
 
       {/* シリーズビューア（スライス送り・シネ・5D・オーバーレイ On/Off のコントローラ）。 */}
-      {hasImages && !isPdf && !isVideo && nonImage.renderable && instances && (
-        <div style={previewBox}>
-          {/* web はピクセルを BFF(WADO-RS)経由で取得して表示（standalone と同一の StackViewport 経路）。 */}
-          <SeriesViewer
-            instances={instances}
-            mode={mode}
-            studyUid={study.studyInstanceUid}
-            seriesUid={series.seriesInstanceUid}
-            fillHeight
-            showControls={toolPanelDefault ?? false}
-          />
-        </div>
+      {previewHost === undefined && hasImages && !isPdf && !isVideo && nonImage.renderable && instances && (
+        <div style={previewBox}>{viewer}</div>
       )}
+      {/* ドック（メイン画面下部）に描く。閉じている（null）間は描かない＝読み込まない。 */}
+      {previewHost && hasImages && !isPdf && !isVideo && nonImage.renderable && instances &&
+        createPortal(<div style={dockBox}>{viewer}</div>, previewHost)}
     </div>
   );
 }
@@ -369,6 +397,9 @@ const previewBox: React.CSSProperties = {
   flexDirection: "column",
   height: "max(320px, calc(100vh - 240px))",
 };
+
+// ドックの本体いっぱいに広げる（高さはドック側で決める）。
+const dockBox: React.CSSProperties = { flex: 1, minHeight: 0, display: "flex", flexDirection: "column" };
 
 /** ピクセルを持たないシリーズの説明ボックス（PDF / 動画の案内と同じ調子）。 */
 const nonImageNotice: React.CSSProperties = {
