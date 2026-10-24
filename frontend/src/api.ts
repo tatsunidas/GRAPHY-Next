@@ -74,6 +74,12 @@ export interface StudyFilters {
   accessionNumber?: string;
   /** StudyInstanceUID 直接指定（他条件は無視して当該 study を返す。カンマ区切りで複数）。IHE IID 起動と取り込み直後の一覧。 */
   studyInstanceUid?: string;
+  /**
+   * 患者 ID か氏名が空（匿名化などで消えた）のスタディだけ。部分一致の検索は空に何も一致しないので、
+   * 空を探すにはこの条件を使う（患者 ID に空文字を渡しても、下の組み立てで捨てられて無条件になる）。
+   * DICOMweb（QIDO-RS）には問い方が無く、Web モードでは効かない。
+   */
+  missingPatientInfo?: boolean;
 }
 
 export const fetchStatus = () => httpGet<AppStatus>("/api/status");

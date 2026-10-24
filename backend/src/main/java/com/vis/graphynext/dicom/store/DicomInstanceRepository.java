@@ -48,6 +48,8 @@ public interface DicomInstanceRepository extends JpaRepository<DicomInstance, St
               and (:studyDateTo is null or i.studyDate <= :studyDateTo)
               and (:filterModality = false or i.modality in :modalities)
               and (:accessionNumber is null or i.accessionNumber = :accessionNumber)
+              and (:onlyMissing = false or i.patientId is null or i.patientId = ''
+                                        or i.patientName is null or i.patientName = '')
             group by i.studyInstanceUid, i.patientId
             order by max(i.studyDate) desc
             """)
@@ -57,7 +59,8 @@ public interface DicomInstanceRepository extends JpaRepository<DicomInstance, St
                                           @Param("studyDateTo") String studyDateTo,
                                           @Param("filterModality") boolean filterModality,
                                           @Param("modalities") List<String> modalities,
-                                          @Param("accessionNumber") String accessionNumber);
+                                          @Param("accessionNumber") String accessionNumber,
+                                          @Param("onlyMissing") boolean onlyMissing);
 
     /**
      * スタディごとの<b>重複なしモダリティ</b>。
@@ -157,10 +160,12 @@ public interface DicomInstanceRepository extends JpaRepository<DicomInstance, St
             from DicomInstance i
             where (:q is null or lower(i.patientId) like lower(concat('%', :q, '%'))
                               or lower(i.patientName) like lower(concat('%', :q, '%')))
+              and (:onlyMissing = false or i.patientId is null or i.patientId = ''
+                                        or i.patientName is null or i.patientName = '')
             group by i.patientId
             order by max(i.patientName)
             """)
-    List<PatientSummary> findPatientSummaries(@Param("q") String q);
+    List<PatientSummary> findPatientSummaries(@Param("q") String q, @Param("onlyMissing") boolean onlyMissing);
 
     List<DicomInstance> findByPatientId(String patientId);
 

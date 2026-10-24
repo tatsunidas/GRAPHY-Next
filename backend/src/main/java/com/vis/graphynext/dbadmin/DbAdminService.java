@@ -69,8 +69,14 @@ public class DbAdminService {
 
     @Transactional(readOnly = true)
     public List<PatientDto> listPatients(String q) {
+        return listPatients(q, false);
+    }
+
+    /** onlyMissing: 患者 ID か氏名が空の患者だけ（匿名化で空になった検査を探す）。 */
+    @Transactional(readOnly = true)
+    public List<PatientDto> listPatients(String q, boolean onlyMissing) {
         String query = (q == null || q.isBlank()) ? null : q;
-        return repo.findPatientSummaries(query).stream()
+        return repo.findPatientSummaries(query, onlyMissing).stream()
                 .map(p -> new PatientDto(p.getPatientId(), p.getPatientName(), p.getPatientBirthDate(),
                         p.getPatientSex(), p.getNumberOfStudies(), p.getNumberOfInstances()))
                 .toList();

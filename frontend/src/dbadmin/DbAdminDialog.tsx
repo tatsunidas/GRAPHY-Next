@@ -164,7 +164,8 @@ function PatientsTab({
   const [transferring, setTransferring] = useState<{ study: Study; patient: Patient } | null>(null);
   const canTransfer = !!desktop()?.dbFoldersList;
 
-  const reload = (query: string) => {
+  const [onlyMissing, setOnlyMissing] = useState(false);
+  const reload = (query: string, missing: boolean = onlyMissing) => {
     setError(null);
     setStudiesByPatient(new Map());
     setSeriesByStudy(new Map());
@@ -173,13 +174,14 @@ function PatientsTab({
     setExpandedStudies(new Set());
     setExpandedSeries(new Set());
     // 全件取得は処理容量上危険なため、検索語が空のときは取得しない（初期は非表示）。
+    // 「未設定のみ」は空の患者に絞るので、検索語が無くても取得してよい。
     const qq = query.trim();
-    if (!qq) {
+    if (!qq && !missing) {
       setPatients(null);
       return;
     }
     setLoading(true);
-    fetchPatients(qq)
+    fetchPatients(qq, missing)
       .then((ps) => setPatients(ps))
       .catch((e: unknown) => setError(friendlyDbAdminError(e, t)))
       .finally(() => setLoading(false));
@@ -193,7 +195,11 @@ function PatientsTab({
       next.add(pid);
       if (!studiesByPatient.has(pid)) {
         try {
-          const studies = await fetchStudies({ patientId: pid });
+          // 患者 ID が空のときは、fetchStudies が空文字を捨てて全スタディが返るので、
+          // 「未設定のみ」で取って患者 ID が空のものに絞る。
+          const studies = pid === ""
+            ? (await fetchStudies({ missingPatientInfo: true })).filter((s) => !s.patientId)
+            : await fetchStudies({ patientId: pid });
           setStudiesByPatient((m) => new Map(m).set(pid, studies));
         } catch (e) {
           setError(friendlyDbAdminError(e, t));
@@ -323,6 +329,18 @@ function PatientsTab({
         <button data-testid="dbadmin-search-button" onClick={() => reload(q)} style={btn}>
           {t("common.search")}
         </button>
+        <label style={{ display: "flex", alignItems: "center", gap: 4, whiteSpace: "nowrap" }}>
+          <input
+            data-testid="dbadmin-only-missing"
+            type="checkbox"
+            checked={onlyMissing}
+            onChange={(e) => {
+              setOnlyMissing(e.target.checked);
+              reload(q, e.target.checked);
+            }}
+          />
+          {t("dbadmin.search.onlyMissing")}
+        </label>
       </div>
 
       {error && <div style={{ color: "#b00020", marginBottom: 8 }}>{error}</div>}
@@ -348,7 +366,7 @@ function PatientsTab({
                   </button>
                   <span style={{ flex: 1 }}>
                     <b>{p.patientName || "—"}</b>
-                    <span style={muted}> {p.patientId}</span>
+                    <span style={muted}> {p.patientId || t("dbadmin.patientId.unset")}</span>
                     <span style={muted}>
                       {" "}
                       ({t("field.studyCount")}: {p.numberOfStudies} / {t("field.instanceCount")}: {p.numberOfInstances})

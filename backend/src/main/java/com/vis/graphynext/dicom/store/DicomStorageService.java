@@ -273,7 +273,7 @@ public class DicomStorageService {
         //   （実際に listSeries が見つからず調査が空振りした）。必ずエスケープで書くこと。
         java.util.List<String> modParam = filterModality ? modalities : java.util.List.of("\0");
         var rows = repo.findStudySummaries(s.patientId(), s.patientName(), s.studyDateFrom(), s.studyDateTo(),
-                filterModality, modParam, s.accessionNumber());
+                filterModality, modParam, s.accessionNumber(), s.onlyMissingPatientInfo());
         // ★ 集計の max(modality) は 1 つしか返せないので、表示用の列挙は別引きする
         //   （CT/PT/NM を持つスタディが "PT" だけに見えていた）。IN 句が空だと SQL が壊れるので守る。
         java.util.List<String> uids = rows.stream()
