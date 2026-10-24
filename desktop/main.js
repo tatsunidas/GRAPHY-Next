@@ -32,6 +32,7 @@ const aiGateway = require("./aiGateway");
 const { isAssistantSender } = require("./assistantSender");
 const { createRelay, createJournal, readJournal } = require("./viewerRelay");
 const { createStore: createMacroStore } = require("./assistantMacros");
+const assistantPluginTools = require("./assistantPluginTools");
 const aiProviders = require("./aiProviders");
 const computeEndpoints = require("./computeEndpoints");
 const localPython = require("./localPython");
@@ -1302,6 +1303,27 @@ ipcMain.handle("graphy:assistant-viewer-cmd", (e, sessionId, cmd) => {
   const includeLabels = !!(dest && dest.ok && dest.local === true);
   const win = BrowserWindow.fromWebContents(e.sender);
   return viewerRelay.relay(sessionId, cmd && typeof cmd === "object" ? { ...cmd, includeLabels } : cmd, {
+    // プラグインのツール: 名前は main の一覧（利用者がオンにしたものだけ）で引き直す。結果を外部 AI へ返す前に承認を取る。
+    pluginTools: {
+      lookup: (name) => {
+        const on = pluginToolStore.enabled();
+        return pluginToolEntries.find((x) => x.name === name && on.has(x.pluginId)) || null;
+      },
+      external: !(dest && dest.ok && dest.local === true),
+      confirmSend: async (entry, preview) => {
+        if (!win || win.isDestroyed()) return false;
+        const r = await dialog.showMessageBox(win, {
+          type: "warning",
+          buttons: ["送る", "取り消す"],
+          defaultId: 1,
+          cancelId: 1,
+          title: "アシスタントの操作の確認",
+          message: `プラグイン「${entry.pluginName}」のツールの結果を、外部の AI（${dest && dest.label ? dest.label : "不明"}）へ送ります。`,
+          detail: `結果の先頭: ${preview}\n\n患者情報が含まれていないか確認してください。送りますか？`,
+        });
+        return r.response === 0;
+      },
+    },
     // 🔴 データを変える操作は、実行のたびにここ（main の描くダイアログ）で承認を取る。文面は main が持つ（レンダラの値は使わない）。
     confirm: async (id) => {
       const text = WRITE_CONFIRM_TEXT[id];
@@ -1318,6 +1340,38 @@ ipcMain.handle("graphy:assistant-viewer-cmd", (e, sessionId, cmd) => {
       return r.response === 0;
     },
   });
+});
+// プラグインが宣言した AI ツール（aiTools[]）の一覧とオン/オフ。一覧は backend の GET /api/plugins（検査済み）から main が組み直す。
+// 既定は全プラグインがオフ。アシスタント窓の設定パネルで利用者が切り替える。
+const pluginToolStore = assistantPluginTools.createToggleStore({ file: path.join(app.getPath("userData"), "assistant-plugin-tools.json") });
+let pluginToolEntries = [];
+async function refreshPluginToolEntries() {
+  try {
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), 5000);
+    try {
+      const res = await fetch(`${API_BASE}/api/plugins`, { signal: ctl.signal });
+      if (!res.ok) return { ok: false, error: "backend" };
+      pluginToolEntries = assistantPluginTools.buildEntries(await res.json());
+    } finally {
+      clearTimeout(timer);
+    }
+  } catch {
+    return { ok: false, error: "backend" };
+  }
+  return { ok: true };
+}
+async function listPluginTools() {
+  const r = await refreshPluginToolEntries();
+  if (!r.ok) return r;
+  const on = pluginToolStore.enabled();
+  return { ok: true, tools: pluginToolEntries.map((x) => ({ ...x, enabled: on.has(x.pluginId) })) };
+}
+ipcMain.handle("graphy:assistant-plugin-tools-list", (e) => (isAssistantSender(e) ? listPluginTools() : { ok: false, error: "forbidden" }));
+ipcMain.handle("graphy:assistant-plugin-tools-set", async (e, pluginId, on) => {
+  if (!isAssistantSender(e)) return { ok: false, error: "forbidden" };
+  const r = pluginToolStore.set(pluginId, on === true);
+  return r.ok ? listPluginTools() : r;
 });
 // マクロ（表示操作の並び）の保存。形と大きさだけ main が見る（assistantMacros.js）。再生時の検証は 2D 窓が毎回行う。
 const macroStore = createMacroStore({ file: path.join(app.getPath("userData"), "assistant-macros.json") });

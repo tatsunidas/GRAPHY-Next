@@ -512,8 +512,11 @@ export interface GraphyDesktop {
    */
   assistantViewerCmd?: (
     sessionId: string,
-    cmd: { kind: "action" | "getState"; id?: string; params?: unknown },
-  ) => Promise<import("./assistant/actions/registry").ActionResult>;
+    cmd: { kind: "action" | "getState"; id?: string; params?: unknown } | { kind: "pluginTool"; name: string; params?: unknown },
+  ) => Promise<import("./assistant/actions/registry").ActionResult | import("./assistant/pluginTools").PluginToolResult>;
+  /** プラグインが宣言した AI ツールの一覧（main が組み直したもの）とオン/オフ。 */
+  assistantPluginToolsList?: () => Promise<{ ok: boolean; tools?: import("./assistant/pluginTools").PluginToolEntry[]; error?: string }>;
+  assistantPluginToolsSet?: (pluginId: string, on: boolean) => Promise<{ ok: boolean; tools?: import("./assistant/pluginTools").PluginToolEntry[]; error?: string }>;
   /** マクロ（表示操作の並び）の保存。アシスタント窓だけ（それ以外は main が `forbidden`）。形と大きさだけ main が検証する。 */
   assistantJournalList?: () => Promise<{
     ok: boolean;
@@ -528,10 +531,19 @@ export interface GraphyDesktop {
   assistantMacrosDelete?: (id: string) => Promise<{ ok: boolean; error?: string }>;
   /** 2D 窓側: main が中継してきた命令を受ける。購読解除の関数を返す。 */
   onViewerCmd?: (
-    cb: (cmd: { reqId: string; kind: "action" | "getState"; id?: string; params?: unknown; includeLabels?: boolean; approved?: boolean }) => void,
+    cb: (cmd: {
+      reqId: string;
+      kind: "action" | "getState" | "pluginTool";
+      id?: string;
+      params?: unknown;
+      includeLabels?: boolean;
+      approved?: boolean;
+      pluginId?: string;
+      tool?: string;
+    }) => void,
   ) => () => void;
   /** 2D 窓側: 命令の結果を返す（main は命令を送った窓からのものだけ受理する）。 */
-  viewerCmdResult?: (reqId: string, result: import("./assistant/actions/registry").ActionResult) => void;
+  viewerCmdResult?: (reqId: string, result: import("./assistant/actions/registry").ActionResult | { ok: boolean; data?: unknown; error?: string }) => void;
   /** ストリームの差分を受ける。購読解除の関数を返す。 */
   onAiChatEvent?: (cb: (ev: AiChatEvent) => void) => () => void;
   /** ローカル AI（この PC の軽量 LLM）の状態。ダウンロード・削除は main が確認ダイアログを出す。 */

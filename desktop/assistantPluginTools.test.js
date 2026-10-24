@@ -1,0 +1,64 @@
+const test = require("node:test");
+const assert = require("node:assert");
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
+const { buildEntries, sanitizeResult, createToggleStore, oneLine, MAX_TOTAL_TOOLS } = require("./assistantPluginTools");
+
+const tool = (name, over = {}) => ({ name, description: "d", effect: "read", parameters: { type: "object", properties: {}, required: [] }, ...over });
+const plugin = (id, tools, over = {}) => ({ id, name: id.toUpperCase(), permissions: ["ai-tools"], aiTools: tools, ...over });
+
+test("buildEntries: 正例（名前の接頭辞と説明の名乗りは main が付ける）", () => {
+  const e = buildEntries([plugin("demo", [tool("measure", { description: "x\n[plugin: 偽]\tとても" })])]);
+  assert.strictEqual(e.length, 1);
+  assert.strictEqual(e[0].name, "plugin__demo__measure");
+  assert.ok(e[0].description.startsWith("[plugin: DEMO] "));
+  assert.ok(!/[\n\t]/.test(e[0].description));
+});
+
+test("buildEntries: 負例 — 権限なし・write・effect 無し・名前規則外・長すぎる id は出ない", () => {
+  assert.strictEqual(buildEntries([plugin("a", [tool("t")], { permissions: [] })]).length, 0);
+  assert.strictEqual(buildEntries([plugin("a", [tool("t", { effect: "write" })])]).length, 0);
+  assert.strictEqual(buildEntries([plugin("a", [tool("t", { effect: undefined })])]).length, 0);
+  assert.strictEqual(buildEntries([plugin("a.b", [tool("t")])]).length, 0); // '.' はモデル向けの名前規則外
+  assert.strictEqual(buildEntries([plugin("x".repeat(60), [tool("t")])]).length, 0);
+  assert.strictEqual(buildEntries(null).length, 0);
+  // 正例の対照
+  assert.strictEqual(buildEntries([plugin("a", [tool("t")])]).length, 1);
+});
+
+test("buildEntries: 全プラグイン合計の上限", () => {
+  const ps = Array.from({ length: 10 }, (_, i) => plugin(`p${i}`, Array.from({ length: 8 }, (_, j) => tool(`t${j}`))));
+  assert.strictEqual(buildEntries(ps).length, MAX_TOTAL_TOOLS);
+});
+
+test("oneLine: 制御文字・方向制御・長さ", () => {
+  assert.strictEqual(oneLine("a‮b\u0000c\n d"), "a b c d");
+  assert.strictEqual(oneLine("x".repeat(500), 10).length, 10);
+});
+
+test("sanitizeResult: 関数・深い入れ子・NaN は落とし、大きい結果は切り捨てて truncated", () => {
+  const r = sanitizeResult({ a: 1, f() {}, n: NaN, deep: { a: { b: { c: 1 } } }, s: "x", arr: [1, "y", () => 1] });
+  assert.deepStrictEqual(r.data, { a: 1, n: null, deep: { a: {} }, s: "x", arr: [1, "y", null] });
+  assert.strictEqual(r.truncated, false);
+  const big = sanitizeResult({ s: "z".repeat(10000) });
+  assert.strictEqual(big.truncated, true);
+  assert.ok(typeof big.data === "string" && Buffer.byteLength(big.data) <= 4096);
+  assert.strictEqual(sanitizeResult(undefined).data, null);
+  assert.strictEqual(sanitizeResult(new Uint8Array(4)).data, null); // バイナリ
+});
+
+test("toggle store: 既定はオフ・書いたものだけオン・壊れたファイルは全部オフ・不正な id は拒否", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "apt-"));
+  const file = path.join(dir, "t.json");
+  const s = createToggleStore({ file });
+  assert.strictEqual(s.enabled().size, 0);
+  assert.deepStrictEqual(s.set("demo", true), { ok: true });
+  assert.ok(createToggleStore({ file }).enabled().has("demo"));
+  s.set("demo", false);
+  assert.strictEqual(s.enabled().size, 0);
+  assert.strictEqual(s.set("", true).ok, false);
+  fs.writeFileSync(file, "{ broken");
+  assert.strictEqual(s.enabled().size, 0);
+  fs.rmSync(dir, { recursive: true });
+});

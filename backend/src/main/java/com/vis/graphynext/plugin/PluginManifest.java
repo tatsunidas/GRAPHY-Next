@@ -35,7 +35,15 @@ public record PluginManifest(
          * メニューでの束ね先。{@link #KNOWN_CATEGORIES} に無い値は null にして配る
          * （フロントは未知の値を見ずに済み、今までどおり平置きになる）。
          */
-        String category) {
+        String category,
+        /** AI アシスタントに渡すツール（検査済み。無ければ null）。 */
+        List<AiToolSpec> aiTools) {
+
+    /** aiTools を持たないマニフェスト（既存の呼び出し側・テスト用）。 */
+    public PluginManifest(String id, String name, String version, Frontend frontend, Backend backend,
+                          List<String> permissions, String category) {
+        this(id, name, version, frontend, backend, permissions, category, null);
+    }
 
     /** 本体が束ね方を知っている category。足すときはフロントの {@code PluginCategory} も足す。 */
     public static final Set<String> KNOWN_CATEGORIES = Set.of("ai");

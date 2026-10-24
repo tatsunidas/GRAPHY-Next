@@ -7,6 +7,7 @@ package com.vis.graphynext.plugin;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 
 import java.util.List;
+import java.util.Map;
 
 /**
  * 各プラグインフォルダ直下の {@code plugin.json}（ディスク上の記述）。
@@ -43,7 +44,13 @@ public record PluginDescriptor(
          * メニューでの束ね先（{@link PluginManifest#KNOWN_CATEGORIES} の値だけ有効）。
          * 例 {@code "ai"} は 2D ビューアの「解析 ＞ AI」にまとめて出る。旧本体は無視して平置きにする。
          */
-        String category) {
+        String category,
+        /**
+         * AI アシスタントに渡すツールの宣言（{@link AiToolSpec}）。信頼できない入力なので、
+         * {@link AiToolSpec#sanitize} を通したものだけが配信される。{@code permissions} に
+         * {@code ai-tools} が要る。
+         */
+        List<Map<String, Object>> aiTools) {
 
     /**
      * 互換宣言。

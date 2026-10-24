@@ -16,6 +16,7 @@ import {
   type ToolDef,
 } from "./actions/registry";
 import type { UiAction, UiProposal } from "./chatState";
+import { isPluginToolName, validatePluginArgs, type PluginToolEntry, type PluginToolResult } from "./pluginTools";
 import { PLAN_TOOL, validatePlan } from "./robot/planModel";
 import type { MacroStep } from "./macros/macroModel";
 
@@ -28,6 +29,10 @@ export const MAX_ROUNDS = 6;
 export interface LoopDeps {
   chat(messages: AiChatMessage[], tools: ToolDef[]): Promise<AiChatResult>;
   viewer(cmd: { kind: "action" | "getState"; id?: string; params?: unknown }): Promise<ActionResult>;
+  /** プラグインのツール。名前は main の一覧で引き直される（ここで渡す pluginId は無い）。無ければ plugin__ は実行しない。 */
+  pluginTool?(cmd: { kind: "pluginTool"; name: string; params: unknown }): Promise<PluginToolResult>;
+  /** 今回モデルへ渡したプラグインのツール（有効なものだけ）。引数仕様の検証と、カードの表示名に使う。 */
+  pluginTools?: PluginToolEntry[];
   onAction(a: UiAction): void;
   onActionUpdate(id: string, patch: Partial<UiAction>): void;
   onProposal(p: UiProposal): void;
@@ -67,6 +72,7 @@ async function runOne(call: AiToolCall, deps: LoopDeps): Promise<string> {
     deps.onProposal({ id: call.id, title: v.title, steps: v.steps });
     return JSON.stringify({ ok: true, note: "shown to the user; nothing was executed" });
   }
+  if (isPluginToolName(call.name)) return runPluginTool(call, deps);
   if (!isActionId(call.name)) return JSON.stringify({ ok: false, error: "unknown-tool" });
   // データを変える操作はモデルが直接実行できない（tools に載せていないが、呼ばれても実行しない）。
   if (isWriteAction(call.name)) return JSON.stringify({ ok: false, error: "not-allowed-for-model" });
@@ -80,6 +86,24 @@ async function runOne(call: AiToolCall, deps: LoopDeps): Promise<string> {
   const r = await deps.viewer({ kind: "action", id: call.name, params: v.params });
   deps.onActionUpdate(call.id, r.ok ? { status: "done", inverse: r.inverse } : { status: "failed", error: r.error });
   return toToolText(r);
+}
+
+/**
+ * プラグインのツール。モデルに渡した一覧（有効なもの）に無い名前は実行しない。引数は宣言された仕様で検証してから中継する
+ * （受け取る main・2D 窓でも再検証される）。結果は main が切り詰めて `untrusted` を付けたものをそのまま返す。
+ */
+async function runPluginTool(call: AiToolCall, deps: LoopDeps): Promise<string> {
+  const entry = deps.pluginTools?.find((e) => e.name === call.name);
+  if (!entry || !deps.pluginTool || deps.mode === "robot") return JSON.stringify({ ok: false, error: "unknown-tool" });
+  const v = validatePluginArgs(entry.parameters, call.args);
+  if (!v.ok) {
+    deps.onAction({ id: call.id, name: call.name, params: call.args, status: "failed", error: v.error });
+    return JSON.stringify({ ok: false, error: v.error });
+  }
+  deps.onAction({ id: call.id, name: call.name, params: v.params, status: "running" });
+  const r = await deps.pluginTool({ kind: "pluginTool", name: call.name, params: v.params });
+  deps.onActionUpdate(call.id, r.ok ? { status: "done" } : { status: "failed", error: r.error });
+  return JSON.stringify(r);
 }
 
 export type LoopResult = AiChatResult | { ok: false; error: "max-rounds" };

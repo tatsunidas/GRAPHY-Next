@@ -134,3 +134,75 @@ test("表示操作は承認を求めず approved:false で届く（レンダラ�
   r.handleResult(t, "d1", { ok: true });
   await p;
 });
+
+// ---- プラグインのツール ----
+const ENTRY = { name: "plugin__demo__measure", pluginId: "demo", pluginName: "DEMO", tool: "measure" };
+const ptOpts = (over = {}) => ({ pluginTools: { lookup: (n) => (n === ENTRY.name ? ENTRY : null), external: false, confirmSend: async () => true, ...over } });
+
+test("pluginTool: main の一覧にある名前だけ 2D 窓へ届き、pluginId/tool は main の値。結果は untrusted で包まれ、ジャーナルに内容が残らない", async () => {
+  const t = fakeTarget();
+  const log = [];
+  const r = createRelay({ resolveTarget: () => t, journal: (e) => log.push(e), newId: () => "p1" });
+  // レンダラが偽の pluginId/tool を付けても使われない
+  const p = r.relay("s", { kind: "pluginTool", name: ENTRY.name, pluginId: "evil", tool: "x", params: { label: "a" } }, ptOpts());
+  await new Promise((res) => setImmediate(res));
+  assert.deepStrictEqual(t.sent[0][1], { reqId: "p1", kind: "pluginTool", pluginId: "demo", tool: "measure", params: { label: "a" } });
+  r.handleResult(t, "p1", { ok: true, data: { patientName: "SECRET^NAME", n: 3 } });
+  const res = await p;
+  assert.deepStrictEqual(res, { ok: true, source: "plugin:demo", untrusted: true, data: { patientName: "SECRET^NAME", n: 3 } });
+  assert.strictEqual(log.length, 1);
+  assert.strictEqual(log[0].kind, "pluginTool");
+  assert.strictEqual(log[0].id, "demo:measure");
+  assert.ok(!JSON.stringify(log).includes("SECRET"), "ジャーナルに結果の中身を残さない");
+});
+
+test("pluginTool: 一覧に無い名前・一覧関数なし・引数が大きすぎる・配列は 2D 窓へ送らない（負例）", async () => {
+  for (const [cmd, opts] of [
+    [{ kind: "pluginTool", name: "plugin__other__x", params: {} }, ptOpts()],
+    [{ kind: "pluginTool", name: ENTRY.name, params: {} }, {}],
+    [{ kind: "pluginTool", name: ENTRY.name, params: { s: "x".repeat(3000) } }, ptOpts()],
+    [{ kind: "pluginTool", name: ENTRY.name, params: [1] }, ptOpts()],
+    [{ kind: "pluginTool", name: 5, params: {} }, ptOpts()],
+  ]) {
+    const t = fakeTarget();
+    const r = createRelay({ resolveTarget: () => t });
+    const res = await r.relay("s", cmd, opts);
+    assert.strictEqual(res.ok, false);
+    assert.strictEqual(t.sent.length, 0);
+  }
+});
+
+test("pluginTool: 外部宛ては承認が要る。拒否・例外・true 以外・関数なしでは結果を返さない。承認は session×plugin で 1 回", async () => {
+  const run = async (confirmSend, extra = {}) => {
+    const t = fakeTarget();
+    let n = 0;
+    const r = createRelay({ resolveTarget: () => t, newId: () => `q${++n}` });
+    const call = async () => {
+      const p = r.relay("s", { kind: "pluginTool", name: ENTRY.name, params: {} }, ptOpts({ external: true, confirmSend, ...extra }));
+      await new Promise((res) => setImmediate(res));
+      r.handleResult(t, `q${n}`, { ok: true, data: { v: 1 } });
+      return p;
+    };
+    return { call };
+  };
+  for (const bad of [async () => false, async () => { throw new Error("x"); }, async () => "yes", undefined]) {
+    const { call } = await run(bad);
+    assert.deepStrictEqual(await call(), { ok: false, error: "declined" });
+  }
+  let asked = 0;
+  const { call } = await run(async (_e, preview) => { asked++; assert.ok(preview.length <= 200); return true; });
+  assert.strictEqual((await call()).ok, true);
+  assert.strictEqual((await call()).ok, true);
+  assert.strictEqual(asked, 1, "同じセッション×プラグインでは 2 回目から聞かない");
+});
+
+test("pluginTool: 2D 窓のエラーは data を持たず ok:false で返る。他窓の結果は無視", async () => {
+  const t = fakeTarget();
+  const other = fakeTarget();
+  const r = createRelay({ resolveTarget: () => t, newId: () => "e1" });
+  const p = r.relay("s", { kind: "pluginTool", name: ENTRY.name, params: {} }, ptOpts());
+  await new Promise((res) => setImmediate(res));
+  assert.strictEqual(r.handleResult(other, "e1", { ok: true, data: { fake: 1 } }), false);
+  r.handleResult(t, "e1", { ok: false, error: "plugin-error" });
+  assert.deepStrictEqual(await p, { ok: false, error: "plugin-error" });
+});

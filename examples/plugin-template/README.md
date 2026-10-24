@@ -45,7 +45,8 @@ backend-optional/               ← 任意。Java のバックエンド面（重
 | `contributes` | UI を出すなら | サーフェス配列。`"viewer2d.menu"` / `"viewer2d.menu.analysis"`（0.2.1 以降）/ `"mainscreen.menu"`（`"viewer2d.toolbar"` は予約） |
 | `ui` | UI を出すなら | フロント面 ES モジュールのファイル名（例 `ui.js`） |
 | `entrypoint` | backend 面を持つなら | `GraphyPlugin` 実装クラスの完全修飾名（`backend-optional/` 参照） |
-| `permissions` | 任意 | 要求権限（例 `"read-pixels"`）。導入時の同意画面に表示される（**強制はまだ無い**） |
+| `permissions` | 任意 | 要求権限（例 `"read-pixels"`）。導入時の同意画面に表示される（**強制はまだ無い**。`ai-egress` と `ai-tools` は例外） |
+| `aiTools` | 任意 | AI アシスタントから呼べるツール（下記）。`permissions` に `"ai-tools"` が無いと**ツールは出ない** |
 | `description`/`author`/`homepage`/`license` | 任意 | マネージャ一覧の表示・法務用 |
 
 ## 署名
@@ -149,3 +150,35 @@ ROI の**書き込みはできない**（読影医の計測をプラグインが
 
 - GRAPHY-Next 本体: <https://github.com/tatsunidas/GRAPHY-Next>
 - 型定義: `graphy-plugin.d.ts`（`host` の全 API。エディタで補完が効く）
+
+## AI アシスタントに渡すツール（`aiTools`、読み取り・表示のみ）
+
+`permissions` に `"ai-tools"` を宣言し、`plugin.json` に `aiTools` を書き、`ui.js` から同名の関数を `export const aiTools` で公開します。
+
+```json
+"permissions": ["ai-tools"],
+"aiTools": [
+  {
+    "name": "measure_lesion",
+    "description": "Return the lesion size of the current tile (mm).",
+    "effect": "read",
+    "parameters": {
+      "type": "object",
+      "properties": { "label": { "type": "string", "maxLength": 40, "description": "Lesion label." } },
+      "required": []
+    }
+  }
+]
+```
+
+```js
+export const aiTools = {
+  measure_lesion: async (args, host) => ({ sizeMm: 12.5 }),
+};
+```
+
+- `effect` は `"read"`（読むだけ）か `"display"`（表示だけ）。**データを書くツール（`write` など）は本体が捨てます。**
+- `name` は `^[a-z][a-z0-9_]{0,39}$`、1 プラグイン 8 ツールまで、`description` は 300 文字まで。全プラグイン合計 32 ツールまで。
+- `parameters` は `number` / `integer`（`minimum`・`maximum` 必須）、`string`（`maxLength` か `enum` が必須）だけ。入れ子・`additionalProperties`・`pattern` は不可。プロパティは 8 個まで。
+- 利用者がアシスタントの「プラグインのツール」でオンにするまで呼ばれません（既定オフ）。呼び出しは 2D 窓で行われ、`activate` は呼ばれません。
+- 戻り値は JSON にできる値（深さ 3、4 KB まで。超えた分は切り捨て）。**AI には「信用できないデータ」として渡り**、外部の AI へ送るときは利用者の確認が出ます。患者を特定できる値は返さないでください。

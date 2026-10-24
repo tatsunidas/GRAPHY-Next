@@ -160,6 +160,23 @@ export async function launchPlugin(m: PluginManifest, host: PluginHostSeed): Pro
   await mod.activate(withHostApis(m, host));
 }
 
+/**
+ * AI ツールの実装を取り出して、ホスト API を束ねた形で返す。無ければ null。`activate` は呼ばない。
+ * ホストの素（surface など）は 2D 窓の `setPluginToolHostSeed` で登録されたものを使う。
+ */
+export async function loadPluginAiTool(
+  m: PluginManifest,
+  tool: string,
+  makeSeed: (m: PluginManifest) => PluginHostSeed,
+): Promise<((args: Record<string, unknown>) => unknown) | null> {
+  const mod = await resolveModule(m);
+  const fns = mod.aiTools;
+  if (!fns || typeof fns !== "object" || !Object.prototype.hasOwnProperty.call(fns, tool) || typeof fns[tool] !== "function") return null;
+  const fn = fns[tool];
+  const host = withHostApis(m, makeSeed(m));
+  return (args) => fn(args, host);
+}
+
 /** backend 面の実行: POST /api/plugins/{id}/run。 */
 export const runPluginBackend = (id: string, payload?: unknown): Promise<unknown> =>
   httpSend<unknown>(`/api/plugins/${encodeURIComponent(id)}/run`, "POST", payload);
