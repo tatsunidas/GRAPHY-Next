@@ -33,6 +33,7 @@ const { isAssistantSender } = require("./assistantSender");
 const { createRelay, createJournal, readJournal } = require("./viewerRelay");
 const { createStore: createMacroStore } = require("./assistantMacros");
 const assistantPluginTools = require("./assistantPluginTools");
+const { createGate: createAiEgressGate } = require("./aiEgressGate");
 const aiProviders = require("./aiProviders");
 const computeEndpoints = require("./computeEndpoints");
 const localPython = require("./localPython");
@@ -1239,7 +1240,44 @@ function migrateTlsPasswords() {
 
 // AI 中継。CSP によりレンダラからは外部 API を叩けないため main が肩代わりする。
 // 用途 → 提供元の解決と応答の正規化は aiGateway / aiAdapters が行う（fw/ai-routing-design.md）。
-ipcMain.handle("graphy:ai-generate", async (_e, req) => aiGateway.generate(req || {}));
+// 🔴 プラグインは renderer に import() されるので、この口は直接呼べてしまう。同意と監査は renderer ではなくここ（aiEgressGate）で行う。
+//    呼び出し元プラグインは区別できないため、claimedPluginId は自己申告（インストール済みで ai-egress を宣言した id のみ受理）。
+const aiEgressGate = createAiEgressGate({
+  lookupPlugin: async (id) => {
+    const list = await fetchPluginList();
+    return (list || []).find((p) => p && p.id === id) || null;
+  },
+  resolve: (capability) => aiGateway.resolveCapability(capability),
+  confirm: async (info) => {
+    const win = BrowserWindow.getFocusedWindow() || BrowserWindow.getAllWindows().find((w) => !w.isDestroyed()) || undefined;
+    let icon;
+    try {
+      const img = nativeImage.createFromBuffer(Buffer.from(info.imageBase64, "base64"));
+      if (!img.isEmpty()) icon = img.resize({ width: 160 });
+    } catch {
+      icon = undefined;
+    }
+    const r = await dialog.showMessageBox(win, {
+      type: "warning",
+      buttons: ["送る", "取り消す"],
+      defaultId: 1,
+      cancelId: 1,
+      title: "外部 AI への送信の確認",
+      message: `プラグイン「${info.pluginName}」（自己申告）が、画像を外部の AI（${info.host}）へ送ろうとしています。`,
+      detail:
+        `モデル: ${info.model}\n指示: ${info.prompt}${info.plaintext ? "\n⚠ 暗号化されない通信で送られます。" : ""}\n\n` +
+        "DICOM タグは含まれませんが、画素に焼き込まれた患者情報（バーンドイン注釈）は消えません。サムネイルで確認してください。送りますか？",
+      ...(icon ? { icon } : {}),
+      ...(info.canRemember ? { checkboxLabel: "このシリーズでは再確認しない", checkboxChecked: false } : {}),
+    });
+    return { ok: r.response === 0, remember: r.response === 0 && r.checkboxChecked === true };
+  },
+  audit: (line) => console.log(line),
+});
+ipcMain.handle("graphy:ai-generate", async (_e, req) => {
+  const g = await aiEgressGate.check(req);
+  return g.ok ? aiGateway.generate(g.req) : { ok: false, error: g.error };
+});
 
 // 会話（text-to-text・ツール・ストリーミング）。**アシスタント窓（#assistant）だけが呼べる**——
 // プラグインは viewer / main 窓の同じ realm にいて、この口が見えてしまうため（assistantSender.js）。
@@ -1345,20 +1383,27 @@ ipcMain.handle("graphy:assistant-viewer-cmd", (e, sessionId, cmd) => {
 // 既定は全プラグインがオフ。アシスタント窓の設定パネルで利用者が切り替える。
 const pluginToolStore = assistantPluginTools.createToggleStore({ file: path.join(app.getPath("userData"), "assistant-plugin-tools.json") });
 let pluginToolEntries = [];
-async function refreshPluginToolEntries() {
+// backend の GET /api/plugins（検査済み・有効なプラグインのみ）。取れなければ null。
+async function fetchPluginList() {
   try {
     const ctl = new AbortController();
     const timer = setTimeout(() => ctl.abort(), 5000);
     try {
       const res = await fetch(`${API_BASE}/api/plugins`, { signal: ctl.signal });
-      if (!res.ok) return { ok: false, error: "backend" };
-      pluginToolEntries = assistantPluginTools.buildEntries(await res.json());
+      if (!res.ok) return null;
+      const body = await res.json();
+      return Array.isArray(body) ? body : null;
     } finally {
       clearTimeout(timer);
     }
   } catch {
-    return { ok: false, error: "backend" };
+    return null;
   }
+}
+async function refreshPluginToolEntries() {
+  const list = await fetchPluginList();
+  if (!list) return { ok: false, error: "backend" };
+  pluginToolEntries = assistantPluginTools.buildEntries(list);
   return { ok: true };
 }
 async function listPluginTools() {
