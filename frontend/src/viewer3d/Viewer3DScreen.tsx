@@ -78,6 +78,7 @@ import { fetchSettings } from "../settings/settingsApi";
 import { hexToRgb01 } from "../viewer/hexColor";
 import { VIEWER3D_CTX_KEY, parseViewer3dCtx, viewer3dCtxChanged } from "./viewer3dCtx";
 import { concatFailureMessage, resolveConcatStack } from "../viewer/concatVolume";
+import { buildConcatResampledVolume, ConcatResampleError, concatResampleErrorMessage, confirmConcatResampleMemory } from "../viewer/concatResample";
 import { concatTileId, type ConcatOpened } from "../viewer/virtualLayout";
 
 interface Viewer3DContext {
@@ -263,6 +264,8 @@ export function Viewer3DScreen({ status }: { status: AppStatus | null }) {
         setMessage(concatFailureMessage(cc, t));
         return;
       }
+      // 面内の格子が違う連結: 元のスライスを並べず、共通の格子へ再サンプルしたメモリ内ボリュームにする。
+      const rs = cc?.ok && cc.kind === "resample" ? cc : null;
       setTitle(ctx.concat ? ctx.concat.labels.join(" + ") : series.seriesDescription || series.seriesInstanceUid);
       modalityRef.current = series.modality;
       seriesRef.current = ctx.concat ? null : {
@@ -280,7 +283,7 @@ export function Viewer3DScreen({ status }: { status: AppStatus | null }) {
       let guardLayout: SeriesLayoutDto | null = null;
       if (cc?.ok) {
         guardLayout = cc.dto;
-        imageIds = cc.imageIds;
+        imageIds = cc.kind === "stack" ? cc.imageIds : [];
       } else try {
         const layout = await fetchSeriesLayout(ctx.study.studyInstanceUid, series.seriesInstanceUid);
         const c0 = Math.min(Math.max(0, ctx.c ?? 0), Math.max(0, layout.nC - 1));
@@ -317,7 +320,7 @@ export function Viewer3DScreen({ status }: { status: AppStatus | null }) {
           imageIdForInstance(mode2, i.sopInstanceUid, ctx.study.studyInstanceUid, series.seriesInstanceUid),
         );
       }
-      if (imageIds.length < 3) {
+      if (!rs && imageIds.length < 3) {
         setPhase("error");
         setMessage(t("viewer3d.needVolume"));
         return;
@@ -331,7 +334,7 @@ export function Viewer3DScreen({ status }: { status: AppStatus | null }) {
 
       // ボリューム構築で確保しようとする量を先に見積もり、バジェットを超えるなら確認する
       // （fw/volume-memory-guard.md V2）。予測不能・警告 OFF・利用者が続行なら素通り。
-      const memDecision = await confirmVolumeMemory({
+      const memDecision = rs ? { proceed: confirmConcatResampleMemory(rs.plan, t), enforceMaxBytes: undefined } : await confirmVolumeMemory({
         layout: guardLayout,
         sliceCount: imageIds.length,
         modality: series.modality,
@@ -357,7 +360,12 @@ export function Viewer3DScreen({ status }: { status: AppStatus | null }) {
       }
 
       const volId = `graphy-viewer3d-vol:${ctx.concat ? concatTileId(ctx.concat.parts.map((p) => ({ study: p.study.studyInstanceUid, series: p.series.seriesInstanceUid }))) : series.seriesInstanceUid}`;
-      const built = await buildMprVolume(imageIds, series.modality, volId, {
+      const built = rs
+        ? await buildConcatResampledVolume({
+            mode: mode2, sources: ctx.concat!.parts, parts: rs.parts, plan: rs.plan, volumeId: volId,
+            onProgress: (f) => setMessage(t("concat.resampling", { pct: Math.round(f * 100) })),
+          })
+        : await buildMprVolume(imageIds, series.modality, volId, {
         maxBytes: memDecision.enforceMaxBytes,
       });
       setTilt(built.corrected ? (built.tiltAngleDeg ?? null) : null);
@@ -458,9 +466,11 @@ export function Viewer3DScreen({ status }: { status: AppStatus | null }) {
           ? t("viewer3d.glLost")
           : isCacheSizeExceeded(e)
             ? t("common.volumeMemExceeded", { budgetMb: String(getAppliedVolumeMaxMb()) })
-            : e instanceof SliceDuplicatesError
-              ? t("volumeDepth.duplicates")
-              : `${t("viewer3d.error")}: ${String(e)}`,
+            : e instanceof ConcatResampleError
+              ? concatResampleErrorMessage(e, t)
+              : e instanceof SliceDuplicatesError
+                ? t("volumeDepth.duplicates")
+                : `${t("viewer3d.error")}: ${String(e)}`,
       );
     }
   }, [mode2, t]);

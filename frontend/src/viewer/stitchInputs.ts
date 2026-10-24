@@ -85,7 +85,7 @@ export function stitchDerivation(
 ): string {
   const [nx, ny, nz] = grid.dims;
   const [a, b, k] = grid.spacing;
-  const how = blend.mode === "linear" ? `linear, range ${((blend.fraction ?? 1) * 100).toFixed(0)}%` : "mean";
+  const how = blend.mode === "linear" ? `linear, range ${((blend.fraction ?? 1) * 100).toFixed(0)}%` : blend.mode === "midpoint" ? "midpoint" : "mean";
   const gains = blend.gains ? `, gains [${blend.gains.map((g) => g.toFixed(3)).join(", ")}]` : "";
   const moved = placements
     .map((d, n) => (d ? `${seriesUids[n]}: ${d}` : ""))

@@ -340,10 +340,12 @@ function sampleInput(vol: RegVolume, x: number, y: number, z: number, tol: numbe
  * - mean: 覆っている入力の算術平均（従来）。
  * - linear: 各入力の法線方向の縁からの距離で重みを付ける（羽毛化）。縁に近い入力は弱く、内側の入力は強い。
  *   `fraction`（0 < f ≤ 1）は重みが切り替わる範囲で、1 なら重なり全体で線形、小さいほど中央で急に切り替わる。
+ * - midpoint: 重なりの中点で切り、法線方向の縁から最も遠い（＝内側の）入力の値だけを採る（混ぜない）。
+ *   2D の連結（`virtualLayout.concatLayouts`）と同じ規則。同じ距離なら入力の順が早い方。
  * - gains: 入力ごとの倍率（信号の拡大率の違いを合わせる）。サンプルに掛ける。
  */
 export interface BlendOptions {
-  mode: "mean" | "linear";
+  mode: "mean" | "linear" | "midpoint";
   fraction?: number;
   gains?: readonly number[];
 }
@@ -373,6 +375,11 @@ function blendAt(
   const cnt = s.length;
   if (cnt === 0) return NaN;
   if (cnt === 1) return s[0];
+  if (blend.mode === "midpoint") {
+    let best = 0;
+    for (let t = 1; t < cnt; t++) if (d[t] > d[best]) best = t;
+    return s[best];
+  }
   let wsum = 0;
   let vsum = 0;
   if (blend.mode === "linear") {
@@ -400,7 +407,7 @@ export function* stitchSlices(
   grid: StitchGrid,
   blend: BlendOptions,
 ): Generator<Float32Array, void, undefined> {
-  if (blend.mode !== "mean" && blend.mode !== "linear") throw new Error(`volumeStitch: 未対応の重なりの扱い ${String(blend.mode)}`);
+  if (blend.mode !== "mean" && blend.mode !== "linear" && blend.mode !== "midpoint") throw new Error(`volumeStitch: 未対応の重なりの扱い ${String(blend.mode)}`);
   const f = blend.fraction ?? 1;
   if (blend.mode === "linear" && !(f > 0 && f <= 1)) throw new Error("volumeStitch: ブレンドの範囲は 0 より大きく 1 以下");
   if (blend.gains && blend.gains.length !== inputs.length) throw new Error("volumeStitch: gains の数が入力と合わない");

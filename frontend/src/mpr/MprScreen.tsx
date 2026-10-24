@@ -26,6 +26,7 @@ import { getAppliedVolumeMaxMb, isCacheSizeExceeded } from "../viewer/volumeMemo
 import { confirmVolumeMemory } from "../viewer/volumeMemoryGuard";
 import { rangedStackIds } from "../viewer/rangedStack";
 import { concatFailureMessage, resolveConcatStack } from "../viewer/concatVolume";
+import { buildConcatResampledVolume, ConcatResampleError, concatResampleErrorMessage, confirmConcatResampleMemory } from "../viewer/concatResample";
 import { concatTileId, type ConcatOpened, type ZRange } from "../viewer/virtualLayout";
 import { useDeviceClass } from "../mobile/useDeviceClass";
 import { imageIdForInstance, imageIdsForLayoutStack } from "../viewer/imageId";
@@ -201,6 +202,8 @@ export function MprScreen({ status }: { status: AppStatus | null }) {
         setMessage(concatFailureMessage(cc, t));
         return;
       }
+      // 面内の格子が違う連結: 元のスライスを並べず、共通の格子へ再サンプルしたメモリ内ボリュームにする。
+      const rs = cc?.ok && cc.kind === "resample" ? cc : null;
       setTitle(ctx.concat ? ctx.concat.labels.join(" + ") : series.seriesDescription || series.seriesInstanceUid);
 
       // レイアウトのセル（c=0・t=0）から組む。インスタンスから組むと、フレームを持つシリーズ
@@ -218,7 +221,7 @@ export function MprScreen({ status }: { status: AppStatus | null }) {
       }
       let imageIds: string[];
       if (cc?.ok) {
-        imageIds = cc.imageIds;
+        imageIds = cc.kind === "stack" ? cc.imageIds : [];
       } else if (ctx.range) {
         // 範囲つき: 全体に黙って戻さない（フォールバックもしない）。
         const ranged = rangedStackIds(guardLayout, mode, ctx.study.studyInstanceUid, series.seriesInstanceUid, 0, 0, ctx.range);
@@ -239,13 +242,13 @@ export function MprScreen({ status }: { status: AppStatus | null }) {
           imageIdForInstance(mode, i.sopInstanceUid, ctx.study.studyInstanceUid, series.seriesInstanceUid),
         );
       }
-      if (imageIds.length < 3) {
+      if (!rs && imageIds.length < 3) {
         setPhase("error");
         setMessage(t("mpr.needVolume"));
         return;
       }
 
-      const memDecision = await confirmVolumeMemory({
+      const memDecision = rs ? { proceed: confirmConcatResampleMemory(rs.plan, t), enforceMaxBytes: undefined } : await confirmVolumeMemory({
         layout: guardLayout,
         sliceCount: imageIds.length,
         modality: series.modality,
@@ -271,7 +274,12 @@ export function MprScreen({ status }: { status: AppStatus | null }) {
       }
 
       const volumeId = `graphy-mpr-vol:${ctx.concat ? concatTileId(ctx.concat.parts.map((p) => ({ study: p.study.studyInstanceUid, series: p.series.seriesInstanceUid }))) : series.seriesInstanceUid}`;
-      const built = await buildMprVolume(imageIds, series.modality, volumeId, {
+      const built = rs
+        ? await buildConcatResampledVolume({
+            mode, sources: ctx.concat!.parts, parts: rs.parts, plan: rs.plan, volumeId,
+            onProgress: (f) => setMessage(t("concat.resampling", { pct: Math.round(f * 100) })),
+          })
+        : await buildMprVolume(imageIds, series.modality, volumeId, {
         maxBytes: memDecision.enforceMaxBytes,
       });
       setTilt(built.corrected ? (built.tiltAngleDeg ?? null) : null);
@@ -308,9 +316,11 @@ export function MprScreen({ status }: { status: AppStatus | null }) {
       setMessage(
         isCacheSizeExceeded(e)
           ? t("common.volumeMemExceeded", { budgetMb: String(getAppliedVolumeMaxMb()) })
-          : e instanceof SliceDuplicatesError
-            ? t("volumeDepth.duplicates")
-            : `${t("mpr.error")}: ${String(e)}`,
+          : e instanceof ConcatResampleError
+            ? concatResampleErrorMessage(e, t)
+            : e instanceof SliceDuplicatesError
+              ? t("volumeDepth.duplicates")
+              : `${t("mpr.error")}: ${String(e)}`,
       );
     }
   }, [mode, t]);

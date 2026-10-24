@@ -118,6 +118,17 @@ export function makeVolume(
   if (data.length !== nx * ny * nz) {
     throw new Error(`regGeometry: データ長 ${data.length} が dims ${nx}x${ny}x${nz} と合わない`);
   }
+  return { data, dims, ...volumeGeometry(iop, ipp0, pixelSpacingCol, pixelSpacingRow, sliceStep) };
+}
+
+/** {@link makeVolume} の幾何だけ（画素を持たずに共通格子の見積もりなどに使う）。引数の意味は同じ。 */
+export function volumeGeometry(
+  iop: readonly number[],
+  ipp0: Vec3,
+  pixelSpacingCol: number,
+  pixelSpacingRow: number,
+  sliceStep: Vec3,
+): Pick<RegVolume, "indexToWorld" | "worldToIndex" | "spacing"> {
   const rc: Vec3 = [iop[0], iop[1], iop[2]]; // 列が進む向き
   const rr: Vec3 = [iop[3], iop[4], iop[5]]; // 行が進む向き
 
@@ -128,8 +139,6 @@ export function makeVolume(
 
   const sliceSpacing = Math.hypot(sliceStep[0], sliceStep[1], sliceStep[2]);
   return {
-    data,
-    dims,
     indexToWorld: m,
     worldToIndex: invertAffine(m),
     spacing: [pixelSpacingCol, pixelSpacingRow, sliceSpacing],

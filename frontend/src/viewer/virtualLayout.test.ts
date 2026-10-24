@@ -467,7 +467,7 @@ describe("concatStackFromParts", () => {
   it("overlap with the same grid: one ascending list, overlap cut at the midpoint", () => {
     const r = concatStackFromParts([part("A", 0, 100), part("B", 90, 110)]);
     expect(r.ok).toBe(true);
-    if (!r.ok) return;
+    if (!r.ok || r.kind !== "stack") throw new Error("expected stack");
     expect(r.imageIds.length).toBe(200);
     expect(r.imageIds[0]).toBe("A:0");
     expect(r.imageIds[199]).toBe("B:109");
@@ -484,9 +484,25 @@ describe("concatStackFromParts", () => {
     expect(concatStackFromParts([part("A", 0, 100), part("B", 100, 100)]).ok).toBe(true);
   });
 
-  it("refuses a different grid after the concat itself is valid", () => {
+  it("a different in-plane grid is no longer refused: it becomes a resample with a size estimate", () => {
     const r = concatStackFromParts([part("A", 0, 100), part("B", 100, 100, { rows: 256, columns: 256, pixelSpacing: [2, 2] })]);
-    expect(r).toEqual({ ok: false, reason: "grid", which: "size" });
+    expect(r.ok).toBe(true);
+    if (!r.ok || r.kind !== "resample") throw new Error("expected resample");
+    // A は 512 画素 × 1 mm（中心 0..511）、B は 256 画素 × 2 mm（中心 0..510）。細かい側の 1 mm で和集合は 512 × 512 画素、奥行き 200 枚
+    expect(r.plan.grid.dims).toEqual([512, 512, 200]);
+    expect(r.count).toBe(200);
+  });
+
+  it("a rotated orientation (small but over the identical-grid tolerance) is still refused, not resampled", () => {
+    const iop = [1, 0, 0, 0, 1, 0].map((x, i) => x + (i === 1 ? 3e-4 : 0));
+    const r = concatStackFromParts([part("A", 0, 100), part("B", 100, 100, { iop })]);
+    expect(r).toEqual({ ok: false, reason: "grid", which: "orientation" });
+  });
+
+  it("a resample that cannot be made (a series with a missing slice) is refused with the reason", () => {
+    const base = part("B", 100, 100, { rows: 256, columns: 256, pixelSpacing: [2, 2] });
+    const gappy: ConcatPart = { ...base, layout: { ...base.layout, hasImage: (_c, _t, z) => z !== 10 } };
+    expect(concatStackFromParts([part("A", 0, 100), gappy])).toEqual({ ok: false, reason: "resample", which: "partGaps", part: 1 });
   });
 
   it("passes the concat violations through (different patient)", () => {
