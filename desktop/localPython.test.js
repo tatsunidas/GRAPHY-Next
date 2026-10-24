@@ -493,6 +493,63 @@ test("detect: 同時に 1 本だけ（走っている間は同じ Promise）・�
   assert.equal(n, 3, "設定を変えたら捨てる");
 });
 
+// 起動したまま Jupyter などを後から入れた人が、再起動なしで通る（retryUnusable）。
+// 「入れる前」は Jupyter が無い Python（probe-system: 使えない）、「入れた後」は Jupyter の入った Python（probe-venv-cpu-torch: 使える）。
+function installable() {
+  const st = { installed: false, n: 0, t: 0 };
+  const exec = fakeExec((file, a, o, done) => {
+    if (file.endsWith("nvidia-smi")) return done(null, "");
+    st.n++;
+    done(null, probeLine(st.installed ? "venv-cpu-torch" : "system"));
+  });
+  st.d = detector(exec, { now: () => st.t });
+  return st;
+}
+
+test("detect retryUnusable: 使えないと覚えたあと、入れ直した環境を再起動なしで使える（force なし）", async () => {
+  const st = installable();
+  const a = await st.d.detect({ retryUnusable: true });
+  assert.equal(a.usable, false, "入れる前は使えない");
+  st.installed = true;
+  st.t += 5000;
+  const b = await st.d.detect({ retryUnusable: true });
+  assert.equal(b.usable, true, "入れた後は検出し直して使える");
+  assert.ok(b.selected, "使う Python が選ばれる");
+});
+
+test("detect retryUnusable: 使えない結果は retryUnusable なしだと従来どおり覚えたまま（回帰）", async () => {
+  const st = installable();
+  await st.d.detect();
+  st.installed = true;
+  st.t += 60_000;
+  const b = await st.d.detect();
+  assert.equal(b.usable, false, "retryUnusable なしなら、覚えている結果");
+  assert.equal(st.n, 1);
+});
+
+test("detect retryUnusable: 使える結果は検出し直さない（実行のたびに走らせない）", async () => {
+  const st = installable();
+  st.installed = true;
+  await st.d.detect({ retryUnusable: true });
+  const n = st.n;
+  st.t += 60_000;
+  const b = await st.d.detect({ retryUnusable: true });
+  assert.equal(b.usable, true);
+  assert.equal(st.n, n, "使える結果は覚えたまま");
+});
+
+test("detect retryUnusable: 使えない結果でも、覚えて 2 秒以内は検出し直さない・2 秒後は検出し直す", async () => {
+  const st = installable();
+  await st.d.detect({ retryUnusable: true });
+  const n = st.n;
+  st.t += 1999;
+  await st.d.detect({ retryUnusable: true });
+  assert.equal(st.n, n, "2 秒以内は覚えている結果");
+  st.t += 1;
+  await st.d.detect({ retryUnusable: true });
+  assert.ok(st.n > n, "2 秒たてば検出し直す");
+});
+
 test("detect: 取り消すと state canceled・覚えない・次の検出は走る", async () => {
   let started;
   const startedP = new Promise((r) => (started = r));

@@ -533,10 +533,14 @@ function run(execFile, file, args, opts) {
   });
 }
 
+/** 使えない結果を覚えてから、検出し直してよくなるまでの時間（ms）。 */
+const RETRY_UNUSABLE_MIN_MS = 2000;
+
 /**
  * 検出器を作る。deps は試験で差し替える。
  * @param deps.getSetting  () => { mode, path? }
  * @param deps.probeDir    確認コードの作業フォルダ（本体専用の空フォルダ）
+ * @param deps.now         () => ms（試験で時計を進める）
  */
 function createDetector(deps) {
   const platform = deps.platform || process.platform;
@@ -546,8 +550,11 @@ function createDetector(deps) {
   const isFile = deps.isFile || ((p) => { try { return fs.statSync(p).isFile(); } catch { return false; } });
   const readFile = deps.readFile || ((p) => { try { return fs.readFileSync(p, "utf8"); } catch { return null; } });
   const mkdir = deps.mkdir || ((p) => fs.mkdirSync(p, { recursive: true }));
+  const now = deps.now || Date.now;
 
   let cache = null;
+  /** cache を覚えた時刻（ms）。 */
+  let cacheAt = 0;
   let inflight = null;
   let abort = null;
 
@@ -684,15 +691,26 @@ function createDetector(deps) {
     };
   }
 
-  /** 同時に 1 本だけ。走っている最中の呼び出しは同じ Promise を返す。結果はアプリが動いている間だけ覚える。 */
-  function detect({ force = false } = {}) {
+  /**
+   * 同時に 1 本だけ。走っている最中の呼び出しは同じ Promise を返す。結果はアプリが動いている間だけ覚える。
+   *
+   * `retryUnusable`: 覚えている結果が「使えない」なら、覚えていないものとして検出し直す（計算に使う入口用）。
+   * アプリを起動したまま Jupyter などを後から入れた人が、再起動なしで通るようにする。使える結果は今までどおり覚える。
+   * 1 回の操作の中で続けて呼ばれても 1 回で済むよう、覚えて {@link RETRY_UNUSABLE_MIN_MS} 以内なら検出し直さない。
+   */
+  function detect({ force = false, retryUnusable = false } = {}) {
     if (inflight) return inflight;
-    if (cache && !force) return Promise.resolve(cache);
+    const unusable = cache && !(cache.selected && cache.usable);
+    const retry = retryUnusable && unusable && now() - cacheAt >= RETRY_UNUSABLE_MIN_MS;
+    if (cache && !force && !retry) return Promise.resolve(cache);
     abort = new AbortController();
     const signal = abort.signal;
     inflight = doDetect(signal)
       .then((r) => {
-        if (r.state !== "canceled") cache = r;
+        if (r.state !== "canceled") {
+          cache = r;
+          cacheAt = now();
+        }
         return r;
       })
       .catch((e) => ({ state: "error", error: String((e && e.message) || e), python: { mode: "auto" }, selected: null, usable: false, candidates: [], searched: [], nvidia: { found: false, gpus: [] }, capabilities: null, reasons: [], guidance: { missing: [], commands: [], links: [] }, elapsedMs: 0 }))

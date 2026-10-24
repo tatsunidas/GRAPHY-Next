@@ -2059,7 +2059,8 @@ function withHasToken(e) {
  * 検出は走らせる（初回は PyTorch の import で数秒かかりうる。結果は覚える）。
  */
 async function localSummary() {
-  const d = await localPython.detect({});
+  // 実行の入口（既定の計算機を決める）から呼ばれる。使えないと覚えている結果は検出し直す（ensureLocalCompute と同じ理由）
+  const d = await localPython.detect({ retryUnusable: true });
   const usable = !!(d && d.selected && d.usable);
   return { usable, cuda: usable && !!d.capabilities && d.capabilities.accelerator === "cuda" };
 }
@@ -2176,7 +2177,8 @@ ipcMain.handle("graphy:compute-local-cancel", () => {
  * （毎回の実行で同意画面に「この PC」とコードの全文が出る）。使う Python は利用者が設定したか、検出して選ばれたもの。
  */
 async function ensureLocalCompute() {
-  const d = await localPython.detect({});
+  // 使えないと覚えている結果は検出し直す（起動したまま Jupyter などを入れた人が、再起動なしで通るように）
+  const d = await localPython.detect({ retryUnusable: true });
   if (!d.selected || !d.usable) return { ok: false, error: "local-unavailable", reasons: d.reasons || [] };
   const r = await localJupyter.ensure(d.selected.path);
   if (!r.ok) return { ok: false, error: r.error, log: r.log };
