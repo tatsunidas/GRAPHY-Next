@@ -28,6 +28,19 @@ export interface StitchInput {
   pet?: StitchPetInfo;
 }
 
+/**
+ * 結合の判定に要る値だけ（画素を読み込まなくても、レイアウトのメタデータから作れる）。
+ * `inplaneLongestMm` は面内の最長寸法、`inplaneFinestMm` は面内の最小間隔（向きの許容角 s / (2L) の入力）。
+ */
+export interface StitchBasis {
+  iop: number[];
+  modality: string;
+  patientId: string;
+  pet?: StitchPetInfo;
+  inplaneLongestMm: number;
+  inplaneFinestMm: number;
+}
+
 export type StitchViolation =
   | "patient"
   | "orientation"
@@ -44,14 +57,12 @@ export interface StitchCheck {
  * 向きの許容角 [rad]。ボリュームの端が向きのずれで動く量（面内の最長寸法 L × 角）が、面内の最小間隔 s の半分に
  * 収まる角 s / (2L)。視野が大きいほど・間隔が細かいほど厳しくなる（500 mm・1 mm で 1e-3 rad）。
  */
-function orientToleranceRad(inputs: readonly StitchInput[]): number {
+function orientToleranceRad(inputs: readonly StitchBasis[]): number {
   let longest = 0;
   let finest = Infinity;
   for (const x of inputs) {
-    const [nx, ny] = x.volume.dims;
-    const [sx, sy] = x.volume.spacing;
-    longest = Math.max(longest, Math.hypot((nx - 1) * sx, (ny - 1) * sy));
-    finest = Math.min(finest, sx, sy);
+    longest = Math.max(longest, x.inplaneLongestMm);
+    finest = Math.min(finest, x.inplaneFinestMm);
   }
   return longest > 0 ? finest / (2 * longest) : 0;
 }
@@ -85,6 +96,24 @@ function petComplete(p: StitchPetInfo | undefined): p is Required<StitchPetInfo>
 /** 結合できる入力の組かを判定する。違反した条件をすべて返す（黙って通さない）。 */
 export function checkStitchInputs(
   inputs: readonly StitchInput[],
+  opts: { orientation?: "strict" | "resample" } = {},
+): StitchCheck {
+  return checkStitchBasis(inputs.map(basisOf), opts);
+}
+
+function basisOf(x: StitchInput): StitchBasis {
+  const [nx, ny] = x.volume.dims;
+  const [sx, sy] = x.volume.spacing;
+  return {
+    iop: x.iop, modality: x.modality, patientId: x.patientId, pet: x.pet,
+    inplaneLongestMm: Math.hypot((nx - 1) * sx, (ny - 1) * sy),
+    inplaneFinestMm: Math.min(sx, sy),
+  };
+}
+
+/** {@link checkStitchInputs} の本体。ボリュームを持たない呼び出し（レイアウトだけの連結）も同じ判定を使う。 */
+export function checkStitchBasis(
+  inputs: readonly StitchBasis[],
   opts: { orientation?: "strict" | "resample" } = {},
 ): StitchCheck {
   const v = new Set<StitchViolation>();
