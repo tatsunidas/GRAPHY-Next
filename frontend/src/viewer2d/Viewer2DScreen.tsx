@@ -30,6 +30,7 @@ import { fetchSeriesLayout } from "../api";
 import { reconcileSolo, toggleSolo } from "./soloTile";
 import { RegistrationPanel } from "./RegistrationPanel";
 import type { RenderOverlay } from "../viewer/Viewer2D";
+import { OverflowRow } from "../viewer/OverflowRow";
 import { buildSeriesLayout, type SeriesLayout } from "../viewer/seriesLayout";
 import { LutDialog, ColorBar } from "../viewer/LutDialog";
 import { eventTarget, getEnabledElement } from "@cornerstonejs/core";
@@ -2156,6 +2157,8 @@ function TileGrid({
           flex: 1,
           minHeight: 0,
           overflowY: "auto",
+          // スクロールバーの出入りでセルの幅が約 15px 動かないよう、余白を常に確保する。
+          scrollbarGutter: "stable",
         }}
       >
         {patient.tiles.flatMap((tile) => [
@@ -3286,7 +3289,7 @@ function FusionControlBar({
     if (isoText.trim() !== "" && Number.isFinite(v) && v !== isolineLevel) onIsolineLevelChange(v);
   };
   return (
-    <div style={fusionBar}>
+    <OverflowRow style={fusionBar} moreTestId="fusion-bar-more">
       <div style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
         <span style={{ fontSize: 11, color: "#0b5cad", flex: "none" }}>🔀</span>
         <span
@@ -3554,7 +3557,7 @@ function FusionControlBar({
           </span>
         </div>
       )}
-    </div>
+    </OverflowRow>
   );
 }
 
@@ -4195,10 +4198,11 @@ const xbtn: React.CSSProperties = {
   lineHeight: 1,
   padding: "1px 6px",
 };
+// 折り返さない 1 行（溢れた分は OverflowRow の「⋯」へ）。折り返すと高さが変わって画像タイルが縮む。
 const fusionBar: React.CSSProperties = {
   display: "flex",
   alignItems: "center",
-  flexWrap: "wrap",
+  flexWrap: "nowrap",
   gap: 8,
   padding: "5px 10px",
   borderTop: "1px solid #e1e7ee",
