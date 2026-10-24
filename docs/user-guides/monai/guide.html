@@ -1,0 +1,411 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>GRAPHY-Next MONAI の使い方 — 外部の GPU で臓器を自動で塗り、SEG で保存する</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;900&family=IBM+Plex+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="../guide.css">
+<style>
+  /* この冊子のための部品（共通の guide.css は変えない） */
+  .duo { display: grid; grid-template-columns: 1fr 1fr; gap: 48px; align-items: start; }
+  .duo .col { display: flex; flex-direction: column; gap: 24px; }
+  .duo .explain li p { font-size: 25px; }
+  .tri { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 28px; align-items: stretch; }
+  .tri .panel { padding: 30px; display: flex; flex-direction: column; gap: 14px; }
+  .tri .panel p, .tri .panel li { font-size: 24px; line-height: 1.5; }
+  .tri .panel h3 { color: var(--accent); }
+  .flow { display: grid; grid-template-columns: repeat(5, 1fr); gap: 18px; list-style: none; }
+  .flow li { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 24px; display: flex; flex-direction: column; gap: 10px; }
+  .flow .n { font-family: "IBM Plex Mono", monospace; color: var(--accent); font-size: 26px; }
+  .flow b { font-size: 28px; }
+  .flow span { font-size: 22px; color: var(--sub); line-height: 1.5; }
+  .page { gap: 22px; padding-top: 72px; padding-bottom: 110px; }
+  h2 { font-size: 46px; }
+  .note { font-size: 22px; line-height: 1.5; }
+  .callout { font-size: 25px; line-height: 1.5; }
+  .panel { padding: 30px; }
+  .panel .steps li { padding: 11px 0; }
+  .panel .steps li p, .panel .steps li small { font-size: 24px; }
+  .explain { gap: 14px; }
+  .explain li p { font-size: 25px; line-height: 1.5; }
+  .shot-row { gap: 40px; }
+  table.ops .r { text-align: right; }
+  .tag { font-family: "IBM Plex Mono", monospace; font-size: 22px; color: var(--accent); }
+  .warn { font-size: 26px; border-left: 6px solid #e0b000; padding: 4px 0 4px 26px; color: var(--text); }
+  code { font-family: "IBM Plex Mono", monospace; font-size: 0.9em; color: var(--accent); }
+  .seg-map { display: grid; grid-template-columns: 1fr 120px 1fr; gap: 24px; align-items: center; }
+  .seg-map .box { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 28px; display: flex; flex-direction: column; gap: 12px; }
+  .seg-map .box p, .seg-map .box li { font-size: 25px; line-height: 1.5; }
+  .seg-map .arrow { text-align: center; font-size: 64px; color: var(--accent); }
+  .seg-map ul { list-style: none; }
+</style>
+</head>
+<body>
+
+<!-- 1. 表紙 -->
+<section class="page cover">
+  <div class="left">
+    <p class="eyebrow">GRAPHY-NEXT / MONAI BUNDLE (REMOTE GPU) 0.2.0</p>
+    <h1>MONAI の使い方</h1>
+    <p class="lead">CT・MR のシリーズから、臓器を自動で塗り分けます。計算は外部の GPU（Google Colab など）で行い、結果は ROI マネージャで確かめて、DICOM SEG として保存します。</p>
+    <div class="chips">
+      <span class="chip on">外部の GPU</span>
+      <span class="chip">DICOM SEG</span>
+      <span class="chip">研究用</span>
+    </div>
+  </div>
+  <div class="panel">
+    <h3>この冊子の内容</h3>
+    <ol class="steps">
+      <li><span class="n">01</span><p>プラグインを入れる<small>設定 ＞ プラグイン</small></p></li>
+      <li><span class="n">02</span><p>GPU の設定<small>Google Colab ／ この PC ／ 自分の Jupyter</small></p></li>
+      <li><span class="n">03</span><p>実行と同意<small>何が外へ送られるか</small></p></li>
+      <li><span class="n">04</span><p>結果を確かめる<small>下見・ROI マネージャ</small></p></li>
+      <li><span class="n">05</span><p>SEG の意味と保存</p></li>
+      <li><span class="n">06</span><p>モデルの選び方・困ったとき・既知の制限</p></li>
+    </ol>
+  </div>
+  <div class="footer"><span>研究用です。診断には使わないでください。データ: TCIA HCC-TACE-Seg（Moawad et al., 2021）CC BY 4.0　doi.org/10.7937/TCIA.5FNA-0924</span><span>1 / 13</span></div>
+</section>
+
+<!-- 2. 全体の流れと注意 -->
+<section class="page">
+  <div>
+    <p class="eyebrow">00 / はじめに</p>
+    <h2>全体の流れ</h2>
+  </div>
+  <ol class="flow">
+    <li><span class="n">1</span><b>設定</b><span>外部の計算機（GPU）を 1 つ用意します。最初の 1 回だけです。</span></li>
+    <li><span class="n">2</span><b>選ぶ</b><span>2D ビューアでシリーズを開き、解析 ＞ AI から、モデルを選んで「実行」。</span></li>
+    <li><span class="n">3</span><b>同意</b><span>送るデータと実行するコードの全文を見て、承諾します。送るたびに必ず出ます。</span></li>
+    <li><span class="n">4</span><b>確かめる</b><span>下見の画像とラベルを見て、ROI マネージャで確かめます。</span></li>
+    <li><span class="n">5</span><b>保存</b><span>保存するラベルを選び、「SEG で保存」。元の画像は変わりません。</span></li>
+  </ol>
+  <div class="duo" style="margin-top: 8px">
+    <div class="panel">
+      <h3>必要なもの</h3>
+      <ul class="steps">
+        <li><p>GRAPHY-Next 0.4.0 以降（デスクトップ版）<small>この冊子の画面は 0.5.1 です</small></p></li>
+        <li><p>MONAI Bundle プラグイン 0.2.0<small>公式プラグイン。署名つきで配布</small></p></li>
+        <li><p>Google アカウント（Colab を使う場合）<small>無料版にも利用枠の上限があります</small></p></li>
+      </ul>
+    </div>
+    <div class="panel">
+      <h3>ご注意</h3>
+      <ul class="steps">
+        <li><p><b>研究用です。診断には使わないでください。</b><small>結果は必ず画像で確かめてください</small></p></li>
+        <li><p>送るのは、本体が<b>匿名化した</b>シリーズだけです<small>プラグインは画素を外へ送る口を持ちません</small></p></li>
+        <li><p>モデルは MONAI Model Zoo の公開モデルです<small>ライセンスはモデルごとに違います（非商用のものがあります）</small></p></li>
+      </ul>
+    </div>
+  </div>
+  <div class="footer"><span>研究用です。診断には使わないでください。</span><span>2 / 13</span></div>
+</section>
+
+<!-- 3. プラグインを入れる -->
+<section class="page">
+  <div>
+    <p class="eyebrow">01 / 環境設定 ＞ プラグイン ＞ 見つける</p>
+    <h2>公式の索引から、プラグインを導入する</h2>
+  </div>
+  <div class="shot-row">
+    <figure class="shot" data-shot="plugins-catalog"><img src="shots/plugins-catalog.png" alt="環境設定のプラグイン。見つけるの一覧に公式のプラグインが出ている"></figure>
+    <div style="display:flex;flex-direction:column;gap:28px">
+      <ol class="explain">
+        <li><span class="num">1</span><p>「プラグインの導入を許可する」を、<b>ご自身で</b>入れます（既定は許可しません）</p></li>
+        <li><span class="num">2</span><p>「見つける」に、公式の索引の一覧が出ます</p></li>
+        <li><span class="num">3</span><p>「MONAI」で絞り込みます</p></li>
+        <li><span class="num">4</span><p>「導入」。導入のたびに、署名と中身を確かめます。信頼欄が <b>verified</b> なら公式の署名です</p></li>
+      </ol>
+      <p class="callout">この図は別の公式プラグインの一覧です。MONAI も同じ手順で入ります。</p>
+      <p class="note">ネットワークの無い環境では「zip から導入」も使えます（注意は p.13）。</p>
+    </div>
+  </div>
+  <div class="footer"><span>研究用です。診断には使わないでください。この図の画像は、プラグインの一覧画面です。</span><span>3 / 13</span></div>
+</section>
+
+<!-- 4. GPU の選び方 -->
+<section class="page">
+  <div>
+    <p class="eyebrow">02 / 環境設定 ＞ 計算機</p>
+    <h2>計算する場所は 3 通り。まずは Google Colab がおすすめです</h2>
+  </div>
+  <div class="tri">
+    <div class="panel">
+      <h3>Google Colab</h3>
+      <p><b>おすすめ</b>。自分のパソコンに GPU や Python の用意が要りません。</p>
+      <ul class="steps">
+        <li><p>Google でログイン → GPU を選んで追加</p></li>
+        <li><p>計算は<b>ご自身の Colab の利用枠</b>で行われます</p></li>
+        <li><p>パッケージは Colab 側で自動で入ります</p></li>
+      </ul>
+    </div>
+    <div class="panel">
+      <h3>この PC</h3>
+      <p>この PC の Python と GPU を使います。</p>
+      <ul class="steps">
+        <li><p>Python と <b>PyTorch・MONAI など</b>が要ります</p></li>
+        <li><p>足りないものは、実行の前に表と<b>導入コマンド</b>で案内します</p></li>
+        <li><p>環境は書き換えません（入れるのはご自身）</p></li>
+      </ul>
+    </div>
+    <div class="panel">
+      <h3>自分の Jupyter Server</h3>
+      <p>自分で立てた Jupyter Server（社内の GPU サーバーなど）を使います。</p>
+      <ul class="steps">
+        <li><p>設定の「計算機を追加」から登録します</p></li>
+        <li><p>必要なパッケージは「この PC」と同じです。足りないものは同じ枠で案内します</p></li>
+        <li><p>この冊子では画面を省略します</p></li>
+      </ul>
+    </div>
+  </div>
+  <p class="callout">計算機を 1 つも登録していないときは、最初の「実行」で、Colab の GPU T4 が自動で登録されます（Colab にログインしている場合）。</p>
+  <p class="note">どの計算機でも、実行のたびに「何を・どこへ送るか」の同意画面が出ます。承諾するまで何も送られません。</p>
+  <div class="footer"><span>研究用です。診断には使わないでください。</span><span>4 / 13</span></div>
+</section>
+
+<!-- 5. Colab -->
+<section class="page">
+  <div>
+    <p class="eyebrow">02 / 環境設定 ＞ 計算機 ＞ Google Colab</p>
+    <h2>Colab にログインして、GPU の計算機を追加する</h2>
+  </div>
+  <div class="shot-row">
+    <figure class="shot" data-shot="settings-colab"><img src="shots/settings-colab.png" alt="環境設定の計算機。Google Colab のログインと、GPU を選んで追加する欄"></figure>
+    <div style="display:flex;flex-direction:column;gap:28px">
+      <ol class="explain">
+        <li><span class="num">1</span><p>「Google でログイン」→ ブラウザが開くので、Colab を使うアカウントでログイン。アカウント名がここに出ます（図ではぼかしています）</p></li>
+        <li><span class="num">2</span><p>GPU の種類を選びます。まずは <b>GPU T4</b>。プランで使えないものには「このプランでは使えません」と出ます</p></li>
+        <li><span class="num">3</span><p>「Colab の計算機を追加」</p></li>
+        <li><span class="num">4</span><p>「登録した計算機」に出ます。<b>既定</b> の印がついた計算機が、プラグインの実行に使われます</p></li>
+      </ol>
+      <p class="callout">Colab の計算機の実体（ランタイム）は、<b>実行するときに自動で確保</b>します（数秒〜数十秒）。</p>
+    </div>
+  </div>
+  <div class="footer"><span>研究用です。診断には使わないでください。</span><span>5 / 13</span></div>
+</section>
+
+<!-- 6. この PC・事前チェック -->
+<section class="page">
+  <div>
+    <p class="eyebrow">02 / この PC・自分の Jupyter ＞ 足りないものの案内</p>
+    <h2>足りないものは、実行の前に表と導入コマンドで案内します</h2>
+  </div>
+  <div class="duo">
+    <div class="col">
+      <figure class="shot" data-shot="settings-local"><img src="shots/settings-local.png" alt="環境設定の計算機。この PC の Python と GPU の検出結果"></figure>
+      <ol class="explain">
+        <li><span class="num">1</span><p>設定では、この PC の Python と GPU を見分けた結果が出ます</p></li>
+        <li><span class="num">2</span><p>環境を変えたら「再検出」</p></li>
+      </ol>
+    </div>
+    <div class="col">
+      <figure class="shot" data-shot="env-panel"><img src="shots/env-panel.png" alt="プラグインの窓に出る、足りないものの表と導入コマンド"></figure>
+      <ol class="explain">
+        <li><span class="num">1</span><p>最初の「実行」で、<b>画像を送らない</b>確認が先に走ります。足りないものを表にします</p></li>
+        <li><span class="num">2</span><p>使われる Python を指した <code>pip install</code> を出します（コピーして実行）</p></li>
+        <li><span class="num">3</span><p>入れたら「再確認」。<b>アプリの再起動は要りません</b></p></li>
+      </ol>
+    </div>
+  </div>
+  <p class="note">GRAPHY はパッケージを自動では入れません。GPU（CUDA）で動かすときは、PyTorch だけ公式サイトの案内の版を入れてください。図は、何も入っていない Python の例です。</p>
+  <div class="footer"><span>研究用です。診断には使わないでください。Python の場所は隠しています。</span><span>6 / 13</span></div>
+</section>
+
+<!-- 7. 実行 -->
+<section class="page">
+  <div>
+    <p class="eyebrow">03 / 2D ビューア ＞ 解析 ＞ AI ＞ MONAI Bundle (remote GPU)</p>
+    <h2>シリーズを開き、モデルを選んで「実行」</h2>
+  </div>
+  <div class="shot-row">
+    <figure class="shot" data-shot="plugin-window"><img src="shots/plugin-window.png" alt="MONAI Bundle の窓。モデルと版の選択と、実行ボタン"></figure>
+    <div style="display:flex;flex-direction:column;gap:28px">
+      <ol class="explain">
+        <li><span class="num">1</span><p>モデルを選びます。このシリーズに使えるものだけが選べます。まずは軽い <b>脾臓（spleen_ct_segmentation）</b> が試しやすいです</p></li>
+        <li><span class="num">2</span><p>版（既定は最新）</p></li>
+        <li><span class="num">3</span><p>「実行」。次の同意画面で、送る内容を確かめます</p></li>
+      </ol>
+      <p class="callout">計算機の上で、モデルの説明（<code>metadata.json</code>）から<b>このシリーズに使えるか</b>を判定します。合わなければ、推論せずに止まり、理由が出ます。</p>
+      <p class="note">⚠ モデルの説明は作者の自己申告です。止めるのは、明らかに合わないときだけです。</p>
+    </div>
+  </div>
+  <div class="footer"><span>研究用です。診断には使わないでください。データ: TCIA HCC-TACE-Seg（Moawad et al., 2021）CC BY 4.0</span><span>7 / 13</span></div>
+</section>
+
+<!-- 8. 同意 -->
+<section class="page">
+  <div>
+    <p class="eyebrow">03 / 同意画面（実行のたびに出ます）</p>
+    <h2>何を・どこへ送るかを見て、承諾してから送ります</h2>
+  </div>
+  <div class="shot-row" style="grid-template-columns: 760px 1fr">
+    <figure class="shot" data-shot="consent"><img src="shots/consent.png" alt="外部の計算機へ送る前の同意画面。送り先・匿名化・送るデータ・実行するコードの全文"></figure>
+    <div style="display:flex;flex-direction:column;gap:26px">
+      <ol class="explain">
+        <li><span class="num">1</span><p><b>送り先</b>。計算機の名前と URL です（この図では URL をぼかしています）</p></li>
+        <li><span class="num">2</span><p><b>送るデータ</b>。枚数・形式・大きさと、<b>焼き込み文字を塗った枚数</b>。患者は匿名（GRAPHY-ANON）に置き換わります</p></li>
+        <li><span class="num">3</span><p><b>実行するコードの全文</b>。計算機の上で動くプログラムを、すべて読めます</p></li>
+        <li><span class="num">4</span><p>確認したらチェックを入れて「送信」。やめるときは「キャンセル」で、何も送られません</p></li>
+      </ol>
+      <p class="callout">最初の実行では、画像を送らない確認の同意が<b>先に 1 回</b>出ます（Colab では何も確かめずに通ります）。</p>
+    </div>
+  </div>
+  <div class="footer"><span>研究用です。診断には使わないでください。データ: TCIA HCC-TACE-Seg（Moawad et al., 2021）CC BY 4.0</span><span>8 / 13</span></div>
+</section>
+
+<!-- 9. 結果と ROI マネージャ -->
+<section class="page">
+  <div>
+    <p class="eyebrow">04 / 結果を確かめる</p>
+    <h2>下見の画像とラベルを見て、ROI マネージャで確かめる</h2>
+  </div>
+  <div class="duo">
+    <div class="col">
+      <figure class="shot" data-shot="result"><img src="shots/result.png" alt="結果。使ったモデルの情報と、下見の画像"></figure>
+      <ol class="explain">
+        <li><span class="num">1</span><p>終わると、時間・GPU・モデルの説明が出ます。この例は <b>63 秒</b>（Tesla T4）</p></li>
+        <li><span class="num">2</span><p><b>下見</b>。塗られた臓器が見えます。ラベル横の数は<b>ボクセル数</b></p></li>
+        <li><span class="num">3</span><p>窓を下へ動かすと、保存するラベルのチェックと「SEG で保存」があります（p.11）</p></li>
+      </ol>
+    </div>
+    <div class="col">
+      <figure class="shot" data-shot="roi-manager"><img src="shots/roi-manager.png" alt="ROI マネージャ。結果のラベルが読み込まれている"></figure>
+      <ol class="explain">
+        <li><span class="num">1</span><p>結果は ROI マネージャにも<b>臓器名つきで</b>読み込まれます（ROI ツール ＞ ROI マネージャ）</p></li>
+        <li><span class="num">2</span><p><b>スライスを動かして、塗りが臓器に合っているかを必ず確かめてください</b></p></li>
+      </ol>
+    </div>
+  </div>
+  <div class="footer"><span>研究用です。診断には使わないでください。データ: TCIA HCC-TACE-Seg（Moawad et al., 2021）CC BY 4.0</span><span>9 / 13</span></div>
+</section>
+
+<!-- 10. SEG の意味 -->
+<section class="page">
+  <div>
+    <p class="eyebrow">05 / DICOM SEG とは</p>
+    <h2>SEG は「どの画素が、どの臓器か」の記録です</h2>
+  </div>
+  <div class="seg-map">
+    <div class="box">
+      <h3>元の CT シリーズ</h3>
+      <ul>
+        <li>画像そのもの（患者・検査・スライスの位置）</li>
+        <li><b>変更されません</b></li>
+      </ul>
+    </div>
+    <div class="arrow">＋</div>
+    <div class="box">
+      <h3>SEG（新しいシリーズ）</h3>
+      <ul>
+        <li><b>臓器ごとの塗り</b>（セグメント）。1 臓器 ＝ 1 セグメント。名前（例: spleen）と色がつきます</li>
+        <li>各スライスの<b>位置・向き</b>（患者座標・mm）を持ち、元の画像の格子に合います</li>
+        <li><b>元のシリーズへの参照</b>。患者・検査の情報は元のシリーズから引き継ぎます</li>
+        <li>画像は含みません。塗りの 0/1 だけです（BINARY 形式）</li>
+      </ul>
+    </div>
+  </div>
+  <div class="duo">
+    <ul class="explain" style="list-style:none">
+      <li style="display:block"><p><b>ラベル番号と臓器名の対応は、モデルごとに違います</b>。保存された SEG には、臓器名がセグメント名として入ります。</p></li>
+      <li style="display:block"><p><b>前景が無い（何も塗られなかった）ラベルは、保存されません</b>。保存の確認画面に、セグメント数が出ます。</p></li>
+    </ul>
+    <ul class="explain" style="list-style:none">
+      <li style="display:block"><p>SEG は DICOM の標準の形式です。元のシリーズと一緒に開けるビューアで、塗りを重ねて見られます。</p></li>
+      <li style="display:block"><p>結果は<b>研究用</b>です。SEG に保存しても、診断に使える結果になるわけではありません。</p></li>
+      <li style="display:block"><p>SEG の中の「アルゴリズムの種類」は、すべて <code>MANUAL</code> と書かれます（本体の既定）。AI が作ったことは、シリーズ説明の <code>[Plugin]</code> で見分けてください。</p></li>
+    </ul>
+  </div>
+  <div class="footer"><span>研究用です。診断には使わないでください。</span><span>10 / 13</span></div>
+</section>
+
+<!-- 11. 保存と解放 -->
+<section class="page">
+  <div>
+    <p class="eyebrow">05 / 保存と、終わるとき</p>
+    <h2>「SEG で保存」で、新しいシリーズとして入れる</h2>
+  </div>
+  <div class="duo">
+    <div class="col">
+      <figure class="shot" data-shot="save-confirm"><img src="shots/save-confirm.png" alt="プラグインによるセグメンテーション保存の確認"></figure>
+      <ol class="explain">
+        <li><span class="num">1</span><p>確認画面で、シリーズ説明（<code>[Plugin] MONAI …</code>）・<b>セグメント数</b>・保存先を確かめて「保存する」。保存先は<b>この PC の保管庫</b>です</p></li>
+      </ol>
+      <p class="note">保存すると「SEG を保存しました」と出て、一覧に新しいシリーズが増えます（再読込で更新）。元の画像は変わりません。</p>
+    </div>
+    <div class="col">
+      <figure class="shot" data-shot="release-confirm"><img src="shots/release-confirm.png" alt="窓を閉じるときの、Colab のランタイムを解放するかの確認"></figure>
+      <ol class="explain">
+        <li><span class="num">1</span><p>プラグインの窓を閉じると、Colab のランタイムを<b>解放するか</b>聞かれます。続けて使わないなら「解放する」（Colab の利用枠を使わなくなります）</p></li>
+      </ol>
+      <p class="note">解放しても、次の実行で自動で確保し直します（数秒〜数十秒）。</p>
+    </div>
+  </div>
+  <div class="footer"><span>研究用です。診断には使わないでください。データ: TCIA HCC-TACE-Seg（Moawad et al., 2021）CC BY 4.0</span><span>11 / 13</span></div>
+</section>
+
+<!-- 12. モデルの選び方 -->
+<section class="page">
+  <div>
+    <p class="eyebrow">06 / モデルの選び方</p>
+    <h2>T4 で最後まで通したのは 8 本。ほかは「未検証」</h2>
+  </div>
+  <table class="ops">
+    <tr><th>モデル</th><th>対象</th><th>ラベル</th><th class="r">GPU の最大（T4）</th></tr>
+    <tr><td>spleen_ct_segmentation</td><td>CT</td><td>脾臓</td><td class="r">0.9 GB</td></tr>
+    <tr><td>wholeBody_ct_segmentation</td><td>CT</td><td>全身 104 臓器</td><td class="r">8.4 GB</td></tr>
+    <tr><td>swin_unetr_btcv_segmentation</td><td>CT</td><td>腹部 13 臓器</td><td class="r">5.4 GB</td></tr>
+    <tr><td>multi_organ_segmentation</td><td>CT</td><td>腹部 7 臓器</td><td class="r">5.8 GB</td></tr>
+    <tr><td>pancreas_ct_dints_segmentation</td><td>CT</td><td>膵臓・膵腫瘍</td><td class="r">3.4 GB</td></tr>
+    <tr><td>renalStructures_UNEST_segmentation</td><td>造影 CT</td><td>腎臓の構造</td><td class="r">5.9 GB</td></tr>
+    <tr><td>prostate_mri_anatomy</td><td>T2 MR</td><td>前立腺</td><td class="r">4.0 GB</td></tr>
+    <tr><td>wholeBrainSeg_Large_UNEST_segmentation</td><td>T1 MR（MNI 空間）</td><td>脳 133 領域</td><td class="r">11.5 GB</td></tr>
+  </table>
+  <div class="duo">
+    <ul class="explain" style="list-style:none">
+      <li style="display:block"><p><b>「未検証」</b>は、判定を通っただけで、Colab で最後まで通したことがない、という意味です。試せますが、動く保証はありません。</p>
+      <li style="display:block"><p>一覧に無い Bundle も「その他」から名前で指定できます（Model Zoo の名前、または Hugging Face の <code>組織/名前</code>）。</p>
+    </ul>
+    <ul class="explain" style="list-style:none">
+      <li style="display:block"><p>設定値・複数チャネル（脳腫瘍など）・ラベル番号と点（vista3d など）を渡せるモデルもあります。画面に入力欄が出ます。</p>
+      <li style="display:block"><p><b>ライセンスはモデルごと</b>に違います（学習データの条件で、非商用に限られるものがあります）。結果の画面で確かめてください。</p>
+    </ul>
+  </div>
+  <div class="footer"><span>研究用です。診断には使わないでください。出典: プラグインの README（2026-10-03 時点の実機の確認）</span><span>12 / 13</span></div>
+</section>
+
+<!-- 13. 困ったとき・既知の制限 -->
+<section class="page">
+  <div>
+    <p class="eyebrow">06 / 困ったとき・既知の制限</p>
+    <h2>うまくいかないときと、いまわかっている限界</h2>
+  </div>
+  <div class="duo">
+    <div class="panel">
+      <h3>うまくいかないとき</h3>
+      <table class="ops">
+        <tr><th>出たこと</th><th>対処</th></tr>
+        <tr><td>足りないものの表が出た</td><td>表の <code>pip install</code> をターミナルで実行 → 「再確認」</td></tr>
+        <tr><td>Bundle が追加のパッケージを求めた</td><td>枠に出た名前を、同じ Python に入れて、もう一度「実行」</td></tr>
+        <tr><td>Jupyter などを後から入れたのに「local-unavailable」</td><td>GRAPHY を再起動（次の版で直す予定です）</td></tr>
+        <tr><td>Colab で GPU の空きが無い／利用枠を使い切った</td><td>時間をおく、別の種類を選ぶ</td></tr>
+        <tr><td>GPU のメモリ不足（CUDA out of memory）</td><td>軽いモデルにする。設定値で解像度を下げられるモデルもあります</td></tr>
+        <tr><td>署名つきで入れたプラグインを zip で入れ直せない</td><td>本体の次の版から、zip と同名の <code>.minisig</code> も一緒に選びます。0.5.1 では、いったん削除してから入れます</td></tr>
+      </table>
+    </div>
+    <div class="panel">
+      <h3>いまわかっている限界（実機の検証）</h3>
+      <ul class="steps">
+        <li><p><b>脾臓（10 例・独立データ）</b>: Dice の平均 0.858（最小 0.536、最大 0.949）。<b>10 例すべてで、予測の体積が基準より小さい</b>傾向<small>1 例は脾臓の一部しか拾えませんでした。原因は未確認</small></p></li>
+        <li><p><b>全身 104 臓器（wholeBody）</b>: 既定の設定では、T4 で<b>10 例すべて失敗</b>。確認できた原因は、メモリ不足の 1 例だけです<small>低解像度の設定では 7 例が完走。結果はばらつきます</small></p></li>
+        <li><p>向き・体積の検証は、<b>一部のモデルだけ</b>です。ほかのモデルは、必ず画像で確かめてください</p></li>
+      </ul>
+    </div>
+  </div>
+  <div class="footer"><span>研究用です。診断には使わないでください。出典: docs/monai-verification.md（AMOS22 の CT 10 例・Colab T4）。Windows の自前 Jupyter は未確認です。</span><span>13 / 13</span></div>
+</section>
+
+<script src="shots/marks.js"></script>
+<script src="../guide.js"></script>
+</body>
+</html>

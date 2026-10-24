@@ -1,0 +1,91 @@
+/* 操作ガイド共通（automator/src/guide/run.ts が 1920×1080 のページで PDF にする） */
+:root {
+  --bg: #0f151b;
+  --bg-2: #141c23;
+  --panel: #18222b;
+  --line: #2a3742;
+  --text: #e7edf1;
+  --sub: #b7c4ce;
+  --muted: #8fa1ae;
+  --accent: #ff6900;
+}
+
+@page { size: 1920px 1080px; margin: 0; }
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { background: var(--bg); color: var(--text); }
+body { font-family: "Noto Sans JP", "Hiragino Sans", "Yu Gothic", sans-serif; }
+
+.page {
+  width: 1920px;
+  height: 1080px;
+  padding: 96px 112px 120px;
+  position: relative;
+  overflow: hidden;
+  page-break-after: always;
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+  gap: 40px;
+}
+.page:nth-child(even) { background: var(--bg-2); }
+
+.eyebrow { font-family: "IBM Plex Mono", monospace; font-size: 26px; letter-spacing: 2px; color: var(--accent); }
+h1 { font-size: 96px; font-weight: 900; line-height: 1.15; }
+h2 { font-size: 56px; font-weight: 700; line-height: 1.2; }
+h3 { font-size: 32px; font-weight: 700; }
+p, li { font-size: 28px; line-height: 1.6; }
+.lead { font-size: 32px; color: var(--sub); }
+.note { font-size: 24px; color: var(--muted); }
+.callout { font-size: 28px; border-left: 6px solid var(--accent); padding: 4px 0 4px 28px; }
+
+.footer {
+  position: absolute;
+  left: 112px;
+  right: 112px;
+  bottom: 48px;
+  font-size: 22px;
+  color: var(--muted);
+  display: flex;
+  justify-content: space-between;
+}
+
+/* 表紙 */
+.cover { display: grid; grid-template-columns: 860px 1fr; gap: 96px; align-items: start; }
+.cover .left { display: flex; flex-direction: column; gap: 40px; }
+.chips { display: flex; gap: 16px; }
+.chip { font-family: "IBM Plex Mono", monospace; font-size: 26px; border: 2px solid var(--accent); padding: 8px 20px; border-radius: 6px; }
+.chip.on { background: var(--accent); color: var(--bg); }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 44px; }
+.steps { list-style: none; }
+.steps li { display: flex; gap: 24px; padding: 22px 0; border-bottom: 1px solid var(--line); }
+.steps li:last-child { border-bottom: none; padding-bottom: 0; }
+.steps .n { font-family: "IBM Plex Mono", monospace; color: var(--accent); }
+.steps small { display: block; color: var(--muted); font-size: 24px; }
+
+/* 画面写真＋番号付きの説明 */
+.shot-row { display: grid; grid-template-columns: 1120px 1fr; gap: 48px; align-items: start; }
+.shot { position: relative; border: 1px solid var(--line); border-radius: 6px; line-height: 0; }
+.shot img { width: 100%; display: block; border-radius: 6px; }
+.mark-box { position: absolute; border: 3px solid var(--accent); border-radius: 4px; }
+.mark-num, .num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--bg);
+  font-weight: 900;
+  font-size: 24px;
+  line-height: 1;
+}
+.mark-num { position: absolute; top: -48px; left: 50%; transform: translateX(-50%); }
+.mark-num.left { top: 50%; left: -50px; transform: translateY(-50%); }
+.explain { list-style: none; display: flex; flex-direction: column; gap: 22px; }
+.explain li { display: grid; grid-template-columns: 40px 1fr; gap: 18px; align-items: start; }
+.explain li .num { margin-top: 4px; }
+
+table.ops { border-collapse: collapse; width: 100%; font-size: 24px; }
+table.ops th, table.ops td { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--line); font-size: 24px; }
+table.ops th { color: var(--accent); font-weight: 700; }
