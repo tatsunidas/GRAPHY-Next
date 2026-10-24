@@ -145,6 +145,11 @@ public class StorageLayout {
         return resolveLocal(inst) != null;
     }
 
+    /** 手元にある実在のファイル（無ければ null）。取り寄せはしない。一覧の表示のように、見ただけで Drive から落としたくない読み取り用。 */
+    public Path localPath(DicomInstance inst) {
+        return resolveLocal(inst);
+    }
+
     /** 手元にある実在のファイル（無ければ null）。取り寄せはしない。 */
     private Path resolveLocal(DicomInstance inst) {
         String uri = inst.getUri();
