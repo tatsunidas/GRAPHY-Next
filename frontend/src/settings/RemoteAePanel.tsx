@@ -7,6 +7,7 @@ import { echoDicom, fetchRemoteAes, type RemoteAe } from "../api";
 import { fetchSettings, saveSettings } from "./settingsApi";
 import { emitRemoteAesChanged } from "../remoteAeEvents";
 import { DicomTlsSection } from "./DicomTlsSection";
+import { ReceiveAnonymizePanel } from "./ReceiveAnonymizePanel";
 import { useI18n } from "../i18n/i18n";
 
 /** Settings(H2) にリモート DICOM ノードを JSON 配列で保存するキー。backend の REMOTE_AES_KEY と一致。 */
@@ -181,6 +182,8 @@ export function RemoteAePanel() {
       </div>
 
       <DicomTlsSection />
+
+      <ReceiveAnonymizePanel />
 
       {yamlAes.length > 0 && (
         <div style={{ marginTop: 20 }}>

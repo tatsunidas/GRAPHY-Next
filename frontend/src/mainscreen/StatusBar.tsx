@@ -6,12 +6,14 @@ import { useEffect, useState } from "react";
 import { type AppStatus } from "../api";
 import { useI18n } from "../i18n/i18n";
 import { errorKey, type WatchBarView } from "../settings/importWatchView";
+import type { ReceiveAnonBar } from "../settings/receiveAnonView";
 import type { JobCounts } from "../computejobs/computeJobsView";
 
 export function StatusBar({
   status,
   error,
   importWatch,
+  receiveAnon,
   computeJobs,
   keepAwake,
   onOpenComputeJobs,
@@ -21,6 +23,8 @@ export function StatusBar({
   error: string | null;
   /** 監視フォルダの自動取り込みの状態（有効なときだけ visible）。 */
   importWatch?: WatchBarView;
+  /** 受信時の匿名化の状態（有効なときだけ visible）。 */
+  receiveAnon?: ReceiveAnonBar;
   /** 計算ジョブの数（standalone で数えるものがあるときだけ）。 */
   computeJobs?: JobCounts | null;
   /** 一括の計算のために OS の眠りを止めているか（main の返答）。 */
@@ -81,6 +85,16 @@ export function StatusBar({
                 {t("importWatch.bar.newItems", { n: importWatch.newCount })}
               </button>
             )}
+          </span>
+        )}
+        {receiveAnon?.visible && (
+          <span
+            data-testid="statusbar-receive-anon"
+            style={{ marginLeft: 12, color: receiveAnon.tone === "error" ? "#b00020" : receiveAnon.tone === "warn" ? "#8a5a00" : undefined }}
+          >
+            {receiveAnon.tone === "error"
+              ? t("recvAnon.bar.invalid")
+              : t("recvAnon.bar.on", { accepted: receiveAnon.accepted, rejected: receiveAnon.rejected })}
           </span>
         )}
         {computeJobs && (

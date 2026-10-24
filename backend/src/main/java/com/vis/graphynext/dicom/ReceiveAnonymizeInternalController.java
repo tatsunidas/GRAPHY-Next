@@ -14,6 +14,8 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.io.IOException;
+import java.util.Base64;
+import java.util.Map;
 
 /**
  * 仮名の鍵の書き出し。鍵は再識別に使えるので、通常の API には出さず、{@code /api/internal/**}
@@ -30,12 +32,12 @@ public class ReceiveAnonymizeInternalController {
         this.anonymizer = anonymizer;
     }
 
+    /** main（{@code computeBridge.call}）は JSON しか読めないので、鍵は base64 の JSON で返す。 */
     @GetMapping("/key")
-    public ResponseEntity<byte[]> key() throws IOException {
+    public ResponseEntity<Map<String, String>> key() throws IOException {
         return ResponseEntity.ok()
-                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"receive-anon.key\"")
-                .contentType(MediaType.APPLICATION_OCTET_STREAM)
+                .contentType(MediaType.APPLICATION_JSON)
                 .header(HttpHeaders.CACHE_CONTROL, "no-store")
-                .body(anonymizer.exportKey());
+                .body(Map.of("key", Base64.getEncoder().encodeToString(anonymizer.exportKey())));
     }
 }

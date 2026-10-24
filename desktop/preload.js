@@ -54,6 +54,8 @@ contextBridge.exposeInMainWorld("graphyDesktop", {
   // DIMSE TLS のパスワード（OS のキーチェーンに預ける。値は返らない）
   tlsPasswordSet: (which, value) => ipcRenderer.invoke("graphy:tls-password-set", { which, value }),
   tlsPasswordStatus: () => ipcRenderer.invoke("graphy:tls-password-status"),
+  // 受信時の匿名化の鍵の書き出し（main が保存ダイアログを出して直接書く。値は返らない）
+  receiveAnonKeyExport: () => ipcRenderer.invoke("graphy:receive-anon-key-export"),
   // プラグイン導入の同意（有効にする前に main が確認ダイアログを出す）
   pluginInstallOptIn: (enabled) => ipcRenderer.invoke("graphy:plugin-install-opt-in", { enabled: enabled === true }),
   dbFoldersList: () => ipcRenderer.invoke("graphy:db-folders-list"),
