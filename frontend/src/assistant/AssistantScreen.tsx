@@ -209,7 +209,7 @@ export function AssistantScreen() {
     setAttachments([]);
     setNote(composed.truncated ? t("assistant.attach.truncated") : null);
     abortedRef.current = false;
-    const viewer = (cmd: { kind: "action" | "getState"; id?: string; params?: unknown }) =>
+    const viewer = (cmd: { kind: "action" | "getState" | "getMeasurements"; id?: string; params?: unknown }) =>
       bridge.assistantViewerCmd!(sessionId, cmd);
     if (robot) setPlan(null);
     const result = await runToolLoop(req, canOperate ? (robot ? buildRobotTools() : [...buildTools(), ...enabledPluginTools.map(toToolDef)]) : [], {

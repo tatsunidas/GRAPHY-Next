@@ -54,6 +54,8 @@ export function useAssistantBridge(input: AssistantBridgeInput): void {
       allTiles: () => ref.current.tileIds,
       readInfo: (id) => queryViewerCommand(id, (c) => c.getTargetInfo()),
       readView: (id) => queryViewerCommand(id, (c) => c.getViewState()),
+      readRois: () =>
+        ref.current.tileIds.flatMap((id, tileIndex) => (queryViewerCommand(id, (c) => c.getRois()) ?? []).map((r) => ({ ...r, tileIndex }))),
       run: (ids, fn) => runViewerCommand(ids, fn),
       runSeries: (ids, fn) => runSeriesCommand(ids, fn),
       activeTool: () => ref.current.activeTool,
