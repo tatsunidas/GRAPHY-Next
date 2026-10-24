@@ -255,7 +255,7 @@ async function assembleCtSourceVolume(
 }
 
 /** 補正済みローカルボリューム用の metadata（`makeVolumeMetadata` と同形）。データは HU(Int16 signed)。 */
-function buildCorrectedMetadata(imageId0: string, spacing: Vec3, cols: number, rows: number): AnyObj {
+export function buildCorrectedMetadata(imageId0: string, spacing: Vec3, cols: number, rows: number): AnyObj {
   const gsm: AnyObj = metaData.get("generalSeriesModule", imageId0) ?? {};
   const plane: AnyObj = metaData.get("imagePlaneModule", imageId0) ?? {};
   return {

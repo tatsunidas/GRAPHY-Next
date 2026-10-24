@@ -717,3 +717,112 @@ describe("端の一致度（並び順・重なりの自動判定）", () => {
     expect(rev.order).toEqual([2, 1, 0]); // 並べ替えられて、逆順のままにはならない
   });
 });
+
+describe("ブレンド（中点切り）", () => {
+  // 1 本目 -100..-42、2 本目 -62..-4（2 本目だけ +100）。縁で測った重なりは -63..-41、中点は -52。
+  const ins = () => [makeInput({ w0: -100, nz: 30 }), makeInput({ w0: -62, nz: 30, add: 100 })];
+  const run = () => {
+    const x = ins();
+    const g = unionGrid(x);
+    return cells(g, stitchToGrid(x, g, { mode: "midpoint" }));
+  };
+
+  it("重なりの中点で切れ、混ぜない（中点より手前は 1 本目だけ、奥は 2 本目だけ）", () => {
+    const cs = run();
+    expect(cs.every((c) => Number.isFinite(c.value))).toBe(true);
+    for (const c of cs.filter((c) => c.w >= -62 - 1e-6 && c.w <= -42 + 1e-6)) {
+      const expected = c.w < -52 - 1e-6 ? 0 : c.w > -52 + 1e-6 ? 100 : null;
+      if (expected !== null) expect(c.value).toBeCloseTo(c.truthV + expected, 3);
+      else expect([0, 100].some((e) => Math.abs(c.value - (c.truthV + e)) < 1e-3)).toBe(true); // ちょうど中点はどちらか一方
+    }
+  });
+  it("重なりの外は従来どおり真値（1 本だけが覆う）", () => {
+    const cs = run();
+    for (const c of cs.filter((c) => c.w < -63)) expect(c.value).toBeCloseTo(c.truthV, 3);
+    for (const c of cs.filter((c) => c.w > -41)) expect(c.value).toBeCloseTo(c.truthV + 100, 3);
+  });
+  it("mean は混ぜる（中点切りが mean と同じ値を返す壊れ方を落とす）", () => {
+    const x = ins();
+    const g = unionGrid(x);
+    const mean = cells(g, stitchToGrid(x, g, BLEND_MEAN));
+    const mid = run();
+    const k = mean.findIndex((c) => Math.abs(c.w - -56) < 1e-6);
+    expect(mean[k].value - mean[k].truthV).toBeCloseTo(50, 3);
+    expect(mid[k].value - mid[k].truthV).toBeCloseTo(0, 3);
+  });
+});
+
+describe("面内の格子が違う入力（連結の再サンプル）", () => {
+  /** 面内 nx×ny・間隔 s の入力。線形な真値から切り出す（原点 (ox, oy)、先頭の法線方向位置 w0、nz 枚、スライス間隔 sz）。 */
+  function gridInput(o: { nx: number; ny: number; s: number; ox: number; oy: number; w0: number; nz: number; sz: number; add?: number }): StitchInput {
+    const f = frame(0);
+    const ipp0: [number, number, number] = [o.ox, o.oy, o.w0];
+    const data = new Float32Array(o.nx * o.ny * o.nz);
+    const v0 = makeVolume(data, [o.nx, o.ny, o.nz], f.iop, ipp0, o.s, o.s, [0, 0, o.sz]);
+    const m = v0.indexToWorld;
+    for (let k = 0; k < o.nz; k++)
+      for (let j = 0; j < o.ny; j++)
+        for (let i = 0; i < o.nx; i++) {
+          data[k * o.nx * o.ny + j * o.nx + i] =
+            truth(m[0] * i + m[1] * j + m[2] * k + m[3], m[4] * i + m[5] * j + m[6] * k + m[7], m[8] * i + m[9] * j + m[10] * k + m[11]) + (o.add ?? 0);
+        }
+    return { volume: v0, iop: f.iop, modality: "CT", patientId: "P1" };
+  }
+  // 小さい視野（8×8・1 mm）が手前、大きい視野（8×8・2 mm = 視野 4 倍の面積）が奥。法線方向は 1 mm 間隔で重なり 5 枚。
+  const small = () => gridInput({ nx: 8, ny: 8, s: 1, ox: 0, oy: 0, w0: 0, nz: 10, sz: 1 });
+  const big = () => gridInput({ nx: 8, ny: 8, s: 2, ox: 0, oy: 0, w0: 5, nz: 10, sz: 1, add: 100 });
+
+  it("共通格子は細かい側の間隔、範囲は 2 つの視野の和集合", () => {
+    const g = unionGrid([small(), big()]);
+    expect(g.spacing).toEqual([1, 1, 1]);
+    expect(g.dims).toEqual([15, 15, 15]); // 大きい視野の中心は 0..14 mm
+  });
+  it("中点切りで再サンプル: 小さい視野の中は手前=真値、奥=+100。大きい視野だけが覆う所は +100、どちらも覆わない所は NaN", () => {
+    const x = [small(), big()];
+    const g = unionGrid(x);
+    const sl = stitchToGrid(x, g, { mode: "midpoint" });
+    const [nx, ny] = g.dims;
+    const m = g.indexToWorld;
+    let nanCount = 0;
+    for (let k = 0; k < g.dims[2]; k++)
+      for (let j = 0; j < ny; j++)
+        for (let i = 0; i < nx; i++) {
+          const xw = m[0] * i + m[1] * j + m[2] * k + m[3];
+          const yw = m[4] * i + m[5] * j + m[6] * k + m[7];
+          const zw = m[8] * i + m[9] * j + m[10] * k + m[11];
+          const v = sl[k][j * nx + i];
+          const inSmall = xw <= 7 + 1e-9 && yw <= 7 + 1e-9 && zw <= 9 + 1e-9;
+          const inBig = zw >= 5 - 1e-9; // 面内は 0..14 の全域
+          if (!inSmall && !inBig) { expect(Number.isNaN(v)).toBe(true); nanCount++; continue; }
+          expect(Number.isNaN(v)).toBe(false);
+          // 重なり（zw 5..9）の縁で測った中点は 7（small の縁 9.5、big の縁 4.5 → 中点 7）。
+          const useBig = inBig && (!inSmall || zw > 7 + 1e-9);
+          const expected = truth(xw, yw, zw) + (useBig ? 100 : 0);
+          expect(v).toBeCloseTo(expected, 3);
+        }
+    expect(nanCount).toBeGreaterThan(0); // 検査の対象（覆われない点）が実在する
+  });
+  it("位相のずれた格子（粗い側の原点が 0.5 mm ずれる）でも線形な真値を再現する（三線形）", () => {
+    const x = [small(), gridInput({ nx: 8, ny: 8, s: 2, ox: 0.5, oy: 0.5, w0: 5, nz: 10, sz: 1 })];
+    const g = unionGrid(x);
+    const sl = stitchToGrid(x, g, { mode: "midpoint" });
+    // 粗い側の面内の縁から半画素以内の点は、端の値の複製（仕様）で線形にならないので、縁（x または y が 0）は除く。
+    const [nx, ny] = g.dims;
+    const m = g.indexToWorld;
+    let checked = 0;
+    let worst = 0;
+    for (let k = 0; k < g.dims[2]; k++)
+      for (let j = 1; j < ny; j++)
+        for (let i = 1; i < nx; i++) {
+          const v = sl[k][j * nx + i];
+          if (Number.isNaN(v)) continue;
+          const xw = m[0] * i + m[1] * j + m[2] * k + m[3];
+          const yw = m[4] * i + m[5] * j + m[6] * k + m[7];
+          const zw = m[8] * i + m[9] * j + m[10] * k + m[11];
+          worst = Math.max(worst, Math.abs(v - truth(xw, yw, zw)));
+          checked++;
+        }
+    expect(checked).toBeGreaterThan(0);
+    expect(worst).toBeLessThan(EPS * 10);
+  });
+});
