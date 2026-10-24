@@ -11,6 +11,7 @@
 const crypto = require("node:crypto");
 const fs = require("node:fs");
 const path = require("node:path");
+const { sanitizeResult } = require("./assistantPluginTools");
 
 /**
  * 応答待ちの上限。2D 窓の実行は同期的で数十 ms のはずなので、数秒で十分という見立ての**暫定値**。
@@ -18,7 +19,11 @@ const path = require("node:path");
  */
 const DEFAULT_TIMEOUT_MS = 5000;
 
-const KINDS = new Set(["action", "getState"]);
+/** プラグインのツールの実行は、プラグインのコード（外部由来）が動くので表示操作より長く待つ。暫定値。 */
+const PLUGIN_TOOL_TIMEOUT_MS = 30000;
+const MAX_PLUGIN_ARGS_BYTES = 2000;
+
+const KINDS = new Set(["action", "getState", "pluginTool"]);
 
 /**
  * データを変える操作（frontend/src/assistant/actions/registry.ts の `effect: "write"` と同じ集合）。
@@ -99,6 +104,7 @@ function createRelay({ resolveTarget, journal = () => {}, timeoutMs = DEFAULT_TI
    * @param {{confirm?: (id: string) => Promise<boolean>}} [opts] write 操作の承認を取る関数（main が窓を束ねて渡す）。
    */
   async function relay(sessionId, cmd, opts = {}) {
+    if (cmd && typeof cmd === "object" && cmd.kind === "pluginTool") return relayPluginTool(sessionId, cmd, opts);
     if (cmd && typeof cmd === "object" && cmd.kind === "action" && WRITE_ACTIONS.has(cmd.id)) {
       let approved = false;
       try {
@@ -115,13 +121,67 @@ function createRelay({ resolveTarget, journal = () => {}, timeoutMs = DEFAULT_TI
     return relayInner(sessionId, cmd, false);
   }
 
-  function relayInner(sessionId, cmd, approved) {
+  // 外部宛てのとき、結果を返す前の承認をセッション×プラグインで 1 回だけにするための記録（承認された組だけ）。
+  const granted = new Set();
+
+  /**
+   * プラグインのツール。**pluginId / tool はレンダラが名乗った値を使わない**: 名前を main の一覧（opts.pluginTools.lookup。
+   * 無効・未許可なら null）で引き直した組だけを 2D 窓へ送る。結果は切り詰めて `untrusted` を付け、
+   * 送信先が外部なら返す前に利用者の承認を取る。
+   * @param {{pluginTools?: {lookup: (name: string) => ({pluginId: string, tool: string}|null), external: boolean, confirmSend: (entry: object, preview: string) => Promise<boolean>}}} opts
+   */
+  async function relayPluginTool(sessionId, cmd, opts) {
+    const sid = String(sessionId || "").slice(0, 64);
+    const pt = opts.pluginTools;
+    const entry = pt && typeof cmd.name === "string" && cmd.name.length <= 100 ? pt.lookup(cmd.name) : null;
+    if (!entry) {
+      journal({ sessionId: sid, kind: "pluginTool", id: "unknown", ok: false, error: "unknown-tool" });
+      return { ok: false, error: "unknown-tool" };
+    }
+    const id = `${entry.pluginId}:${entry.tool}`;
+    const params = cmd.params === undefined || cmd.params === null ? {} : cmd.params;
+    let size = Infinity;
+    try {
+      size = Buffer.byteLength(JSON.stringify(params));
+    } catch {
+      /* 循環など */
+    }
+    if (typeof params !== "object" || Array.isArray(params) || size > MAX_PLUGIN_ARGS_BYTES) {
+      journal({ sessionId: sid, kind: "pluginTool", id, ok: false, error: "bad-command" });
+      return { ok: false, error: "bad-command" };
+    }
+    const res = await relayInner(sid, { kind: "pluginTool", pluginId: entry.pluginId, tool: entry.tool, params }, false, PLUGIN_TOOL_TIMEOUT_MS);
+    if (!res || res.ok !== true) return { ok: false, error: typeof (res && res.error) === "string" ? res.error.slice(0, 80) : "plugin-error" };
+    const r = sanitizeResult(res.data);
+    if (pt.external) {
+      const key = `${sid}|${entry.pluginId}`;
+      if (!granted.has(key)) {
+        let ok = false;
+        try {
+          ok = (await pt.confirmSend(entry, r.preview.slice(0, 200))) === true;
+        } catch {
+          ok = false;
+        }
+        if (!ok) {
+          journal({ sessionId: sid, kind: "pluginTool", id, ok: false, error: "declined" });
+          return { ok: false, error: "declined" };
+        }
+        granted.add(key);
+      }
+    }
+    return { ok: true, source: `plugin:${entry.pluginId}`, untrusted: true, data: r.data, ...(r.truncated ? { truncated: true } : {}) };
+  }
+
+  function relayInner(sessionId, cmd, approved, timeout = timeoutMs) {
     if (!cmd || typeof cmd !== "object" || !KINDS.has(cmd.kind)) return Promise.resolve({ ok: false, error: "bad-command" });
     if (cmd.kind === "action" && (typeof cmd.id !== "string" || cmd.id.length > 64)) return Promise.resolve({ ok: false, error: "bad-command" });
     const target = resolveTarget();
     const log = (res) => {
       if (cmd.kind === "action") {
         journal({ sessionId: String(sessionId || "").slice(0, 64), kind: "action", id: cmd.id, params: journalParams(cmd.params), ok: !!(res && res.ok), error: res && res.ok ? undefined : res && res.error });
+      } else if (cmd.kind === "pluginTool") {
+        // 結果の中身は残さない（ok と error だけ）
+        journal({ sessionId: String(sessionId || "").slice(0, 64), kind: "pluginTool", id: `${cmd.pluginId}:${cmd.tool}`, params: journalParams(cmd.params), ok: !!(res && res.ok), error: res && res.ok ? undefined : res && res.error });
       }
       return res;
     };
@@ -131,7 +191,7 @@ function createRelay({ resolveTarget, journal = () => {}, timeoutMs = DEFAULT_TI
       const timer = setTimeout(() => {
         pending.delete(reqId);
         resolve(log({ ok: false, error: "timeout" }));
-      }, timeoutMs);
+      }, timeout);
       pending.set(reqId, {
         target,
         done: (res) => {
@@ -140,7 +200,11 @@ function createRelay({ resolveTarget, journal = () => {}, timeoutMs = DEFAULT_TI
         },
       });
       try {
-        target.send("graphy:viewer-cmd", { reqId, kind: cmd.kind, id: cmd.id, params: cmd.params, includeLabels: cmd.includeLabels === true, approved: approved === true });
+        const payload =
+          cmd.kind === "pluginTool"
+            ? { reqId, kind: cmd.kind, pluginId: cmd.pluginId, tool: cmd.tool, params: cmd.params }
+            : { reqId, kind: cmd.kind, id: cmd.id, params: cmd.params, includeLabels: cmd.includeLabels === true, approved: approved === true };
+        target.send("graphy:viewer-cmd", payload);
       } catch {
         pending.delete(reqId);
         clearTimeout(timer);

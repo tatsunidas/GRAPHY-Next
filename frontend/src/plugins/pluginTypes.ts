@@ -216,6 +216,19 @@ export interface PluginManifest {
   permissions?: string[];
   /** メニューでの束ね先。未指定は今までどおり宣言したサーフェスに平置き。 */
   category?: PluginCategory;
+  /**
+   * AI アシスタントに渡すツール（`plugin.json` の `aiTools`。backend が検査・組み直した後の形）。
+   * `permissions` に `ai-tools` が無い、または `effect` が `read` / `display` 以外のものは backend が落とすので、ここには来ない。
+   */
+  aiTools?: PluginAiToolSpec[];
+}
+
+/** `plugin.json` の `aiTools[]` の 1 件（検査済み）。引数は number | integer | string(maxLength | enum) の閉じた形。 */
+export interface PluginAiToolSpec {
+  name: string;
+  description: string;
+  effect: "read" | "display";
+  parameters: Record<string, unknown>;
 }
 
 interface PluginHostBase {
@@ -1154,6 +1167,12 @@ export type PluginHostSeed = DistributiveOmit<
  */
 export interface PluginModule {
   activate(host: PluginHost): void | Promise<void>;
+  /**
+   * AI アシスタントから呼ばれるツールの実装（`plugin.json` の `aiTools` と同じ名前）。2D 窓が呼び出し時にだけ読み込み、
+   * `activate` は呼ばない。引数は宣言した仕様で検証済み。戻り値は JSON にできる値（4 KB を超える分は切り捨てられ、
+   * 外部の AI へ渡るときは利用者の確認が入る）。
+   */
+  aiTools?: Record<string, (args: Record<string, unknown>, host: PluginHost) => unknown | Promise<unknown>>;
 }
 
 /** H68 の 1 チャネル。`spec` は本体の Raw の読み方（`RawSpec`）と同じ。画素間隔は mm。 */

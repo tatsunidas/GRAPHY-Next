@@ -16,6 +16,8 @@ import { runToolLoop } from "./toolLoop";
 import { RobotPanel, type RobotPlan } from "./robot/RobotPanel";
 import { buildRobotTools } from "./robot/planModel";
 import { MacroPanel, type MacroApi } from "./macros/MacroPanel";
+import { PluginToolPanel } from "./PluginToolPanel";
+import { toToolDef, type PluginToolEntry, type PluginToolResult } from "./pluginTools";
 import { candidatesFromActions } from "./macros/macroModel";
 import { DOC_CHUNKS } from "./docsBundle";
 import { searchDocs } from "./docsIndex";
@@ -71,6 +73,8 @@ export function AssistantScreen() {
   const [note, setNote] = useState<string | null>(null);
   const [macroOpen, setMacroOpen] = useState(false);
   const [robot, setRobot] = useState(false);
+  const [pluginToolOpen, setPluginToolOpen] = useState(false);
+  const [pluginTools, setPluginTools] = useState<PluginToolEntry[]>([]);
   const [plan, setPlan] = useState<RobotPlan | null>(null);
   const [resolved, setResolved] = useState<AiResolveResult | null>(null);
   const sessionId = useMemo(newSessionId, []);
@@ -91,6 +95,23 @@ export function AssistantScreen() {
   useEffect(() => {
     void bridge?.aiResolve?.("text-to-text").then(setResolved);
   }, [bridge]);
+
+  // プラグインが宣言した AI ツール（main が backend から組み直した一覧）。窓を開いたとき・パネルを開いたときに取り直す。
+  const reloadPluginTools = useCallback(async () => {
+    const r = await bridge?.assistantPluginToolsList?.();
+    setPluginTools(r?.ok && r.tools ? r.tools : []);
+  }, [bridge]);
+  useEffect(() => {
+    void reloadPluginTools();
+  }, [reloadPluginTools]);
+  const togglePlugin = useCallback(
+    async (pluginId: string, on: boolean) => {
+      const r = await bridge?.assistantPluginToolsSet?.(pluginId, on);
+      if (r?.ok && r.tools) setPluginTools(r.tools);
+    },
+    [bridge],
+  );
+  const enabledPluginTools = useMemo(() => pluginTools.filter((e) => e.enabled), [pluginTools]);
 
   const flush = useCallback(() => {
     timerRef.current = null;
@@ -177,7 +198,7 @@ export function AssistantScreen() {
     // ツールを送るのは、使える口があり、提供元がツール呼び出しに対応するとき（toolMode:none は案内のみ）。
     const canOperate = !!bridge.assistantViewerCmd && !!resolved?.ok && resolved.toolMode !== "none";
     const req: AiChatMessage[] = [
-      { role: "system", text: buildSystemPrompt(locale, hits, { canOperate, robot }) },
+      { role: "system", text: buildSystemPrompt(locale, hits, { canOperate, robot, pluginTools: canOperate && !robot && enabledPluginTools.length > 0 }) },
       ...history,
       { role: "user", text: composed.text, images: allImages.length ? allImages.map((i) => ({ base64: i.base64, mimeType: i.mimeType })) : undefined },
     ];
@@ -191,11 +212,13 @@ export function AssistantScreen() {
     const viewer = (cmd: { kind: "action" | "getState"; id?: string; params?: unknown }) =>
       bridge.assistantViewerCmd!(sessionId, cmd);
     if (robot) setPlan(null);
-    const result = await runToolLoop(req, canOperate ? (robot ? buildRobotTools() : buildTools()) : [], {
+    const result = await runToolLoop(req, canOperate ? (robot ? buildRobotTools() : [...buildTools(), ...enabledPluginTools.map(toToolDef)]) : [], {
       mode: robot ? "robot" : "chat",
       onPlan: (p) => setPlan(p),
       chat: (messages, tools) => bridge.aiChat!({ sessionId, messages, tools: tools.length ? tools : undefined, stream: true }),
       viewer,
+      pluginTools: enabledPluginTools,
+      pluginTool: (cmd) => bridge.assistantViewerCmd!(sessionId, cmd) as Promise<PluginToolResult>,
       onAction: (action) => dispatch({ type: "actionAdd", action }),
       onActionUpdate: (id, patch) => dispatch({ type: "actionUpdate", id, patch }),
       onProposal: (proposal) => dispatch({ type: "proposalAdd", proposal }),
@@ -211,7 +234,7 @@ export function AssistantScreen() {
       flush();
     }
     dispatch({ type: "done", result });
-  }, [input, images, attachments, ingesting, resolved, t, state.pending, state.messages, bridge, locale, sessionId, flush, robot]);
+  }, [input, images, attachments, ingesting, resolved, t, state.pending, state.messages, bridge, locale, sessionId, flush, robot, enabledPluginTools]);
 
   const stop = useCallback(() => {
     abortedRef.current = true;
@@ -285,6 +308,18 @@ export function AssistantScreen() {
             {t("assistant.robot.button")}
           </button>
         )}
+        {bridge?.assistantPluginToolsList && (
+          <button
+            style={S.linkBtn}
+            onClick={() => {
+              setPluginToolOpen((v) => !v);
+              void reloadPluginTools();
+            }}
+            data-testid="assistant-plugintools-toggle"
+          >
+            {t("assistant.plugintools.button")}
+          </button>
+        )}
         {macroApi && (
           <button style={S.linkBtn} onClick={() => setMacroOpen((v) => !v)} data-testid="assistant-macro-toggle">
             {t("assistant.macro.button")}
@@ -309,6 +344,7 @@ export function AssistantScreen() {
 
       {robot && resolved?.ok && resolved.toolMode === "none" && <div style={S.note}>{t("assistant.robot.noTools")}</div>}
       {robot && robotApi && <RobotPanel plan={plan} api={robotApi} t={t} onDiscard={() => setPlan(null)} />}
+      {pluginToolOpen && <PluginToolPanel tools={pluginTools} onToggle={(id, on) => void togglePlugin(id, on)} busy={busy} t={t} />}
       {macroOpen && macroApi && <MacroPanel api={macroApi} candidates={macroCandidates} busy={busy} t={t} />}
       {note && <div style={S.note}>{note}</div>}
       {attachments.length > 0 && !(resolved?.ok && resolved.local) && (
@@ -497,7 +533,7 @@ function Bubble({
         {m.actions?.map((a) => (
           <div key={a.id} style={S.card} data-testid={`assistant-action-${a.name}`} data-status={a.status}>
             <span>
-              {t(`assistant.act.${a.name}`)}
+              {a.name.startsWith("plugin__") ? t("assistant.act.plugin", { name: a.name.slice(8).replace("__", " / ") }) : t(`assistant.act.${a.name}`)}
               {a.params && Object.keys(a.params).length ? ` ${Object.entries(a.params).map(([k, v]) => `${k}=${String(v)}`).join(" ")}` : ""}
             </span>
             <span style={a.status === "failed" ? S.err : S.dim} data-testid="assistant-action-status">

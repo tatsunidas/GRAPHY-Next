@@ -10,6 +10,7 @@ import { useWlPresets } from "./wlPresetStore";
 import { TOOL_IDS } from "../viewer/toolIds";
 import { changeRoiStatsDisplay, useRoiStatsDisplay } from "../viewer/roiStatsDisplay";
 import { usePluginMenu, runPluginBackend } from "../plugins/pluginRegistry";
+import { setPluginToolHostSeed } from "../plugins/pluginToolHost";
 import { groupViewerPluginItems } from "../plugins/pluginMenuGroups";
 import type { PluginHostSeed, PluginManifest, Viewer2DSurface } from "../plugins/pluginTypes";
 import {
@@ -216,6 +217,11 @@ export function Viewer2DMenuBar({
     mountSeriesPanel: (el, series, opts) => actions.mountSeriesPanel(el, series, opts),
   });
   /** 「プラグイン」メニューに出るもの。 */
+  // アシスタントからのプラグインツール呼び出しに使うホストの素（メニューのクリックと同じ組み立てを共有する）
+  useEffect(() => {
+    setPluginToolHostSeed(makeViewerHost("viewer2d.menu"));
+  });
+  useEffect(() => () => setPluginToolHostSeed(null), []);
   const pluginItems = usePluginMenu("viewer2d.menu", makeViewerHost("viewer2d.menu"));
   /** 「解析」メニューに出るもの（`fw/subtraction-design.md` §15.8）。 */
   const analysisPluginItems = usePluginMenu(

@@ -10,6 +10,17 @@ import { runSeriesCommand } from "../viewer/seriesCommands";
 import { TOOL_IDS } from "../viewer/toolIds";
 import type { DisplayTool } from "../assistant/actions/registry";
 import { executeCommand, type BridgeDeps, type WlPresetLite } from "./assistantBridge";
+import { executePluginTool, type PluginToolDeps } from "./pluginToolBridge";
+import { loadPluginAiTool, loadPluginManifests } from "../plugins/pluginRegistry";
+import { getPluginToolHostSeed } from "../plugins/pluginToolHost";
+
+const pluginToolDeps: PluginToolDeps = {
+  manifests: loadPluginManifests,
+  load: async (m, tool) => {
+    const seed = getPluginToolHostSeed();
+    return seed ? loadPluginAiTool(m, tool, seed) : null;
+  },
+};
 
 const TOOL_BY_SYMBOL: Record<DisplayTool, string> = {
   windowLevel: TOOL_IDS.windowLevel,
@@ -53,6 +64,11 @@ export function useAssistantBridge(input: AssistantBridgeInput): void {
       toolId: (s) => TOOL_BY_SYMBOL[s],
     };
     return d.onViewerCmd((cmd) => {
+      if (cmd.kind === "pluginTool") {
+        // プラグインのコードは非同期。結果は命令を送った窓（main）へだけ返る。
+        void executePluginTool(pluginToolDeps, cmd).then((r) => d.viewerCmdResult?.(cmd.reqId, r));
+        return;
+      }
       let result;
       try {
         result = executeCommand(deps, { kind: cmd.kind, id: cmd.id, params: cmd.params, includeLabels: cmd.includeLabels, approved: cmd.approved === true });
