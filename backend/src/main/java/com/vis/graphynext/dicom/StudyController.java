@@ -64,7 +64,8 @@ public class StudyController {
             @RequestParam(required = false) String studyDateTo,
             @RequestParam(required = false) String modality,
             @RequestParam(required = false) String accessionNumber,
-            @RequestParam(required = false) String studyInstanceUid) {
+            @RequestParam(required = false) String studyInstanceUid,
+            @RequestParam(required = false, defaultValue = "false") boolean missingPatientInfo) {
         WebDicomDataService web = webProvider.getIfAvailable();
         // StudyInstanceUID 直接指定（検索条件は無視して当該 study を返す）。IHE IID 起動と、取り込み直後の一覧。
         // カンマ区切りで複数（QIDO-RS の UID リスト照合と同じ書き方）。
@@ -79,8 +80,9 @@ public class StudyController {
                     .filter(s -> uids.contains(s.studyInstanceUid())).toList();
         }
         StudySearch search = new StudySearch(patientId, patientName, studyDateFrom, studyDateTo, modality,
-                accessionNumber).normalized();
+                accessionNumber, missingPatientInfo).normalized();
         if (web != null) {
+            // QIDO-RS に「空のもの」を問う書き方が無いので、Web モードでは効かない（画面側で無効にする）。
             return web.searchStudies(toQido(search)).stream().map(StudyController::studyOf).toList();
         }
         return storage.listStudies(search);

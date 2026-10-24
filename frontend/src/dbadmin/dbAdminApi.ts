@@ -32,8 +32,24 @@ export interface Stats {
   volumeBytesByModality: StatBucket[];
 }
 
-export const fetchPatients = (q?: string) =>
-  httpGet<Patient[]>(`/api/patients${q ? `?q=${encodeURIComponent(q)}` : ""}`);
+/** onlyMissing: 患者 ID か氏名が空の患者だけ（部分一致では空に当たらないので別の条件で探す）。 */
+export function patientsQuery(q?: string, onlyMissing?: boolean): string {
+  const params = new URLSearchParams();
+  if (q) params.set("q", q);
+  if (onlyMissing) params.set("onlyMissing", "true");
+  const qs = params.toString();
+  return `/api/patients${qs ? `?${qs}` : ""}`;
+}
+
+export const fetchPatients = (q?: string, onlyMissing?: boolean) => httpGet<Patient[]>(patientsQuery(q, onlyMissing));
+
+/**
+ * 患者単位の編集・削除の宛先。患者 ID が空の患者は、パス（`/api/patients/{id}`）だと宛先が成り立たない
+ * （`/api/patients/`）ので、クエリ（`?patientId=`）で指す。
+ */
+export function patientTarget(patientId: string): string {
+  return patientId === "" ? "/api/patients?patientId=" : `/api/patients/${encodeURIComponent(patientId)}`;
+}
 
 export const fetchStats = () => httpGet<Stats>("/api/stats");
 
@@ -53,7 +69,7 @@ export interface PatientEditResult {
 }
 
 export const savePatient = (patientId: string, edit: PatientEdit) =>
-  httpSend<PatientEditResult>(`/api/patients/${encodeURIComponent(patientId)}`, "PUT", edit);
+  httpSend<PatientEditResult>(patientTarget(patientId), "PUT", edit);
 
 /** 運べずに残した記録・重なった ROI があるときの知らせの文言（無ければ null）。 */
 export function recordsNotice(r: PatientEditResult | undefined, t: (k: string, v?: Record<string, string | number>) => string): string | null {
@@ -63,7 +79,7 @@ export function recordsNotice(r: PatientEditResult | undefined, t: (k: string, v
 }
 
 export const deletePatient = (patientId: string) =>
-  httpSend(`/api/patients/${encodeURIComponent(patientId)}`, "DELETE");
+  httpSend(patientTarget(patientId), "DELETE");
 
 export const deleteStudy = (studyUid: string) =>
   httpSend(`/api/studies/${encodeURIComponent(studyUid)}`, "DELETE");

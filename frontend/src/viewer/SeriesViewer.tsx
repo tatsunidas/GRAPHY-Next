@@ -10,6 +10,7 @@ import { applyTransform, readTransform, FIT_TRANSFORM } from "./transform";
 import { ToolIcon } from "../icons/ToolIcon";
 import { UI_ICON_FILES } from "../icons/toolIcons";
 import { buildSeriesLayout, buildLayoutFromDto, DEFAULT_AXES, type AxisSpec, type SeriesLayout } from "./seriesLayout";
+import { nearestReal, nextRealLoop, realZs, stepReal } from "./realSlices";
 import { concatHasGap, describeKept, restrictLayout, type ConcatOpened, type ZRange } from "./virtualLayout";
 import CineControls from "./CineControls";
 import { VideoViewer } from "./VideoViewer";
@@ -421,6 +422,12 @@ export function SeriesViewer({
   // 送り(スライダー/キー/ホイール/シネ/同期)の母数。ThickSlab ON はデジタル枚数、OFF はネイティブ枚数。
   const activeCount = effectiveThick ? digitalCount : nZ;
 
+  // T/C に欠けた位置（刻みの違う相など）があるシリーズは、送り・再生・スライダーを実画像のある Z だけで巡る
+  // （ブランクを挟むとちらつく）。ThickSlab・frame-stack は従来どおり全 Z。null = 従来どおり。
+  const realList = useMemo(
+    () => (isFrameStack || effectiveThick ? null : realZs(layout, cc, tc)),
+    [layout, cc, tc, isFrameStack, effectiveThick],
+  );
   const zc = Math.min(Math.max(0, z), activeCount - 1);
   // 現在位置に対応するネイティブ Z（currentImageId・ippAt・onDimChange・参照線に使う）。
   const nativeZ = effectiveThick ? digitalToNativeZ(zc, slicesPerStep, nZ) : zc;
@@ -1102,9 +1109,12 @@ export function SeriesViewer({
   const cineInterval = Math.max(16, Math.round(1000 / fps));
   useEffect(() => {
     if (!playZ || activeCount <= 1 || navLocked) return;
-    const id = window.setInterval(() => setZ((p) => (p + 1) % activeCount), cineInterval);
+    const id = window.setInterval(
+      () => setZ((p) => (realList ? nextRealLoop(realList, p) : (p + 1) % activeCount)),
+      cineInterval,
+    );
     return () => window.clearInterval(id);
-  }, [playZ, cineInterval, activeCount, navLocked]);
+  }, [playZ, cineInterval, activeCount, navLocked, realList]);
   useEffect(() => {
     if (!playC || layout.nC <= 1) return;
     const id = window.setInterval(() => setC((p) => (p + 1) % layout.nC), cineInterval);
@@ -1128,11 +1138,11 @@ export function SeriesViewer({
     //    ホイール・キー・3 本指ドラッグの入口をここ 1 本に絞ってある。
     const step = (d: number) => {
       if (isSliceNavigationLocked()) return;
-      setZ((p) => Math.max(0, Math.min(activeCount - 1, p + d)));
+      setZ((p) => (realList ? stepReal(realList, p, d) : Math.max(0, Math.min(activeCount - 1, p + d))));
     };
     const jumpTo = (z: number) => {
       if (isSliceNavigationLocked()) return;
-      setZ(z);
+      setZ(realList ? (z <= 0 ? realList[0] : realList[realList.length - 1]) : z);
     };
     // 既定ショートカット（registry）に従う。ArrowUp=前, ArrowDown=次, Home/End=先頭/末尾,
     // Space=シネ, O=テキストオーバーレイ切替。
@@ -1225,7 +1235,13 @@ export function SeriesViewer({
       el.removeEventListener("touchend", onTouchEnd);
       el.removeEventListener("touchcancel", onTouchEnd);
     };
-  }, [activeCount, gridOn]);
+  }, [activeCount, gridOn, realList]);
+
+  // T/C を切り替えて、今の Z がその (c, t) では欠けている（ブランク位置）ときは、物理位置が最も近い実画像へ寄せる。
+  useEffect(() => {
+    if (!realList) return;
+    setZ((p) => (realList.includes(p) ? p : nearestReal(realList, p, layout.ippAt, layout.normal)));
+  }, [realList, layout]);
 
   // ── シリーズ Sync ─────────────────────────────────────────
   //
@@ -1568,9 +1584,9 @@ export function SeriesViewer({
                 <DimSlider
                   label={axisLabel(t, stackAxisSpec)}
                   dim={stackAxisSpec.dim}
-                  idx={zc}
-                  count={activeCount}
-                  onChange={navLocked ? () => {} : setZ}
+                  idx={realList ? Math.max(0, realList.indexOf(zc)) : zc}
+                  count={realList ? realList.length : activeCount}
+                  onChange={navLocked ? () => {} : realList ? (i) => setZ(realList[i] ?? 0) : setZ}
                   trailing={cinePlayBtn(
                     playZ,
                     () => setPlayZ((p) => !p),

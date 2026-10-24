@@ -59,9 +59,9 @@ class ImportedStudiesListingTest {
         ImportService.ImportResult r = importService.importPaths(List.of(root.toString()));
         assertEquals(2, r.studyInstanceUids().size());
 
-        List<String> listed = studies.studies(null, null, null, null, null, null, String.join(",", r.studyInstanceUids()))
+        List<String> listed = studies.studies(null, null, null, null, null, null, String.join(",", r.studyInstanceUids()), false)
                 .stream().map(StudyDto::studyInstanceUid).sorted().toList();
         assertEquals(List.of("1.2.m.studyA", "1.2.m.studyB"), listed, "取り込んだ検査だけ（別の検査 C は出ない）");
-        assertEquals(3, studies.studies(null, null, null, null, null, null, null).size(), "条件なしなら 3 件ともある");
+        assertEquals(3, studies.studies(null, null, null, null, null, null, null, false).size(), "条件なしなら 3 件ともある");
     }
 }

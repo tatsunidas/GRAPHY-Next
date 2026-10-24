@@ -203,10 +203,15 @@ public class PluginManagerService {
                 f.minisig(), f.publishedKey());
     }
 
-    /** ローカル zip の検査（オフライン導入の同意画面用）。 */
-    public PluginPreview inspectFile(byte[] zip, String filename) {
+    /**
+     * ローカル zip の検査（オフライン導入の同意画面用）。
+     *
+     * @param minisig   zip と一緒に渡された {@code .minisig} の中身（無ければ null）
+     * @param publicKey 同 {@code .pub}（無ければ null。公式鍵や導入済みの鍵で足りるなら要らない）
+     */
+    public PluginPreview inspectFile(byte[] zip, String filename, String minisig, String publicKey) {
         requireMutable();
-        return preview(zip, new InstalledPlugin.Source("file", filename), null, null, null);
+        return preview(zip, new InstalledPlugin.Source("file", filename), null, minisig, publicKey);
     }
 
     /**
@@ -240,11 +245,11 @@ public class PluginManagerService {
         requireConfirmed(f.bytes(), confirmedSha256);
         return installer.install(f.bytes(), source, f.expectedSha(), trustTier(source, sig),
                 sig.ok() ? sig.keyId() : null,
-                sig.ok() ? signerKeyToStore(f, sig) : null);
+                sig.ok() ? signerKeyToStore(f.publishedKey(), sig) : null);
     }
 
     /** TOFU 用に固定する公開鍵。以前固定した鍵があればそれを維持し、初回のみリリースの鍵を採る。 */
-    private String signerKeyToStore(Fetched f, SignatureState sig) {
+    private String signerKeyToStore(String publishedKey, SignatureState sig) {
         Optional<InstalledPlugin> known = installer.installed().stream()
                 .filter(p -> p.signerPublicKey() != null && p.signerKeyId() != null
                         && p.signerKeyId().equalsIgnoreCase(sig.keyId()))
@@ -259,9 +264,9 @@ public class PluginManagerService {
                             return false;
                         }
                     })
-                    .findFirst().orElse(f.publishedKey());
+                    .findFirst().orElse(publishedKey);
         }
-        return f.publishedKey();
+        return publishedKey;
     }
 
     /** zip から id だけを読む（署名判定の TOFU 照合に使う）。 */
@@ -270,11 +275,23 @@ public class PluginManagerService {
         return PluginPackage.readDescriptor(zip, base, mapper).id();
     }
 
-    /** ローカル zip（オフライン/エアギャップ導入）。 */
-    public InstalledPlugin installFromFile(byte[] zip, String filename, String confirmedSha256) throws IOException {
+    /**
+     * ローカル zip（オフライン/エアギャップ導入）。{@code .minisig} を添えれば GitHub 経由と同じ署名の判定を通る
+     * （公式鍵なら {@code verified}、導入済みの同 id の鍵と一致すれば更新として入る）。
+     * 添えない場合の判定は従来どおり（以前署名つきで入れた id は、剥がし対策で拒否される）。
+     */
+    public InstalledPlugin installFromFile(byte[] zip, String filename, String confirmedSha256,
+                                           String minisig, String publicKey) throws IOException {
         requireMutable();
+        InstalledPlugin.Source source = new InstalledPlugin.Source("file", filename);
+        SignatureState sig = evaluateSignature(zip, minisig, publicKey, idOf(zip));
+        if (sig.state().equals("invalid")) {
+            throw new PluginInstallException("signature check failed: " + sig.problem());
+        }
         requireConfirmed(zip, confirmedSha256);
-        return installer.install(zip, new InstalledPlugin.Source("file", filename), null, "local");
+        return installer.install(zip, source, null, trustTier(source, sig),
+                sig.ok() ? sig.keyId() : null,
+                sig.ok() ? signerKeyToStore(publicKey, sig) : null);
     }
 
     // --- 同梱の公式プラグイン（fw/plugin-manager-design.md §10） ----------------
@@ -400,7 +417,7 @@ public class PluginManagerService {
             if (pinnedKey != null) {
                 return SignatureState.invalid(null,
                         "the installed version was signed (key " + Minisign.parseKey(pinnedKey).keyId()
-                        + ") but this package has no signature");
+                        + ") but this package has no signature (select the .minisig together with the zip, or uninstall the plugin first)");
             }
             return SignatureState.unsigned();
         }

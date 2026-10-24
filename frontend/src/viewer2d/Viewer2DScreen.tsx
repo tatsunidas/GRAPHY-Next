@@ -39,6 +39,7 @@ import {
   useIsDisplayOnlyTile,
   queryViewerCommand,
   queryViewerTargetInfo,
+  registerToolRequestHandler,
 } from "../viewer/viewerCommands";
 import {
   addPolygonPoint,
@@ -2047,6 +2048,8 @@ function TileGrid({
   //    並び、貼り付けが全タイルで起きる。宛先は `resolveRoiEditTarget()` が 1 つに決める。
   const actionsRef = useRef(actions);
   actionsRef.current = actions;
+  // タイル下の操作バーからのツール切替の依頼（ROI・描画ツール有効中のパンなど）を、画面のツールバーと同じ setTool へ通す。
+  useEffect(() => registerToolRequestHandler((name) => actionsRef.current.setTool(name)), []);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       // 文字入力欄（ラベル編集など）と、器（解析ダイアログ）の中は触らない。

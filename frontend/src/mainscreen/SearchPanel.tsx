@@ -29,8 +29,11 @@ const fromInputDate = (v: string) => v.replace(/-/g, "");
 export function SearchPanel({
   onSearch,
   isDemo = false,
+  missingSupported = true,
 }: {
   onSearch: (f: StudyFilters) => void;
+  /** 「患者ID・氏名が未設定のみ」を出すか。DICOMweb（Web モード）には空を問う手段が無いので false。 */
+  missingSupported?: boolean;
   /** 公開デモ。初期検索条件を「今日のみ」ではなく全期間（1900/01/01〜今日）にする。 */
   isDemo?: boolean;
 }) {
@@ -45,6 +48,7 @@ export function SearchPanel({
   const [dateTo, setDateTo] = useState(todayStr);
   const [modalities, setModalities] = useState<string[]>([]);
   const [accession, setAccession] = useState("");
+  const [onlyMissing, setOnlyMissing] = useState(false);
   const [showModalityGrid, setShowModalityGrid] = useState(false);
 
   const filters: StudyFilters = useMemo(() => {
@@ -55,8 +59,9 @@ export function SearchPanel({
     if (dateTo) f.studyDateTo = dateTo;
     if (modalities.length) f.modality = modalities.join(",");
     if (accession.trim()) f.accessionNumber = accession.trim();
+    if (onlyMissing) f.missingPatientInfo = true;
     return f;
-  }, [patientId, patientName, dateFrom, dateTo, modalities, accession]);
+  }, [patientId, patientName, dateFrom, dateTo, modalities, accession, onlyMissing]);
 
   const isEmpty = Object.keys(filters).length === 0;
   const filterKey = JSON.stringify(filters);
@@ -117,6 +122,7 @@ export function SearchPanel({
     setDateTo("");
     setModalities([]);
     setAccession("");
+    setOnlyMissing(false);
   };
 
   return (
@@ -142,6 +148,23 @@ export function SearchPanel({
           style={input}
         />
       </Field>
+
+      {missingSupported && <label style={{ display: "flex", alignItems: "center", gap: 6, margin: "0 0 10px", fontSize: 12 }}>
+        <input
+          data-testid="search-only-missing"
+          type="checkbox"
+          checked={onlyMissing}
+          onChange={(e) => {
+            setOnlyMissing(e.target.checked);
+            // 匿名化で検査日もずれる／空になることがあるので、見つけるときは期間を外す（日付欄も空になる）。
+            if (e.target.checked) {
+              setDateFrom("");
+              setDateTo("");
+            }
+          }}
+        />
+        {t("dbadmin.search.onlyMissing")}
+      </label>}
 
       <Field label={t("main.search.studyDate")}>
         {/* ネイティブ日付入力は最小内容幅が広く、狭い検索パネル(250px)で横並びだと右側が

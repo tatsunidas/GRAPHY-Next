@@ -462,7 +462,7 @@ export function MainScreen({
       <div style={middle}>
         {/* status（isDemo）は非同期取得のため、確定後に isDemo が変わったら SearchPanel を
             再マウントして初期日付(1900/01/01〜当日)を再計算させる。 */}
-        <SearchPanel key={String(isDemo)} onSearch={onSearch} isDemo={isDemo} />
+        <SearchPanel key={String(isDemo)} onSearch={onSearch} isDemo={isDemo} missingSupported={status?.mode !== "web"} />
         <div style={centerColumn}>
         <div style={listArea(listLayout)}>
         <div style={treeArea}>

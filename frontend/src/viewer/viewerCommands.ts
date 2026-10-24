@@ -760,6 +760,31 @@ export function registerViewerCommands(key: string, cmds: ViewerCommands): () =>
 }
 
 /**
+ * タイル → 画面へ「ツールを切り替えたい」と伝える窓口。
+ *
+ * <p>画面のツールバー・メニューのツールは**全タイル共通のモード**（画面の `activeTool`）で、
+ * タイル下の操作バーのパンは**そのタイルだけの Pan↔W/L の切替**。ROI・描画ツールが有効なときに
+ * 下のパンを押すと、タイルだけで切り替えると画面のツールバーの強調とずれる。画面（1 つ）が
+ * ここへ登録し、タイルは {@link requestTool} で**画面のツールバーと同じ経路**へ頼む。
+ * 画面が無い文脈（ポータブル版など）では登録が無く、{@link requestTool} は false を返す。
+ */
+let toolRequestHandler: ((toolName: string) => void) | null = null;
+
+export function registerToolRequestHandler(handler: (toolName: string) => void): () => void {
+  toolRequestHandler = handler;
+  return () => {
+    if (toolRequestHandler === handler) toolRequestHandler = null;
+  };
+}
+
+/** 画面へツールの切替を頼む。頼めた（画面が登録している）ときだけ true。 */
+export function requestTool(toolName: string): boolean {
+  if (!toolRequestHandler) return false;
+  toolRequestHandler(toolName);
+  return true;
+}
+
+/**
  * 表示の操作だけを受け付けるタイル（動画タイル・`VideoViewer`）の命令。
  *
  * <p>動画タイルは {@link ViewerCommands} を登録しない（プラグイン向けの問い合わせ H1〜H40 に
