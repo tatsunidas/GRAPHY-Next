@@ -10,8 +10,6 @@ import com.vis.graphynext.dicom.store.StorageLayout;
 import com.vis.graphynext.dicom.web.WebDicomDataService;
 import org.dcm4che3.data.Attributes;
 import org.dcm4che3.data.Tag;
-import org.dcm4che3.io.DicomInputStream;
-import org.dcm4che3.io.DicomInputStream.IncludeBulkData;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
@@ -278,9 +276,8 @@ public class TagExtractService {
         if (path == null) {
             return null;
         }
-        try (DicomInputStream in = new DicomInputStream(path.toFile())) {
-            in.setIncludeBulkData(IncludeBulkData.NO);
-            return in.readDatasetUntilPixelData();
+        try {
+            return HeaderReader.read(path);
         } catch (IOException e) {
             log.warn("tag-extract: header 読取失敗 {}", inst.getSopInstanceUid(), e);
             return null;
