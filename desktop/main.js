@@ -1362,6 +1362,23 @@ ipcMain.handle("graphy:assistant-viewer-cmd", (e, sessionId, cmd) => {
         return r.response === 0;
       },
     },
+    // ROI の計測値: 外部宛てのときは、返す前に承認を取る（セッションに 1 回）。宛先がローカルと判定できたときだけ省く。
+    measurements: {
+      external: !(dest && dest.ok && dest.local === true),
+      confirmSend: async (preview) => {
+        if (!win || win.isDestroyed()) return false;
+        const r = await dialog.showMessageBox(win, {
+          type: "warning",
+          buttons: ["送る", "取り消す"],
+          defaultId: 1,
+          cancelId: 1,
+          title: "アシスタントの操作の確認",
+          message: `2D ビューアの ROI の計測値を、外部の AI（${dest && dest.label ? dest.label : "不明"}）へ送ります。`,
+          detail: `結果の先頭: ${preview}\n\n患者情報が含まれていないか確認してください。送りますか？`,
+        });
+        return r.response === 0;
+      },
+    },
     // 🔴 データを変える操作は、実行のたびにここ（main の描くダイアログ）で承認を取る。文面は main が持つ（レンダラの値は使わない）。
     confirm: async (id) => {
       const text = WRITE_CONFIRM_TEXT[id];

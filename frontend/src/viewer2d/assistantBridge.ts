@@ -11,11 +11,13 @@ import {
   DISPLAY_TOOLS,
   GET_STATE_TOOL,
   isWriteAction,
+  projectRois,
   projectState,
   validateAction,
   type ActionResult,
   type DisplayTool,
   type InverseStep,
+  type RawRoi,
   type RawViewerState,
 } from "../assistant/actions/registry";
 
@@ -32,6 +34,8 @@ export interface BridgeDeps {
   allTiles(): string[];
   readInfo(id: string): ViewerTargetInfo | null;
   readView(id: string): ViewerViewState | null;
+  /** 全タイルの ROI（識別子・座標を含み得る生の値）。必ず projectRois を通してから外へ出す。 */
+  readRois(): RawRoi[];
   run(ids: string[], fn: (c: ViewerCommands) => void): void;
   runSeries(ids: string[], fn: (c: SeriesCommands) => void): void;
   activeTool(): string;
@@ -44,7 +48,7 @@ export interface BridgeDeps {
 }
 
 export interface BridgeCommand {
-  kind: "action" | "getState";
+  kind: "action" | "getState" | "getMeasurements";
   id?: string;
   params?: unknown;
   /** ローカル宛のときだけ true（seriesLabel を含める）。 */
@@ -85,6 +89,9 @@ function symbolOfTool(deps: BridgeDeps, toolId: string): DisplayTool | undefined
 export function executeCommand(deps: BridgeDeps, cmd: BridgeCommand): ActionResult {
   if (cmd.kind === "getState") {
     return { ok: true, state: projectState(collectRawState(deps), { includeLabels: cmd.includeLabels === true }) };
+  }
+  if (cmd.kind === "getMeasurements") {
+    return { ok: true, measurements: projectRois(deps.readRois(), { includeLabels: cmd.includeLabels === true }) };
   }
   if (cmd.id === GET_STATE_TOOL) return { ok: false, error: "unknown-action" };
   const v = validateAction(cmd.id, cmd.params);

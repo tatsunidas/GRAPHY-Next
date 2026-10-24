@@ -92,4 +92,24 @@ describe("runToolLoop", () => {
     expect(r).toMatchObject({ ok: false, error: "canceled" });
     expect(s.viewerCalls.length).toBe(1);
   });
+  it("getMeasurements: reads through the viewer and marks the result untrusted", async () => {
+    const s = setup([calls({ id: "m1", name: "getMeasurements", args: {} }), text("ok")], () => ({ ok: true, measurements: { rois: [{ roi: "roi1", mean: 5 }] } }));
+    await runToolLoop([{ role: "user", text: "x" }], buildTools(), s.deps);
+    expect(s.viewerCalls).toEqual([{ kind: "getMeasurements" }]);
+    const tool = (s.sent[1] as { role: string; text?: string }[])[2];
+    expect(JSON.parse(tool.text!)).toEqual({ ok: true, rois: [{ roi: "roi1", mean: 5 }], untrusted: true });
+  });
+  it("getMeasurements: a truncated (string) result is not spread as a structure", async () => {
+    const s = setup([calls({ id: "m1", name: "getMeasurements", args: {} }), text("ok")], () => ({ ok: true, measurements: '{"rois":[{"roi":"ro' }));
+    await runToolLoop([{ role: "user", text: "x" }], buildTools(), s.deps);
+    const tool = (s.sent[1] as { role: string; text?: string }[])[2];
+    expect(JSON.parse(tool.text!)).toEqual({ ok: true, measurements: '{"rois":[{"roi":"ro', truncated: true, untrusted: true });
+  });
+  it("getMeasurements: refused in robot mode (negative)", async () => {
+    const s = setup([calls({ id: "m1", name: "getMeasurements", args: {} }), text("ok")]);
+    await runToolLoop([{ role: "user", text: "x" }], buildTools(), { ...s.deps, mode: "robot" });
+    expect(s.viewerCalls).toEqual([]);
+    const tool = (s.sent[1] as { role: string; text?: string }[])[2];
+    expect(JSON.parse(tool.text!)).toEqual({ ok: false, error: "not-allowed-in-robot-mode" });
+  });
 });

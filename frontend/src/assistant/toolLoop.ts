@@ -6,6 +6,7 @@
 // 「ツール結果を返して次を呼ぶ」往復はここ（呼び出し側）が持つ（設計書 §15）。
 import type { AiChatMessage, AiChatResult, AiToolCall } from "../desktopBridge";
 import {
+  GET_MEASUREMENTS_TOOL,
   GET_STATE_TOOL,
   PROPOSE_TOOL,
   isActionId,
@@ -28,7 +29,7 @@ export const MAX_ROUNDS = 6;
 
 export interface LoopDeps {
   chat(messages: AiChatMessage[], tools: ToolDef[]): Promise<AiChatResult>;
-  viewer(cmd: { kind: "action" | "getState"; id?: string; params?: unknown }): Promise<ActionResult>;
+  viewer(cmd: { kind: "action" | "getState" | "getMeasurements"; id?: string; params?: unknown }): Promise<ActionResult>;
   /** プラグインのツール。名前は main の一覧で引き直される（ここで渡す pluginId は無い）。無ければ plugin__ は実行しない。 */
   pluginTool?(cmd: { kind: "pluginTool"; name: string; params: unknown }): Promise<PluginToolResult>;
   /** 今回モデルへ渡したプラグインのツール（有効なものだけ）。引数仕様の検証と、カードの表示名に使う。 */
@@ -47,7 +48,16 @@ export interface LoopDeps {
 
 /** モデルへ返すツール結果（逆操作は画面用なので含めない）。 */
 function toToolText(r: ActionResult): string {
-  return JSON.stringify(r.ok ? { ok: true, ...(r.state ? { state: r.state } : {}) } : { ok: false, error: r.error });
+  return JSON.stringify(
+    r.ok ? { ok: true, ...(r.state ? { state: r.state } : {}), ...(r.measurements ? measurementsPart(r) : {}) } : { ok: false, error: r.error },
+  );
+}
+
+/** 計測値の結果。main が上限で切った場合は文字列で届く（途中で切れた JSON を構造として扱わない）。`untrusted` は常に付ける。 */
+function measurementsPart(r: Extract<ActionResult, { ok: true }>): Record<string, unknown> {
+  const m: unknown = r.measurements;
+  if (typeof m === "string") return { measurements: m, truncated: true, untrusted: true };
+  return { ...(m as Record<string, unknown>), untrusted: true, ...((r as { truncated?: boolean }).truncated ? { truncated: true } : {}) };
 }
 
 async function runOne(call: AiToolCall, deps: LoopDeps): Promise<string> {
@@ -63,6 +73,11 @@ async function runOne(call: AiToolCall, deps: LoopDeps): Promise<string> {
   if (call.argsError) return JSON.stringify({ ok: false, error: `bad-arguments: ${call.argsError}` });
   if (call.name === GET_STATE_TOOL) {
     const r = await deps.viewer({ kind: "getState" });
+    deps.onAction({ id: call.id, name: call.name, status: r.ok ? "done" : "failed", error: r.ok ? undefined : r.error });
+    return toToolText(r);
+  }
+  if (call.name === GET_MEASUREMENTS_TOOL) {
+    const r = await deps.viewer({ kind: "getMeasurements" });
     deps.onAction({ id: call.id, name: call.name, status: r.ok ? "done" : "failed", error: r.ok ? undefined : r.error });
     return toToolText(r);
   }

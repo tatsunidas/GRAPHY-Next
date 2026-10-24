@@ -164,6 +164,7 @@ export const ja: Record<string, string> = {
   "assistant.notConfigured": "AI の会話用モデルが設定されていません。\nメインウィンドウの「環境設定 › AI」で、Text to text（チャット）のモデルを選んでください。\n（鍵が要らないローカルの提供元も使えます）",
   "assistant.noDesktop": "AI アシスタントはデスクトップ版でのみ使えます。",
   "assistant.act.getState": "ビューアの状態を確認",
+  "assistant.act.getMeasurements": "ROI の計測値を読み取り",
   "assistant.act.setWindowLevel": "ウィンドウ幅/レベルを設定",
   "assistant.act.clearMeasurements": "計測線をすべて消す",
   "assistant.robot.writeMark": "⚠ 元に戻せません・実行時に確認ダイアログが出ます",
