@@ -11,6 +11,8 @@ import {
   fetchManagerStatus,
   installPluginFromFile,
   inspectPluginFromFile,
+  pickLocalPackage,
+  type LocalPackage,
   inspectPluginFromGitHub,
   installPluginFromGitHub,
   reinstallPlugin,
@@ -49,7 +51,7 @@ export function PluginManagerPanel() {
   const [repo, setRepo] = useState("");
   const [version, setVersion] = useState("");
   /** 検査済みで、ユーザーの同意待ちになっている配布物（同意画面の入力）。 */
-  const [pending, setPending] = useState<{ preview: PluginPreview; file?: File; repo?: string; version?: string } | null>(null);
+  const [pending, setPending] = useState<{ preview: PluginPreview; file?: LocalPackage; repo?: string; version?: string } | null>(null);
   const [tab, setTab] = useState<"installed" | "catalog" | "manual">("installed");
   /** 一覧（見つける）の導入済み状態を取り直す合図。導入・削除などで一覧が変わるたびに進める。 */
   const [catalogKey, setCatalogKey] = useState(0);
@@ -127,7 +129,7 @@ export function PluginManagerPanel() {
   const inspect = async (
     key: string,
     action: () => Promise<PluginPreview>,
-    file?: File,
+    file?: LocalPackage,
     from?: { repo: string; version?: string; entry?: CatalogItem },
   ) => {
     setBusy(key);
@@ -165,7 +167,7 @@ export function PluginManagerPanel() {
 
   const installConfirmed = async (
     preview: PluginPreview,
-    file: File | undefined,
+    file: LocalPackage | undefined,
     acknowledgeUnverified: boolean,
     repoArg?: string,
     versionArg?: string,
@@ -200,9 +202,13 @@ export function PluginManagerPanel() {
       .finally(() => setInspectingId(null));
   };
 
-  const installFile = (file: File | undefined) => {
-    if (!file) return;
-    void inspect("file", () => inspectPluginFromFile(file), file);
+  const installFile = async (files: File[]) => {
+    const local = await pickLocalPackage(files);
+    if (!local) {
+      setMsg({ text: t("pluginmgr.installFileNoZip"), ok: false });
+      return;
+    }
+    void inspect("file", () => inspectPluginFromFile(local), local);
   };
 
   /** 同意画面で「導入する」を押したときだけ、実際に展開・保存する。失敗時は画面を閉じない。 */
@@ -328,11 +334,12 @@ export function PluginManagerPanel() {
               {busy === "file" ? t("pluginmgr.inspecting") : t("pluginmgr.installFile")}
               <input
                 type="file"
-                accept=".zip"
+                accept=".zip,.minisig,.pub"
+                multiple
                 style={{ display: "none" }}
                 disabled={busy !== null}
                 onChange={(e) => {
-                  installFile(e.target.files?.[0]);
+                  void installFile(Array.from(e.target.files ?? []));
                   e.target.value = ""; // 同じファイルを選び直せるようにリセット
                 }}
               />
