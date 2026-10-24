@@ -1648,6 +1648,7 @@ export const en: Record<string, string> = {
   "viewer2d.leftPanel.picked": "Checked ({{count}})",
   "viewer2d.leftPanel.concat": "Concat",
   "viewer2d.leftPanel.unpick": "Uncheck",
+  "viewer2d.leftPanel.closeSeries": "Close (shown)",
   "openConcat.menu": "Open concatenated… ({{count}})",
   "openConcat.clear": "Clear selection",
   "openConcat.pick": "Select for concatenated open",
