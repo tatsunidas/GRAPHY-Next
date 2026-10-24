@@ -87,3 +87,21 @@ jobs:
         run: |
           npm ci || npm install
           npm run build
+
+  automator:
+    name: Automator (typecheck)
+    runs-on: ubuntu-latest
+    # 🔴 automator は CI に無かったので、spike の型エラー 2 件が長く main に残った（2026-10 に #482 で修正）。
+    #    実機（Electron）は要らない型検査だけ回す。型検査は OS に依存しないので ubuntu のみ。
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: automator/package-lock.json
+      - name: Typecheck
+        working-directory: automator
+        run: |
+          npm ci
+          npm run typecheck
