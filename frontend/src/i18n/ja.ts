@@ -1650,6 +1650,7 @@ export const ja: Record<string, string> = {
   "viewer2d.leftPanel.picked": "チェック済み（{{count}}）",
   "viewer2d.leftPanel.concat": "連結",
   "viewer2d.leftPanel.unpick": "チェックを外す",
+  "viewer2d.leftPanel.closeSeries": "閉じる（表示中）",
   "openConcat.menu": "連結して開く… ({{count}} 本)",
   "openConcat.clear": "選択を解除",
   "openConcat.pick": "連結して開くシリーズに選ぶ",
