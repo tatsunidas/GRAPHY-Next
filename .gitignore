@@ -10,6 +10,8 @@ frontend/portable-dist/
 desktop/node_modules/
 # frontend-maven-plugin が配置する node ランタイム
 frontend/node/
+# tsc -b が書く増分ビルドのキャッシュ（型検査のたびに書き換わる。automator/tsconfig.tsbuildinfo など）
+*.tsbuildinfo
 
 # --- Electron build staging / output ---
 desktop/renderer/
