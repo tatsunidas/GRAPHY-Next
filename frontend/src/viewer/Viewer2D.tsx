@@ -3143,7 +3143,7 @@ const STATUS_BAR_COMPACT_BELOW_PX = 460;
 
 /**
  * 画像外の状態バー。自分の幅を測り、狭ければ詰めた表示を子に指示する。
- * 高さは常に 1 行分なので、詰めても詰めなくても画像の位置は変わらない。
+ * 高さは常に固定（`STATUS_BAR_HEIGHT_PX`）なので、詰めても・Fusion で値が 2 段になっても画像の位置は変わらない。
  */
 function StatusBar({ children, hidden }: { children: (compact: boolean) => React.ReactNode; hidden?: boolean }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -3173,7 +3173,13 @@ function StatusItem({ label, value, testId, minWidth }: { label: string; value: 
   );
 }
 
+// 値の欄は Fusion 中に前景／背景の 2 段になる。2 段分（15px × 2）＋上下 padding 5px × 2 ＋ border 1px × 2 を常に確保し、
+// Fusion の有無・カーソルの値で画像（黒枠）の高さを動かさない。
+const STATUS_BAR_ROW_PX = 15;
+const STATUS_BAR_HEIGHT_PX = STATUS_BAR_ROW_PX * 2 + 10 + 2;
 const statusBar: React.CSSProperties = {
+  height: STATUS_BAR_HEIGHT_PX,
+  boxSizing: "border-box",
   display: "flex",
   alignItems: "center",
   gap: 14,
@@ -3187,8 +3193,8 @@ const statusBar: React.CSSProperties = {
   fontVariantNumeric: "tabular-nums",
 };
 // 狭いビューア（グリッド表示など）用。文字と余白を詰める。高さは 1 行のまま。
-// minHeight は通常表示の高さ（32px）に揃え、詰めても画像の大きさを変えない。
-const statusBarCompact: React.CSSProperties = { fontSize: 11, gap: 6, padding: "5px 8px", minHeight: 32, boxSizing: "border-box" };
+// 高さは通常表示と同じ固定値（statusBar）のまま、詰めても画像の大きさを変えない。
+const statusBarCompact: React.CSSProperties = { fontSize: 11, gap: 6, padding: "5px 8px" };
 const infoBtnCompact: React.CSSProperties = { padding: "0 7px", fontSize: 11, fontWeight: 600 };
 // 状態項目の左グループ。狭いときは末尾が切れる（折り返してバーを高くしない）。
 const statusGroup: React.CSSProperties = {
@@ -3219,8 +3225,10 @@ const btnDisabled: React.CSSProperties = { opacity: 0.45, cursor: "not-allowed" 
 const statusKey: React.CSSProperties = { color: "#6b7785" };
 const statusVal: React.CSSProperties = { color: "#1a2530", fontWeight: 600 };
 // Fusion 中の二段表示（前景／背景）。行高を詰めて、状態バーが 1 行のときと同じ高さに収める。
-const statusStack: React.CSSProperties = { display: "inline-flex", flexDirection: "column", lineHeight: 1.25 };
-const statusStackRow: React.CSSProperties = { display: "inline-flex", gap: 4, alignItems: "baseline" };
+const statusStack: React.CSSProperties = { display: "inline-flex", flexDirection: "column" };
+const statusStackRow: React.CSSProperties = {
+  display: "inline-flex", gap: 4, alignItems: "baseline", height: STATUS_BAR_ROW_PX, lineHeight: `${STATUS_BAR_ROW_PX}px`,
+};
 const statusSubKey: React.CSSProperties = { color: "#6b7785", fontSize: 11 };
 
 const wrap: React.CSSProperties = {
