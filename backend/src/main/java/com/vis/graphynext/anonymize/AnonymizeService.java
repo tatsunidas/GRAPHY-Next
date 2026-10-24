@@ -655,7 +655,9 @@ public class AnonymizeService {
     private static void writePart10(Attributes ds, String tsuid, OutputStream out) throws IOException {
         String ts = (tsuid == null || tsuid.isBlank()) ? UID.ExplicitVRLittleEndian : tsuid;
         Attributes fmi = ds.createFileMetaInformation(ts);
-        DicomOutputStream dos = new DicomOutputStream(out, ts);
+        // ファイルメタ情報は常に Explicit VR LE。ts で開くと Implicit VR のデータが書けない。
+        // writeDataset(fmi, ds) がファイルメタ情報の後で、fmi の転送構文にデータセットの符号化を切り替える。
+        DicomOutputStream dos = new DicomOutputStream(out, UID.ExplicitVRLittleEndian);
         dos.writeDataset(fmi, ds);
         dos.flush();
     }
