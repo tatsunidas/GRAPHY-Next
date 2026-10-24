@@ -1,0 +1,15 @@
+{
+  "id": "ai-tools-noperm",
+  "name": "AI Tools NoPerm",
+  "version": "0.1.0",
+  "engines": { "graphy": ">=0.3.0", "os": ["win32", "darwin", "linux"] },
+  "description": "Declares aiTools without the ai-tools permission; must not be exposed.",
+  "author": "automator",
+  "license": "MIT",
+  "contributes": ["viewer2d.menu"],
+  "ui": "ui.js",
+  "permissions": [],
+  "aiTools": [
+    { "name": "t", "description": "Must not be exposed.", "effect": "read", "parameters": { "type": "object", "properties": {}, "required": [] } }
+  ]
+}

@@ -185,7 +185,7 @@ export const ja: Record<string, string> = {
   "assistant.plugintools.title": "プラグインのツール",
   "assistant.plugintools.empty": "有効なプラグインのツールはありません。プラグインが宣言し、本体が検査したものだけが並びます。",
   "assistant.plugintools.note": "オンにしたプラグインのツールは AI から呼べます。結果は AI に渡るため、外部の AI の場合は結果を送る前に確認が出ます。",
-  "assistant.act.plugin": "プラグインのツール: {name}",
+  "assistant.act.plugin": "プラグインのツール: {{name}}",
   "assistant.macro.button": "マクロ",
   "assistant.macro.title": "マクロ（表示操作の記録と再生）",
   "assistant.macro.empty": "保存したマクロはありません。",

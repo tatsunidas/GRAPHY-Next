@@ -185,7 +185,7 @@ export const en: Record<string, string> = {
   "assistant.plugintools.title": "Plugin tools",
   "assistant.plugintools.empty": "No plugin tools available. Only tools declared by plugins and validated by the app are listed.",
   "assistant.plugintools.note": "Tools of plugins you turn on can be called by the AI. Their results go to the AI; for an external AI you are asked before a result is sent.",
-  "assistant.act.plugin": "Plugin tool: {name}",
+  "assistant.act.plugin": "Plugin tool: {{name}}",
   "assistant.macro.button": "Macros",
   "assistant.macro.title": "Macros (record and replay view operations)",
   "assistant.macro.empty": "No saved macros.",
