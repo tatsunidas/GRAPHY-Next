@@ -10,7 +10,7 @@ import { applyTransform, readTransform, FIT_TRANSFORM } from "./transform";
 import { ToolIcon } from "../icons/ToolIcon";
 import { UI_ICON_FILES } from "../icons/toolIcons";
 import { buildSeriesLayout, buildLayoutFromDto, DEFAULT_AXES, type AxisSpec, type SeriesLayout } from "./seriesLayout";
-import { describeKept, restrictLayout, type ZRange } from "./virtualLayout";
+import { concatHasGap, describeKept, restrictLayout, type ConcatOpened, type ZRange } from "./virtualLayout";
 import CineControls from "./CineControls";
 import { VideoViewer } from "./VideoViewer";
 import { XaAnalysisDialog } from "./XaAnalysisDialog";
@@ -154,6 +154,7 @@ export function SeriesViewer({
   range,
   onRangeEdit,
   onRangeClear,
+  concat,
 }: {
   instances: Instance[];
   mode: ViewerMode;
@@ -205,6 +206,8 @@ export function SeriesViewer({
   onRangeEdit?: () => void;
   /** 範囲つきで開いているときの「全体を開く」。 */
   onRangeClear?: () => void;
+  /** 連結して開いたタイル。レイアウトは取得済み（各シリーズのレイアウトを呼び出し側で連結した結果）なので、取得し直さない。 */
+  concat?: ConcatOpened;
 }) {
   const { t } = useI18n();
   // ツールパネルの開閉。未制御のときは親の showControls を初期値・追従元にし（一括開閉は親が上書き）、
@@ -243,6 +246,12 @@ export function SeriesViewer({
     // シリーズが変わったら並べ替え状態をリセット。
     setSortMode(null);
     setSortMeta(null);
+    if (concat) {
+      // 連結は位置の昇順に並べ済み。並べ替え（sortMeta）は単一シリーズの添字が前提なので持たない。
+      setBaseLayout(concat.layout);
+      setLayoutReady(true);
+      return;
+    }
     let cancelled = false;
     fetchSeriesLayout(studyUid, seriesUid)
       .then((dto) => {
@@ -265,7 +274,7 @@ export function SeriesViewer({
     return () => {
       cancelled = true;
     };
-  }, [studyUid, seriesUid, fallback, mode, instances]);
+  }, [studyUid, seriesUid, fallback, mode, instances, concat]);
 
   // 安全網: レイアウト取得がハング/極端に遅い場合でも、一定時間で Viewer 描画へ進む
   // （その場合はフォールバック描画＝従来挙動）。通常は 45ms 程度で解決し先に ready になる。
@@ -379,7 +388,9 @@ export function SeriesViewer({
    * 軸の提示で判定する（§5.7 の「UI に『XA なら…』の分岐を撒かない」）。
    */
   const isPullbackSeries = axes.z.kind === "pullback";
-  const thickAvailable = spatialStack && isThickSlabAvailable({ hasVideo, nZ }) && !gridOn;
+  // 隙間のある連結では、Slab のまとまりが撮っていない範囲を含む厚みになるので使わせない。
+  const gappedConcat = concatHasGap(concat?.joints);
+  const thickAvailable = spatialStack && isThickSlabAvailable({ hasVideo, nZ }) && !gridOn && !gappedConcat;
 
   // 実スライス間隔(mm)を先頭2枚の IOP/IPP から算出（デジタル枚数換算・厚み範囲に使う）。
   const spacingDep = `${spatialStack ? 1 : 0}|${nZ}|${zStack[0] ?? ""}|${zStack[1] ?? ""}`;
@@ -963,6 +974,7 @@ export function SeriesViewer({
   const currentImageId = zStack[nativeZ];
   const hasVideoRef = useRef(hasVideo); hasVideoRef.current = hasVideo;
   const thickAvailableRef = useRef(thickAvailable); thickAvailableRef.current = thickAvailable;
+  const gappedConcatRef = useRef(gappedConcat); gappedConcatRef.current = gappedConcat;
   const sortMetaRef = useRef<SortMeta | null>(sortMeta); sortMetaRef.current = sortMeta;
   const currentImageIdRef = useRef(currentImageId); currentImageIdRef.current = currentImageId;
   const pendingFollowRef = useRef<string | null>(null);
@@ -1020,7 +1032,7 @@ export function SeriesViewer({
           return;
         }
         if (!thickAvailableRef.current) {
-          emitToast(t("series.thickSlab.unavailable"));
+          emitToast(t(gappedConcatRef.current ? "series.thickSlab.concatGap" : "series.thickSlab.unavailable"));
           return;
         }
         setThickSlabProj(projection);
@@ -1263,7 +1275,11 @@ export function SeriesViewer({
   }, [syncOn, sliceSyncId]);
 
   // 別ウィンドウ（ROI 特徴量の画面）からの「見せて」を受けるため、自分のシリーズを登録する。
-  useEffect(() => registerRevealSeries(seriesUid), [seriesUid]);
+  useEffect(() => {
+    if (!concat) return registerRevealSeries(seriesUid);
+    const offs = [...new Set(concat.cells.map((cell) => cell.series))].map((s) => registerRevealSeries(s));
+    return () => offs.forEach((off) => off());
+  }, [seriesUid, concat]);
 
   // ── ROI を見せる（ROI マネージャの行選択・複製の直後）─────────────────────
   // 宛先は SOP Instance UID ＋フレーム番号。どのタイルがその画像を持っているかは
@@ -1325,8 +1341,11 @@ export function SeriesViewer({
 
   // ROI/Mask 作成時の紐付けコンテキスト（z は Viewer2D 側で現在 index を補う）。
   const roiContext = useMemo(
-    () => ({ patientKey: patientKey ?? "", studyUid, seriesUid, seriesLabel: seriesLabel ?? "", c: cc, t: tc }),
-    [patientKey, studyUid, seriesUid, seriesLabel, cc, tc],
+    () => ({
+      patientKey: patientKey ?? "", studyUid, seriesUid, seriesLabel: seriesLabel ?? "", c: cc, t: tc,
+      ...(concat ? { sourceAt: (zi: number) => concat.cells[zi] && { studyUid: concat.cells[zi].study, seriesUid: concat.cells[zi].series } } : {}),
+    }),
+    [patientKey, studyUid, seriesUid, seriesLabel, cc, tc, concat],
   );
 
   /**
@@ -1424,6 +1443,24 @@ export function SeriesViewer({
       data-testid="series-viewer-root"
       style={fillHeight ? { ...root, flex: 1, display: "flex", flexDirection: "column", minHeight: 0 } : root}
     >
+      {concat && (
+        <div data-testid="series-concat-banner" style={rangeBanner}>
+          <span>{t("series.concat.banner", { parts: concat.labels.join(" + "), count: concat.layout.nZ })}</span>
+          <span data-testid="series-concat-current">
+            {(() => {
+              const cell = concat.cells[zc];
+              if (!cell) return "";
+              const joint = concat.joints.find((j) => j.index === zc);
+              const base = t("series.concat.current", { part: concat.labels[cell.partIndex] ?? "" });
+              if (!joint) return base;
+              const note = joint.gapMm > 0
+                ? t("series.concat.gap", { mm: joint.gapMm.toFixed(1) })
+                : joint.overlapMm > 0 ? t("series.concat.overlap", { mm: joint.overlapMm.toFixed(1) }) : "";
+              return `${base} ${t("series.concat.jointHere")}${note ? ` (${note})` : ""}`;
+            })()}
+          </span>
+        </div>
+      )}
       {rangeInfo && (
         <div data-testid="series-range-banner" style={rangeBanner}>
           <span>{t("series.range.banner", { from: rangeInfo.from, to: rangeInfo.to, total: rangeInfo.total })}</span>
@@ -1541,6 +1578,7 @@ export function SeriesViewer({
                     "cine-play-z",
                   )}
                   testId="dim-slider-z"
+                  ticks={concat ? concat.joints.map((j) => j.index) : undefined}
                 />
               ))}
             {layout.nC > 1 && (
@@ -2003,7 +2041,11 @@ export function SeriesViewer({
               {thickSlabOn && thickAvailable && thickOriginal && (
                 <span style={hint}>{t("series.thickSlab.off")}</span>
               )}
-              {!thickAvailable && <span style={hint}>{t("series.thickSlab.unavailable")}</span>}
+              {!thickAvailable && (
+                <span style={hint} data-testid="thick-slab-unavailable">
+                  {t(gappedConcat ? "series.thickSlab.concatGap" : "series.thickSlab.unavailable")}
+                </span>
+              )}
             </div>
             )}
           </>
@@ -2178,6 +2220,7 @@ function DimSlider({
   onChange,
   trailing,
   testId,
+  ticks,
 }: {
   label: string;
   dim?: string | null;
@@ -2186,7 +2229,10 @@ function DimSlider({
   onChange: (v: number) => void;
   trailing?: React.ReactNode;
   testId?: string;
+  /** スライダー上に目盛りを出す位置（連結の継ぎ目）。 */
+  ticks?: number[];
 }) {
+  const listId = ticks && ticks.length > 0 && testId ? `${testId}-ticks` : undefined;
   return (
     <div style={row}>
       <span style={dimLabel}>
@@ -2202,7 +2248,9 @@ function DimSlider({
         disabled={count <= 1}
         onChange={(e) => onChange(Number(e.target.value))}
         style={{ flex: 1 }}
+        list={listId}
       />
+      {listId && <datalist id={listId} data-testid={`${testId}-ticks`}>{ticks!.map((v) => <option key={v} value={v} />)}</datalist>}
       <IndexJump count={count} onJump={onChange} testId={testId ? `${testId}-jump` : undefined} />
       {trailing}
     </div>

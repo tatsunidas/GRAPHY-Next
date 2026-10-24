@@ -16,6 +16,8 @@ export interface ViewerContext {
   c: number;
   t: number;
   z: number;
+  /** 連結表示のとき、連結後の Z の番号 → そのスライスの元のスタディ・シリーズ。ROI の紐付け先を元のシリーズにする。 */
+  sourceAt?: (z: number) => { studyUid: string; seriesUid: string } | undefined;
 }
 
 const byViewport = new Map<string, ViewerContext>();

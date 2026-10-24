@@ -131,7 +131,8 @@ import { GLAM_CTX_KEY } from "../radiomics/GlamAnalysisScreen";
 import { ROI_FEATURE_CTX_KEY } from "../radiomics/RoiFeatureScreen";
 import { useI18n } from "../i18n/i18n";
 import { OpenRangeDialog } from "./OpenRangeDialog";
-import { tileIdFor, type ZRange } from "../viewer/virtualLayout";
+import { OpenConcatDialog, type ConcatPick } from "./OpenConcatDialog";
+import { concatTileId, tileIdFor, type ConcatOpened, type ZRange } from "../viewer/virtualLayout";
 import { desktop } from "../desktopBridge";
 import { closeAllPluginWindows } from "../plugins/pluginWindowApi";
 import { mountSeriesPanel, closeAllSeriesPanels, PluginSeriesPanels } from "../plugins/pluginSeriesPanelApi";
@@ -166,7 +167,15 @@ interface Tile {
   fusion?: FusionOverlay; // Fusion オーバーレイ（設定時）
   /** 範囲つきで開いたタイル（シリーズの一部だけ）。無ければ全体。 */
   range?: ZRange;
+  /**
+   * 連結して開いたタイル（複数シリーズを開くときだけ 1 本につなぐ）。`study`/`series` は先頭の部分（代表）、
+   * `instances` は全部分の和集合。単一シリーズ前提の操作は {@link isConcatTile} で無効にする。
+   */
+  concat?: ConcatOpened;
 }
+
+/** 連結タイルか。`tile.series` を単一シリーズとして読む操作は、これが true のとき使わない（代表の 1 本だけを指してしまう）。 */
+const isConcatTile = (tile: Pick<Tile, "concat">) => !!tile.concat;
 
 interface PatientSession {
   patientKey: string; // patientId || patientName || studyUid（同一患者判定キー）
@@ -450,6 +459,44 @@ export function Viewer2DScreen({ status }: { status: AppStatus | null }) {
     setActiveKey(pKey);
   }, []);
 
+  /** 連結タイルを追加する。各シリーズのレイアウトは連結ダイアログで取得・連結済み。 */
+  const addConcatTile = useCallback(async (picks: ConcatPick[], opened: ConcatOpened) => {
+    const tileId = concatTileId(picks.map((p) => ({ study: p.study.studyInstanceUid, series: p.series.seriesInstanceUid })));
+    const first = picks[0];
+    const pKey = derivePatientKey(first.study);
+    let instances: Instance[] = [];
+    try {
+      const lists = await Promise.all(picks.map((p) => fetchInstances(p.study.studyInstanceUid, p.series.seriesInstanceUid)));
+      instances = lists.flat();
+    } catch {
+      /* 取得失敗時は空で追加（レイアウトは連結済みなので表示はできる） */
+    }
+    const tile: Tile = {
+      id: tileId, study: first.study, series: first.series, instances, syncEnabled: false, concat: opened,
+    };
+    setPatients((prev) => {
+      const idx = prev.findIndex((pp) => pp.patientKey === pKey);
+      if (idx >= 0) {
+        if (prev[idx].tiles.some((tl) => tl.id === tileId)) return prev;
+        const updated = [...prev];
+        updated[idx] = { ...prev[idx], tiles: [...prev[idx].tiles, tile], soloTileId: null };
+        return updated;
+      }
+      return [
+        ...prev,
+        {
+          patientKey: pKey,
+          patientId: first.study.patientId,
+          patientName: first.study.patientName ?? "",
+          tiles: [tile],
+          gridCols: 0,
+          gridRows: 0,
+        },
+      ];
+    });
+    setActiveKey(pKey);
+  }, []);
+
   /** 同一患者のタイルをクリアして新しい1枚で置き換える（別スタディを開く場合）。 */
   const replacePatientTiles = useCallback(async (patientKey: string, study: Study, series: Series) => {
     const tileId = `${study.studyInstanceUid}|${series.seriesInstanceUid}`;
@@ -592,6 +639,9 @@ export function Viewer2DScreen({ status }: { status: AppStatus | null }) {
     { study: Study; series: Series; patientKey?: string; tileId?: string; initial?: ZRange } | null
   >(null);
 
+  /** 連結ダイアログの対象（左ツリーで選んだ 2 本以上、選んだ順）。 */
+  const [concatDlg, setConcatDlg] = useState<ConcatPick[] | null>(null);
+
   /** タイルの Fusion オーバーレイを設定または解除する。 */
   const setTileFusion = useCallback(
     (patientKey: string, tileId: string, overlay: FusionOverlay | undefined) => {
@@ -699,6 +749,7 @@ export function Viewer2DScreen({ status }: { status: AppStatus | null }) {
           patients={patients}
           onAdd={addTile}
           onOpenRange={(study, series) => setRangeDlg({ study, series })}
+          onOpenConcat={setConcatDlg}
           initialPatientId={initialPatientId}
           initialPatientName={initialPatientName}
           initialStudyUid={initialStudyUid}
@@ -737,6 +788,18 @@ export function Viewer2DScreen({ status }: { status: AppStatus | null }) {
         </div>
       </div>
       <CopyImageAskHost />
+      {concatDlg && (
+        <OpenConcatDialog
+          mode={mode}
+          picks={concatDlg}
+          onClose={() => setConcatDlg(null)}
+          onOpen={(opened) => {
+            const picks = concatDlg;
+            setConcatDlg(null);
+            void addConcatTile(picks, opened);
+          }}
+        />
+      )}
       {rangeDlg && (
         <OpenRangeDialog
           mode={mode}
@@ -1030,6 +1093,11 @@ function TileGrid({
 
       if (payload.type === "series") {
         if (zone === "center") {
+          // 連結タイルは Fusion の重ね先にできない（背景の座標系が複数シリーズにまたがる）。
+          if (patient.tiles.find((tl) => tl.id === targetTileId)?.concat) {
+            emitToast(t("series.concat.disabled"));
+            return;
+          }
           // センタードロップ → Fusion オーバーレイに設定（既ロード済みシリーズも可）
           void fetchInstances(payload.study.studyInstanceUid, payload.series.seriesInstanceUid)
             .then((instances) => {
@@ -1051,7 +1119,7 @@ function TileGrid({
         } else {
           // 既にタイルに読み込まれているシリーズは重複挿入しない
           const alreadyLoaded = patient.tiles.some(
-            (t) => t.series.seriesInstanceUid === payload.series.seriesInstanceUid,
+            (t) => !t.concat && t.series.seriesInstanceUid === payload.series.seriesInstanceUid,
           );
           if (!alreadyLoaded) {
             void onInsertAdjacent(
@@ -1069,6 +1137,10 @@ function TileGrid({
             // タイルヘッダを中央ドロップ → そのタイルのシリーズを Fusion に設定。
             // ドロップ元タイルで表示中だった C/T を引き継ぐ（1ch 目固定を避ける）。
             const srcTile = patient.tiles.find((t) => t.id === payload.tileId);
+            if (srcTile?.concat || patient.tiles.find((t) => t.id === targetTileId)?.concat) {
+              emitToast(t("series.concat.disabled"));
+              return;
+            }
             if (srcTile) {
               const dims = tileDimsRef.current.get(payload.tileId);
               // ドラッグ元タイルで適用中の LUT を Fusion オーバーレイへ引き継ぐ。
@@ -1716,6 +1788,7 @@ function TileGrid({
         const tid = resolveTargets()[0];
         const tile = patient.tiles.find((tl) => tl.id === tid);
         if (!tile) { comingSoon(t("viewer2d.menu.imagej")); return; }
+        if (isConcatTile(tile)) { notify(t("series.concat.disabled")); return; }
         bridgeImageJHyperStack(
           tile.study.studyInstanceUid,
           tile.series.seriesInstanceUid,
@@ -1731,6 +1804,7 @@ function TileGrid({
         const tid = resolveTargets()[0];
         const tile = patient.tiles.find((tl) => tl.id === tid);
         if (!tile) { comingSoon(t("main.toolbar.viewer3d")); return; }
+        if (isConcatTile(tile)) { notify(t("series.concat.disabled")); return; }
         const dims = tileDimsRef.current.get(tile.id);
         const ctx = { study: tile.study, series: tile.series, c: dims?.c ?? 0, t: dims?.t ?? 0, range: tile.range, ts: Date.now() };
         localStorage.setItem("graphy-viewer3d-ctx", JSON.stringify(ctx));
@@ -1743,6 +1817,7 @@ function TileGrid({
         const tid = resolveTargets()[0];
         const tile = patient.tiles.find((tl) => tl.id === tid);
         if (!tile) { comingSoon(t("main.toolbar.mpr")); return; }
+        if (isConcatTile(tile)) { notify(t("series.concat.disabled")); return; }
         const ctx = { study: tile.study, series: tile.series, range: tile.range, ts: Date.now() };
         localStorage.setItem("graphy-mpr-ctx", JSON.stringify(ctx));
         const d = desktop();
@@ -1754,6 +1829,7 @@ function TileGrid({
         const tid = resolveTargets()[0];
         const tile = patient.tiles.find((tl) => tl.id === tid);
         if (!tile) { comingSoon(t("main.toolbar.slicer")); return; }
+        if (isConcatTile(tile)) { notify(t("series.concat.disabled")); return; }
         const ctx = { study: tile.study, series: tile.series, range: tile.range, ts: Date.now() };
         localStorage.setItem("graphy-slicer-ctx", JSON.stringify(ctx));
         const d = desktop();
@@ -1765,6 +1841,7 @@ function TileGrid({
         const tid = resolveTargets()[0];
         const tile = patient.tiles.find((tl) => tl.id === tid);
         if (!tile) { comingSoon(t("curvedMpr.title")); return; }
+        if (isConcatTile(tile)) { notify(t("series.concat.disabled")); return; }
         const dims = tileDimsRef.current.get(tile.id);
         const ctx = { study: tile.study, series: tile.series, c: dims?.c ?? 0, t: dims?.t ?? 0, ts: Date.now() };
         localStorage.setItem("graphy-curvedmpr-ctx", JSON.stringify(ctx));
@@ -1777,6 +1854,7 @@ function TileGrid({
         const tid = resolveTargets()[0];
         const tile = patient.tiles.find((tl) => tl.id === tid);
         if (!tile) { comingSoon(t("viewer2d.menu.histogram")); return; }
+        if (isConcatTile(tile)) { notify(t("series.concat.disabled")); return; }
         const dims = tileDimsRef.current.get(tile.id);
         setHisto({ tile, z: dims?.z ?? 0, c: dims?.c ?? 0, t: dims?.t ?? 0 });
       },
@@ -1785,6 +1863,7 @@ function TileGrid({
         const tid = resolveTargets()[0];
         const tile = patient.tiles.find((tl) => tl.id === tid);
         if (!tile) { comingSoon(t("vi.menu")); return; }
+        if (isConcatTile(tile)) { notify(t("series.concat.disabled")); return; }
         setValueInsp({ tile });
       },
       // 対象（選択→無ければ先頭）タイルのシリーズでリサンプル・切り抜きダイアログを開く。
@@ -1792,6 +1871,7 @@ function TileGrid({
         const tid = resolveTargets()[0];
         const tile = patient.tiles.find((tl) => tl.id === tid);
         if (!tile) { comingSoon(t("viewer2d.menu.resample")); return; }
+        if (isConcatTile(tile)) { notify(t("series.concat.disabled")); return; }
         const dims = tileDimsRef.current.get(tile.id);
         setResample({ tile, c: dims?.c ?? 0, t: dims?.t ?? 0 });
       },
@@ -1802,6 +1882,7 @@ function TileGrid({
         const tid = resolveTargets()[0];
         const tile = patient.tiles.find((tl) => tl.id === tid);
         if (!tile) { comingSoon(t("fourier.menu")); return; }
+        if (isConcatTile(tile)) { notify(t("series.concat.disabled")); return; }
         setFourier({ tileId: tile.id, label: tile.series.seriesDescription || tile.series.seriesInstanceUid });
       },
       // SUV 校正: 対象（選択→無ければ先頭）タイル。PET(Modality=PT) のみ有効。
@@ -1824,6 +1905,7 @@ function TileGrid({
         const tid = resolveTargets()[0];
         const tile = patient.tiles.find((tl) => tl.id === tid);
         if (!tile) { comingSoon(t("texture.menu")); return; }
+        if (isConcatTile(tile)) { notify(t("series.concat.disabled")); return; }
         setTextureTarget(tile);
       },
       // フィルタ画像（LoG）: 対象タイルのシリーズ全体に LoG を掛け、スケールごとに派生シリーズを作る。
@@ -1831,6 +1913,7 @@ function TileGrid({
         const tid = resolveTargets()[0];
         const tile = patient.tiles.find((tl) => tl.id === tid);
         if (!tile) { comingSoon(t("filterImg.menu")); return; }
+        if (isConcatTile(tile)) { notify(t("series.concat.disabled")); return; }
         setFilterImageTarget(tile);
       },
       // GLAM 解析: 別ウィンドウ（#glam）で開く。対象は localStorage 経由で渡す
@@ -1839,6 +1922,7 @@ function TileGrid({
         const tid = resolveTargets()[0];
         const tile = patient.tiles.find((tl) => tl.id === tid);
         if (!tile) { comingSoon(t("glam.menu")); return; }
+        if (isConcatTile(tile)) { notify(t("series.concat.disabled")); return; }
         localStorage.setItem(GLAM_CTX_KEY, JSON.stringify({
           studyInstanceUid: tile.study.studyInstanceUid,
           seriesInstanceUid: tile.series.seriesInstanceUid,
@@ -1852,6 +1936,7 @@ function TileGrid({
         const tid = resolveTargets()[0];
         const tile = patient.tiles.find((tl) => tl.id === tid);
         if (!tile) { comingSoon(t("roiFeat.menu")); return; }
+        if (isConcatTile(tile)) { notify(t("series.concat.disabled")); return; }
         localStorage.setItem(ROI_FEATURE_CTX_KEY, JSON.stringify({
           studyInstanceUid: tile.study.studyInstanceUid,
           seriesInstanceUid: tile.series.seriesInstanceUid,
@@ -1864,6 +1949,7 @@ function TileGrid({
         const tid = resolveTargets()[0];
         const tile = patient.tiles.find((tl) => tl.id === tid);
         if (!tile) { comingSoon(t("roiFeat.maxSection.menu")); return; }
+        if (isConcatTile(tile)) { notify(t("series.concat.disabled")); return; }
         setMaxSectionTarget(tile);
       },
       // レポート: 対象（選択→無ければ先頭）タイルのスタディでレポート編集ダイアログを開く。
@@ -2260,7 +2346,7 @@ function TileGrid({
         <StitchDialog
           patientId={patient.patientId}
           mode={mode}
-          candidates={patient.tiles.map((tl) => {
+          candidates={patient.tiles.filter((tl) => !tl.concat).map((tl) => {
             const d = tileDimsRef.current.get(tl.id);
             return { id: tl.id, study: tl.study, series: tl.series, instances: tl.instances, c: d?.c ?? 0, t: d?.t ?? 0 };
           })}
@@ -2527,9 +2613,10 @@ function TileCell({
     }
   }, [tile.fusion?.series.seriesInstanceUid]);
 
-  const seriesLabel =
-    tile.series.seriesDescription ||
-    `#${tile.series.seriesNumber ?? "?"} ${tile.series.modality ?? ""}`.trim();
+  const seriesLabel = tile.concat
+    ? t("series.concat.heading", { parts: tile.concat.labels.join(" + "), count: tile.concat.layout.nZ })
+    : tile.series.seriesDescription ||
+      `#${tile.series.seriesNumber ?? "?"} ${tile.series.modality ?? ""}`.trim();
   const dateLabel = tile.study.studyDate || "";
   const studyDesc = tile.study.studyDescription || "";
 
@@ -2897,6 +2984,7 @@ function TileCell({
           // （StudyList のプレビューに取られないようにする）。
           acceptsTaskLaunch
           range={tile.range}
+          concat={tile.concat}
           onRangeEdit={onRangeEdit}
           onRangeClear={onRangeClear}
         />
@@ -3480,6 +3568,7 @@ function StudyBrowser({
   patients,
   onAdd,
   onOpenRange,
+  onOpenConcat,
   initialPatientId,
   initialPatientName,
   initialStudyUid,
@@ -3487,6 +3576,7 @@ function StudyBrowser({
   patients: PatientSession[];
   onAdd: (study: Study, series: Series) => void;
   onOpenRange: (study: Study, series: Series) => void;
+  onOpenConcat: (picks: ConcatPick[]) => void;
   initialPatientId?: string | null;
   initialPatientName?: string | null;
   initialStudyUid?: string | null;
@@ -3500,6 +3590,13 @@ function StudyBrowser({
   // 直近の検索フィルタと、ツリー再マウント用バージョン（新シリーズ生成後の再取得に使う）。
   const lastFiltersRef = useRef<Parameters<typeof fetchStudies>[0] | null>(null);
   const [treeVersion, setTreeVersion] = useState(0);
+  // 連結して開くために選んだシリーズ（選んだ順）。
+  const [picked, setPicked] = useState<ConcatPick[]>([]);
+  const togglePick = useCallback((study: Study, series: Series) => {
+    setPicked((prev) => prev.some((p) => p.series.seriesInstanceUid === series.seriesInstanceUid)
+      ? prev.filter((p) => p.series.seriesInstanceUid !== series.seriesInstanceUid)
+      : [...prev, { study, series }]);
+  }, []);
 
   const loadedTileIds = useMemo(() => {
     const ids = new Set<string>();
@@ -3584,6 +3681,16 @@ function StudyBrowser({
         </button>
       </div>
 
+      {picked.length > 0 && (
+        <div style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 8, fontSize: 12 }}>
+          <button
+            type="button" data-testid="series-concat-open" style={searchBtn} disabled={picked.length < 2}
+            title={picked.length < 2 ? t("openConcat.needTwo") : undefined}
+            onClick={() => onOpenConcat(picked)}
+          >{t("openConcat.menu", { count: picked.length })}</button>
+          <button type="button" onClick={() => setPicked([])}>{t("openConcat.clear")}</button>
+        </div>
+      )}
       {error && <div style={{ color: "#b00020", fontSize: 12 }}>{error}</div>}
       {!error && studies === undefined && (
         <div style={{ fontSize: 12, color: "#888" }}>{t("viewer2d.searchPrompt")}</div>
@@ -3602,6 +3709,8 @@ function StudyBrowser({
             loadedTileIds={loadedTileIds}
             onAdd={onAdd}
             onOpenRange={onOpenRange}
+            pickedUids={picked.map((p) => p.series.seriesInstanceUid)}
+            onTogglePick={togglePick}
             autoOpen={s.studyInstanceUid === initialStudyUid}
           />
         ))}
@@ -3616,12 +3725,17 @@ function StudyNode({
   loadedTileIds,
   onAdd,
   onOpenRange,
+  pickedUids,
+  onTogglePick,
   autoOpen = false,
 }: {
   study: Study;
   loadedTileIds: Set<string>;
   onAdd: (study: Study, series: Series) => void;
   onOpenRange: (study: Study, series: Series) => void;
+  /** 連結して開くために選ばれているシリーズの UID（選んだ順）。 */
+  pickedUids: string[];
+  onTogglePick: (study: Study, series: Series) => void;
   autoOpen?: boolean;
 }) {
   const { t } = useI18n();
@@ -3706,6 +3820,15 @@ function StudyNode({
                 _resetDragState();
               }}
             >
+              <input
+                type="checkbox"
+                data-testid="series-concat-pick"
+                title={t("openConcat.pick")}
+                checked={pickedUids.includes(se.seriesInstanceUid)}
+                onChange={() => onTogglePick(study, se)}
+                onClick={(e) => e.stopPropagation()}
+                style={{ margin: "0 4px 0 0" }}
+              />
               <span
                 style={{
                   flex: 1,
