@@ -164,7 +164,7 @@ describe("getMeasurements (PHI allow-list)", () => {
     const { deps } = makeDeps({ readRois: () => rois as never });
     const r = executeCommand(deps, { kind: "getMeasurements", includeLabels: labels });
     expect(r.ok).toBe(true);
-    return (r as { measurements: { rois: Record<string, unknown>[]; truncated?: boolean } }).measurements;
+    return (r as unknown as { measurements: { rois: Record<string, unknown>[]; truncated?: boolean } }).measurements;
   };
   it("passes the values the viewer shows", () => {
     expect(run([roi()]).rois[0]).toEqual({
