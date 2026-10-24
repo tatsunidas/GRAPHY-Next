@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 import type { SeriesLayout } from "./seriesLayout";
 import { parseSliceRange } from "../mainscreen/sliceRange";
 import {
-  checkConcat, concatLayouts, contiguousSpan, describeKept, positionsMm, rangeFromIndices, rangeToleranceMm,
+  checkConcat, concatHasGap, concatLayouts, concatPartFromDto, concatTileId, contiguousSpan, describeKept, positionsMm, rangeFromIndices, rangeToleranceMm,
   restrictLayout, tileIdFor, type ConcatPart,
 } from "./virtualLayout";
 
@@ -334,5 +334,79 @@ describe("restrictLayout then concat (partial series in a concat)", () => {
     const r = concatOk([{ ...a, layout: ra.layout }, part("B", 100, 100)]);
     expect(r.layout.nZ).toBe(150);
     expect(r.joints[0].gapMm).toBeCloseTo(0, 9);
+  });
+});
+
+describe("concatTileId", () => {
+  it("is stable for the same parts in the same order, and differs by order and by range", () => {
+    const a = { study: "s1", series: "a" };
+    const b = { study: "s1", series: "b" };
+    expect(concatTileId([a, b])).toBe(concatTileId([a, b]));
+    expect(concatTileId([a, b])).not.toBe(concatTileId([b, a]));
+    expect(concatTileId([a, b])).not.toBe(concatTileId([{ ...a, range: { kind: "mm", fromMm: 0, toMm: 10 } }, b]));
+    expect(concatTileId([a, b]).startsWith("concat|")).toBe(true);
+    expect(concatTileId([a, b])).not.toBe(tileIdFor("s1", "a"));
+  });
+});
+
+describe("concatPartFromDto", () => {
+  const src = () => ({ study: "s", series: "x", layout: part("x", 0, 10).layout, patientId: "P1", modality: "CT" });
+  const dto = (over: Record<string, unknown> = {}) => ({
+    imageOrientationPatient: [1, 0, 0, 0, 1, 0] as readonly number[] | null,
+    pixelSpacingRow: 0.8,
+    pixelSpacingCol: 0.9,
+    imageWidth: 512,
+    imageHeight: 256,
+    frameOfReferenceUID: "FOR" as string | null,
+    ...over,
+  });
+
+  it("maps row/column spacing and size to the right fields (positive control)", () => {
+    const r = concatPartFromDto(src(), dto());
+    expect("missing" in r).toBe(false);
+    if ("missing" in r) return;
+    expect(r.pixelSpacing).toEqual([0.8, 0.9]);
+    expect(r.rows).toBe(256);
+    expect(r.columns).toBe(512);
+    expect(r.frameOfReferenceUid).toBe("FOR");
+  });
+
+  it("refuses unknown values instead of filling them in", () => {
+    expect(concatPartFromDto(src(), dto({ imageOrientationPatient: null }))).toEqual({ missing: "iop" });
+    expect(concatPartFromDto(src(), dto({ pixelSpacingRow: 0 }))).toEqual({ missing: "pixelSpacing" });
+    expect(concatPartFromDto(src(), dto({ pixelSpacingCol: 0 }))).toEqual({ missing: "pixelSpacing" });
+    expect(concatPartFromDto(src(), dto({ imageWidth: 0 }))).toEqual({ missing: "size" });
+  });
+
+  it("a missing FrameOfReferenceUID becomes empty, which checkConcat then refuses", () => {
+    const r = concatPartFromDto(src(), dto({ frameOfReferenceUID: null }));
+    if ("missing" in r) throw new Error("unexpected");
+    expect(checkConcat([part("A", 0, 100), { ...r, layout: part("B", 100, 100).layout }]).violations).toContain("frameOfReference");
+  });
+});
+
+describe("concatHasGap", () => {
+  const joints = (...gaps: number[]) => gaps.map((gapMm) => ({ gapMm }));
+  it("false without a gap: overlap, adjacent, not concatenated", () => {
+    expect(concatHasGap(undefined)).toBe(false);
+    expect(concatHasGap([])).toBe(false);
+    expect(concatHasGap(joints(0))).toBe(false);
+    const overlap = concatOk([part("A", 0, 100), part("B", 90, 110)]);
+    expect(concatHasGap(overlap.joints)).toBe(false);
+    const adjacent = concatOk([part("A", 0, 100), part("B", 100, 100)]);
+    expect(concatHasGap(adjacent.joints)).toBe(false);
+  });
+
+  it("true when any seam has a gap", () => {
+    expect(concatHasGap(joints(10))).toBe(true);
+    expect(concatHasGap(joints(0, 5, 0))).toBe(true);
+    const gap = concatOk([part("A", 0, 100), part("B", 110, 90)]);
+    expect(concatHasGap(gap.joints)).toBe(true);
+  });
+
+  it("only one gapped seam among three parts", () => {
+    const r = concatOk([part("A", 0, 50), part("B", 50, 50), part("C", 110, 50)]);
+    expect(r.joints.map((j) => j.gapMm > 0)).toEqual([false, true]);
+    expect(concatHasGap(r.joints)).toBe(true);
   });
 });

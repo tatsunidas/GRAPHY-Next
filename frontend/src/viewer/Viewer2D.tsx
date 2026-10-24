@@ -991,7 +991,8 @@ export function Viewer2D({
       if (!uid || !refId || !imageIdsRef.current.includes(refId)) return;
       const ctx = getViewerContext(viewportIdRef.current);
       if (!ctx) return;
-      const sc = { studyUid: ctx.studyUid, seriesUid: ctx.seriesUid, z: ctx.z, c: ctx.c, t: ctx.t };
+      const src = ctx.sourceAt?.(ctx.z);
+      const sc = { studyUid: src?.studyUid ?? ctx.studyUid, seriesUid: src?.seriesUid ?? ctx.seriesUid, z: ctx.z, c: ctx.c, t: ctx.t };
       setRoiMaskMeta(uid, { patientKey: ctx.patientKey, seriesLabel: ctx.seriesLabel, scope: sc, origin: sc });
       // 描き終えた ROI を選択する（選択中の ROI は内側のドラッグで移動できる＝作る→動かすが続けて行える）。
       try {

@@ -335,3 +335,52 @@ export function concatLayouts(parts: readonly ConcatPart[]): ConcatResult {
   };
   return { ok: true, layout, cells, joints, check };
 }
+
+/** 連結して開いたタイルに渡すもの。各シリーズのレイアウトは開く前に取得・連結済みで、見出しと継ぎ目の表示に使う名前を添える。 */
+export interface ConcatOpened {
+  layout: SeriesLayout;
+  cells: ConcatCell[];
+  joints: ConcatJoint[];
+  /** `parts` の添字ごとの短い名前（例: 「#2 CT HeadNeck」）。 */
+  labels: string[];
+}
+
+/** 隙間のある継ぎ目を含むか。含む連結では、スライスをまとめる処理（Slab）が撮っていない範囲を含んだ厚みになる。 */
+export function concatHasGap(joints: ReadonlyArray<Pick<ConcatJoint, "gapMm">> | undefined): boolean {
+  return !!joints && joints.some((j) => j.gapMm > 0);
+}
+
+/** 連結タイルの ID。選んだ順の各部分（範囲つきも）をそのままつなぐ。同じ組み合わせ・同じ順なら同じ ID。 */
+export function concatTileId(parts: ReadonlyArray<{ study: string; series: string; range?: ZRange }>): string {
+  return `concat|${parts.map((p) => tileIdFor(p.study, p.series, p.range)).join("+")}`;
+}
+
+/** 取得したレイアウト DTO の判定用の値から {@link ConcatPart} を作る。不明な値（間隔 0・IOP なし・FoR なし）は埋めずに断る。 */
+export function concatPartFromDto(
+  src: { study: string; series: string; layout: SeriesLayout; patientId: string; modality: string; pet?: StitchPetInfo },
+  dto: {
+    imageOrientationPatient: readonly number[] | null;
+    pixelSpacingRow: number;
+    pixelSpacingCol: number;
+    imageWidth: number;
+    imageHeight: number;
+    frameOfReferenceUID: string | null;
+  },
+): ConcatPart | { missing: "iop" | "pixelSpacing" | "size" } {
+  if (!dto.imageOrientationPatient || dto.imageOrientationPatient.length < 6) return { missing: "iop" };
+  if (!(dto.pixelSpacingRow > 0) || !(dto.pixelSpacingCol > 0)) return { missing: "pixelSpacing" };
+  if (!(dto.imageWidth > 0) || !(dto.imageHeight > 0)) return { missing: "size" };
+  return {
+    study: src.study,
+    series: src.series,
+    layout: src.layout,
+    iop: [...dto.imageOrientationPatient],
+    pixelSpacing: [dto.pixelSpacingRow, dto.pixelSpacingCol],
+    rows: dto.imageHeight,
+    columns: dto.imageWidth,
+    patientId: src.patientId,
+    frameOfReferenceUid: dto.frameOfReferenceUID ?? "",
+    modality: src.modality,
+    pet: src.pet,
+  };
+}
