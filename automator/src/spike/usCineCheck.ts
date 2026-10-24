@@ -14,7 +14,7 @@ import { AUTOMATOR_ROOT } from "../fixtures/manifest.js";
 import { waitForMainScreenReady } from "../checklist/items/shared/helpers.js";
 import { dismissStartupDialogs } from "../common/dismissDialogs.js";
 
-const FILE = process.env.US_FILE;
+const FILE: string = process.env.US_FILE ?? "";
 if (!FILE) throw new Error("US_FILE を指定してください");
 const OUT_DIR = path.join(AUTOMATOR_ROOT, ".results", process.env.OUT ?? "us-cine");
 
