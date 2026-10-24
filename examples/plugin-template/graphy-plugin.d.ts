@@ -2436,6 +2436,12 @@ export type PluginHost = Viewer2DPluginHost | MainScreenPluginHost;
  */
 export interface PluginModule {
   activate(host: PluginHost): void | Promise<void>;
+  /**
+   * AI アシスタントから呼ばれるツールの実装。`plugin.json` の `permissions` に `"ai-tools"`、`aiTools` に同名の宣言が要る
+   * （無いものは呼ばれない）。読み取り・表示のみ。2D 窓が呼び出し時にだけ読み込み、`activate` は呼ばない。
+   * 戻り値は JSON にできる値（深さ 3・4 KB まで）。AI には信用できないデータとして渡る。
+   */
+  aiTools?: Record<string, (args: Record<string, unknown>, host: PluginHost) => unknown | Promise<unknown>>;
 }
 
 /** `host.file.saveJobArtifact()` の指定（H53）。 */

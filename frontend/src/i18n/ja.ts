@@ -2638,7 +2638,7 @@ export const ja: Record<string, string> = {
   "pluginmgr.consent.uiScope": "画面に読み込まれるコード",
   "pluginmgr.consent.jarWarning":
     "{{jars}} を含みます。JAR はアプリ本体と同じ権限で動作し、画像・DB・ファイルすべてにアクセスできます。",
-  "pluginmgr.consent.permissions": "要求権限: {{list}}（外部送信 ai-egress は実行時に強制されます。その他は宣言のみです）",
+  "pluginmgr.consent.permissions": "要求権限: {{list}}（外部送信 ai-egress は実行時に強制されます。ai-tools は AI アシスタントから呼ばれるツールの提供で、利用者がアシスタント側でオンにするまで使われません。その他は宣言のみです）",
   "pluginmgr.consent.noSignature": "この配布物には署名がないため、作成者と内容の真正性を確認できません。配布元を信頼できる場合のみ導入してください。",
   "pluginmgr.consent.overwrite": "同じ ID のプラグインが既に導入されています。上書きされます。",
   "pluginmgr.consent.blocked": "このプラグインはこの環境では動作しないため導入できません。",

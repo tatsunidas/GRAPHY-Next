@@ -2649,7 +2649,7 @@ export const en: Record<string, string> = {
   "pluginmgr.consent.uiScope": "code loaded into the UI",
   "pluginmgr.consent.jarWarning":
     "Includes {{jars}}. A JAR runs with the same privileges as the app itself and can access all images, the database and your files.",
-  "pluginmgr.consent.permissions": "Requested permissions: {{list}} (ai-egress is enforced at runtime; the others are declared only)",
+  "pluginmgr.consent.permissions": "Requested permissions: {{list}} (ai-egress is enforced at runtime; ai-tools lets the AI assistant call tools the plugin provides, only after you turn them on in the assistant; the others are declared only)",
   "pluginmgr.consent.noSignature": "This package is not signed, so its author and contents cannot be verified. Install only if you trust the source.",
   "pluginmgr.consent.overwrite": "A plugin with the same ID is already installed and will be overwritten.",
   "pluginmgr.consent.blocked": "This plugin cannot run in this environment, so it cannot be installed.",
