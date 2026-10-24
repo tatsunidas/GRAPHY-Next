@@ -131,7 +131,8 @@ import { GLAM_CTX_KEY } from "../radiomics/GlamAnalysisScreen";
 import { ROI_FEATURE_CTX_KEY } from "../radiomics/RoiFeatureScreen";
 import { useI18n } from "../i18n/i18n";
 import { OpenRangeDialog } from "./OpenRangeDialog";
-import { OpenConcatDialog, type ConcatPick } from "./OpenConcatDialog";
+import { OpenConcatDialog, seriesShortLabel, type ConcatPick } from "./OpenConcatDialog";
+import { LEFT_PANEL_OPEN_KEY, parseLeftPanelOpen, tileListLabel } from "./leftPanel";
 import { concatTileId, tileIdFor, type ConcatOpened, type ZRange } from "../viewer/virtualLayout";
 import { desktop } from "../desktopBridge";
 import { closeAllPluginWindows } from "../plugins/pluginWindowApi";
@@ -639,6 +640,16 @@ export function Viewer2DScreen({ status }: { status: AppStatus | null }) {
     { study: Study; series: Series; patientKey?: string; tileId?: string; initial?: ZRange } | null
   >(null);
 
+  /** 左の検索パネルの表示/非表示（画像の領域を広げる）。選択は保存する。読み書きできなければ表示のまま。 */
+  const [leftOpen, setLeftOpen] = useState<boolean>(() => {
+    try { return parseLeftPanelOpen(localStorage.getItem(LEFT_PANEL_OPEN_KEY)); } catch { return true; }
+  });
+  const toggleLeftPanel = () => {
+    const next = !leftOpen;
+    setLeftOpen(next);
+    try { localStorage.setItem(LEFT_PANEL_OPEN_KEY, String(next)); } catch { /* 保存できなくても今回は切り替える */ }
+  };
+
   /** 連結ダイアログの対象（左ツリーで選んだ 2 本以上、選んだ順）。 */
   const [concatDlg, setConcatDlg] = useState<ConcatPick[] | null>(null);
 
@@ -738,6 +749,11 @@ export function Viewer2DScreen({ status }: { status: AppStatus | null }) {
     >
       <div style={header}>
         <strong style={{ fontSize: 14 }}>{t("viewer2d.title")}</strong>
+        <button
+          type="button" data-testid="left-panel-toggle" style={hbtn} aria-pressed={leftOpen}
+          title={t(leftOpen ? "viewer2d.leftPanel.hide" : "viewer2d.leftPanel.show")}
+          onClick={toggleLeftPanel}
+        >{leftOpen ? "◀" : "▶"} {t("viewer2d.leftPanel.label")}</button>
         <span style={{ flex: 1 }} />
         <button onClick={() => window.close()} style={hbtn}>
           {t("common.close")}
@@ -750,6 +766,9 @@ export function Viewer2DScreen({ status }: { status: AppStatus | null }) {
           onAdd={addTile}
           onOpenRange={(study, series) => setRangeDlg({ study, series })}
           onOpenConcat={setConcatDlg}
+          hidden={!leftOpen}
+          activeKey={activeKey}
+          onRemoveTile={removeTile}
           initialPatientId={initialPatientId}
           initialPatientName={initialPatientName}
           initialStudyUid={initialStudyUid}
@@ -3569,6 +3588,9 @@ function StudyBrowser({
   onAdd,
   onOpenRange,
   onOpenConcat,
+  hidden,
+  activeKey,
+  onRemoveTile,
   initialPatientId,
   initialPatientName,
   initialStudyUid,
@@ -3577,6 +3599,10 @@ function StudyBrowser({
   onAdd: (study: Study, series: Series) => void;
   onOpenRange: (study: Study, series: Series) => void;
   onOpenConcat: (picks: ConcatPick[]) => void;
+  /** true で非表示。アンマウントはしない（検索結果・チェック・展開を保つ）。 */
+  hidden: boolean;
+  activeKey: string | null;
+  onRemoveTile: (patientKey: string, tileId: string) => void;
   initialPatientId?: string | null;
   initialPatientName?: string | null;
   initialStudyUid?: string | null;
@@ -3659,8 +3685,10 @@ function StudyBrowser({
     // コンテキストなし: 自動検索しない（ユーザーが検索条件を入力して実行する）
   }, [initialPatientId, initialPatientName, initialStudyUid, search]);
 
+  const activePatient = patients.find((p) => p.patientKey === activeKey);
+
   return (
-    <div style={tree}>
+    <div style={hidden ? { ...tree, display: "none" } : tree} data-testid="left-panel">
       <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 8 }}>
         <input
           value={patientId}
@@ -3681,16 +3709,45 @@ function StudyBrowser({
         </button>
       </div>
 
-      {picked.length > 0 && (
-        <div style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 8, fontSize: 12 }}>
-          <button
-            type="button" data-testid="series-concat-open" style={searchBtn} disabled={picked.length < 2}
-            title={picked.length < 2 ? t("openConcat.needTwo") : undefined}
-            onClick={() => onOpenConcat(picked)}
-          >{t("openConcat.menu", { count: picked.length })}</button>
-          <button type="button" onClick={() => setPicked([])}>{t("openConcat.clear")}</button>
-        </div>
-      )}
+      <details open style={listBox} data-testid="left-open-list">
+        <summary style={listHead}>{t("viewer2d.leftPanel.open", { count: activePatient?.tiles.length ?? 0 })}</summary>
+        {(activePatient?.tiles ?? []).map((tile) => {
+          const l = tileListLabel(tile);
+          return (
+            <div key={tile.id} style={listRow} data-testid="left-open-row">
+              <span style={listText} title={l.text}>
+                {l.concat && <span style={concatTag}>{t("viewer2d.leftPanel.concat")}</span>}{l.text}
+              </span>
+              <button
+                type="button" style={listX} title={t("viewer2d.removeTile")}
+                onClick={() => activePatient && onRemoveTile(activePatient.patientKey, tile.id)}
+              >✕</button>
+            </div>
+          );
+        })}
+      </details>
+      <details open style={listBox} data-testid="left-picked-list">
+        <summary style={listHead}>{t("viewer2d.leftPanel.picked", { count: picked.length })}</summary>
+        {picked.map((p) => (
+          <div key={p.series.seriesInstanceUid} style={listRow} data-testid="left-picked-row">
+            <span style={listText} title={seriesShortLabel(p.series)}>{seriesShortLabel(p.series)}</span>
+            <button
+              type="button" style={listX} title={t("viewer2d.leftPanel.unpick")}
+              onClick={() => togglePick(p.study, p.series)}
+            >✕</button>
+          </div>
+        ))}
+        {picked.length > 0 && (
+          <div style={{ display: "flex", gap: 6, alignItems: "center", marginTop: 4 }}>
+            <button
+              type="button" data-testid="series-concat-open" style={searchBtn} disabled={picked.length < 2}
+              title={picked.length < 2 ? t("openConcat.needTwo") : undefined}
+              onClick={() => onOpenConcat(picked)}
+            >{t("openConcat.menu", { count: picked.length })}</button>
+            <button type="button" onClick={() => setPicked([])}>{t("openConcat.clear")}</button>
+          </div>
+        )}
+      </details>
       {error && <div style={{ color: "#b00020", fontSize: 12 }}>{error}</div>}
       {!error && studies === undefined && (
         <div style={{ fontSize: 12, color: "#888" }}>{t("viewer2d.searchPrompt")}</div>
@@ -3909,6 +3966,18 @@ const tree: React.CSSProperties = {
   padding: 12,
   overflowY: "auto",
   background: "#fafbfc",
+};
+const listBox: React.CSSProperties = { marginBottom: 8, fontSize: 12 };
+const listHead: React.CSSProperties = { cursor: "pointer", fontWeight: 600, color: "#33404d", marginBottom: 2 };
+const listRow: React.CSSProperties = { display: "flex", alignItems: "center", gap: 4, padding: "1px 0" };
+const listText: React.CSSProperties = {
+  flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: "#33404d",
+};
+const listX: React.CSSProperties = {
+  flex: "none", border: "none", background: "transparent", cursor: "pointer", color: "#8a98a6", fontSize: 12,
+};
+const concatTag: React.CSSProperties = {
+  marginRight: 4, padding: "0 4px", borderRadius: 3, background: "#e3edf9", color: "#0b5cad", fontSize: 11,
 };
 const treeInput: React.CSSProperties = {
   padding: "5px 8px",
