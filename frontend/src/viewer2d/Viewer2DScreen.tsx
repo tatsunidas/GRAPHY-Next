@@ -3650,12 +3650,13 @@ function StudyBrowser({
       : [...prev, { study, series }]);
   }, []);
 
-  const loadedTileIds = useMemo(() => {
-    const ids = new Set<string>();
+  // 表示中のタイル ID → それを持つ患者の鍵（行の ✓ を押して閉じるとき removeTile に要る）。
+  const tileOwner = useMemo(() => {
+    const owner = new Map<string, string>();
     for (const p of patients) {
-      for (const tile of p.tiles) ids.add(tile.id);
+      for (const tile of p.tiles) owner.set(tile.id, p.patientKey);
     }
-    return ids;
+    return owner;
   }, [patients]);
 
   const search = useCallback((filters: Parameters<typeof fetchStudies>[0]) => {
@@ -3789,7 +3790,8 @@ function StudyBrowser({
           <StudyNode
             key={`${s.studyInstanceUid}:${treeVersion}`}
             study={s}
-            loadedTileIds={loadedTileIds}
+            tileOwner={tileOwner}
+            onRemoveTile={onRemoveTile}
             onAdd={onAdd}
             onOpenRange={onOpenRange}
             pickedUids={picked.map((p) => p.series.seriesInstanceUid)}
@@ -3805,7 +3807,8 @@ function StudyBrowser({
 
 function StudyNode({
   study,
-  loadedTileIds,
+  tileOwner,
+  onRemoveTile,
   onAdd,
   onOpenRange,
   pickedUids,
@@ -3813,7 +3816,8 @@ function StudyNode({
   autoOpen = false,
 }: {
   study: Study;
-  loadedTileIds: Set<string>;
+  tileOwner: Map<string, string>;
+  onRemoveTile: (patientKey: string, tileId: string) => void;
   onAdd: (study: Study, series: Series) => void;
   onOpenRange: (study: Study, series: Series) => void;
   /** 連結して開くために選ばれているシリーズの UID（選んだ順）。 */
@@ -3882,7 +3886,8 @@ function StudyNode({
       {open &&
         (series ?? []).map((se) => {
           const tileId = `${study.studyInstanceUid}|${se.seriesInstanceUid}`;
-          const loaded = loadedTileIds.has(tileId);
+          const ownerKey = tileOwner.get(tileId);
+          const loaded = ownerKey !== undefined;
           const seriesLabel = `#${se.seriesNumber ?? "?"} ${se.modality ?? ""} ${se.seriesDescription ?? ""}`.trim();
 
           return (
@@ -3927,15 +3932,15 @@ function StudyNode({
                 {se.numberOfInstances})
               </span>
               <button
-                onClick={() => !loaded && onAdd(study, se)}
-                disabled={loaded}
+                onClick={() => (ownerKey !== undefined ? onRemoveTile(ownerKey, tileId) : onAdd(study, se))}
+                data-testid="series-toggle"
                 style={{
                   ...addBtn,
                   ...(loaded
                     ? { color: "#0b5cad", border: "1px solid #b0cce8", background: "#eef4fc" }
                     : {}),
                 }}
-                title={loaded ? "表示中" : "タイルに追加"}
+                title={loaded ? t("viewer2d.leftPanel.closeSeries") : "タイルに追加"}
               >
                 {loaded ? "✓" : "＋"}
               </button>
