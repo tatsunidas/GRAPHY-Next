@@ -77,6 +77,8 @@ import { useI18n } from "../i18n/i18n";
 import { fetchSettings } from "../settings/settingsApi";
 import { hexToRgb01 } from "../viewer/hexColor";
 import { VIEWER3D_CTX_KEY, parseViewer3dCtx, viewer3dCtxChanged } from "./viewer3dCtx";
+import { concatFailureMessage, resolveConcatStack } from "../viewer/concatVolume";
+import { concatTileId, type ConcatOpened } from "../viewer/virtualLayout";
 
 interface Viewer3DContext {
   study: Study;
@@ -87,6 +89,8 @@ interface Viewer3DContext {
   t?: number;
   /** 範囲つきで開いたタイルから起動したとき、ボリュームをこの範囲だけで組む。 */
   range?: ZRange;
+  /** 連結して開いたタイルから起動したとき。選んだシリーズから連結を作り直してボリュームにする。 */
+  concat?: { parts: ConcatOpened["parts"]; labels: string[] };
   ts: number;
 }
 
@@ -251,9 +255,17 @@ export function Viewer3DScreen({ status }: { status: AppStatus | null }) {
         setMessage(t("viewer3d.noSeries"));
         return;
       }
-      setTitle(series.seriesDescription || series.seriesInstanceUid);
+      // 連結: 複数のシリーズにまたがるので、1 本のシリーズに紐づく機能（2D の ROI・サーバー上のオブジェクト・
+      // 中心線の派生シリーズ保存）は出さない（seriesRef を持たない）。
+      const cc = ctx.concat ? await resolveConcatStack(ctx.concat.parts, mode2) : null;
+      if (cc && !cc.ok) {
+        setPhase("error");
+        setMessage(concatFailureMessage(cc, t));
+        return;
+      }
+      setTitle(ctx.concat ? ctx.concat.labels.join(" + ") : series.seriesDescription || series.seriesInstanceUid);
       modalityRef.current = series.modality;
-      seriesRef.current = {
+      seriesRef.current = ctx.concat ? null : {
         studyUid: ctx.study.studyInstanceUid,
         seriesUid: series.seriesInstanceUid,
         seriesDesc: series.seriesDescription || series.seriesInstanceUid,
@@ -266,7 +278,10 @@ export function Viewer3DScreen({ status }: { status: AppStatus | null }) {
       let imageIds: string[];
       // メモリ量の事前予測に使う（layout が取れなかったフォールバック経路では予測しない）。
       let guardLayout: SeriesLayoutDto | null = null;
-      try {
+      if (cc?.ok) {
+        guardLayout = cc.dto;
+        imageIds = cc.imageIds;
+      } else try {
         const layout = await fetchSeriesLayout(ctx.study.studyInstanceUid, series.seriesInstanceUid);
         const c0 = Math.min(Math.max(0, ctx.c ?? 0), Math.max(0, layout.nC - 1));
         const t0 = Math.min(Math.max(0, ctx.t ?? 0), Math.max(0, layout.nT - 1));
@@ -332,14 +347,16 @@ export function Viewer3DScreen({ status }: { status: AppStatus | null }) {
 
       // web: 全スライスを 1 リクエストで BFF キャッシュに載せてから volume 構築（個別 WADO-RS 往復を回避）。
       if (mode2 === "web") {
-        try {
-          await prefetchSeries(ctx.study.studyInstanceUid, series.seriesInstanceUid);
-        } catch {
-          /* prefetch は最適化。失敗しても個別取得で続行 */
+        for (const p of ctx.concat?.parts ?? [{ study: ctx.study, series }]) {
+          try {
+            await prefetchSeries(p.study.studyInstanceUid, p.series.seriesInstanceUid);
+          } catch {
+            /* prefetch は最適化。失敗しても個別取得で続行 */
+          }
         }
       }
 
-      const volId = `graphy-viewer3d-vol:${series.seriesInstanceUid}`;
+      const volId = `graphy-viewer3d-vol:${ctx.concat ? concatTileId(ctx.concat.parts.map((p) => ({ study: p.study.studyInstanceUid, series: p.series.seriesInstanceUid }))) : series.seriesInstanceUid}`;
       const built = await buildMprVolume(imageIds, series.modality, volId, {
         maxBytes: memDecision.enforceMaxBytes,
       });

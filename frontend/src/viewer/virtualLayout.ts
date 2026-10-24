@@ -14,6 +14,7 @@
  *
  * <p>backend の ZCT レイアウト API は変えない。レイアウトは今のとおり全体を取り、画面側で絞る。
  */
+import type { Series, Study } from "../api";
 import type { SeriesLayout } from "./seriesLayout";
 import { checkStitchBasis, type StitchPetInfo, type StitchViolation } from "./volumeStitch";
 
@@ -338,6 +339,8 @@ export function concatLayouts(parts: readonly ConcatPart[]): ConcatResult {
 
 /** 連結して開いたタイルに渡すもの。各シリーズのレイアウトは開く前に取得・連結済みで、見出しと継ぎ目の表示に使う名前を添える。 */
 export interface ConcatOpened {
+  /** 選んだ順のシリーズ。MPR・3D・Slicer は ids の関数を持てない ctx に載せ、受け側でこれから連結を作り直す。 */
+  parts: Array<{ study: Study; series: Series }>;
   layout: SeriesLayout;
   cells: ConcatCell[];
   joints: ConcatJoint[];
@@ -353,6 +356,41 @@ export function concatHasGap(joints: ReadonlyArray<Pick<ConcatJoint, "gapMm">> |
 /** 連結タイルの ID。選んだ順の各部分（範囲つきも）をそのままつなぐ。同じ組み合わせ・同じ順なら同じ ID。 */
 export function concatTileId(parts: ReadonlyArray<{ study: string; series: string; range?: ZRange }>): string {
   return `concat|${parts.map((p) => tileIdFor(p.study, p.series, p.range)).join("+")}`;
+}
+
+export type InplaneGridResult =
+  | { ok: true }
+  | { ok: false; reason: "size" | "pixelSpacing" | "orientation" | "offset" };
+
+/**
+ * 連結する全シリーズの面内の格子（行列数・ピクセル間隔・向き・面内位置）が同じか。同じなら、連結後のスライス列を
+ * そのまま 1 本のボリュームにできる（再サンプルしない）。
+ *
+ * <p>許容は「画像の端でのずれが最小ピクセル間隔の 1/100 以内」から導く。ピクセル間隔の差は全幅（長辺の画素数）、
+ * 向きの成分の差は長辺の長さ、で効くので、それぞれ許容を割る。面内位置は行・列方向へ射影した IPP の差。
+ * 最初のシリーズと比べる。値が不明（IPP なし）のときは同じとみなさず断る。
+ */
+export function sameInplaneGrid(parts: readonly ConcatPart[]): InplaneGridResult {
+  if (parts.length < 2) return { ok: true };
+  const a = parts[0];
+  const finest = Math.min(a.pixelSpacing[0], a.pixelSpacing[1]);
+  const tol = finest / 100;
+  const longestPx = Math.max(a.rows, a.columns);
+  const longestMm = Math.hypot((a.columns - 1) * a.pixelSpacing[1], (a.rows - 1) * a.pixelSpacing[0]);
+  const ip0 = a.layout.ippAt?.(0) ?? null;
+  for (const b of parts.slice(1)) {
+    if (b.rows !== a.rows || b.columns !== a.columns) return { ok: false, reason: "size" };
+    if (b.pixelSpacing.some((p, i) => Math.abs(p - a.pixelSpacing[i]) * longestPx > tol)) {
+      return { ok: false, reason: "pixelSpacing" };
+    }
+    if (b.iop.some((x, i) => !(Math.abs(x - a.iop[i]) * longestMm <= tol))) return { ok: false, reason: "orientation" };
+    const ip = b.layout.ippAt?.(0) ?? null;
+    if (!ip0 || !ip) return { ok: false, reason: "offset" };
+    const d = [ip[0] - ip0[0], ip[1] - ip0[1], ip[2] - ip0[2]];
+    const along = (o: number) => d[0] * a.iop[o] + d[1] * a.iop[o + 1] + d[2] * a.iop[o + 2];
+    if (!(Math.abs(along(0)) <= tol && Math.abs(along(3)) <= tol)) return { ok: false, reason: "offset" };
+  }
+  return { ok: true };
 }
 
 /** 取得したレイアウト DTO の判定用の値から {@link ConcatPart} を作る。不明な値（間隔 0・IOP なし・FoR なし）は埋めずに断る。 */

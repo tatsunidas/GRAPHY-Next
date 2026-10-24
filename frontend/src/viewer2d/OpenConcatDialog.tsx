@@ -118,6 +118,7 @@ export function OpenConcatDialog({
             type="button" data-testid="open-concat-confirm"
             disabled={!result || !result.ok}
             onClick={() => result && result.ok && onOpen({
+              parts: picks.map((p) => ({ study: p.study, series: p.series })),
               layout: result.layout, cells: result.cells, joints: result.joints, labels,
             })}
           >{t("openConcat.open")}</button>

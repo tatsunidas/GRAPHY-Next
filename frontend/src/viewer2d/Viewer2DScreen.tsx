@@ -134,6 +134,7 @@ import { OpenRangeDialog } from "./OpenRangeDialog";
 import { OpenConcatDialog, seriesShortLabel, type ConcatPick } from "./OpenConcatDialog";
 import { LEFT_PANEL_OPEN_KEY, parseLeftPanelOpen, tileListLabel } from "./leftPanel";
 import { concatTileId, tileIdFor, type ConcatOpened, type ZRange } from "../viewer/virtualLayout";
+import { concatFailureMessage, resolveConcatStack } from "../viewer/concatVolume";
 import { desktop } from "../desktopBridge";
 import { closeAllPluginWindows } from "../plugins/pluginWindowApi";
 import { mountSeriesPanel, closeAllSeriesPanels, PluginSeriesPanels } from "../plugins/pluginSeriesPanelApi";
@@ -177,6 +178,28 @@ interface Tile {
 
 /** 連結タイルか。`tile.series` を単一シリーズとして読む操作は、これが true のとき使わない（代表の 1 本だけを指してしまう）。 */
 const isConcatTile = (tile: Pick<Tile, "concat">) => !!tile.concat;
+
+/**
+ * 連結したタイルを MPR・3D・Slicer の窓で開く。窓を開く前に連結の列を作ってみて、隙間・格子の違いなどで
+ * ボリュームにできないなら理由を出して開かない（窓だけ開いて空になるのを避ける）。
+ */
+async function openConcatWindow(
+  opened: ConcatOpened,
+  mode: "standalone" | "web",
+  view: "mpr" | "viewer3d" | "slicer",
+  extra: Record<string, unknown>,
+  t: (key: string, vars?: Record<string, string | number>) => string,
+  notify: (msg: string) => void,
+): Promise<void> {
+  const r = await resolveConcatStack(opened.parts, mode);
+  if (!r.ok) { notify(concatFailureMessage(r, t)); return; }
+  const first = opened.parts[0];
+  const ctx = { study: first.study, series: first.series, concat: { parts: opened.parts, labels: opened.labels }, ...extra, ts: Date.now() };
+  localStorage.setItem(`graphy-${view}-ctx`, JSON.stringify(ctx));
+  const d = desktop();
+  if (d?.openViewer) void d.openViewer(view);
+  else window.open(`${window.location.pathname}#${view}`, `graphy-${view}`);
+}
 
 interface PatientSession {
   patientKey: string; // patientId || patientName || studyUid（同一患者判定キー）
@@ -1823,7 +1846,7 @@ function TileGrid({
         const tid = resolveTargets()[0];
         const tile = patient.tiles.find((tl) => tl.id === tid);
         if (!tile) { comingSoon(t("main.toolbar.viewer3d")); return; }
-        if (isConcatTile(tile)) { notify(t("series.concat.disabled")); return; }
+        if (tile.concat) { void openConcatWindow(tile.concat, mode, "viewer3d", { c: 0, t: 0 }, t, notify); return; }
         const dims = tileDimsRef.current.get(tile.id);
         const ctx = { study: tile.study, series: tile.series, c: dims?.c ?? 0, t: dims?.t ?? 0, range: tile.range, ts: Date.now() };
         localStorage.setItem("graphy-viewer3d-ctx", JSON.stringify(ctx));
@@ -1836,7 +1859,7 @@ function TileGrid({
         const tid = resolveTargets()[0];
         const tile = patient.tiles.find((tl) => tl.id === tid);
         if (!tile) { comingSoon(t("main.toolbar.mpr")); return; }
-        if (isConcatTile(tile)) { notify(t("series.concat.disabled")); return; }
+        if (tile.concat) { void openConcatWindow(tile.concat, mode, "mpr", {}, t, notify); return; }
         const ctx = { study: tile.study, series: tile.series, range: tile.range, ts: Date.now() };
         localStorage.setItem("graphy-mpr-ctx", JSON.stringify(ctx));
         const d = desktop();
@@ -1848,7 +1871,7 @@ function TileGrid({
         const tid = resolveTargets()[0];
         const tile = patient.tiles.find((tl) => tl.id === tid);
         if (!tile) { comingSoon(t("main.toolbar.slicer")); return; }
-        if (isConcatTile(tile)) { notify(t("series.concat.disabled")); return; }
+        if (tile.concat) { void openConcatWindow(tile.concat, mode, "slicer", { c: 0, t: 0 }, t, notify); return; }
         const ctx = { study: tile.study, series: tile.series, range: tile.range, ts: Date.now() };
         localStorage.setItem("graphy-slicer-ctx", JSON.stringify(ctx));
         const d = desktop();

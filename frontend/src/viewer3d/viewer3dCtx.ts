@@ -7,7 +7,7 @@
  * 3D ウィンドウが開いたまま 2D から別のシリーズ/C/T で再起動されたとき、読み込み直すかの判断に使う。
  * `ts`（書き込み時刻）だけが違う場合は同じ内容なので読み込み直さない。
  */
-import { rangeKey, type ZRange } from "../viewer/virtualLayout";
+import { concatTileId, rangeKey, type ZRange } from "../viewer/virtualLayout";
 
 export const VIEWER3D_CTX_KEY = "graphy-viewer3d-ctx";
 
@@ -18,12 +18,14 @@ export interface Viewer3DCtxLike {
   t?: number;
   /** 範囲つきで開いたときの範囲。違えば別の内容として読み直す。 */
   range?: ZRange;
+  /** 連結して開いたときの選んだシリーズ。違えば別の内容として読み直す。 */
+  concat?: { parts: Array<{ study: { studyInstanceUid: string }; series: { seriesInstanceUid: string } }> };
 }
 
 export function viewer3dCtxKey(ctx: Viewer3DCtxLike | null | undefined): string | null {
   const study = ctx?.study?.studyInstanceUid;
   if (!study) return null;
-  return `${study}|${ctx?.series?.seriesInstanceUid ?? ""}|${ctx?.c ?? 0}|${ctx?.t ?? 0}${ctx?.range ? `|${rangeKey(ctx.range)}` : ""}`;
+  return `${study}|${ctx?.series?.seriesInstanceUid ?? ""}|${ctx?.c ?? 0}|${ctx?.t ?? 0}${ctx?.range ? `|${rangeKey(ctx.range)}` : ""}${ctx?.concat ? `|${concatTileId(ctx.concat.parts.map((p) => ({ study: p.study.studyInstanceUid, series: p.series.seriesInstanceUid })))}` : ""}`;
 }
 
 /** 現在のコンテキストと、新しく書かれたコンテキストが（読み込み直すべきほど）違うか。 */
