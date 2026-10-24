@@ -29,3 +29,24 @@ describe("deleteRelatedNote", () => {
     expect(en["dbadmin.delete.relatedNote"]).toContain("Reports are kept");
   });
 });
+
+import { patientTarget, patientsQuery } from "./dbAdminApi";
+
+describe("患者 ID が空の患者の宛先と検索", () => {
+  it("通常の患者はパス、空の患者はクエリで指す（パスだと /api/patients/ になり宛先が成り立たない）", () => {
+    expect(patientTarget("P 1/2")).toBe("/api/patients/P%201%2F2");
+    expect(patientTarget("")).toBe("/api/patients?patientId=");
+  });
+  it("未設定のみは検索語が無くても組み立てられ、従来の検索語だけの形は変わらない", () => {
+    expect(patientsQuery()).toBe("/api/patients");
+    expect(patientsQuery("ab c")).toBe("/api/patients?q=ab+c");
+    expect(patientsQuery(undefined, true)).toBe("/api/patients?onlyMissing=true");
+    expect(patientsQuery("x", false)).toBe("/api/patients?q=x");
+  });
+  it("文言は ja と en にある", () => {
+    for (const k of ["dbadmin.search.onlyMissing", "dbadmin.patientId.unset"] as const) {
+      expect(ja[k]).toBeTruthy();
+      expect(en[k]).toBeTruthy();
+    }
+  });
+});

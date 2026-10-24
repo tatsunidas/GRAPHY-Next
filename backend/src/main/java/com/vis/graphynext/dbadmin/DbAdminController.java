@@ -31,8 +31,9 @@ public class DbAdminController {
 
     /** 患者一覧（q で患者ID/名の部分一致検索）。 */
     @GetMapping("/api/patients")
-    public List<PatientDto> patients(@RequestParam(required = false) String q) {
-        return service.listPatients(q);
+    public List<PatientDto> patients(@RequestParam(required = false) String q,
+                                     @RequestParam(required = false, defaultValue = "false") boolean onlyMissing) {
+        return service.listPatients(q, onlyMissing);
     }
 
     /** 患者情報（患者レベル）の編集。 */
@@ -41,6 +42,21 @@ public class DbAdminController {
         DbAdminService.EditResult r = service.updatePatient(patientId, edit.patientName(), edit.patientBirthDate(),
                 edit.patientSex(), edit.newPatientId());
         return Map.of("updatedInstances", r.updatedInstances(), "records", r.records());
+    }
+
+    /**
+     * 患者 ID が空の患者を指す編集。パスの {@code /api/patients/{patientId}} は ID が空だと宛先が成り立たない
+     * （{@code /api/patients/}）ので、クエリで指す。{@code ?patientId=}（空）を許す。
+     */
+    @PutMapping(value = "/api/patients", params = "patientId")
+    public Map<String, Object> updatePatientByQuery(@RequestParam String patientId, @RequestBody PatientEdit edit) {
+        return updatePatient(patientId, edit);
+    }
+
+    /** 患者 ID が空の患者の削除（クエリ指定。理由は {@link #updatePatientByQuery}）。 */
+    @DeleteMapping(value = "/api/patients", params = "patientId")
+    public Map<String, Object> deletePatientByQuery(@RequestParam String patientId) {
+        return deletePatient(patientId);
     }
 
     /** 患者の削除（全スタディ）。 */

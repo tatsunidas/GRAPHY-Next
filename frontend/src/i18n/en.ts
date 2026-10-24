@@ -3155,6 +3155,8 @@ export const en: Record<string, string> = {
   "dbadmin.tab.patients": "Patients",
   "dbadmin.tab.stats": "Statistics",
   "dbadmin.search.placeholder": "Search by Patient ID / Name",
+  "dbadmin.search.onlyMissing": "Only missing Patient ID / Name",
+  "dbadmin.patientId.unset": "(no ID)",
   "dbadmin.searchPrompt": "Search by Patient ID or Name (the full list is not shown initially).",
   "dbadmin.patients.empty": "No matching patients.",
   "dbadmin.delete.relatedNote": "ROIs, registrations, GLAM analyses, XA calibrations and other records attached to these images will also be deleted. Reports are kept.",
