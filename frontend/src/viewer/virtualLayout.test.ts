@@ -6,7 +6,8 @@ import { describe, expect, it } from "vitest";
 import type { SeriesLayout } from "./seriesLayout";
 import { parseSliceRange } from "../mainscreen/sliceRange";
 import {
-  contiguousSpan, describeKept, positionsMm, rangeFromIndices, rangeToleranceMm, restrictLayout, tileIdFor,
+  checkConcat, concatLayouts, contiguousSpan, describeKept, positionsMm, rangeFromIndices, rangeToleranceMm,
+  restrictLayout, tileIdFor, type ConcatPart,
 } from "./virtualLayout";
 
 /** 300 枚・1 mm 間隔・法線 +z の合成レイアウト（imageId は z と c・t が分かる文字列）。 */
@@ -144,5 +145,194 @@ describe("contiguousSpan / describeKept / tileIdFor", () => {
     expect(a).not.toBe(b);
     expect(tileIdFor("S", "R", { kind: "mm", fromMm: 199, toMm: 100 })).toBe(a); // 順序によらない
     expect(tileIdFor("S", "R", { kind: "index", from: 0, to: 9 })).toBe("S|R|#1-10");
+  });
+});
+
+/** 法線 +z・start mm から step mm 間隔で n 枚の連結用の 1 本。imageId は「名前:元の z」。 */
+function part(name: string, start: number, n: number, over: Partial<ConcatPart> = {}, step = 1): ConcatPart {
+  return {
+    study: "st",
+    series: name,
+    layout: {
+      nZ: n, nC: 1, nT: 1,
+      zStack: () => Array.from({ length: n }, (_, z) => `${name}:${z}`),
+      ippAt: (z) => [0, 0, start + z * step],
+      normal: [0, 0, 1],
+    },
+    iop: [1, 0, 0, 0, 1, 0],
+    pixelSpacing: [1, 1],
+    rows: 512,
+    columns: 512,
+    patientId: "P1",
+    frameOfReferenceUid: "FOR1",
+    modality: "CT",
+    ...over,
+  };
+}
+
+/** 向きの許容角 s / (2L)（512x512・1 mm で約 6.9e-4 rad）。 */
+const THETA = 1 / (2 * Math.hypot(511, 511));
+const tilted = (rad: number) => [Math.cos(rad), 0, -Math.sin(rad), 0, 1, 0];
+
+function concatOk(parts: ConcatPart[]) {
+  const r = concatLayouts(parts);
+  if (!r.ok) throw new Error("concat failed: " + r.violations.join(","));
+  return r;
+}
+
+describe("concatLayouts", () => {
+  it("overlap: cuts at the midpoint, no interleaving, uniform 1 mm", () => {
+    const r = concatOk([part("A", 0, 100), part("B", 90, 110)]);
+    expect(r.layout.nZ).toBe(200);
+    const pos = positionsMm(r.layout)!;
+    for (let i = 1; i < pos.length; i++) expect(pos[i] - pos[i - 1]).toBeCloseTo(1, 2);
+    r.cells.forEach((c, i) => {
+      if (c.series === "A") expect(pos[i]).toBeLessThanOrEqual(94 + 1e-9);
+      else expect(pos[i]).toBeGreaterThanOrEqual(95 - 1e-9);
+    });
+    // 並びは A が先、B が後で、途中で入れ替わらない
+    const firstB = r.cells.findIndex((c) => c.series === "B");
+    expect(r.cells.slice(0, firstB).every((c) => c.series === "A")).toBe(true);
+    expect(r.cells.slice(firstB).every((c) => c.series === "B")).toBe(true);
+    expect(r.joints).toHaveLength(1);
+    expect(r.joints[0].index).toBe(firstB);
+    expect(r.joints[0].overlapMm).toBeCloseTo(10, 6);
+    expect(r.joints[0].gapMm).toBe(0);
+    const ids = r.layout.zStack(0, 0);
+    expect(ids[0]).toBe("A:0");
+    expect(ids[firstB]).toBe("B:5"); // B の 95 mm（B の先頭 90 mm から 5 枚目）
+  });
+
+  it("gap: keeps every slice and reports the edge-to-edge gap", () => {
+    const r = concatOk([part("A", 0, 100), part("B", 110, 90)]);
+    expect(r.layout.nZ).toBe(190);
+    expect(r.joints[0].gapMm).toBeCloseTo(10, 6);
+    expect(r.joints[0].overlapMm).toBe(0);
+  });
+
+  it("exactly adjacent: no overlap and no gap", () => {
+    const r = concatOk([part("A", 0, 100), part("B", 100, 100)]);
+    expect(r.layout.nZ).toBe(200);
+    expect(r.joints[0].gapMm).toBeCloseTo(0, 9);
+    expect(r.joints[0].overlapMm).toBeCloseTo(0, 9);
+  });
+
+  it("orders by position whatever order the parts are given, and keeps the source per cell", () => {
+    const r = concatOk([part("B", 100, 100), part("A", 0, 100)]);
+    expect(r.cells[0].series).toBe("A");
+    expect(r.cells[199].series).toBe("B");
+    expect(r.cells[0].partIndex).toBe(1);
+  });
+
+  it("three parts use the same rule at each seam", () => {
+    const r = concatOk([part("A", 0, 50), part("B", 45, 50), part("C", 90, 60)]);
+    const pos = positionsMm(r.layout)!;
+    for (let i = 1; i < pos.length; i++) expect(pos[i] - pos[i - 1]).toBeCloseTo(1, 2);
+    expect(r.joints).toHaveLength(2);
+    expect(r.layout.nZ).toBe(150);
+    expect(new Set(r.cells.map((c) => c.series))).toEqual(new Set(["A", "B", "C"]));
+  });
+
+  it("a series listed in descending order is output ascending", () => {
+    const desc = part("A", 0, 100);
+    desc.layout.ippAt = (z) => [0, 0, 99 - z];
+    const r = concatOk([desc, part("B", 100, 100)]);
+    const pos = positionsMm(r.layout)!;
+    for (let i = 1; i < pos.length; i++) expect(pos[i]).toBeGreaterThan(pos[i - 1]);
+  });
+
+  it("ippAt follows the concatenated order", () => {
+    const r = concatOk([part("A", 0, 100), part("B", 90, 110)]);
+    expect(r.layout.ippAt!(0)).toEqual([0, 0, 0]);
+    expect(r.layout.ippAt!(199)).toEqual([0, 0, 199]);
+  });
+
+  it("does not touch the source layouts", () => {
+    const a = part("A", 0, 100);
+    const b = part("B", 90, 110);
+    concatOk([a, b]);
+    expect(a.layout.nZ).toBe(100);
+    expect(b.layout.nZ).toBe(110);
+  });
+});
+
+describe("checkConcat violations", () => {
+  const A = () => part("A", 0, 100);
+  const B = () => part("B", 100, 100);
+  const violations = (b: ConcatPart) => {
+    const r = checkConcat([A(), b]);
+    return r.ok ? [] : r.violations;
+  };
+
+  it("passes the clean pair (positive control)", () => {
+    expect(checkConcat([A(), B()]).ok).toBe(true);
+  });
+
+  it("different FrameOfReferenceUID / empty", () => {
+    expect(violations({ ...B(), frameOfReferenceUid: "FOR2" })).toEqual(["frameOfReference"]);
+    expect(violations({ ...B(), frameOfReferenceUid: "" })).toContain("frameOfReference");
+  });
+
+  it("different patient", () => {
+    expect(violations({ ...B(), patientId: "P2" })).toEqual(["patient"]);
+  });
+
+  it("different modality", () => {
+    expect(violations({ ...B(), modality: "MR" })).toEqual(["modality"]);
+  });
+
+  it("orientation: rejects 2x tolerance, accepts 0.5x tolerance", () => {
+    expect(violations({ ...B(), iop: tilted(2 * THETA) })).toEqual(["orientation"]);
+    expect(violations({ ...B(), iop: tilted(0.5 * THETA) })).toEqual([]);
+  });
+
+  it("C or T above 1, or a T stack", () => {
+    const multiC = B();
+    multiC.layout = { ...multiC.layout, nC: 2 };
+    expect(violations(multiC)).toEqual(["multiCT"]);
+    const multiT = B();
+    multiT.layout = { ...multiT.layout, nT: 2 };
+    expect(violations(multiT)).toEqual(["multiCT"]);
+    const tStack = B();
+    tStack.layout = { ...tStack.layout, stackAxis: "t" };
+    expect(violations(tStack)).toEqual(["multiCT"]);
+  });
+
+  it("no IPP", () => {
+    const b = B();
+    b.layout = { ...b.layout, ippAt: undefined };
+    expect(violations(b)).toEqual(["noIpp"]);
+  });
+
+  it("one series only", () => {
+    expect(checkConcat([A()])).toMatchObject({ ok: false, violations: ["tooFew"] });
+  });
+
+  it("a series inside another one (nothing left after the cut)", () => {
+    const r = checkConcat([part("A", 0, 100), part("B", 40, 10)]);
+    expect(r.ok).toBe(false);
+    expect(r.violations).toContain("nested");
+  });
+
+  it("reports every violation at once", () => {
+    const r = checkConcat([A(), { ...B(), patientId: "P2", modality: "MR", frameOfReferenceUid: "X" }]);
+    expect(r.violations).toEqual(["patient", "frameOfReference", "modality"]);
+  });
+
+  it("concatLayouts refuses with the same violations", () => {
+    const r = concatLayouts([A(), { ...B(), patientId: "P2" }]);
+    expect(r).toMatchObject({ ok: false, violations: ["patient"] });
+  });
+});
+
+describe("restrictLayout then concat (partial series in a concat)", () => {
+  it("uses the restricted range of each part", () => {
+    const a = part("A", 0, 100);
+    const ra = restrictLayout(a.layout, { kind: "mm", fromMm: 50, toMm: 99 });
+    expect(ra.ok).toBe(true);
+    if (!ra.ok) return;
+    const r = concatOk([{ ...a, layout: ra.layout }, part("B", 100, 100)]);
+    expect(r.layout.nZ).toBe(150);
+    expect(r.joints[0].gapMm).toBeCloseTo(0, 9);
   });
 });
