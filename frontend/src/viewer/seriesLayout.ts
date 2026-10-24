@@ -43,6 +43,11 @@ export interface SeriesLayout {
   /** 指定 (c, t) に対する Z スタック（imageId 配列, z 昇順）。 */
   zStack(c: number, t: number): string[];
   /**
+   * 指定 (c, t) の Z に実画像があるか（false = `zStack` がブランクで埋めた位置）。省略時は全 Z が実画像。
+   * 刻みの違う相が 1 シリーズに入るとき、スライス送りでブランクを飛ばすのに使う（`realSlices.ts`）。
+   */
+  hasImage?(c: number, t: number, z: number): boolean;
+  /**
    * 軸の提示（ラベル・種別）。省略時は {@link DEFAULT_AXES}。
    * UI 側に「XA なら…」の分岐を撒かないための仕組み（`fw/angio-design.md` §5.7）。
    */
@@ -139,6 +144,7 @@ export function buildLayoutFromDto(
       }
       return out;
     },
+    hasImage: (c, t, z) => !!grid[c]?.[t]?.[z],
     // T 方向のスタック（stackAxis="t" のときの表示スタック）。
     // ブランク埋めはしない — XA は欠損を最終フレーム保持で backend が既に埋めており、
     // ここでブランクを挟むと再生中に黒画面が点滅する。
