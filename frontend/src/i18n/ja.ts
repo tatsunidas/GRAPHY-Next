@@ -1398,7 +1398,6 @@ export const ja: Record<string, string> = {
   "levelset.expandOutside": "outside",
   "levelset.expandInside": "inside",
   "levelset.iterations": "反復数",
-  "viewer2d.tool.releaseRoiFirst": "ROI・描画ツール（計測/ブラシ/Wand 等）が有効中です。ツールバーで W/L・Pan・Zoom などに切り替えてから操作してください。",
   "viewer2d.tool.wandTolerance": "Wand トレランス（輝度差）",
   "viewer2d.tool.brushSize": "ブラシ径(px)",
   "roiMgr.title": "ROI マネージャ",

@@ -64,7 +64,7 @@ import { computeOrientationMarkers, type OrientationMarkers } from "./orientatio
 import { computeScaleBar, type ScaleBar } from "./scaleBar";
 import { getOrCreateCameraSync, getOrCreateVoiSync, getOrCreatePresentationSync, getOrCreateSeriesVoiSync, broadcastSeriesProperties, captureVoiBaseline, clearVoiBaseline } from "./sync";
 import { registerReferenceSource, bumpReference, subscribeReference, computeReferenceSegments, type RefSegment } from "./referenceLines";
-import { registerViewerCommands, type ViewerCommands, type ViewerDerivedSeriesRequest, type ViewerDerivedSeriesResult, type ViewerOverlay, type ViewerPixelData, type ViewerSrRequest, type ViewerSrResult, type ViewerPixelDataOptions, type ViewerAngioReportRequest, type ViewerPresentationStateRequest, type ViewerRoi, type ViewerSpatialCalibration, type ViewerTargetInfo, type ViewerViewState, type ViewerXaState, type ViewerXaCine, ViewerLabelVolume, ViewerLabelVolumeResult } from "./viewerCommands";
+import { registerViewerCommands, requestTool, type ViewerCommands, type ViewerDerivedSeriesRequest, type ViewerDerivedSeriesResult, type ViewerOverlay, type ViewerPixelData, type ViewerSrRequest, type ViewerSrResult, type ViewerPixelDataOptions, type ViewerAngioReportRequest, type ViewerPresentationStateRequest, type ViewerRoi, type ViewerSpatialCalibration, type ViewerTargetInfo, type ViewerViewState, type ViewerXaState, type ViewerXaCine, ViewerLabelVolume, ViewerLabelVolumeResult } from "./viewerCommands";
 import { buildPluginMeta, computeCalipers, hasShapeCalipers, pickPluginMeta, readRoiStats, roiPointsPx } from "./roiRead";
 import { CONTOUR_TOOL_NAMES } from "./roiContourTools";
 import { POINT_ROI_TOOL_NAME } from "./pointRoiTool";
@@ -773,9 +773,11 @@ export function Viewer2D({
 
   /** 左ドラッグの割り当てを Pan↔W/L で切り替える。 */
   const togglePan = () => {
-    // ROI/描画/セグメンテーション系ツールが有効な間は切替を抑止し、先に解除を促す。
+    // ROI/描画/セグメンテーション系ツールが有効な間は、画面のツールバーで Pan を選んだのと同じに
+    // 切り替える（全タイル共通のモード。画面のツールバーの強調も Pan になる）。
+    // 画面が無い文脈（requestTool が false）では、このタイルだけを Pan にする。
     if (BLOCKING_TOOLS.has(activeToolRef.current)) {
-      emitToast(t("viewer2d.tool.releaseRoiFirst"));
+      if (!requestTool(PanTool.toolName)) setActiveToolRef.current?.(PanTool.toolName);
       return;
     }
     const tg = ToolGroupManager.getToolGroup(`${viewportIdRef.current}-tg`);

@@ -1396,7 +1396,6 @@ export const en: Record<string, string> = {
   "levelset.expandOutside": "outside",
   "levelset.expandInside": "inside",
   "levelset.iterations": "Iterations",
-  "viewer2d.tool.releaseRoiFirst": "A ROI/drawing tool (measure/brush/wand) is active. Switch to W/L, Pan, or Zoom in the toolbar first.",
   "viewer2d.tool.wandTolerance": "Wand tolerance (intensity)",
   "viewer2d.tool.brushSize": "Brush size (px)",
   "roiMgr.title": "ROI Manager",
