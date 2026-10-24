@@ -5,9 +5,10 @@
 import { describe, expect, it } from "vitest";
 import type { SeriesLayout } from "./seriesLayout";
 import { parseSliceRange } from "../mainscreen/sliceRange";
+import { concatStackFromParts } from "./concatVolume";
 import {
   checkConcat, concatHasGap, concatLayouts, concatPartFromDto, concatTileId, contiguousSpan, describeKept, positionsMm, rangeFromIndices, rangeToleranceMm,
-  restrictLayout, tileIdFor, type ConcatPart,
+  restrictLayout, sameInplaneGrid, tileIdFor, type ConcatPart,
 } from "./virtualLayout";
 
 /** 300 枚・1 mm 間隔・法線 +z の合成レイアウト（imageId は z と c・t が分かる文字列）。 */
@@ -408,5 +409,90 @@ describe("concatHasGap", () => {
     const r = concatOk([part("A", 0, 50), part("B", 50, 50), part("C", 110, 50)]);
     expect(r.joints.map((j) => j.gapMm > 0)).toEqual([false, true]);
     expect(concatHasGap(r.joints)).toBe(true);
+  });
+});
+
+describe("sameInplaneGrid", () => {
+  const withIpp = (name: string, start: number, n: number, xy: [number, number], over: Partial<ConcatPart> = {}) =>
+    part(name, start, n, {
+      layout: {
+        nZ: n, nC: 1, nT: 1,
+        zStack: () => Array.from({ length: n }, (_, z) => `${name}:${z}`),
+        ippAt: (z) => [xy[0], xy[1], start + z],
+        normal: [0, 0, 1],
+      },
+      ...over,
+    });
+
+  it("accepts identical grids (the in-plane position may differ only along the normal)", () => {
+    expect(sameInplaneGrid([part("A", 0, 100), part("B", 90, 110)])).toEqual({ ok: true });
+  });
+
+  it("refuses different matrix size", () => {
+    expect(sameInplaneGrid([part("A", 0, 10), part("B", 10, 10, { rows: 256, columns: 256 })]))
+      .toEqual({ ok: false, reason: "size" });
+  });
+
+  it("refuses different pixel spacing, even by a small relative amount", () => {
+    expect(sameInplaneGrid([part("A", 0, 10), part("B", 10, 10, { pixelSpacing: [4, 4] })]))
+      .toEqual({ ok: false, reason: "pixelSpacing" });
+    // 512 画素の幅で端が最小ピクセル間隔の 1/100 以内に収まる差（1e-5 mm）は同じ、超える差（1e-4 mm）は別
+    expect(sameInplaneGrid([part("A", 0, 10), part("B", 10, 10, { pixelSpacing: [1.00001, 1.00001] })])).toEqual({ ok: true });
+    expect(sameInplaneGrid([part("A", 0, 10), part("B", 10, 10, { pixelSpacing: [1.0001, 1.0001] })]))
+      .toEqual({ ok: false, reason: "pixelSpacing" });
+  });
+
+  it("refuses a rotated orientation that would shift the image edge by more than 1/100 pixel", () => {
+    expect(sameInplaneGrid([part("A", 0, 10), part("B", 10, 10, { iop: [1, 0, 0, 0, 1, 0].map((x, i) => x + (i === 1 ? 1e-4 : 0)) })]))
+      .toEqual({ ok: false, reason: "orientation" });
+    expect(sameInplaneGrid([part("A", 0, 10), part("B", 10, 10, { iop: [1, 0, 0, 0, 1, 0].map((x, i) => x + (i === 1 ? 1e-6 : 0)) })]))
+      .toEqual({ ok: true });
+  });
+
+  it("refuses an in-plane shift of the origin (a 4x-FOV pair shifted by one pixel is refused, a 0.001 mm rounding is not)", () => {
+    expect(sameInplaneGrid([withIpp("A", 0, 10, [0, 0]), withIpp("B", 10, 10, [1, 0])]))
+      .toEqual({ ok: false, reason: "offset" });
+    expect(sameInplaneGrid([withIpp("A", 0, 10, [0, 0]), withIpp("B", 10, 10, [0, 0.4])]))
+      .toEqual({ ok: false, reason: "offset" });
+    expect(sameInplaneGrid([withIpp("A", 0, 10, [0, 0]), withIpp("B", 10, 10, [0.001, 0])])).toEqual({ ok: true });
+  });
+
+  it("refuses when the position is unknown (no IPP) instead of assuming a match", () => {
+    const noIpp = part("B", 10, 10, { layout: { nZ: 10, nC: 1, nT: 1, zStack: () => [], normal: [0, 0, 1] } });
+    expect(sameInplaneGrid([part("A", 0, 10), noIpp])).toEqual({ ok: false, reason: "offset" });
+  });
+});
+
+describe("concatStackFromParts", () => {
+  it("overlap with the same grid: one ascending list, overlap cut at the midpoint", () => {
+    const r = concatStackFromParts([part("A", 0, 100), part("B", 90, 110)]);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.imageIds.length).toBe(200);
+    expect(r.imageIds[0]).toBe("A:0");
+    expect(r.imageIds[199]).toBe("B:109");
+  });
+
+  it("refuses a gap with its size (volume building would interpolate the unscanned range)", () => {
+    const r = concatStackFromParts([part("A", 0, 100), part("B", 110, 100)]);
+    expect(r.ok).toBe(false);
+    if (r.ok || r.reason !== "gap") throw new Error("expected gap");
+    expect(r.gapMm).toBeCloseTo(10, 5);
+  });
+
+  it("an adjacent pair (no gap, no overlap) is accepted", () => {
+    expect(concatStackFromParts([part("A", 0, 100), part("B", 100, 100)]).ok).toBe(true);
+  });
+
+  it("refuses a different grid after the concat itself is valid", () => {
+    const r = concatStackFromParts([part("A", 0, 100), part("B", 100, 100, { rows: 256, columns: 256, pixelSpacing: [2, 2] })]);
+    expect(r).toEqual({ ok: false, reason: "grid", which: "size" });
+  });
+
+  it("passes the concat violations through (different patient)", () => {
+    const r = concatStackFromParts([part("A", 0, 100), part("B", 100, 100, { patientId: "P2" })]);
+    expect(r.ok).toBe(false);
+    if (r.ok || r.reason !== "violation") throw new Error("expected violation");
+    expect(r.violations).toContain("patient");
   });
 });

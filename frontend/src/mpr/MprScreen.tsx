@@ -25,7 +25,8 @@ import { ensureCornerstoneInitialized } from "../viewer/cornerstoneSetup";
 import { getAppliedVolumeMaxMb, isCacheSizeExceeded } from "../viewer/volumeMemory";
 import { confirmVolumeMemory } from "../viewer/volumeMemoryGuard";
 import { rangedStackIds } from "../viewer/rangedStack";
-import type { ZRange } from "../viewer/virtualLayout";
+import { concatFailureMessage, resolveConcatStack } from "../viewer/concatVolume";
+import { concatTileId, type ConcatOpened, type ZRange } from "../viewer/virtualLayout";
 import { useDeviceClass } from "../mobile/useDeviceClass";
 import { imageIdForInstance, imageIdsForLayoutStack } from "../viewer/imageId";
 import { formatNumber } from "../viewer/roiStatsText";
@@ -75,6 +76,8 @@ interface MprContext {
   series?: Series;
   /** 範囲つきで開いたタイルから起動したとき、ボリュームをこの範囲だけで組む。 */
   range?: ZRange;
+  /** 連結して開いたタイルから起動したとき。選んだシリーズから連結を作り直してボリュームにする。 */
+  concat?: { parts: ConcatOpened["parts"]; labels: string[] };
   ts: number;
 }
 
@@ -192,12 +195,18 @@ export function MprScreen({ status }: { status: AppStatus | null }) {
         setMessage(t("mpr.noSeries"));
         return;
       }
-      setTitle(series.seriesDescription || series.seriesInstanceUid);
+      const cc = ctx.concat ? await resolveConcatStack(ctx.concat.parts, mode) : null;
+      if (cc && !cc.ok) {
+        setPhase("error");
+        setMessage(concatFailureMessage(cc, t));
+        return;
+      }
+      setTitle(ctx.concat ? ctx.concat.labels.join(" + ") : series.seriesDescription || series.seriesInstanceUid);
 
       // レイアウトのセル（c=0・t=0）から組む。インスタンスから組むと、フレームを持つシリーズ
       // （Parametric Map）や複数時相のシリーズで正しいボリュームにならない。
       // レイアウトは面内サイズと画素形式としてメモリの予測（fw/volume-memory-guard.md V2）にも使う。
-      const guardLayout = await fetchSeriesLayout(
+      const guardLayout = cc?.ok ? cc.dto : await fetchSeriesLayout(
         ctx.study.studyInstanceUid,
         series.seriesInstanceUid,
       ).catch(() => null);
@@ -208,7 +217,9 @@ export function MprScreen({ status }: { status: AppStatus | null }) {
         return;
       }
       let imageIds: string[];
-      if (ctx.range) {
+      if (cc?.ok) {
+        imageIds = cc.imageIds;
+      } else if (ctx.range) {
         // 範囲つき: 全体に黙って戻さない（フォールバックもしない）。
         const ranged = rangedStackIds(guardLayout, mode, ctx.study.studyInstanceUid, series.seriesInstanceUid, 0, 0, ctx.range);
         if (!ranged.ok) {
@@ -222,7 +233,7 @@ export function MprScreen({ status }: { status: AppStatus | null }) {
           ? imageIdsForLayoutStack(guardLayout.cells, mode, 0, 0, ctx.study.studyInstanceUid, series.seriesInstanceUid)
           : [];
       }
-      if (!ctx.range && imageIds.length < 3 && (!guardLayout || (guardLayout.nC <= 1 && guardLayout.nT <= 1))) {
+      if (!ctx.range && !cc && imageIds.length < 3 && (!guardLayout || (guardLayout.nC <= 1 && guardLayout.nT <= 1))) {
         const instances = await fetchInstances(ctx.study.studyInstanceUid, series.seriesInstanceUid);
         imageIds = instances.map((i) =>
           imageIdForInstance(mode, i.sopInstanceUid, ctx.study.studyInstanceUid, series.seriesInstanceUid),
@@ -250,14 +261,16 @@ export function MprScreen({ status }: { status: AppStatus | null }) {
 
       // web: 全スライスを 1 リクエストで BFF キャッシュに載せてから volume 構築（個別 WADO-RS 往復を回避）。
       if (mode === "web") {
-        try {
-          await prefetchSeries(ctx.study.studyInstanceUid, series.seriesInstanceUid);
-        } catch {
-          /* prefetch は最適化。失敗しても個別取得で続行 */
+        for (const p of ctx.concat?.parts ?? [{ study: ctx.study, series }]) {
+          try {
+            await prefetchSeries(p.study.studyInstanceUid, p.series.seriesInstanceUid);
+          } catch {
+            /* prefetch は最適化。失敗しても個別取得で続行 */
+          }
         }
       }
 
-      const volumeId = `graphy-mpr-vol:${series.seriesInstanceUid}`;
+      const volumeId = `graphy-mpr-vol:${ctx.concat ? concatTileId(ctx.concat.parts.map((p) => ({ study: p.study.studyInstanceUid, series: p.series.seriesInstanceUid }))) : series.seriesInstanceUid}`;
       const built = await buildMprVolume(imageIds, series.modality, volumeId, {
         maxBytes: memDecision.enforceMaxBytes,
       });

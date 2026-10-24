@@ -26,7 +26,8 @@ import { matchesShortcut } from "../shortcuts/registry";
 import { getAppliedVolumeMaxMb, isCacheSizeExceeded } from "../viewer/volumeMemory";
 import { confirmVolumeMemory } from "../viewer/volumeMemoryGuard";
 import { rangedStackIds } from "../viewer/rangedStack";
-import type { ZRange } from "../viewer/virtualLayout";
+import { concatFailureMessage, resolveConcatStack } from "../viewer/concatVolume";
+import { concatTileId, type ConcatOpened, type ZRange } from "../viewer/virtualLayout";
 import {
   teardownSlicer,
   displayReconStack,
@@ -77,6 +78,8 @@ interface SlicerContext {
   t?: number;
   /** 範囲つきで開いたタイルから起動したとき、ボリュームをこの範囲だけで組む。 */
   range?: ZRange;
+  /** 連結して開いたタイルから起動したとき。選んだシリーズから連結を作り直してボリュームにする。 */
+  concat?: { parts: ConcatOpened["parts"]; labels: string[] };
   ts: number;
 }
 
@@ -208,6 +211,8 @@ export function SlicerScreen({ status }: { status: AppStatus | null }) {
   const srcStudyRef = useRef<string>("");
   const srcSeriesRef = useRef<string>("");
   const srcRangeRef = useRef<ZRange | null>(null);
+  /** 連結から開いたか。派生シリーズの保存は 1 本のソースに紐づくので、連結では出さない。 */
+  const srcConcatRef = useRef(false);
   const srcDescRef = useRef<string>("");
   const genResultRef = useRef<GenResult | null>(null);
   const layoutRef = useRef<SeriesLayoutDto | null>(null);
@@ -319,7 +324,14 @@ export function SlicerScreen({ status }: { status: AppStatus | null }) {
         setMessage(t("slicer.noSeries"));
         return;
       }
-      setTitle(series.seriesDescription || series.seriesInstanceUid);
+      const cc = ctx.concat ? await resolveConcatStack(ctx.concat.parts, mode) : null;
+      if (cc && !cc.ok) {
+        setPhase("error");
+        setMessage(concatFailureMessage(cc, t));
+        return;
+      }
+      srcConcatRef.current = !!ctx.concat;
+      setTitle(ctx.concat ? ctx.concat.labels.join(" + ") : series.seriesDescription || series.seriesInstanceUid);
       srcStudyRef.current = ctx.study.studyInstanceUid;
       srcSeriesRef.current = series.seriesInstanceUid;
       srcDescRef.current = series.seriesDescription || "";
@@ -330,7 +342,7 @@ export function SlicerScreen({ status }: { status: AppStatus | null }) {
       let c0 = 0;
       let t0 = 0;
       try {
-        const layout = await fetchSeriesLayout(ctx.study.studyInstanceUid, series.seriesInstanceUid);
+        const layout = cc?.ok ? cc.dto : await fetchSeriesLayout(ctx.study.studyInstanceUid, series.seriesInstanceUid);
         layoutRef.current = layout;
         setDims({ nC: layout.nC, nT: layout.nT, cDim: layout.cDimension, tDim: layout.tDimension });
         c0 = Math.min(Math.max(0, ctx.c ?? 0), Math.max(0, layout.nC - 1));
@@ -338,7 +350,9 @@ export function SlicerScreen({ status }: { status: AppStatus | null }) {
         setCSel(c0);
         setTSel(t0);
         srcRangeRef.current = ctx.range ?? null;
-        if (ctx.range) {
+        if (cc?.ok) {
+          imageIds = cc.imageIds;
+        } else if (ctx.range) {
           // 範囲つき: 全体に黙って戻さない（フォールバックもしない）。
           const ranged = rangedStackIds(layout, mode, ctx.study.studyInstanceUid, series.seriesInstanceUid, c0, t0, ctx.range);
           if (!ranged.ok) {
@@ -350,7 +364,7 @@ export function SlicerScreen({ status }: { status: AppStatus | null }) {
         } else {
           imageIds = imageIdsForCT(layout, mode, c0, t0, ctx.study.studyInstanceUid, series.seriesInstanceUid);
         }
-        if (!ctx.range && imageIds.length < 3) {
+        if (!ctx.range && !cc && imageIds.length < 3) {
           const instances = await fetchInstances(ctx.study.studyInstanceUid, series.seriesInstanceUid);
           imageIds = instances.map((i) =>
             imageIdForInstance(mode, i.sopInstanceUid, ctx.study.studyInstanceUid, series.seriesInstanceUid),
@@ -358,7 +372,7 @@ export function SlicerScreen({ status }: { status: AppStatus | null }) {
         }
       } catch {
         layoutRef.current = null;
-        if (ctx.range) {
+        if (ctx.range || ctx.concat) {
           // 範囲つきでレイアウトが取れないときは、全体を組まずに止める。
           setPhase("error");
           setMessage(t("series.range.fail.invalid"));
@@ -391,13 +405,15 @@ export function SlicerScreen({ status }: { status: AppStatus | null }) {
       }
       // web: 全スライスを 1 リクエストで BFF キャッシュに載せてから volume 構築（個別 WADO-RS 往復を回避）。
       if (mode === "web") {
-        try {
-          await prefetchSeries(ctx.study.studyInstanceUid, series.seriesInstanceUid);
-        } catch {
-          /* prefetch は最適化。失敗しても個別取得で続行 */
+        for (const p of ctx.concat?.parts ?? [{ study: ctx.study, series }]) {
+          try {
+            await prefetchSeries(p.study.studyInstanceUid, p.series.seriesInstanceUid);
+          } catch {
+            /* prefetch は最適化。失敗しても個別取得で続行 */
+          }
         }
       }
-      const volumeId = `graphy-slicer-vol:${series.seriesInstanceUid}:c${c0}t${t0}`;
+      const volumeId = `graphy-slicer-vol:${ctx.concat ? concatTileId(ctx.concat.parts.map((p) => ({ study: p.study.studyInstanceUid, series: p.series.seriesInstanceUid }))) : series.seriesInstanceUid}:c${c0}t${t0}`;
       // CT はガントリチルトを必要に応じて自動補正（buildMprVolume 内で判定）。
       const built = await buildMprVolume(imageIds, series.modality, volumeId, {
         maxBytes: memDecision.enforceMaxBytes,
@@ -693,6 +709,10 @@ export function SlicerScreen({ status }: { status: AppStatus | null }) {
   const onSave = useCallback(async () => {
     const g = genResultRef.current;
     if (!g || saving) return;
+    if (srcConcatRef.current) {
+      setGenInfo(t("series.concat.saveUnsupported"));
+      return;
+    }
     setSaving(true);
     setGenInfo("");
     try {
@@ -737,7 +757,7 @@ export function SlicerScreen({ status }: { status: AppStatus | null }) {
   const applyCT = useCallback(
     async (cIdx: number, tIdx: number) => {
       const layout = layoutRef.current;
-      if (!layout) return;
+      if (!layout || srcConcatRef.current) return;
       const rangeNow = srcRangeRef.current;
       let ids: string[];
       if (rangeNow) {
