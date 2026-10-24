@@ -93,7 +93,14 @@ export type AiCapability = "image-to-image" | "image-to-text" | "text-to-text" |
 export interface AiGenerateRequest {
   /** 用途。main 側が応答の種類を決める。 */
   capability?: AiCapability;
-  model: string;
+  model?: string;
+  /**
+   * 呼び出し元プラグインの**自己申告**。main は、インストール済みで `ai-egress` を宣言している id しか受理せず、
+   * 無い・未知なら `unknown-caller` で拒否する。権限の証明ではない（main は呼び出し元を区別できない）。
+   */
+  claimedPluginId?: string;
+  /** 同意を「このセッション・このスコープでは再確認しない」にする単位（通常はシリーズ UID）。 */
+  scopeKey?: string;
   prompt: string;
   /** 送信画像（base64、データ URL の接頭辞は含めない）。 */
   imageBase64: string;
@@ -483,7 +490,7 @@ export interface GraphyDesktop {
    * 外部 AI API への中継（デスクトップのみ）。
    *
    * <p>⚠ **直接呼ばないこと。** 患者画像の外部送信には同意と監査が要る。
-   * 呼び出しは必ず `plugins/pluginAiApi.ts` の `requestAiGeneration()` を通す。
+   * 同意・監査は main（aiEgressGate）が行う。プラグインは `requestAiGeneration()` 経由で呼ぶ。
    */
   aiGenerate?: (req: AiGenerateRequest) => Promise<AiGenerateResult>;
   /**

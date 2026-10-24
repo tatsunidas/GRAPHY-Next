@@ -7,8 +7,8 @@
  *   1. ai-egress を宣言していないプラグインは **同意ダイアログを出す前に** permission-denied で弾かれる
  *   2. 宣言しているプラグインには host.ai / host.file が渡る
  *   3. 鍵が未設定なら、同意を求める前に no-api-key で止まる（無駄な同意を取らない）
- *   4. 鍵を入れると同意ダイアログが出る。**送る画像とプロンプト全文**が表示される
- *   5. 確認チェックを入れるまで送信ボタンは押せない
+ *   4. 🔴 pluginId なし・未知・権限なしを名乗る直接呼び（renderer から window.graphyDesktop.aiGenerate）は main が拒否する
+ *   5. 鍵を入れると main のネイティブ確認が出る（直接呼びでもプラグイン経由でも）。宛先・プロンプト・サムネイルが付く
  *   6. 取り消すと canceled が返り、**送信は起きない**
  *   7. 設定画面でキーを保存すると「設定済み」になり、GET /api/settings には**含まれない**
  *   8. 保存した秘密ファイルが**平文でない**
@@ -43,7 +43,8 @@ const OUT_DIR = path.join(AUTOMATOR_ROOT, ".results", "art-check");
 const PLUGIN_IDS = ["ai-egress-check", "ai-egress-denied"];
 /** 本物のキーは使わない。ゲートの検証に必要なのは「入っている」という状態だけ。 */
 const DUMMY_KEY = "AUTOMATOR-DUMMY-KEY-NOT-A-REAL-CREDENTIAL";
-const SECRET_FILE = path.join(DESKTOP_RUN_DATA_DIR, "secrets.enc.json");
+// dev の Electron は CWD が desktop/ になり、秘密ファイルはそこに作られる（run-data ではない）。gitignore 済み。
+const SECRET_FILE = path.join(AUTOMATOR_ROOT, "..", "desktop", "secrets.enc.json");
 
 function installVerificationPlugins(): void {
   for (const id of PLUGIN_IDS) {
@@ -92,7 +93,11 @@ async function runProbe(page: Page, pluginId: string, globalName: string, waitFo
 
 async function main(): Promise<void> {
   fs.mkdirSync(OUT_DIR, { recursive: true });
-  fs.rmSync(SECRET_FILE, { force: true });
+  // 開発者が実際の鍵を持っているかもしれない。消さずに止める（この spike が作った分だけ最後に消す）。
+  if (fs.existsSync(SECRET_FILE)) {
+    console.log(`既に ${SECRET_FILE} があります。実際の鍵を壊さないよう中断します。退避してから再実行してください。`);
+    process.exit(2);
+  }
   installVerificationPlugins();
 
   const driver = new DesktopDriver();
@@ -124,6 +129,24 @@ async function main(): Promise<void> {
     await viewerPage.getByTestId("series-viewer-root").first().waitFor({ state: "visible", timeout: 15_000 });
     await viewerPage.waitForTimeout(2000);
 
+    // main のネイティブ確認はスタブする（実クラウド・実ダイアログを持ち込まない）。finally で必ず元に戻す。
+    type Dlg = { calls: { message: string; detail: string; hasIcon: boolean; hasCheckbox: boolean }[]; answer: number };
+    await driver.app.evaluate(({ dialog }) => {
+      const g = globalThis as unknown as { __dlg: Dlg & { orig: unknown } };
+      g.__dlg = { calls: [], answer: 1, orig: dialog.showMessageBox };
+      (dialog as unknown as { showMessageBox: unknown }).showMessageBox = async (...args: unknown[]) => {
+        const o = (args.find((x) => x && typeof x === "object" && "message" in (x as object)) ?? {}) as Record<string, unknown>;
+        g.__dlg.calls.push({
+          message: String(o.message ?? ""),
+          detail: String(o.detail ?? ""),
+          hasIcon: !!o.icon,
+          hasCheckbox: typeof o.checkboxLabel === "string",
+        });
+        return { response: g.__dlg.answer, checkboxChecked: false };
+      };
+    });
+    const dlg = () => driver.app.evaluate(() => (globalThis as unknown as { __dlg: Dlg }).__dlg);
+    const setAnswer = (n: number) => driver.app.evaluate((_a, v) => { (globalThis as unknown as { __dlg: Dlg }).__dlg.answer = v; }, n);
     const denied = await runProbe(viewerPage, "ai-egress-denied", "__aiEgressDenied", true);
     check(denied.hasAi === true, "権限が無くても host.ai は渡る（拒否は呼び出し時）", denied.hasAi);
     check(
@@ -132,8 +155,8 @@ async function main(): Promise<void> {
       denied.outcome,
     );
     check(
-      (await viewerPage.getByTestId("ai-egress-consent").count()) === 0,
-      "🔴 権限が無いときは同意ダイアログを出さない（同意を取る前に弾く）",
+      (await dlg()).calls.length === 0,
+      "🔴 権限が無いときは確認ダイアログを出さない（同意を取る前に弾く）",
     );
 
     const noKey = await runProbe(viewerPage, "ai-egress-check", "__aiEgressCheck", true);
@@ -144,8 +167,8 @@ async function main(): Promise<void> {
       noKey.outcome,
     );
     check(
-      (await viewerPage.getByTestId("ai-egress-consent").count()) === 0,
-      "鍵が無いときも同意ダイアログは出ない",
+      (await dlg()).calls.length === 0,
+      "🔴 鍵が無いときも確認ダイアログは出ない（main が鍵を先に見る）",
     );
 
     // --- 2. 設定画面で鍵を入れる ---
@@ -155,11 +178,11 @@ async function main(): Promise<void> {
     await mainPage.getByTestId("settings-dialog").waitFor({ state: "visible", timeout: 10_000 });
     await mainPage.getByTestId("settings-cat-ai").click();
     await mainPage.getByTestId("ai-panel").waitFor({ state: "visible", timeout: 10_000 });
-    await mainPage.getByTestId("ai-key-input").fill(DUMMY_KEY);
-    await mainPage.getByTestId("ai-key-save").click();
-    await mainPage.getByTestId("ai-key-state").waitFor({ state: "visible" });
+    await mainPage.getByTestId("ai-key-input-gemini-public").fill(DUMMY_KEY);
+    await mainPage.getByTestId("ai-key-save-gemini-public").click();
+    await mainPage.getByTestId("ai-key-state-gemini-public").waitFor({ state: "visible" });
     await mainPage.waitForTimeout(500);
-    const stateText = (await mainPage.getByTestId("ai-key-state").textContent()) ?? "";
+    const stateText = (await mainPage.getByTestId("ai-key-state-gemini-public").textContent()) ?? "";
     check(/設定済み|Configured/.test(stateText), "鍵を保存すると『設定済み』になる", stateText);
     await mainPage.screenshot({ path: path.join(OUT_DIR, "2-ai-panel.png") });
 
@@ -174,51 +197,66 @@ async function main(): Promise<void> {
 
     await mainPage.getByTestId("dialog-close-button").click();
 
-    // --- 3. 同意ダイアログ ---
-    console.log("\n[3] 送信前の同意");
-    await viewerPage.evaluate(() => {
-      delete (window as unknown as Record<string, unknown>).__aiEgressCheck;
-    });
-    await viewerPage.getByTestId("viewer2d-menu-plugins").click();
-    await viewerPage.getByTestId("plugin-item-ai-egress-check").click();
+    // --- 3. 送信前の同意（main のネイティブ確認。ダイアログはスタブし、節の終わりで必ず戻す） ---
+    console.log("\n[3] 送信前の同意（main）");
+    const direct = (extra: Record<string, unknown>) =>
+      viewerPage!.evaluate(
+        (e) =>
+          (window as unknown as { graphyDesktop: { aiGenerate: (r: unknown) => Promise<{ ok: boolean; error?: string }> } }).graphyDesktop.aiGenerate({
+            capability: "image-to-image",
+            prompt: "DIRECT CALL PROBE",
+            imageBase64: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4//8/AAX+Av4N70a4AAAAAElFTkSuQmCC",
+            mimeType: "image/png",
+            ...e,
+          }),
+        extra,
+      );
+    {
+      // 🔴 プラグインを経由せず renderer から直接呼ぶ（悪意あるプラグインが取れる経路）。
+      const noId = await direct({});
+      check(noId.ok === false && noId.error === "unknown-caller", "🔴 直接呼び（pluginId なし）は unknown-caller で拒否される", noId);
+      const fake = await direct({ claimedPluginId: "no-such-plugin" });
+      check(fake.error === "unknown-caller", "🔴 直接呼び（未知の pluginId）は拒否される", fake);
+      const noPerm = await direct({ claimedPluginId: "ai-egress-denied" });
+      check(noPerm.error === "unknown-caller", "🔴 直接呼び（ai-egress 未宣言のプラグインを名乗る）は拒否される", noPerm);
+      check((await dlg()).calls.length === 0, "🔴 拒否された呼び出しでは確認ダイアログも出ない（送信経路に入らない）");
 
-    const consent = viewerPage.getByTestId("ai-egress-consent");
-    await consent.waitFor({ state: "visible", timeout: 20_000 });
-    check(true, "🔴 鍵があると同意ダイアログが出る");
+      // 🔴 ai-egress を宣言したプラグインを名乗る直接呼び: 確認が main で出て、取り消すと送信されない。
+      await setAnswer(1);
+      const cancelDirect = await direct({ claimedPluginId: "ai-egress-check", scopeKey: "s-direct" });
+      let d = await dlg();
+      check(d.calls.length === 1, "🔴 直接呼びでも main の確認ダイアログが出る", d.calls.length);
+      check(cancelDirect.ok === false && cancelDirect.error === "canceled", "🔴 取り消すと canceled が返る（送信しない）", cancelDirect);
+      check(d.calls[0]?.message.includes("generativelanguage.googleapis.com") === true, "宛先ホストが表示される（main が解決した値）", d.calls[0]?.message);
+      check(d.calls[0]?.detail.includes("DIRECT CALL PROBE") === true, "プロンプトが表示される", d.calls[0]?.detail);
+      check(d.calls[0]?.hasIcon === true, "送信する画像のサムネイルが付く", d.calls[0]);
+      check(d.calls[0]?.hasCheckbox === true, "scopeKey があれば『再確認しない』が選べる");
+      check(d.calls[0]?.message.includes("自己申告") === true, "プラグイン名は自己申告と明記される", d.calls[0]?.message);
 
-    const host = (await viewerPage.getByTestId("ai-egress-host").textContent()) ?? "";
-    check(host.includes("generativelanguage.googleapis.com"), "宛先ホストが表示される", host);
-    const prompt = (await viewerPage.getByTestId("ai-egress-prompt").textContent()) ?? "";
-    check(prompt.includes("AUTOMATOR PROBE"), "🔴 プロンプト全文が表示される", prompt.slice(0, 60));
-    check(
-      (await viewerPage.getByTestId("ai-egress-image").count()) === 1,
-      "🔴 送信する画像そのものが表示される",
-    );
-    check(
-      await viewerPage.getByTestId("ai-egress-send").isDisabled(),
-      "🔴 確認チェックを入れるまで送信ボタンは押せない",
-    );
-    await viewerPage.screenshot({ path: path.join(OUT_DIR, "3-consent.png") });
-
-    await viewerPage.getByTestId("ai-egress-ack").check();
-    check(
-      !(await viewerPage.getByTestId("ai-egress-send").isDisabled()),
-      "確認チェックを入れると送信ボタンが押せる",
-    );
-
-    // 取り消す。**ここで送信が起きないこと**が本題。
-    await viewerPage.getByTestId("ai-egress-cancel").click();
-    await consent.waitFor({ state: "detached", timeout: 10_000 });
-    await viewerPage.waitForFunction(
-      () => (window as unknown as Record<string, Probe>).__aiEgressCheck?.outcome !== undefined,
-      undefined,
-      { timeout: 10_000 },
-    );
-    const cancelled = await viewerPage.evaluate(
-      () => (window as unknown as Record<string, Probe>).__aiEgressCheck,
-    );
-    check(cancelled.outcome?.error === "canceled", "🔴 取り消すと canceled が返る（送信しない）", cancelled.outcome);
+      // プラグイン経由（host.ai.generate）でも同じ。
+      await viewerPage!.evaluate(() => { delete (window as unknown as Record<string, unknown>).__aiEgressCheck; });
+      await viewerPage!.getByTestId("viewer2d-menu-plugins").click();
+      await viewerPage!.getByTestId("plugin-item-ai-egress-check").click();
+      await viewerPage!.waitForFunction(
+        () => (window as unknown as Record<string, Probe>).__aiEgressCheck?.outcome !== undefined,
+        undefined,
+        { timeout: 20_000 },
+      );
+      const viaPlugin = await viewerPage!.evaluate(() => (window as unknown as Record<string, Probe>).__aiEgressCheck);
+      d = await dlg();
+      check(d.calls.length === 2, "🔴 プラグイン経由でも main の確認が出る", d.calls.length);
+      check(viaPlugin.outcome?.error === "canceled", "🔴 プラグイン経由でも取り消すと canceled（送信しない）", viaPlugin.outcome);
+      check(d.calls[1]?.detail.includes("AUTOMATOR PROBE") === true, "プロンプト(先頭)が表示される", d.calls[1]?.detail);
+      console.log("  [未達] 承認して実際に外部へ送る経路（実クラウド・課金を持ち込まないため）。main の関門は単体テスト（aiEgressGate.test.js）のみ");
+    }
   } finally {
+    await driver.app
+      .evaluate(({ dialog }) => {
+        const g = globalThis as unknown as { __dlg?: { orig: unknown } };
+        if (g.__dlg) (dialog as unknown as { showMessageBox: unknown }).showMessageBox = g.__dlg.orig;
+      })
+      .catch(() => {});
+    fs.rmSync(SECRET_FILE, { force: true });
     await viewerPage?.close().catch(() => {});
     await driver.stop();
   }

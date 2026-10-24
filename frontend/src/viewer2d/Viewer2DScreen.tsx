@@ -139,7 +139,6 @@ import { concatFailureMessage, resolveConcatStack } from "../viewer/concatVolume
 import { desktop } from "../desktopBridge";
 import { closeAllPluginWindows } from "../plugins/pluginWindowApi";
 import { mountSeriesPanel, closeAllSeriesPanels, PluginSeriesPanels } from "../plugins/pluginSeriesPanelApi";
-import { AiEgressConsentHost } from "../plugins/pluginAiApi";
 
 // ── 型定義 ────────────────────────────────────────────────────
 
@@ -2089,7 +2088,6 @@ function TileGrid({
       */}
       <PluginSeriesPanels />
       {/* 外部 AI 送信の同意ダイアログ。本体のツリー内に置かないと i18n が効かない。 */}
-      <AiEgressConsentHost />
       <Viewer2DMenuBar
         actions={actions}
         refLines={refLines}
