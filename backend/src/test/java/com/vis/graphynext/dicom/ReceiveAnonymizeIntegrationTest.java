@@ -13,10 +13,12 @@ import com.vis.graphynext.dicom.store.DicomStoreScp;
 import com.vis.graphynext.dicom.store.DicomStoreScu;
 import com.vis.graphynext.settings.SettingsService;
 import org.dcm4che3.data.Attributes;
+import org.dcm4che3.data.Fragments;
 import org.dcm4che3.data.Sequence;
 import org.dcm4che3.data.Tag;
 import org.dcm4che3.data.UID;
 import org.dcm4che3.data.VR;
+import org.dcm4che3.data.Value;
 import org.dcm4che3.io.DicomInputStream;
 import org.dcm4che3.net.TransferCapability;
 import org.junit.jupiter.api.BeforeEach;
@@ -38,6 +40,7 @@ import java.util.Map;
 import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -219,6 +222,54 @@ class ReceiveAnonymizeIntegrationTest {
         assertEquals(0, fileCount(incoming), "incoming に残らない");
         // 氏名は ID と同じ仮名
         assertEquals(got.get(0).getPatientId(), got.get(0).getPatientName());
+    }
+
+    /**
+     * 実機で Implicit VR の C-STORE が全件断られた不具合の回帰。Implicit VR（DICOM の既定の転送構文）と
+     * JPEG Baseline（圧縮）でも受け付け、仮名にして保管し、圧縮の画素は元のバイト列のまま残る。
+     */
+    @Test
+    void implicitVrAndJpeg_areAccepted_withOriginalValuesGone_andJpegPixelsUntouched() throws Exception {
+        String pid = "TS-PID-1";
+        String name = "TSCASE^ICHIRO";
+        String study = "1.2.826.7.9";
+        String series = "1.2.826.7.9.1";
+        Attributes implicit = ct(pid, study, series, "1.2.826.7.9.1.1");
+        implicit.setString(Tag.PatientName, VR.PN, name);
+        Path fImplicit = DicomPhantomFactory.writeFile(tmp.resolve("send-implicit.dcm"), implicit, UID.ImplicitVRLittleEndian);
+
+        Attributes jpeg = ct(pid, study, series, "1.2.826.7.9.1.2");
+        jpeg.setString(Tag.PatientName, VR.PN, name);
+        byte[] frame = new byte[] {(byte) 0xFF, (byte) 0xD8, 1, 2, 3, 4, 5, 6, (byte) 0xFF, (byte) 0xD9};
+        Fragments frags = jpeg.newFragments(Tag.PixelData, VR.OB, 2);
+        frags.add(Value.NULL);
+        frags.add(frame);
+        Path fJpeg = DicomPhantomFactory.writeFile(tmp.resolve("send-jpeg.dcm"), jpeg, UID.JPEGBaseline8Bit);
+
+        int port = freePort();
+        DicomScpServer scp = start(anonymizer, tmp.resolve("in-ts"), port);
+        try {
+            var r1 = send(port, fImplicit);
+            assertTrue(r1.success(), "Implicit VR: " + r1);
+            var r2 = send(port, fJpeg);
+            assertTrue(r2.success(), "JPEG Baseline: " + r2);
+        } finally {
+            scp.stop();
+        }
+
+        List<DicomInstance> got = storage.findMatches(null, pseudo().uid(study), null, null);
+        assertEquals(2, got.size(), "2 枚とも保管された");
+        assertEquals(pseudo().patientId(pid, "ANON-"), got.get(0).getPatientId(), "仮名の患者 ID");
+        assertFalse(anyContains(tmp.resolve("store"), pid, name), "保管庫に元の患者 ID・氏名が残らない");
+        String jpegSop = pseudo().uid("1.2.826.7.9.1.2");
+        DicomInstance jpegStored = got.stream().filter(i -> i.getSopInstanceUid().equals(jpegSop)).findFirst().orElseThrow();
+        try (DicomInputStream in = new DicomInputStream(layout.resolveForRead(jpegStored).toFile())) {
+            in.setIncludeBulkData(DicomInputStream.IncludeBulkData.YES);
+            Attributes fmi = in.readFileMetaInformation();
+            assertEquals(UID.JPEGBaseline8Bit, fmi.getString(Tag.TransferSyntaxUID), "圧縮のまま");
+            Fragments out = (Fragments) in.readDataset().getValue(Tag.PixelData);
+            assertArrayEquals(frame, (byte[]) out.get(1), "圧縮された画素は元のバイト列のまま");
+        }
     }
 
     @Test
