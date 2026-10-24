@@ -436,6 +436,82 @@ class PluginManagerServiceTest {
         assertTrue(e.getMessage().contains("signature check failed"), e.getMessage());
     }
 
+    // --- ローカル zip ＋ .minisig（署名つきで入れた同 id の再導入） ---------------------
+
+    private PluginManagerService signedInstalled(Path dir, MinisignFixture key, List<String> trusted) throws Exception {
+        byte[] zip = pluginZip();
+        PluginManagerService svc = service(dir, signedClient(zip, key.sign(zip, "v1"), key.publicKey()),
+                true, "standalone", true, trusted);
+        svc.installFromGitHub("owner/acme", null, null, true);
+        return svc;
+    }
+
+    @Test
+    void localZipWithMatchingMinisigReinstallsAPreviouslySignedPlugin(@TempDir Path dir) throws Exception {
+        MinisignFixture key = new MinisignFixture("00112233445566b1");
+        PluginManagerService svc = signedInstalled(dir, key, List.of());
+        byte[] zip = pluginZip();
+        String sig = key.sign(zip, "v2");
+
+        PluginManagerService.PluginPreview p = svc.inspectFile(zip, "acme.zip", sig, null);
+        assertEquals("pinned", p.signature());
+        assertTrue(p.alreadyInstalled());
+
+        InstalledPlugin rec = svc.installFromFile(zip, "acme.zip", p.sha256(), sig, null);
+        assertEquals("B166554433221100", rec.signerKeyId());
+        assertEquals(key.publicKey(), rec.signerPublicKey()); // 固定済みの鍵が維持される
+    }
+
+    @Test
+    void localZipSignedByTrustedKeyIsVerified(@TempDir Path dir) throws Exception {
+        MinisignFixture key = new MinisignFixture("00112233445566b2");
+        PluginManagerService svc = service(dir, fakeClient(pluginZip()), true, "standalone", true,
+                List.of(key.publicKey()));
+        byte[] zip = pluginZip();
+        String sig = key.sign(zip, "file:acme.zip");
+
+        InstalledPlugin rec = svc.installFromFile(zip, "acme.zip", null, sig, null);
+
+        assertEquals("verified", rec.trust());
+        assertEquals("B266554433221100", rec.signerKeyId());
+    }
+
+    @Test
+    void localZipWithoutMinisigStillCannotReplaceASignedPlugin(@TempDir Path dir) throws Exception {
+        PluginManagerService svc = signedInstalled(dir, new MinisignFixture("00112233445566b3"), List.of());
+        byte[] zip = pluginZip();
+
+        PluginManagerService.PluginPreview p = svc.inspectFile(zip, "acme.zip", null, null);
+        assertEquals("invalid", p.signature());
+        assertTrue(p.signatureProblem().contains(".minisig"), p.signatureProblem());
+
+        PluginInstallException e = assertThrows(PluginInstallException.class,
+                () -> svc.installFromFile(zip, "acme.zip", null, null, null));
+        assertTrue(e.getMessage().contains("signature check failed"), e.getMessage());
+    }
+
+    @Test
+    void localZipWithMinisigOfAnotherKeyOrAnotherContentIsRejected(@TempDir Path dir) throws Exception {
+        MinisignFixture key = new MinisignFixture("00112233445566b4");
+        PluginManagerService svc = signedInstalled(dir, key, List.of());
+        byte[] zip = pluginZip();
+
+        MinisignFixture attacker = new MinisignFixture("00112233445566b5");
+        assertThrows(PluginInstallException.class,
+                () -> svc.installFromFile(zip, "acme.zip", null, attacker.sign(zip, "x"), attacker.publicKey()));
+
+        String sigOfOther = key.sign("other content".getBytes(StandardCharsets.UTF_8), "x");
+        assertThrows(PluginInstallException.class,
+                () -> svc.installFromFile(zip, "acme.zip", null, sigOfOther, null));
+    }
+
+    @Test
+    void localZipWithoutMinisigIsUnchangedWhenNothingWasSigned(@TempDir Path dir) throws Exception {
+        PluginManagerService svc = service(dir, fakeClient(pluginZip()), true, "standalone");
+        InstalledPlugin rec = svc.installFromFile(pluginZip(), "acme.zip", null, null, null);
+        assertEquals("local", rec.trust());
+    }
+
     @Test
     void unsignedReleaseIsUnchangedFromBefore(@TempDir Path dir) throws Exception {
         PluginManagerService svc = service(dir, fakeClient(pluginZip()), true, "standalone");

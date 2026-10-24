@@ -207,15 +207,44 @@ export const disablePlugin = (id: string) =>
 export const uninstallPlugin = (id: string) =>
   httpSend<{ id: string; removed: boolean }>(`/api/plugin-manager/${encodeURIComponent(id)}`, "DELETE");
 
+/** ローカルの zip と、一緒に選んだ署名（`<zip名>.minisig`）・公開鍵（`.pub`）の中身。 */
+export interface LocalPackage {
+  zip: File;
+  signature?: string;
+  publicKey?: string;
+}
+
+/**
+ * 選ばれたファイルから zip と署名を取り出す。署名は `<zip名>.minisig`（無ければ 1 つだけ選ばれた `.minisig`）、
+ * 公開鍵は `.pub`。zip が無ければ null。署名つきで入れたプラグインを再導入するには署名を添える必要がある。
+ */
+export async function pickLocalPackage(files: File[]): Promise<LocalPackage | null> {
+  const zip = files.find((f) => /\.zip$/i.test(f.name));
+  if (!zip) return null;
+  const sigs = files.filter((f) => /\.minisig$/i.test(f.name));
+  const sig = sigs.find((f) => f.name.toLowerCase() === `${zip.name}.minisig`.toLowerCase()) ?? (sigs.length === 1 ? sigs[0] : undefined);
+  const pub = files.find((f) => /\.pub$/i.test(f.name));
+  return {
+    zip,
+    signature: sig ? await sig.text() : undefined,
+    publicKey: pub ? await pub.text() : undefined,
+  };
+}
+
+const signatureFields = (p: LocalPackage): Record<string, string> => ({
+  ...(p.signature ? { signature: p.signature } : {}),
+  ...(p.publicKey ? { publicKey: p.publicKey } : {}),
+});
+
 /** ローカル zip の検査（オフライン導入の同意画面用）。展開・保存はしない。 */
-export const inspectPluginFromFile = (file: File) =>
-  postZip<PluginPreview>("/api/plugin-manager/inspect/file", file);
+export const inspectPluginFromFile = (p: LocalPackage) =>
+  postZip<PluginPreview>("/api/plugin-manager/inspect/file", p.zip, signatureFields(p));
 
 /**
  * ローカル zip を導入（オフライン/エアギャップ）。`confirmedSha256` は検査で提示された値。
  */
-export const installPluginFromFile = (file: File, confirmedSha256: string) =>
-  postZip<InstalledPlugin>("/api/plugin-manager/install/file", file, { confirmedSha256 });
+export const installPluginFromFile = (p: LocalPackage, confirmedSha256: string) =>
+  postZip<InstalledPlugin>("/api/plugin-manager/install/file", p.zip, { confirmedSha256, ...signatureFields(p) });
 
 /**
  * zip の multipart POST。http.ts は JSON 専用のため raw fetch を使う。

@@ -80,11 +80,14 @@ public class PluginManagerController {
     }
 
     @PostMapping("/inspect/file")
-    public ResponseEntity<Object> inspectFile(@RequestParam("file") MultipartFile file) {
+    public ResponseEntity<Object> inspectFile(@RequestParam("file") MultipartFile file,
+                                              @RequestParam(value = "signature", required = false) String signature,
+                                              @RequestParam(value = "publicKey", required = false) String publicKey) {
         if (file == null || file.isEmpty()) {
             return ResponseEntity.badRequest().body(Map.of("error", "file is required"));
         }
-        return handle(() -> service.inspectFile(file.getBytes(), file.getOriginalFilename()));
+        return handle(() -> service.inspectFile(file.getBytes(), file.getOriginalFilename(),
+                blankToNull(signature), blankToNull(publicKey)));
     }
 
     @PostMapping("/install/github")
@@ -99,11 +102,18 @@ public class PluginManagerController {
     @PostMapping("/install/file")
     public ResponseEntity<Object> installFile(@RequestParam("file") MultipartFile file,
                                               @RequestParam(value = "confirmedSha256", required = false)
-                                              String confirmedSha256) {
+                                              String confirmedSha256,
+                                              @RequestParam(value = "signature", required = false) String signature,
+                                              @RequestParam(value = "publicKey", required = false) String publicKey) {
         if (file == null || file.isEmpty()) {
             return ResponseEntity.badRequest().body(Map.of("error", "file is required"));
         }
-        return handle(() -> service.installFromFile(file.getBytes(), file.getOriginalFilename(), confirmedSha256));
+        return handle(() -> service.installFromFile(file.getBytes(), file.getOriginalFilename(), confirmedSha256,
+                blankToNull(signature), blankToNull(publicKey)));
+    }
+
+    private static String blankToNull(String s) {
+        return s == null || s.isBlank() ? null : s;
     }
 
     @PostMapping("/{id}/reinstall")
