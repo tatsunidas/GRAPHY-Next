@@ -144,7 +144,10 @@ abstract class FileSystemPluginRegistry implements PluginRegistry {
             log.warn("[plugins] {}: unknown category '{}' (shown ungrouped)", d.id(), category);
             category = null;
         }
-        return new PluginManifest(d.id(), d.name(), d.version(), fe, be, d.permissions(), category);
+        List<AiToolSpec> tools = AiToolSpec.sanitize(d.aiTools(), d.permissions(),
+                why -> log.warn("[plugins] {}: {}", d.id(), why));
+        return new PluginManifest(d.id(), d.name(), d.version(), fe, be, d.permissions(), category,
+                tools.isEmpty() ? null : tools);
     }
 
     /** 走査で見つかった 1 プラグイン（フォルダ + 記述）。 */
