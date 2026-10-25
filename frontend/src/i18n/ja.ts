@@ -850,7 +850,7 @@ export const ja: Record<string, string> = {
   "viewer2d.legend.target": "操作の対象",
   "viewer2d.fusion.crossPatient": "別の患者の画像は重ねられません（患者の取り違え防止）",
   "viewer2d.scope.ambiguous": "複数の患者を表示中です。操作したい画像を一度クリックして、対象の患者を決めてください",
-  "roi.paste.otherPatient": "別の患者のタイルへは貼り付けられません（コピー元と同じ患者のタイルを選んでください）",
+  "roi.paste.outOfImage": "貼り付けできませんでした。コピー元と同じ大きさ（mm）にすると、貼り付け先の画像からはみ出します。",
   "viewer2d.searchPrompt": "患者IDまたは患者氏名を入力して検索してください。",
   "viewer2d.layout": "レイアウト",
   "viewer2d.layout.auto": "自動",
