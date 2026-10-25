@@ -138,7 +138,7 @@ public final class RetentionPlanner {
             return;
         }
         chosen.add(s.studyUid());
-        items.add(new RetentionPlan.Item(s.studyUid(), s.patientName(), s.studyDate(), s.modality(), s.instances(),
+        items.add(new RetentionPlan.Item(s.studyUid(), s.patientId(), s.patientName(), s.studyDate(), s.modality(), s.instances(),
                 s.sizeBytes(), s.lastReceivedAt(), reason));
         total[0] += s.sizeBytes();
     }
