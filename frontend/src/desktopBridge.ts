@@ -519,7 +519,7 @@ export interface GraphyDesktop {
    */
   assistantViewerCmd?: (
     sessionId: string,
-    cmd: { kind: "action" | "getState" | "getMeasurements"; id?: string; params?: unknown } | { kind: "pluginTool"; name: string; params?: unknown },
+    cmd: { kind: "action" | "getState" | "getMeasurements"; id?: string; params?: unknown } | { kind: "captureView"; withRoi?: boolean } | { kind: "pluginTool"; name: string; params?: unknown },
   ) => Promise<import("./assistant/actions/registry").ActionResult | import("./assistant/pluginTools").PluginToolResult>;
   /** プラグインが宣言した AI ツールの一覧（main が組み直したもの）とオン/オフ。 */
   assistantPluginToolsList?: () => Promise<{ ok: boolean; tools?: import("./assistant/pluginTools").PluginToolEntry[]; error?: string }>;
@@ -540,8 +540,9 @@ export interface GraphyDesktop {
   onViewerCmd?: (
     cb: (cmd: {
       reqId: string;
-      kind: "action" | "getState" | "getMeasurements" | "pluginTool";
+      kind: "action" | "getState" | "getMeasurements" | "captureView" | "pluginTool";
       id?: string;
+      withRoi?: boolean;
       params?: unknown;
       includeLabels?: boolean;
       approved?: boolean;

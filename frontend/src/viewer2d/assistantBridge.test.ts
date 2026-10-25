@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { executeCommand, type BridgeDeps } from "./assistantBridge";
+import { executeCaptureView, executeCommand, type BridgeDeps } from "./assistantBridge";
 import { buildTools, projectState, validateAction, validateProposal } from "../assistant/actions/registry";
 
 function makeDeps(over: Partial<BridgeDeps> = {}) {
@@ -12,6 +12,7 @@ function makeDeps(over: Partial<BridgeDeps> = {}) {
       ({ sliceIndex: 7, sliceCount: 50, modality: "CT", patientKey: "PID123", studyUid: "1.2.3", seriesUid: "1.2.4", imageId: "wadouri:http://x/1.2.3", apiBase: "http://localhost:1", seriesLabel: "TARO YAMADA CT" }) as never,
     readView: () => ({ windowCenter: 40, windowWidth: 400, unit: "HU", colormap: null, invert: false, flipH: false, flipV: false, rotation: 0, zoom: 1 }) as never,
     readRois: () => [],
+    captureTile: async () => null,
     run: (_ids, fn) => fn(cmds as never),
     runSeries: (_ids, fn) => fn({ goTo: (d: unknown) => calls.push(`goTo(${JSON.stringify(d)})`) } as never),
     activeTool: () => "WindowLevel",
@@ -202,5 +203,49 @@ describe("getMeasurements (PHI allow-list)", () => {
     executeCommand(deps, { kind: "getMeasurements" });
     expect(calls).toEqual([]);
     expect(buildTools().map((t) => t.name)).toContain("getMeasurements");
+  });
+});
+
+describe("executeCaptureView", () => {
+  const img = { dataUrl: "data:image/png;base64,AAAA", mimeType: "image/png" as const, w: 8, h: 8 };
+  const mk = (over: Partial<BridgeDeps> = {}) => {
+    const calls: Array<[string, boolean]> = [];
+    const { deps } = makeDeps({
+      targets: () => ["tileB"],
+      allTiles: () => ["tileA", "tileB"],
+      captureTile: async (id, withRoi) => {
+        calls.push([id, withRoi]);
+        return img;
+      },
+      ...over,
+    });
+    return { deps, calls };
+  };
+
+  it("captures the selected tile, with or without ROIs", async () => {
+    const { deps, calls } = mk();
+    expect(await executeCaptureView(deps, { kind: "captureView", withRoi: true })).toEqual({ ok: true, image: img });
+    expect(await executeCaptureView(deps, { kind: "captureView" })).toEqual({ ok: true, image: img });
+    expect(await executeCaptureView(deps, { kind: "captureView", withRoi: "yes" as unknown as boolean })).toEqual({ ok: true, image: img });
+    expect(calls).toEqual([["tileB", true], ["tileB", false], ["tileB", false]]);
+  });
+
+  it("falls back to the first tile when nothing is selected", async () => {
+    const { deps, calls } = mk({ targets: () => [] });
+    await executeCaptureView(deps, { kind: "captureView" });
+    expect(calls[0][0]).toBe("tileA");
+  });
+
+  it("reports no-tile without tiles and capture-failed when the capture fails or throws", async () => {
+    expect(await executeCaptureView(mk({ targets: () => [], allTiles: () => [] }).deps, { kind: "captureView" })).toEqual({ ok: false, error: "no-tile" });
+    expect(await executeCaptureView(mk({ captureTile: async () => null }).deps, { kind: "captureView" })).toEqual({ ok: false, error: "capture-failed" });
+    expect(
+      await executeCaptureView(mk({ captureTile: async () => { throw new Error("gl"); } }).deps, { kind: "captureView" }),
+    ).toEqual({ ok: false, error: "capture-failed" });
+  });
+
+  it("is not reachable through the model-facing action path", () => {
+    const { deps } = mk();
+    expect(executeCommand(deps, { kind: "action", id: "captureView" })).toEqual({ ok: false, error: "unknown-action" });
   });
 });

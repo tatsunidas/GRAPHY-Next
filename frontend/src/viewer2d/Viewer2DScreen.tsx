@@ -85,7 +85,7 @@ import { useAssistantBridge } from "./useAssistantBridge";
 import { useWlPresets } from "./wlPresetStore";
 import { presetLabel } from "./wlPresets";
 import { emitToast, subscribeToast } from "../viewer/toast";
-import { composeTileWithAnnotations, visibleRoiCount } from "../viewer/tileCapture";
+import { composeTileWithAnnotations, downscaleDataUrl, visibleRoiCount } from "../viewer/tileCapture";
 import { askCopyWithRoi, CopyImageAskHost } from "./CopyImageAsk";
 import { classifySeriesRenderability } from "../viewer/seriesRenderable";
 import { subscribeSeriesRefresh } from "../viewer/viewerRefresh";
@@ -271,6 +271,9 @@ function getDropZone(e: React.DragEvent<HTMLElement>): "before" | "after" | "cen
   return "center";
 }
 
+/** アシスタントへ添える表示画像の長辺（px）。暫定値（実モデルで見直す）。 */
+const ASSISTANT_IMAGE_MAX_EDGE = 1024;
+
 /**
  * 指定タイルの canvas から PNG dataURL を取得する。
  * Cornerstone3D の WebGL canvas に対して toDataURL を試みる。
@@ -319,18 +322,21 @@ function tileVisibleRoiCount(tileId: string): number {
   );
 }
 
+/** 指定タイルの画像（PNG の dataURL）。withRoi なら ROI の線と計測の文字を重ねる（四隅の文字は含まない）。コピーとアシスタントの添付が共用する。 */
+async function captureTileImage(tileId: string, withRoi: boolean): Promise<string | null> {
+  const url = captureTileDataUrl(tileId);
+  if (!url || !withRoi) return url;
+  const element = tileViewportElement(tileId);
+  const canvas = element?.querySelector("canvas") as HTMLCanvasElement | null;
+  const svg = element?.querySelector(".svg-layer") as SVGSVGElement | null;
+  if (!canvas || !svg) return null;
+  return composeTileWithAnnotations(canvas, svg).catch(() => null);
+}
+
 /** 指定タイルの画像をクリップボードへコピーする。withRoi なら ROI の線と計測の文字を重ねる（四隅の文字は含まない）。 */
 async function copyTileImage(tileId: string, withRoi: boolean): Promise<boolean> {
-  let url = captureTileDataUrl(tileId);
+  const url = await captureTileImage(tileId, withRoi);
   if (!url) return false;
-  if (withRoi) {
-    const element = tileViewportElement(tileId);
-    const canvas = element?.querySelector("canvas") as HTMLCanvasElement | null;
-    const svg = element?.querySelector(".svg-layer") as SVGSVGElement | null;
-    if (!canvas || !svg) return false;
-    url = await composeTileWithAnnotations(canvas, svg).catch(() => null);
-    if (!url) return false;
-  }
   const copy = desktop()?.copyImage;
   if (copy) return copy(url).catch(() => false);
   try {
@@ -2310,6 +2316,10 @@ function TileGrid({
     setTool: actions.setTool,
     setLayoutCols: (c) => onSetGrid(patient.patientKey, 0, c),
     presets: wlPresets.map((p) => ({ key: p.key, label: presetLabel(p, t), center: p.center, width: p.width })),
+    captureTile: async (tileId, withRoi) => {
+      const url = await captureTileImage(tileId, withRoi);
+      return url ? downscaleDataUrl(url, ASSISTANT_IMAGE_MAX_EDGE) : null;
+    },
   });
 
   /**

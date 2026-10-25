@@ -9,7 +9,7 @@ import { queryViewerCommand, runViewerCommand } from "../viewer/viewerCommands";
 import { runSeriesCommand } from "../viewer/seriesCommands";
 import { TOOL_IDS } from "../viewer/toolIds";
 import type { DisplayTool } from "../assistant/actions/registry";
-import { executeCommand, type BridgeDeps, type WlPresetLite } from "./assistantBridge";
+import { executeCaptureView, executeCommand, type BridgeDeps, type CapturedImage, type WlPresetLite } from "./assistantBridge";
 import { executePluginTool, type PluginToolDeps } from "./pluginToolBridge";
 import { loadPluginAiTool, loadPluginManifests } from "../plugins/pluginRegistry";
 import { getPluginToolHostSeed } from "../plugins/pluginToolHost";
@@ -40,6 +40,7 @@ export interface AssistantBridgeInput {
   setTool: (toolId: string) => void;
   setLayoutCols: (n: number) => void;
   presets: WlPresetLite[];
+  captureTile: (tileId: string, withRoi: boolean) => Promise<CapturedImage | null>;
 }
 
 /** 最新の入力を ref で持ち、購読は 1 回だけ張る（命令のたびに外れて取りこぼさない）。 */
@@ -56,6 +57,7 @@ export function useAssistantBridge(input: AssistantBridgeInput): void {
       readView: (id) => queryViewerCommand(id, (c) => c.getViewState()),
       readRois: () =>
         ref.current.tileIds.flatMap((id, tileIndex) => (queryViewerCommand(id, (c) => c.getRois()) ?? []).map((r) => ({ ...r, tileIndex }))),
+      captureTile: (id, withRoi) => ref.current.captureTile(id, withRoi),
       run: (ids, fn) => runViewerCommand(ids, fn),
       runSeries: (ids, fn) => runSeriesCommand(ids, fn),
       activeTool: () => ref.current.activeTool,
@@ -69,6 +71,12 @@ export function useAssistantBridge(input: AssistantBridgeInput): void {
       if (cmd.kind === "pluginTool") {
         // プラグインのコードは非同期。結果は命令を送った窓（main）へだけ返る。
         void executePluginTool(pluginToolDeps, cmd).then((r) => d.viewerCmdResult?.(cmd.reqId, r));
+        return;
+      }
+      if (cmd.kind === "captureView") {
+        void executeCaptureView(deps, { kind: "captureView", withRoi: cmd.withRoi === true })
+          .catch(() => ({ ok: false as const, error: "capture-failed" }))
+          .then((r) => d.viewerCmdResult?.(cmd.reqId, r));
         return;
       }
       let result;

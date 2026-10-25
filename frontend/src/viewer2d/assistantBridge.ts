@@ -28,6 +28,13 @@ export interface WlPresetLite {
   width: number;
 }
 
+export interface CapturedImage {
+  dataUrl: string;
+  mimeType: "image/png" | "image/jpeg";
+  w: number;
+  h: number;
+}
+
 export interface BridgeDeps {
   /** 命令の対象タイル（選択があれば選択、無ければ全タイル）。 */
   targets(): string[];
@@ -36,6 +43,8 @@ export interface BridgeDeps {
   readView(id: string): ViewerViewState | null;
   /** 全タイルの ROI（識別子・座標を含み得る生の値）。必ず projectRois を通してから外へ出す。 */
   readRois(): RawRoi[];
+  /** タイルの表示画像（縮小済み）。ROI を重ねるか選べる。取れなければ null。 */
+  captureTile(id: string, withRoi: boolean): Promise<CapturedImage | null>;
   run(ids: string[], fn: (c: ViewerCommands) => void): void;
   runSeries(ids: string[], fn: (c: SeriesCommands) => void): void;
   activeTool(): string;
@@ -48,11 +57,13 @@ export interface BridgeDeps {
 }
 
 export interface BridgeCommand {
-  kind: "action" | "getState" | "getMeasurements";
+  kind: "action" | "getState" | "getMeasurements" | "captureView";
   id?: string;
   params?: unknown;
   /** ローカル宛のときだけ true（seriesLabel を含める）。 */
   includeLabels?: boolean;
+  /** captureView: ROI の線と計測文字を重ねるか。 */
+  withRoi?: boolean;
   /** main が利用者の承認を取ったあとにだけ付ける。データを変える操作はこれが無いと実行しない。 */
   approved?: boolean;
 }
@@ -84,6 +95,18 @@ export function collectRawState(deps: BridgeDeps): RawViewerState {
 /** 実際のツール ID → 表示系シンボル（逆引き）。許可リスト外の現在ツールは undefined＝元に戻せない。 */
 function symbolOfTool(deps: BridgeDeps, toolId: string): DisplayTool | undefined {
   return DISPLAY_TOOLS.find((s) => deps.toolId(s) === toolId);
+}
+
+/**
+ * 表示中のタイルの画像を取る（読み取りだけ。表示状態・ROI・ファイルは変えない）。利用者のボタンからだけ呼ばれる＝モデルのツールではない。
+ * 対象は選択中の先頭タイル（無ければ先頭）。
+ */
+export async function executeCaptureView(deps: BridgeDeps, cmd: BridgeCommand): Promise<ActionResult> {
+  const id = deps.targets()[0] ?? deps.allTiles()[0];
+  if (!id) return { ok: false, error: "no-tile" };
+  const image = await deps.captureTile(id, cmd.withRoi === true).catch(() => null);
+  if (!image) return { ok: false, error: "capture-failed" };
+  return { ok: true, image };
 }
 
 export function executeCommand(deps: BridgeDeps, cmd: BridgeCommand): ActionResult {

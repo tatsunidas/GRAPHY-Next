@@ -15,7 +15,7 @@ test("relay: result from the target window resolves; journal records the action"
   const log = [];
   const r = createRelay({ resolveTarget: () => t, journal: (e) => log.push(e), newId: () => "r1" });
   const p = r.relay("s1", { kind: "action", id: "setWindowLevel", params: { center: 40, width: 400 } });
-  assert.deepStrictEqual(t.sent[0][1], { reqId: "r1", kind: "action", id: "setWindowLevel", params: { center: 40, width: 400 }, includeLabels: false, approved: false });
+  assert.deepStrictEqual(t.sent[0][1], { reqId: "r1", kind: "action", id: "setWindowLevel", params: { center: 40, width: 400 }, includeLabels: false, withRoi: false, approved: false });
   assert.strictEqual(r.handleResult(t, "r1", { ok: true }), true);
   assert.deepStrictEqual(await p, { ok: true });
   assert.strictEqual(log.length, 1);
@@ -110,7 +110,7 @@ test("write 操作: 承認すると approved:true で 2D 窓へ届く。承認�
   const r = createRelay({ resolveTarget: () => t, journal: (e) => log.push(e), newId: () => "w1" });
   const p = r.relay("s", cmd, { confirm: async (id) => id === "clearMeasurements" });
   await new Promise((res) => setImmediate(res));
-  assert.deepStrictEqual(t.sent[0][1], { reqId: "w1", kind: "action", id: "clearMeasurements", params: {}, includeLabels: false, approved: true });
+  assert.deepStrictEqual(t.sent[0][1], { reqId: "w1", kind: "action", id: "clearMeasurements", params: {}, includeLabels: false, withRoi: false, approved: true });
   r.handleResult(t, "w1", { ok: true });
   assert.deepStrictEqual(await p, { ok: true });
   // 負例: 拒否 / 関数なし / 例外 / true 以外の値
@@ -215,7 +215,7 @@ test("getMeasurements: 2D 窓へ届き(includeLabels を引き継ぐ)、untruste
   let asked = 0;
   const p = r.relay("s", { kind: "getMeasurements", includeLabels: true }, { measurements: { external: false, confirmSend: async () => { asked++; return true; } } });
   await new Promise((res) => setImmediate(res));
-  assert.deepStrictEqual(t.sent[0][1], { reqId: "m1", kind: "getMeasurements", id: undefined, params: undefined, includeLabels: true, approved: false });
+  assert.deepStrictEqual(t.sent[0][1], { reqId: "m1", kind: "getMeasurements", id: undefined, params: undefined, includeLabels: true, withRoi: false, approved: false });
   r.handleResult(t, "m1", { ok: true, measurements: { rois: [{ roi: "roi1", mean: 55.5, label: "SECRET" }] } });
   assert.deepStrictEqual(await p, { ok: true, untrusted: true, measurements: { rois: [{ roi: "roi1", mean: 55.5, label: "SECRET" }] } });
   assert.strictEqual(asked, 0);
@@ -252,4 +252,103 @@ test("getMeasurements: 外部宛て(既定)は初回だけ確認。拒否・例�
 test("getMeasurements: 2D 窓が無い・エラーのときは ok:false", async () => {
   const r = createRelay({ resolveTarget: () => null });
   assert.deepStrictEqual(await r.relay("s", { kind: "getMeasurements" }, { measurements: { external: false } }), { ok: false, error: "no-viewer" });
+});
+
+// ── captureView（表示中のタイルの画像） ───────────────────────────────────
+const PNG_B64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4//8/AAX+Av4N70a4AAAAAElFTkSuQmCC";
+const JPG_B64 = "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBD";
+const pngUrl = `data:image/png;base64,${PNG_B64}`;
+
+async function capture(result, opts, cmd = { kind: "captureView", withRoi: true }) {
+  const t = fakeTarget();
+  const log = [];
+  const r = createRelay({ resolveTarget: () => t, journal: (e) => log.push(e), newId: () => "c1" });
+  const p = r.relay("s", cmd, opts);
+  await new Promise((res) => setImmediate(res));
+  if (result !== undefined) r.handleResult(t, "c1", result);
+  return { res: await p, sent: t.sent, log };
+}
+const okOpts = (over = {}) => ({ capture: { external: false, imageModelOk: true, confirmSend: async () => true, ...over } });
+
+test("captureView: 2D 窓へ withRoi が届き、洗った画像(base64・mime は main が決める)だけが返る。ローカルは確認なし。ジャーナルに画像なし", async () => {
+  let asked = 0;
+  const { res, sent, log } = await capture(
+    { ok: true, image: { dataUrl: pngUrl, mimeType: "text/html", w: 1, h: 1, extra: "NO", evil: { a: 1 } }, secret: "NO" },
+    okOpts({ confirmSend: async () => { asked++; return true; } }),
+  );
+  assert.strictEqual(sent[0][1].kind, "captureView");
+  assert.strictEqual(sent[0][1].withRoi, true);
+  assert.deepStrictEqual(res, { ok: true, image: { base64: PNG_B64, mimeType: "image/png", w: 1, h: 1 } });
+  assert.strictEqual(asked, 0);
+  assert.strictEqual(log.length, 1);
+  assert.ok(!JSON.stringify(log).includes(PNG_B64));
+});
+
+test("captureView: withRoi はブール値だけ(文字列などは false)", async () => {
+  const { sent } = await capture({ ok: true, image: { dataUrl: pngUrl } }, okOpts(), { kind: "captureView", withRoi: "true" });
+  assert.strictEqual(sent[0][1].withRoi, false);
+});
+
+test("captureView: jpeg も通る。宣言と中身が合わない・svg/html・非 base64・空・上限超過・形違いは bad-result", async () => {
+  const jpeg = await capture({ ok: true, image: { dataUrl: `data:image/jpeg;base64,${JPG_B64}`, w: 10, h: 20 } }, okOpts());
+  assert.deepStrictEqual(jpeg.res, { ok: true, image: { base64: JPG_B64, mimeType: "image/jpeg", w: 10, h: 20 } });
+  const bad = [
+    `data:image/png;base64,${JPG_B64}`, // 宣言は png、中身は jpeg
+    `data:image/svg+xml;base64,${PNG_B64}`,
+    `data:text/html;base64,${PNG_B64}`,
+    `data:image/png;base64,${PNG_B64}!!`,
+    `data:image/png;base64,`,
+    `data:image/png,${PNG_B64}`,
+    `image/png;base64,${PNG_B64}`,
+    `data:image/png;base64,${PNG_B64.slice(0, 11)}${"A".repeat(8 * 1024 * 1024)}`,
+  ];
+  for (const dataUrl of bad) {
+    const { res } = await capture({ ok: true, image: { dataUrl } }, okOpts());
+    assert.deepStrictEqual(res, { ok: false, error: "bad-result" }, dataUrl.slice(0, 40));
+  }
+  for (const image of [undefined, null, "x", 5, {}, { dataUrl: 5 }, { base64: PNG_B64 }]) {
+    const { res } = await capture({ ok: true, image }, okOpts());
+    assert.deepStrictEqual(res, { ok: false, error: "bad-result" });
+  }
+});
+
+test("captureView: 寸法が不正でも画像は通り、寸法だけ 0 になる", async () => {
+  const { res } = await capture({ ok: true, image: { dataUrl: pngUrl, w: "9", h: -3 } }, okOpts());
+  assert.deepStrictEqual(res, { ok: true, image: { base64: PNG_B64, mimeType: "image/png", w: 0, h: 0 } });
+});
+
+test("captureView: 外部宛て(既定)は画像ごとに毎回確認。拒否・例外・関数なし・opts なしでは画像を返さず、確認には洗った画像が渡る", async () => {
+  const payload = { ok: true, image: { dataUrl: pngUrl, w: 1, h: 1 } };
+  for (const opts of [undefined, {}, { capture: { imageModelOk: true } }, okOpts({ external: true, confirmSend: async () => false }), okOpts({ external: true, confirmSend: async () => { throw new Error("x"); } }), okOpts({ external: true, confirmSend: async () => "yes" })]) {
+    const { res, log } = await capture(payload, opts);
+    assert.strictEqual(res.ok, false);
+    assert.ok(!("image" in res));
+    assert.strictEqual(log.at(-1).ok, false);
+  }
+  let seen = [];
+  const opts = okOpts({ external: true, confirmSend: async (img) => { seen.push(img); return true; } });
+  assert.strictEqual((await capture(payload, opts)).res.ok, true);
+  assert.strictEqual((await capture(payload, opts)).res.ok, true);
+  assert.strictEqual(seen.length, 2, "セッション1回にしない");
+  assert.deepStrictEqual(seen[0], { base64: PNG_B64, mimeType: "image/png", w: 1, h: 1 });
+});
+
+test("captureView: external が省略されたら外部扱い(ローカルと判定できたときだけ省く)", async () => {
+  const { res } = await capture({ ok: true, image: { dataUrl: pngUrl } }, { capture: { imageModelOk: true, confirmSend: async () => false } });
+  assert.deepStrictEqual(res, { ok: false, error: "declined" });
+});
+
+test("captureView: 画像モデルが無ければ 2D 窓へ送る前に image-model-not-set", async () => {
+  for (const opts of [undefined, {}, okOpts({ imageModelOk: false }), okOpts({ imageModelOk: "yes" })]) {
+    const { res, sent } = await capture(undefined, opts);
+    assert.deepStrictEqual(res, { ok: false, error: "image-model-not-set" });
+    assert.strictEqual(sent.length, 0);
+  }
+});
+
+test("captureView: 2D 窓が無い・タイルが無い・失敗のときは ok:false で理由を返す", async () => {
+  const r = createRelay({ resolveTarget: () => null });
+  assert.deepStrictEqual(await r.relay("s", { kind: "captureView" }, okOpts()), { ok: false, error: "no-viewer" });
+  assert.deepStrictEqual((await capture({ ok: false, error: "no-tile" }, okOpts())).res, { ok: false, error: "no-tile" });
+  assert.deepStrictEqual((await capture({ ok: false, error: "capture-failed" }, okOpts())).res, { ok: false, error: "capture-failed" });
 });

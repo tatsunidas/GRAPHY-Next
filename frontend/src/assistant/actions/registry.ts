@@ -333,7 +333,16 @@ export interface InverseStep {
   params: Record<string, unknown>;
 }
 
+/** captureView の結果。2D 窓は dataUrl で返し、main が洗って base64 に直して（mime は main が決める）アシスタント窓へ渡す。 */
+export interface CapturedImageResult {
+  dataUrl?: string;
+  base64?: string;
+  mimeType: string;
+  w: number;
+  h: number;
+}
+
 /** 2D 窓から返る実行結果。`inverse` を順に実行すると元に戻る。 */
 export type ActionResult =
-  | { ok: true; inverse?: InverseStep[]; state?: Record<string, unknown>; measurements?: Record<string, unknown>; note?: string }
+  | { ok: true; inverse?: InverseStep[]; state?: Record<string, unknown>; measurements?: Record<string, unknown>; image?: CapturedImageResult; note?: string }
   | { ok: false; error: string };
