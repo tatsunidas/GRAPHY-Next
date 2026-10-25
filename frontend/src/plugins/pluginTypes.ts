@@ -24,6 +24,7 @@ import type {
   PluginCurveFrameOptions,
 } from "./pluginCenterlineApi";
 import type { Vec3 } from "../viewer/reslice";
+import type { PluginCurvedMprResult, PluginCurvedMprSpec } from "./pluginCurvedMprApi";
 import type { PluginSeriesPanelHandle, PluginSeriesPanelOptions } from "./pluginSeriesPanelApi";
 import type { ViewerDerivedSeriesRequest, ViewerDerivedSeriesResult, ViewerOverlay, ViewerPixelDataOptions, ViewerRoiMeasurements, ViewerTarget, ViewerAngioReportRequest, ViewerPresentationStateRequest, ViewerTilePixelData, ViewerTileSpatialCalibration, ViewerTileXaState, ViewerTileXaCine, ViewerTileRoi, ViewerTileViewState, ViewerSrMeasurementGroup, ViewerSrRequest, ViewerSrResult, ViewerLabelVolume, ViewerLabelVolumeResult } from "../viewer/viewerCommands";
 
@@ -1102,6 +1103,18 @@ export interface Viewer2DPluginHost extends PluginHostBase {
     polylineWorld: readonly Vec3[],
     opts: PluginCurveFrameOptions,
   ) => PluginCurveFrame[];
+  /**
+   * **中心線を渡して、本体の Curved MPR 窓を開く**（H73）。渡すのは制御点（患者 LPS mm・2 点以上）と
+   * 見え方のオプションだけで、再構成・表示・保存は本体が行う（プラグインに CPR を書かせない）。
+   * 窓には「プラグイン <名前> が指定した中心線」の札が出る（出所は host が入れる）。
+   * 窓が既に開いていれば、その窓の中心線が置き換わる。
+   *
+   * <p>🔴 戻り値は**検証と起動要求まで**（点が 2 点未満・非有限・同一点・開いていないシリーズは
+   * `ok:false` で窓を開かない）。窓は非同期に開くので、ボリュームの範囲外の点は戻り値では返せず、
+   * 窓の警告として出る（範囲外を 0 で埋めた絵を正常として出さない）。
+   * `options.frameMode` の省略時は `ROTATION_MINIMIZING`（血管向け）。
+   */
+  openCurvedMpr: (spec: PluginCurvedMprSpec) => Promise<PluginCurvedMprResult>;
   /**
    * **シリーズビューパネルをそのまま貸す**（H34）。W/L バー・スライダ・ThickSlab・参照線・
    * 計測・シネ、そして**フュージョン重畳**が丸ごと付いてくる。

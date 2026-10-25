@@ -125,6 +125,7 @@ import {
   registerPluginVolumes,
 } from "../plugins/pluginVolumeApi";
 import { resamplePluginVolume } from "../plugins/pluginResample";
+import { openCurvedMprFromPlugin } from "../plugins/pluginCurvedMprApi";
 import {
   commitRtDoseExport,
   commitSegExport,
@@ -2142,6 +2143,8 @@ function TileGrid({
         if (d?.openViewer) void d.openViewer("curvedmpr");
         else window.open(`${window.location.pathname}#curvedmpr`, "graphy-curvedmpr");
       },
+      // プラグインが中心線を渡して Curved MPR 窓を開く（H73）。開いているタイルのシリーズからしか引かない。
+      openCurvedMpr: (spec, producer) => openCurvedMprFromPlugin(spec, producer, studyUidOfSeries),
       // 対象（選択→無ければ先頭）タイルのシリーズで Histogram 解析ダイアログを開く。
       openHistogram: () => {
         const tid = resolveTargets()[0];

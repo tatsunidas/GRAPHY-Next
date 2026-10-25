@@ -24,6 +24,7 @@ import type {
   PluginRtDoseRequest,
   PluginRtDoseResult,
 } from "../plugins/pluginTypes";
+import type { PluginCurvedMprResult, PluginCurvedMprSpec } from "../plugins/pluginCurvedMprApi";
 import { ToolIcon } from "../icons/ToolIcon";
 import { OverflowRow } from "../viewer/OverflowRow";
 import { UI_ICON_FILES } from "../icons/toolIcons";
@@ -241,6 +242,8 @@ export interface ViewerActions {
   launchSlicer(): void;
   /** 対象タイルのシリーズで Curved MPR ウィンドウを開く。 */
   launchCurvedMpr(): void;
+  /** プラグインから中心線を渡して Curved MPR 窓を開く（H73）。出所は呼び出し側（host）が渡す。 */
+  openCurvedMpr(spec: PluginCurvedMprSpec, producer: { id: string; name: string; version: string }): Promise<PluginCurvedMprResult>;
   /** 対象タイルのシリーズで Histogram 解析ダイアログを開く。 */
   openHistogram(): void;
   /** 対象タイルのシリーズで値の点検（Probe の点の時間曲線）ダイアログを開く。 */
