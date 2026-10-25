@@ -6,6 +6,7 @@
 // main が中継してきた命令を**もう一度検証**してから、既存の ViewerCommands / SeriesCommands を呼ぶ
 // （送信側の検証は信用しない）。registry に載っていない操作は実行できない。
 import type { ViewerCommands, ViewerTargetInfo, ViewerViewState } from "../viewer/viewerCommands";
+import type { CreateRoiRequest } from "../viewer/roiCreate";
 import type { SeriesCommands } from "../viewer/seriesCommands";
 import {
   DISPLAY_TOOLS,
@@ -54,6 +55,10 @@ export interface BridgeDeps {
   presets(): WlPresetLite[];
   /** 表示系ツールのシンボル名 → 実ツール ID。 */
   toolId(sym: DisplayTool): string;
+  /** 表示中のスライスへ ROI を作る（出自の印は呼び出し側＝アシスタントとして付く）。 */
+  createRoi(id: string, req: CreateRoiRequest): ReturnType<ViewerCommands["createRoi"]> | null;
+  /** アシスタントが作った ROI だけを消す。 */
+  removeAssistantRoi(roiUid: string): boolean;
 }
 
 export interface BridgeCommand {
@@ -189,6 +194,21 @@ export function executeCommand(deps: BridgeDeps, cmd: BridgeCommand): ActionResu
     case "clearMeasurements":
       // 取り消せない（ROI/計測は 2D の undo の対象外）。inverse は返さない。
       deps.run(targets, (x) => x.clearAnnotations("measure"));
+      break;
+    case "createRoi": {
+      const r = deps.createRoi(first, {
+        tool: p.shape === "rectangle" ? "RectangleROI" : "EllipticalROI",
+        centerView: [p.u as number, p.v as number],
+        radiiMm: [p.radiusXmm as number, p.radiusYmm as number],
+      });
+      if (!r) return { ok: false, error: "no-tile" };
+      if (!r.ok) return { ok: false, error: `roi-${r.reason}` };
+      // 取り消しは「作った ROI だけ消す」。手描きの ROI には触れない。
+      inverse.push({ id: "removeAssistantRoi", params: { roiUid: r.roiUid } });
+      break;
+    }
+    case "removeAssistantRoi":
+      if (!deps.removeAssistantRoi(p.roiUid as string)) return { ok: false, error: "not-removable" };
       break;
     default:
       return { ok: false, error: "unknown-action" };

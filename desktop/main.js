@@ -1326,6 +1326,10 @@ const WRITE_CONFIRM_TEXT = {
     message: "2D ビューアの計測線（長さ・角度など）をすべて消します。",
     detail: "元に戻せません。ロックされた計測は残ります。実行しますか？",
   },
+  createRoi: {
+    message: "2D ビューアの表示中のスライスに、ROI（楕円または矩形）を 1 つ追加します。",
+    detail: "アシスタントの「元に戻す」で、この ROI だけを消せます。追加しますか？",
+  },
 };
 const viewerRelay = createRelay({
   resolveTarget: () => {

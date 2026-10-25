@@ -2583,7 +2583,18 @@ export function Viewer2D({
     const tol = sliceToleranceFromStack(ipp(ids[i]), ipp(ids[i + 1] ?? ids[i - 1]), plane?.sliceThickness ?? plane?.columnPixelSpacing ?? null);
     const maxExtent = maxExtentFromImage(plane?.rows, plane?.columns, plane?.rowPixelSpacing, plane?.columnPixelSpacing);
     if (tol === null || maxExtent === null || !cam.focalPoint || !cam.viewPlaneNormal) return { ok: false, reason: "no-geometry" };
-    const handles = buildRoiHandles(req, {
+    let creq = req;
+    if (req.centerView !== undefined) {
+      const cv = req.centerView;
+      const canvas = v.getCanvas();
+      if (req.centerLps !== undefined || req.centerPx !== undefined || !Array.isArray(cv) || cv.length !== 2 || !cv.every((n) => typeof n === "number" && Number.isFinite(n) && n >= 0 && n <= 1) || !canvas.clientWidth || !canvas.clientHeight) {
+        return { ok: false, reason: "bad-request" };
+      }
+      const w = v.canvasToWorld([cv[0] * canvas.clientWidth, cv[1] * canvas.clientHeight] as Types.Point2);
+      if (!w || !w.every((n) => Number.isFinite(n))) return { ok: false, reason: "no-geometry" };
+      creq = { tool: req.tool, radiiMm: req.radiiMm, label: req.label, centerLps: [w[0], w[1], w[2]] };
+    }
+    const handles = buildRoiHandles(creq, {
       worldToCanvas: (p) => {
         const c = v.worldToCanvas(p as Types.Point3);
         return c && Number.isFinite(c[0]) && Number.isFinite(c[1]) ? [c[0], c[1]] : null;

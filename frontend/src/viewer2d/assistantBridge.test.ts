@@ -21,6 +21,14 @@ function makeDeps(over: Partial<BridgeDeps> = {}) {
     setLayoutCols: (n) => calls.push(`setLayoutCols(${n})`),
     presets: () => [{ key: "lung", label: "肺野", center: -600, width: 1500 }],
     toolId: (s) => (s === "windowLevel" ? "WindowLevel" : s === "pan" ? "Pan" : s),
+    createRoi: (id, req) => {
+      calls.push(`createRoi(${id},${JSON.stringify(req)})`);
+      return { ok: true, roiUid: "uid-1", centerLps: [0, 0, 0] };
+    },
+    removeAssistantRoi: (uid) => {
+      calls.push(`removeAssistantRoi(${uid})`);
+      return uid === "uid-1";
+    },
     ...over,
   };
   return { deps, calls };
@@ -247,5 +255,43 @@ describe("executeCaptureView", () => {
   it("is not reachable through the model-facing action path", () => {
     const { deps } = mk();
     expect(executeCommand(deps, { kind: "action", id: "captureView" })).toEqual({ ok: false, error: "unknown-action" });
+  });
+});
+
+describe("createRoi / removeAssistantRoi", () => {
+  const ok = { shape: "ellipse", u: 0.25, v: 0.75, radiusXmm: 20, radiusYmm: 10 };
+  it("未承認は実行しない（deps を呼ばない）", () => {
+    const { deps, calls } = makeDeps();
+    expect(executeCommand(deps, { kind: "action", id: "createRoi", params: ok })).toEqual({ ok: false, error: "approval-required" });
+    expect(executeCommand(deps, { kind: "action", id: "createRoi", params: ok, approved: false })).toEqual({ ok: false, error: "approval-required" });
+    expect(calls.filter((c) => c.startsWith("createRoi"))).toEqual([]);
+  });
+  it("承認つきで 1 回だけ作り、取り消し用の inverse を返す", () => {
+    const { deps, calls } = makeDeps();
+    const r = executeCommand(deps, { kind: "action", id: "createRoi", params: ok, approved: true });
+    expect(r).toEqual({ ok: true, inverse: [{ id: "removeAssistantRoi", params: { roiUid: "uid-1" } }] });
+    expect(calls.filter((c) => c.startsWith("createRoi"))).toEqual([
+      'createRoi(t1,{"tool":"EllipticalROI","centerView":[0.25,0.75],"radiiMm":[20,10]})',
+    ]);
+    executeCommand(deps, { kind: "action", id: "createRoi", params: { ...ok, shape: "rectangle" }, approved: true });
+    expect(calls[calls.length - 1]).toContain('"tool":"RectangleROI"');
+  });
+  it("範囲外・未知キー・NaN は検証で落ちて deps を呼ばない", () => {
+    const { deps, calls } = makeDeps();
+    for (const p of [
+      { ...ok, u: 1.1 }, { ...ok, v: -0.1 }, { ...ok, radiusXmm: 0 }, { ...ok, radiusYmm: 501 }, { ...ok, u: NaN },
+      { ...ok, shape: "polygon" }, { ...ok, centerLps: [0, 0, 0] }, { shape: "ellipse", u: 0.5, v: 0.5, radiusXmm: 1 },
+    ])
+      expect(executeCommand(deps, { kind: "action", id: "createRoi", params: p, approved: true }).ok).toBe(false);
+    expect(calls.filter((c) => c.startsWith("createRoi"))).toEqual([]);
+  });
+  it("作成の失敗理由をそのまま返し、inverse は付けない", () => {
+    const { deps } = makeDeps({ createRoi: () => ({ ok: false, reason: "too-large" }) });
+    expect(executeCommand(deps, { kind: "action", id: "createRoi", params: ok, approved: true })).toEqual({ ok: false, error: "roi-too-large" });
+  });
+  it("removeAssistantRoi: 消せない uid（手描き・他者・ロック・無い）は not-removable", () => {
+    const { deps } = makeDeps();
+    expect(executeCommand(deps, { kind: "action", id: "removeAssistantRoi", params: { roiUid: "uid-1" } })).toEqual({ ok: true, inverse: undefined });
+    expect(executeCommand(deps, { kind: "action", id: "removeAssistantRoi", params: { roiUid: "hand-drawn" } })).toEqual({ ok: false, error: "not-removable" });
   });
 });

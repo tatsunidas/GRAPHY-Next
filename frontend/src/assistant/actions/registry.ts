@@ -42,7 +42,13 @@ export type ActionId =
   | "goToSlice"
   | "setLayout"
   | "setTool"
-  | "clearMeasurements";
+  | "clearMeasurements"
+  | "createRoi"
+  | "removeAssistantRoi";
+
+/** `createRoi` で作れる形（シンボル名。実ツールへの写像は 2D 窓の実行器が持つ）。 */
+export const ROI_SHAPES = ["ellipse", "rectangle"] as const;
+export type RoiShape = (typeof ROI_SHAPES)[number];
 
 export const ACTIONS: readonly ActionDef[] = [
   {
@@ -95,6 +101,27 @@ export const ACTIONS: readonly ActionDef[] = [
     params: {},
     required: [],
     effect: "write",
+  },
+  {
+    id: "createRoi",
+    description:
+      "Add one ROI (ellipse or rectangle) on the slice currently shown, at a position given as fractions of the visible image area (u = 0 left .. 1 right, v = 0 top .. 1 bottom, as seen on screen), with radii in millimetres along the screen's horizontal and vertical directions. The user must approve each run in a confirmation dialog. The ROI can be undone with the undo button. Use only when the user asks to place a ROI.",
+    params: {
+      shape: { type: "enum", values: ROI_SHAPES, description: "ellipse or rectangle." },
+      u: { type: "number", min: 0, max: 1, description: "Horizontal centre as a fraction of the visible area." },
+      v: { type: "number", min: 0, max: 1, description: "Vertical centre as a fraction of the visible area." },
+      radiusXmm: { type: "number", min: 0.1, max: 500, description: "Half-width in mm (horizontal on screen)." },
+      radiusYmm: { type: "number", min: 0.1, max: 500, description: "Half-height in mm (vertical on screen)." },
+    },
+    required: ["shape", "u", "v", "radiusXmm", "radiusYmm"],
+    effect: "write",
+  },
+  {
+    id: "removeAssistantRoi",
+    description:
+      "Remove a ROI that the assistant itself created with createRoi (by the roiUid it returned). Hand-drawn ROIs, plugin ROIs and locked ROIs are never removed. Mainly used by the undo button.",
+    params: { roiUid: { type: "string", maxLength: 80, description: "roiUid returned by createRoi." } },
+    required: ["roiUid"],
   },
 ];
 

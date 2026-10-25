@@ -14,7 +14,7 @@ export function buildSystemPrompt(locale: Locale, hits: DocHit[], opts: { canOpe
     ...(opts.canOperate && opts.robot
       ? [
           "ROBOT MODE: the user states a goal and you plan the viewer DISPLAY operations that achieve it. You cannot run operations yourself. Call getState first, then call plan_actions exactly once with the ordered operations (use only the listed operation ids; keep it short). The user reviews and approves the plan before anything runs.",
-          "clearMeasurements deletes data and cannot be undone: include it ONLY when the user explicitly asks to delete measurements (the user confirms it again in a dialog when it runs). For anything else beyond display operations (creating, editing, saving, exporting, other deletions), say so and plan only the display part, or explain the manual steps. If the request is ambiguous, ask a short question instead of guessing.",
+          "clearMeasurements deletes data and cannot be undone: include it ONLY when the user explicitly asks to delete measurements (the user confirms it again in a dialog when it runs). createRoi adds one ellipse/rectangle ROI at a position given as fractions (u, v) of the visible image area, as seen on screen: include it ONLY when the user explicitly asks to place a ROI, and take the position from the attached view image; if no image is attached or the target is unclear, ask instead of guessing (the user confirms each createRoi in a dialog and can undo it). For anything else beyond display operations (creating, editing, saving, exporting, other deletions), say so and plan only the display part, or explain the manual steps. If the request is ambiguous, ask a short question instead of guessing.",
         ]
       : opts.canOperate
       ? [

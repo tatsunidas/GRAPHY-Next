@@ -103,6 +103,8 @@ test("readJournal: 新しい順・件数上限・壊れた行と未知のフィ�
 
 test("write 操作: 承認すると approved:true で 2D 窓へ届く。承認の関数が無い・拒否・例外では 2D 窓へ送らない", async () => {
   assert.ok(WRITE_ACTIONS.has("clearMeasurements"));
+  assert.ok(WRITE_ACTIONS.has("createRoi"));
+  assert.ok(!WRITE_ACTIONS.has("removeAssistantRoi")); // 作った ROI だけを消す逆操作。確認は付けない（設計）
   const cmd = { kind: "action", id: "clearMeasurements", params: {}, approved: true /* レンダラが付けてきた値は無視される */ };
   // 正例
   const t = fakeTarget();
