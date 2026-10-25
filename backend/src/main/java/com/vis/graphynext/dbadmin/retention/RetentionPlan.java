@@ -20,7 +20,7 @@ public record RetentionPlan(List<Item> items, long totalBytes, Map<String, Integ
                             List<String> warnings) {
 
     /** 消す検査 1 件。reason は {@code days} / {@code size} / {@code free}（最初に当たった条件）。 */
-    public record Item(String studyUid, String patientName, String studyDate, String modality, long instances,
+    public record Item(String studyUid, String patientId, String patientName, String studyDate, String modality, long instances,
                        long sizeBytes, long lastReceivedAt, String reason) {
     }
 }
