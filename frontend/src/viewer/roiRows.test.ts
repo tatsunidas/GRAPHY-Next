@@ -124,6 +124,22 @@ describe("buildRoiPanelModel（全患者表示: shown）", () => {
   });
 });
 
+describe("buildRoiPanelModel（グループ）", () => {
+  it("形の ROI・計測の行にグループの鍵と名前が載る", () => {
+    const m = buildRoiPanelModel(
+      [ann("a", "RectangleROI"), ann("b", "Length"), ann("c", "RectangleROI")],
+      [], [],
+      env({ a: { groupId: "g1", groupName: "病変 A" }, b: { groupId: "g1", groupName: "病変 A" } }),
+      () => [1],
+    );
+    expect(m.rois.map((r) => r.rowKind === "shape" && [r.key, r.groupId, r.groupName])).toEqual([
+      ["a", "g1", "病変 A"],
+      ["c", undefined, undefined],
+    ]);
+    expect(m.measures.map((r) => [r.uid, r.groupId])).toEqual([["b", "g1"]]);
+  });
+});
+
 describe("paintedRowName", () => {
   it("segment が 1 つなら属性編集の label を正とする", () => {
     expect(paintedRowName({ label: "Edited", segmentLabels: { "1": "Old" } }, "id", 1, true)).toBe("Edited");

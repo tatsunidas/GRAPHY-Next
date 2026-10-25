@@ -40,6 +40,9 @@ export interface RoiMaskMeta {
   scope?: RoiScope;
   /** 作成時の scope（原本。編集で "all" にしても元 index を復元できるよう保持）。 */
   origin?: RoiScope;
+  /** ROI グループの鍵と名前（同じ鍵の ROI が 1 つのグループ。名前は所属 ROI に持たせ、メンバーがいる間だけグループが存在する）。 */
+  groupId?: string;
+  groupName?: string;
   /** 任意のカスタム属性（DICOM/ImageJ 出力時に保持）。 */
   custom?: Record<string, string>;
   /** このマスクに存在する segment index の一覧（多セグメント, D3）。Mask のみ。既定 [1]。 */

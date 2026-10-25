@@ -34,6 +34,7 @@ import type { HistogramData } from "../viewer/histogram";
 import { LoadingSpinner } from "../viewer/LoadingSpinner";
 import { fusionMeasureForSeries, useFusionMeasure, type FusionMeasureInfo } from "../viewer/fusionMeasureContext";
 import { seriesUidOf } from "../viewer/suvStore";
+import { pooledValueStats, sumAreaMm2 } from "../viewer/roiGroups";
 
 const CHART_W = 520;
 const CHART_H = 150;
@@ -54,12 +55,15 @@ export interface RoiStatsTarget {
 export function RoiStatsDialog({
   targets,
   initialUid,
+  groupTitle,
   onClose,
 }: {
   /** 対象 ROI（ROI マネージャに出ている順）。 */
   targets: RoiStatsTarget[];
   /** 開いた直後に詳細を出す ROI。 */
   initialUid?: string;
+  /** グループの計測結果を開くとき、そのグループ名。あれば表の下に「グループ合算」を出す。 */
+  groupTitle?: string;
   onClose: () => void;
 }) {
   const { t } = useI18n();
@@ -265,6 +269,8 @@ export function RoiStatsDialog({
               </table>
             </div>
 
+            {groupTitle !== undefined && <GroupSummary title={groupTitle} rows={rows} />}
+
             <div style={detailBox}>
               {focusIsMask ? (
                 focusedMask ? <MaskDetail stats={focusedMask} /> : <span style={dim}>—</span>
@@ -277,6 +283,35 @@ export function RoiStatsDialog({
           </>
         )}
       </div>
+    </div>
+  );
+}
+
+/**
+ * グループの合算。合計面積と、全画素を 1 つの集団とみなした平均 ± SD。
+ * 🔴 単位が混ざる（HU と SUV など）ときは合算せず理由を出す。面積の無い ROI は 0 で埋めず件数で示す。
+ */
+function GroupSummary({ title, rows }: { title: string; rows: RoiStatsCsvRow[] }) {
+  const { t } = useI18n();
+  const area = sumAreaMm2(rows.map((r) => r.stats?.geometry.areaMm2));
+  const withValues = rows.flatMap((r) => (r.stats?.values ? [r.stats.values] : []));
+  const pooled = pooledValueStats(withValues.map((v) => ({ n: v.n, mean: v.mean, sd: v.sd, unit: v.unit })));
+  return (
+    <div style={detailBox} data-testid="roi-group-summary">
+      <div style={{ ...detailLine, fontWeight: 600 }}>{t("roiStats.group.title")}: {title}</div>
+      <div style={detailLine}>
+        {t("roiStats.group.rois")}: {rows.length}
+        {area.counted > 0 && (
+          <> / {t("roiStats.group.area")}: {formatNumber(area.sum)} mm²{area.missing > 0 ? ` ${t("roiStats.group.areaPartial", { counted: area.counted, missing: area.missing })}` : ""}</>
+        )}
+      </div>
+      {pooled ? (
+        <div style={detailLine}>
+          {t("roiStats.group.pooled")}: {formatNumber(pooled.mean)} ± {formatNumber(pooled.sd)} {valueUnitLabel(pooled.unit, t)} / {t("roiStats.n")}: {pooled.n}
+        </div>
+      ) : (
+        <div style={{ ...detailLine, ...dim }}>{t(withValues.length === 0 ? "roiStats.group.noValues" : "roiStats.group.mixedUnit")}</div>
+      )}
     </div>
   );
 }

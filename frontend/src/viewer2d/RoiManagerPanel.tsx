@@ -11,7 +11,7 @@
  *  - 計測: 長さ・角度・プローブなど（ROI ではない）。
  * 設計: `fw/roi-manager-design.md` / `fw/roi-mask-model.md` §10。
  */
-import { toggleRoiSelection } from "../viewer/roiInteriorGrab";
+import { selectRois, toggleRoiSelection } from "../viewer/roiInteriorGrab";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { eventTarget, getRenderingEngine, Enums as csEnums } from "@cornerstonejs/core";
 import {
@@ -34,6 +34,7 @@ import { isRoiLocked, setRoiLocked } from "../viewer/roiLock";
 import { emitSeriesRefresh } from "../viewer/viewerRefresh";
 import { emitDbChanged } from "../dbEvents";
 import { combineRois, splitMask, roiToMask, withTempMask, isAreaRoi, resolveRoiStack, type BoolOp, type RoiOperand, type SplitConnectivity } from "../viewer/roiBooleanOps";
+import { nextGroupNumber, planGroup } from "../viewer/roiGroups";
 import { buildRoiPanelModel, type MeasureRow, type PaintedRoiRow, type RoiPanelModel, type RoiRow, type RoiRowEnv, type RowOwner, type ShapeRoiRow } from "../viewer/roiRows";
 import { sphereFromCircleRoi, createSphere3DFromCircleRoi, bakeSphere3D, splitMaskToSlices, maskVolumeStats, type MaskVolumeStats } from "../viewer/roi3d";
 import { listSpheres3D, updateSphere3D, deleteSphere3D, subscribeSphere3D, type Sphere3D } from "../viewer/sphere3dStore";
@@ -84,8 +85,10 @@ export interface PanelSeries {
 
 /** 一覧の見出しの鍵。患者 `p:<患者>`、シリーズ `s:<患者>|<シリーズ>`。 */
 const patientSec = (pk: string) => `p:${pk}`;
+const groupSec = (groupId: string) => `g:${groupId}`;
 const seriesSec = (pk: string, uid: string) => `s:${pk}|${uid}`;
 function inSection(o: RowOwner, sec: string): boolean {
+  if (sec.startsWith("g:")) return !!o.groupId && o.groupId === sec.slice(2);
   if (sec.startsWith("p:")) return o.patientKey === sec.slice(2);
   return !!o.patientKey && !!o.seriesUid && seriesSec(o.patientKey, o.seriesUid) === sec;
 }
@@ -937,9 +940,86 @@ export function RoiManagerPanel({
     );
   };
 
+  // ── ROI グループ ──
+  const annUids = new Set([...model.rois.flatMap((r) => (r.rowKind === "shape" ? [r.uid] : [])), ...model.measures.map((m) => m.uid)]);
+  const selectedAnnUids = [...selUids].filter((u) => annUids.has(u));
+  const groupRowsOf = (gid: string) => ({
+    rois: model.rois.filter((r): r is ShapeRoiRow => r.rowKind === "shape" && r.groupId === gid),
+    measures: model.measures.filter((m) => m.groupId === gid),
+  });
+  const groupUids = (gid: string) => {
+    const g = groupRowsOf(gid);
+    return [...g.rois.map((r) => r.uid), ...g.measures.map((m) => m.uid)];
+  };
+  const groupNames = [...model.rois, ...model.measures].map((r) => ("groupName" in r ? r.groupName : undefined));
+  const makeGroup = () => {
+    const prefix = t("roiMgr.groupPrefix");
+    const plan = planGroup(
+      selectedAnnUids,
+      (u) => getRoiMaskMeta(u)?.patientKey,
+      () => crypto.randomUUID(),
+      `${prefix} ${nextGroupNumber(groupNames, prefix)}`,
+    );
+    if (!plan.ok) { emitToast(t(plan.reason === "crossPatient" ? "roiMgr.group.crossPatient" : "roiMgr.group.tooFew")); return; }
+    for (const u of selectedAnnUids) setRoiMaskMeta(u, { groupId: plan.groupId, groupName: plan.name });
+    emitToast(t("roiMgr.group.made", { n: selectedAnnUids.length, name: plan.name }));
+    refresh();
+  };
+  const renameGroup = (gid: string, name: string) => { for (const u of groupUids(gid)) setRoiMaskMeta(u, { groupName: name }); };
+  const ungroup = (gid: string) => { for (const u of groupUids(gid)) setRoiMaskMeta(u, { groupId: undefined, groupName: undefined }); refresh(); };
+  const lockGroup = (gid: string) => {
+    const uids = groupUids(gid);
+    const allLocked = uids.length > 0 && uids.every(isRoiLocked);
+    for (const u of uids) setRoiLocked(u, !allLocked);
+    refresh();
+  };
+  const deleteGroup = (gid: string, name: string) => {
+    const uids = groupUids(gid).filter((u) => !isRoiLocked(u));
+    if (uids.length === 0) return;
+    if (!window.confirm(t("roiMgr.group.deleteConfirm", { name, n: uids.length }))) return;
+    const owners = new Set(uids.map((u) => getRoiMaskMeta(u)?.patientKey || activePatientKey));
+    for (const u of uids) {
+      try { csAnnotation.state.removeAnnotation(u); } catch { /* ignore */ }
+      deleteRoiMaskMeta(u);
+    }
+    for (const pk of owners) scheduleRoiSave(pk);
+    refresh();
+  };
+  const groupHead = (gid: string, name: string) => {
+    const g = groupRowsOf(gid);
+    const uids = groupUids(gid);
+    const allLocked = uids.length > 0 && uids.every(isRoiLocked);
+    const anyVisible = g.rois.some((r) => r.visible) || g.measures.some((m) => m.visible);
+    const sec = groupSec(gid);
+    return (
+      <div key={`h:${sec}:${gid}`} style={groupHeadStyle} data-testid="roi-group-head" data-group-id={gid}>
+        <button onClick={() => toggleCollapsed(sec)} style={eyeBtn} title={t("roiMgr.sectionFold")} aria-expanded={!collapsed.has(sec)}>
+          {collapsed.has(sec) ? "▸" : "▾"}
+        </button>
+        <input
+          type="text" style={{ ...name_, fontWeight: 600, flex: "1 1 80px" }} defaultValue={name} title={t("roiMgr.group.rename")}
+          onChange={(e) => renameGroup(gid, e.target.value)}
+          data-testid="roi-group-name"
+        />
+        <span style={countBadge}>{uids.length}</span>
+        <button onClick={() => setRowsVisible(g.rois, g.measures, !anyVisible)} style={eyeBtn} title={t("roiMgr.sectionEye")} data-testid="roi-group-visible">
+          {anyVisible ? "👁" : "🚫"}
+        </button>
+        <button onClick={() => lockGroup(gid)} style={eyeBtn} title={t("roiMgr.group.lock")} aria-pressed={allLocked} data-testid="roi-group-lock">
+          {allLocked ? "🔒" : "🔓"}
+        </button>
+        <button onClick={() => selectRois(uids)} style={editBtn} title={t("roiMgr.group.select")} data-testid="roi-group-select">◎</button>
+        <button onClick={() => setStatsOpen({ section: sec })} style={editBtn} title={t("roiMgr.sectionStats")} data-testid="roi-group-stats">Σ</button>
+        <button onClick={() => ungroup(gid)} style={editBtn} title={t("roiMgr.group.ungroup")} data-testid="roi-group-ungroup">⛓</button>
+        <button onClick={() => deleteGroup(gid, name)} disabled={allLocked} style={allLocked ? { ...delBtn, opacity: 0.35, cursor: "not-allowed" } : delBtn} title={t("roiMgr.group.delete")} data-testid="roi-group-delete">🗑</button>
+      </div>
+    );
+  };
+
   // ── 患者→シリーズの見出し（全患者表示）──
-  // 1 患者・1 シリーズだけのときは見出しを出さない（従来の見た目のまま）。
-  const grouping = !!shownSeries && (new Set(shownSeries.map((x) => x.patientKey)).size > 1 || shownSeries.length > 1);
+  // 1 患者・1 シリーズだけで、グループも無いときは見出しを出さない（従来の見た目のまま）。
+  const anyGroup = model.rois.some((r) => r.rowKind === "shape" && r.groupId) || model.measures.some((m) => m.groupId);
+  const grouping = !!shownSeries && (new Set(shownSeries.map((x) => x.patientKey)).size > 1 || shownSeries.length > 1 || anyGroup);
   const toggleCollapsed = (k: string) =>
     setCollapsed((c) => { const n = new Set(c); if (n.has(k)) n.delete(k); else n.add(k); return n; });
   const roiVisible = (r: RoiRow): boolean =>
@@ -992,11 +1072,18 @@ export function RoiManagerPanel({
       const psec = patientSec(pk);
       out.push(sectionHead(psec, pname || pk, 0, asRois(prow), asMeasures(prow), pk === activePatientKey));
       if (collapsed.has(psec)) continue;
+      // グループ: 所属 ROI はグループ見出しの下にだけ出す（シリーズ区画には重複させない）。
+      for (const gid of [...new Set(prow.filter((r) => r.groupId).map((r) => r.groupId as string))]) {
+        const grow = prow.filter((r) => r.groupId === gid);
+        out.push(groupHead(gid, grow[0].groupName ?? ""));
+        if (!collapsed.has(groupSec(gid))) out.push(...grow.map(render));
+      }
+      const ungrouped = prow.filter((r) => !r.groupId);
       const seriesOf = shownSeries.filter((x) => x.patientKey === pk);
       const known = new Set(seriesOf.map((x) => x.seriesUid));
-      out.push(...prow.filter((r) => !r.seriesUid || !known.has(r.seriesUid)).map(render));
+      out.push(...ungrouped.filter((r) => !r.seriesUid || !known.has(r.seriesUid)).map(render));
       for (const se of seriesOf) {
-        const srow = prow.filter((r) => r.seriesUid === se.seriesUid);
+        const srow = ungrouped.filter((r) => r.seriesUid === se.seriesUid);
         if (seriesOf.length > 1) {
           const ssec = seriesSec(pk, se.seriesUid);
           out.push(sectionHead(ssec, se.label, 1, asRois(srow), asMeasures(srow)));
@@ -1066,6 +1153,7 @@ export function RoiManagerPanel({
       </div>
       <div style={{ ...row, justifyContent: "flex-start" }}>
         <button onClick={addNewPainted} disabled={busy} style={editBtn} title={t("roiMgr.newMask")} data-testid="roi-new-painted">＋{t("roiMgr.newMaskShort")}</button>
+        <button onClick={makeGroup} disabled={selectedAnnUids.length < 2} style={editBtn} title={t("roiMgr.group.make")} data-testid="roi-group-make">🗂 {t("roiMgr.groupPrefix")} ({selectedAnnUids.length})</button>
       </div>
       {model.rois.length === 0 && <div style={empty}>{t("roiMgr.empty")}</div>}
       {renderGrouped<RoiRow>(
@@ -1104,6 +1192,11 @@ export function RoiManagerPanel({
         <RoiStatsDialog
           targets={statsTargets}
           initialUid={statsOpen.focus}
+          groupTitle={
+            statsOpen.section?.startsWith("g:")
+              ? [...model.rois, ...model.measures].find((r) => r.groupId === statsOpen.section!.slice(2))?.groupName ?? ""
+              : undefined
+          }
           onClose={() => setStatsOpen(null)}
         />
       )}
@@ -1117,6 +1210,14 @@ const panel: React.CSSProperties = {
 };
 const head: React.CSSProperties = { display: "flex", alignItems: "center", gap: 4, padding: "6px 8px", borderBottom: "1px solid #e6eaee", background: "#fff" };
 const hbtn: React.CSSProperties = { border: "1px solid #cdd5de", borderRadius: 5, background: "#fff", cursor: "pointer", fontSize: 13, padding: "1px 7px" };
+const groupHeadStyle: React.CSSProperties = {
+  display: "flex", flexWrap: "wrap", alignItems: "center", gap: 4, padding: "2px 8px 2px 14px", background: "#f1eefb",
+  borderLeft: "3px solid #8a6fd1", color: "#4a3a7a",
+};
+const name_: React.CSSProperties = {
+  flex: 1, minWidth: 0, color: "#33404d", fontSize: 12,
+  border: "1px solid transparent", borderRadius: 4, background: "transparent", padding: "2px 4px",
+};
 const patientHead: React.CSSProperties = {
   display: "flex", alignItems: "center", gap: 4, padding: "4px 8px", background: "#eaf0f6",
   borderTop: "1px solid #dde4ea", borderBottom: "1px solid #dde4ea", fontWeight: 600, color: "#33404d",
