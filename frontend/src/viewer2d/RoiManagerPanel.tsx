@@ -270,6 +270,8 @@ export function RoiManagerPanel({
   };
   const toggleRoi = (uid: string, vis: boolean) => {
     try { csAnnotation.visibility.setAnnotationVisibility(uid, vis); } catch { /* ignore */ }
+    // 上流は表示の切り替えで再描画しない。選択中の ROI は選択解除の副作用で再描画されて動いて見えるだけ。
+    renderAll();
     refresh();
   };
   // scope の Z を global("all") ↔ local(原本 index) でトグル。
