@@ -69,6 +69,13 @@ export interface SavedRoi {
   scope?: RoiScope;
   origin?: RoiScope;
   custom?: Record<string, string>;
+  /**
+   * ROI グループ（同じ `groupId` の ROI が 1 つのグループ）。名前は所属 ROI に持たせる＝グループは
+   * メンバーがいる間だけ存在する。🔴 **`schema` を上げずに足した項目**: 知らない旧アプリは無視して
+   * 読む（ROI は無傷、グループ所属だけが外れる）。
+   */
+  groupId?: string;
+  groupName?: string;
   isVisible?: boolean;
   isLocked?: boolean;
 }
@@ -154,6 +161,8 @@ export interface RoiSaveContext {
     scope?: RoiScope;
     origin?: RoiScope;
     custom?: Record<string, string>;
+    groupId?: string;
+    groupName?: string;
   } | undefined;
   /** 現在表示中の ZCT（scope 未登録の ROI に補う）。 */
   ct?: { c: number; t: number; studyUid?: string; seriesUid?: string };
@@ -213,6 +222,10 @@ export function toSavedRoi(ann: AnnotationLike, ctx: RoiSaveContext): SavedRoi |
   if (meta?.scope) out.scope = meta.scope;
   if (meta?.origin) out.origin = meta.origin;
   if (meta?.custom && Object.keys(meta.custom).length) out.custom = { ...meta.custom };
+  if (meta?.groupId) {
+    out.groupId = meta.groupId;
+    if (meta.groupName) out.groupName = meta.groupName;
+  }
   if (ann.isVisible === false) out.isVisible = false;
   if (ann.isLocked === true) out.isLocked = true;
   return out;
@@ -293,6 +306,10 @@ export function parseSaveFile(json: string | null | undefined): ParsedRoiFile {
     if (s.scope && typeof s.scope === "object") item.scope = sanitizeScope(s.scope);
     if (s.origin && typeof s.origin === "object") item.origin = sanitizeScope(s.origin);
     if (s.custom && typeof s.custom === "object") item.custom = sanitizeCustom(s.custom);
+    if (typeof s.groupId === "string" && s.groupId) {
+      item.groupId = s.groupId;
+      if (typeof s.groupName === "string") item.groupName = s.groupName;
+    }
     if (s.isVisible === false) item.isVisible = false;
     if (s.isLocked === true) item.isLocked = true;
     out.push(item);
@@ -410,6 +427,8 @@ export function buildRestoredMeta(
   scope?: RoiScope;
   origin?: RoiScope;
   custom?: Record<string, string>;
+  groupId?: string;
+  groupName?: string;
 } {
   return {
     patientKey,
@@ -419,6 +438,8 @@ export function buildRestoredMeta(
     scope: roi.scope,
     origin: roi.origin ?? roi.scope,
     custom: roi.custom,
+    groupId: roi.groupId,
+    groupName: roi.groupName,
   };
 }
 

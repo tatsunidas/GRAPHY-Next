@@ -32,6 +32,8 @@ export interface RoiRowEnv {
     segments?: number[];
     segmentLabels?: Record<string, string>;
     scope?: { seriesUid?: string };
+    groupId?: string;
+    groupName?: string;
   } | undefined;
   isAnnotationVisible(uid: string): boolean;
   isLocked(uid: string): boolean;
@@ -54,6 +56,9 @@ export interface SphereInput {
 export interface RowOwner {
   patientKey?: string;
   seriesUid?: string;
+  /** 所属する ROI グループ（形の ROI・計測のみ）。 */
+  groupId?: string;
+  groupName?: string;
 }
 
 export interface ShapeRoiRow extends RowOwner {
@@ -147,7 +152,7 @@ export function buildRoiPanelModel(
     const ann = a as { annotationUID?: string; metadata?: { toolName?: string } } | null;
     const uid = ann?.annotationUID;
     const am = env.metaOf(uid ?? "");
-    const owner: RowOwner = { patientKey: am?.patientKey, seriesUid: am?.scope?.seriesUid };
+    const owner: RowOwner = { patientKey: am?.patientKey, seriesUid: am?.scope?.seriesUid, groupId: am?.groupId, groupName: am?.groupName };
     if (!uid || !mine(owner.patientKey, owner.seriesUid)) continue;
     const kind = annotationRoiKind(ann);
     const tool = ann?.metadata?.toolName ?? "ROI";
@@ -158,6 +163,7 @@ export function buildRoiPanelModel(
   const painted: PaintedRoiRow[] = [];
   for (const s of segmentations) {
     const meta = env.metaOf(s.segmentationId);
+    // 塗り ROI はグループ化しない（保存の経路が別で、グループの所属を持たせられない）。
     const owner: RowOwner = { patientKey: meta?.patientKey, seriesUid: meta?.scope?.seriesUid };
     if (!mine(owner.patientKey, owner.seriesUid)) continue;
     const segs = segmentsOf(s.segmentationId);

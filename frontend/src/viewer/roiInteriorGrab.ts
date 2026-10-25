@@ -405,6 +405,22 @@ export function toggleRoiSelection(uid: string): void {
   }
 }
 
+/** 指定の ROI を選択状態にする（ほかの選択は外す）。グループの「選択」用。 */
+export function selectRois(uids: readonly string[]): void {
+  try {
+    for (const u of csAnnotation.selection.getAnnotationsSelected() ?? []) {
+      if (!uids.includes(u)) csAnnotation.selection.setAnnotationSelected(u, false);
+    }
+    for (const u of uids) {
+      if (csAnnotation.state.getAnnotation(u)) csAnnotation.selection.setAnnotationSelected(u, true, true);
+    }
+    const ids = (getRenderingEngines() ?? []).flatMap((re) => re.getViewports().map((v) => v.id));
+    triggerAnnotationRenderForViewportIds(ids);
+  } catch {
+    /* 選択できなくても致命的ではない */
+  }
+}
+
 /** ROI の選択をすべて外して描き直す（Esc）。何も選択していなければ何もしない。 */
 export function deselectAllRois(): void {
   try {
