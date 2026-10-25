@@ -97,6 +97,7 @@ export function RoiManagerPanel({
   mode,
   onRevealRoi,
   onDuplicateRoi,
+  onCopyRoi,
   onConvertToRoi,
   onClose,
 }: {
@@ -114,6 +115,8 @@ export function RoiManagerPanel({
   onRevealRoi?: (roiUid: string) => void;
   /** ROI を複製する（貼り付け先は現在表示中のスライス）。 */
   onDuplicateRoi?: (roiUid: string) => void;
+  /** ROI をコピーする（貼り付けは対象タイルを選んでから）。 */
+  onCopyRoi?: (roiUid: string) => void;
   /** 計測（Length / Probe）を ROI に変える。 */
   onConvertToRoi?: (roiUid: string) => void;
   onClose: () => void;
@@ -690,6 +693,20 @@ export function RoiManagerPanel({
     </button>
   );
 
+  // 行の「コピー」。貼り付けは、貼り付け先のタイルを 1 度クリックしてから ROI メニュー／Ctrl+V。
+  const copyButton = (uid: string) =>
+    onCopyRoi ? (
+      <button
+        onClick={(e) => { e.stopPropagation(); onCopyRoi(uid); }}
+        disabled={busy}
+        style={editBtn}
+        title={t("roiMgr.copy")}
+        data-testid="roi-mgr-copy"
+      >
+        ⎘
+      </button>
+    ) : null;
+
   // 形の ROI（面積・線・点）。
   const renderShapeRow = (r: ShapeRoiRow) => (
     <div key={r.key} data-testid="roi-row" data-kind="shape" data-roi-key={r.key}>
@@ -735,6 +752,7 @@ export function RoiManagerPanel({
             ⧉
           </button>
         )}
+        {copyButton(r.uid)}
         {/circle/i.test(r.tool) && <button onClick={(e) => { e.stopPropagation(); runDefineSphere(r.uid); }} disabled={busy} style={editBtn} title={t("roiMgr.defineSphere")} data-testid="roi-mgr-define-sphere">◎</button>}
         {/circle/i.test(r.tool) && <button onClick={(e) => { e.stopPropagation(); runSphere(r.uid); }} disabled={busy} style={editBtn} title={t("roiMgr.toSphere")}>⬤</button>}
         <button onClick={(e) => { e.stopPropagation(); setStatsOpen({ focus: r.uid }); }} style={editBtn} title={t("roiMgr.statsRoi")}>Σ</button>
@@ -761,6 +779,18 @@ export function RoiManagerPanel({
         onChange={(e) => renameAnnotation(m.uid, e.target.value)}
       />
       <input type="color" defaultValue="#ffff00" onClick={(e) => e.stopPropagation()} onChange={(e) => setRoiStyle(m.uid, { color: hexToRgb(e.target.value) })} title={t("roiMgr.color")} style={colorInput} />
+      {onDuplicateRoi && (
+        <button
+          onClick={(e) => { e.stopPropagation(); setFocusedRoi(m.uid); onDuplicateRoi(m.uid); }}
+          disabled={busy}
+          style={editBtn}
+          title={t("roiMgr.duplicate")}
+          data-testid="roi-mgr-duplicate"
+        >
+          ⧉
+        </button>
+      )}
+      {copyButton(m.uid)}
       {onConvertToRoi && canConvertMeasureToRoi(m.tool) && (
         <button
           onClick={(e) => { e.stopPropagation(); setFocusedRoi(m.uid); onConvertToRoi(m.uid); }}

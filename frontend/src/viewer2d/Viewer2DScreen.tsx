@@ -59,7 +59,7 @@ import {
   setSplineFitOn,
   toggleSplineFit,
 } from "../viewer/roiContourTools";
-import { subscribeRoiMaskStore } from "../viewer/roiMaskStore";
+import { getRoiMaskMeta, subscribeRoiMaskStore } from "../viewer/roiMaskStore";
 import { getLoadedRois, registerRoiCollector, scheduleRoiSave } from "../viewer/roiSaveStore";
 import { collectRoisForPatient, sopOfImageId } from "../viewer/roiRestore";
 import { emitRoiReveal } from "../viewer/roiReveal";
@@ -2049,12 +2049,21 @@ function TileGrid({
         runViewerCommand(targets, (c) => c.selectRoi(roiUid, exclusive));
       },
       copyRoi: (roiUid) => {
-        const uid = roiUid ?? selectedAnnotations()[0]?.annotationUID;
-        if (!uid) { notify(t("roi.copy.none")); return; }
-        const target = roiOwnerTile(uid as string) ?? resolveRoiEditTarget();
+        // 指定が無ければ、選択中の ROI すべて（複数可）。
+        const uids = roiUid
+          ? [roiUid]
+          : selectedAnnotations().map((a) => a.annotationUID as string | undefined).filter((u): u is string => !!u);
+        if (uids.length === 0) { notify(t("roi.copy.none")); return; }
+        // 貼り付け先は 1 つのタイルなので、患者・タイルが混ざった選択はコピーさせない（黙って一部だけ取らない）。
+        if (new Set(uids.map((u) => getRoiMaskMeta(u)?.patientKey).filter(Boolean)).size > 1) { notify(t("roi.copy.crossPatient")); return; }
+        const owners = uids.map((u) => roiOwnerTile(u));
+        if (new Set(owners.filter(Boolean)).size > 1) { notify(t("roi.copy.crossTile")); return; }
+        const target = owners.find(Boolean) ?? resolveRoiEditTarget();
         if (!target) { notify(t("roi.paste.noTile")); return; }
-        const ok = queryViewerCommand(target, (c) => c.copyRoi(uid as string));
-        notify(t(ok ? "roi.copy.done" : "roi.copy.failed"));
+        const n = queryViewerCommand(target, (c) => c.copyRois(uids)) ?? 0;
+        if (n === 0) notify(t("roi.copy.failed"));
+        else if (n < uids.length) notify(t("roi.copy.partial", { n, m: uids.length - n }));
+        else notify(t(n > 1 ? "roi.copy.doneN" : "roi.copy.done", { n }));
       },
       pasteRoi: () => {
         if (!hasClipboardRoi()) { notify(t("roi.paste.empty")); return; }
@@ -2685,6 +2694,7 @@ function TileGrid({
           mode={mode}
           onRevealRoi={revealRoi}
           onDuplicateRoi={(uid) => actions.duplicateRoi(uid)}
+          onCopyRoi={(uid) => actions.copyRoi(uid)}
           onConvertToRoi={(uid) => actions.convertMeasureToRoi(uid)}
           onClose={() => setShowRoiMgr(false)}
         />

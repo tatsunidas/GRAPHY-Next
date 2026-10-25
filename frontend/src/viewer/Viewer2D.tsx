@@ -43,7 +43,7 @@ import { getScissors, setScissorsActive, subscribeScissors, scissorsToolName, sc
 import { setViewerContext, clearViewerContext, getViewerContext, type ViewerContext } from "./viewerContext";
 import { deleteRoiMaskMeta, getRoiMaskMeta, setRoiMaskMeta, subscribeRoiMaskStore } from "./roiMaskStore";
 import { noteFocusedTile } from "./focusedTile";
-import { copyRoiToClipboard, duplicateRoi as duplicateRoiEntry, hasClipboardRoi, makePixelToWorld, ownsImage, pasteRoiInto } from "./roiClipboard";
+import { type PasteContext, copyRoisToClipboard, duplicateRoi as duplicateRoiEntry, hasClipboardRoi, makePixelToWorld, ownsImage, pasteRoisInto } from "./roiClipboard";
 import { emitRoiReveal } from "./roiReveal";
 import { reconcileGlobalAnnotations } from "./globalRoiSync";
 import { loadRoisCached, scheduleRoiSave } from "./roiSaveStore";
@@ -1251,7 +1251,10 @@ export function Viewer2D({
             // 判定はツールグループ単位（GridView リンクでは複数タイルで共有）なので、このグループの左ドラッグを見る。
             const measureActive = () => MEASURE_TOOLS.includes(tg.getActivePrimaryMouseButtonTool());
             for (const tn of [...MEASURE_TOOLS, PlanarFreehandROITool.toolName]) {
-              installInteriorGrab(tg.getToolInstance(tn), { isMeasureToolActive: measureActive });
+              installInteriorGrab(tg.getToolInstance(tn), {
+                isMeasureToolActive: measureActive,
+                onCrossPatientSelection: () => emitToast(t("roi.move.crossPatient")),
+              });
             }
             // ROI ブラシ（セグメンテーション編集）。passive で追加。
             tg.addTool(BrushTool.toolName);
@@ -2465,16 +2468,30 @@ export function Viewer2D({
     }
   };
 
+  /** ROI が乗っているスライスの、このタイルのスタック内の番号（乗っていなければ undefined）。 */
+  const stackIndexOfRoi = (roiUid: string): number | undefined => {
+    const refId = (csAnnotation.state as { getAnnotation(uid: string): { metadata?: { referencedImageId?: string } } | undefined })
+      .getAnnotation(roiUid)?.metadata?.referencedImageId;
+    const i = refId ? imageIdsRef.current.indexOf(refId) : -1;
+    return i >= 0 ? i : undefined;
+  };
+
   /**
-   * 選択中（または指定）の ROI をクリップボードへ取る。取れた件数を返す。
+   * ROI をクリップボードへ取る（複数可）。取れた件数を返す。
    *
-   * <p>複数選択されていても**先頭の 1 件だけ**を取る。複数コピーは「貼ったときにどう並ぶか」を
-   * 決めないと使えず、いまその要件が無いので広げない。
+   * <p>貼ったときの並びは、コピー元の位置関係（面内の相対位置・スライス間の枚数差）をそのまま写す
+   * （`roiClipboard.retargetEntries` / `pasteRoisInto`）。宛先の患者・タイルが混ざっていないかの検査は、
+   * 全タイルを知っている呼び出し側（Viewer2DScreen）が先に済ませる。
    */
+  const copyRois = (roiUids: string[]): number =>
+    copyRoisToClipboard(roiUids, roiContextRef.current?.patientKey, stackIndexOfRoi);
+
+  /** 指定の 1 件、省略なら**選択中のうちこのタイルの ROI すべて**。取れたら true。 */
   const copyRoi = (roiUid?: string): boolean => {
-    const uid = roiUid ?? csAnnotation.selection.getAnnotationsSelected()?.[0];
-    if (!uid) return false;
-    return copyRoiToClipboard(uid, roiContextRef.current?.patientKey);
+    const uids = roiUid
+      ? [roiUid]
+      : (csAnnotation.selection.getAnnotationsSelected() ?? []).filter((u) => stackIndexOfRoi(u) !== undefined);
+    return uids.length > 0 && copyRois(uids) > 0;
   };
 
   const ownsRoi = (roiUid: string): boolean => {
@@ -2484,33 +2501,34 @@ export function Viewer2D({
   };
 
   /** 貼り付け/複製で共通の宛先情報。現在表示中のスライスへ置く。 */
-  const pasteContext = () => {
+  const pasteContext = (sliceIndex: number = indexRef.current) => {
     const v = vp();
-    const imageId = imageIdsRef.current[indexRef.current];
+    const imageId = imageIdsRef.current[sliceIndex];
     if (!v || !imageId) return null;
     const ctx = getViewerContext(viewportIdRef.current);
     return {
       imageId,
-      viewport: v as unknown as Parameters<typeof pasteRoiInto>[0]["viewport"],
-      sliceIndex: indexRef.current,
+      viewport: v as unknown as PasteContext["viewport"],
+      sliceIndex,
       patientKey: roiContextRef.current?.patientKey ?? "",
       seriesLabel: roiContextRef.current?.seriesLabel,
       // 🔴 貼り付け先スライスの **local** scope。global(z:"all") を引き継がない。
       scope: ctx
-        ? { studyUid: ctx.studyUid, seriesUid: ctx.seriesUid, z: indexRef.current, c: ctx.c, t: ctx.t }
+        ? { studyUid: ctx.studyUid, seriesUid: ctx.seriesUid, z: sliceIndex, c: ctx.c, t: ctx.t }
         : undefined,
       labelFor: (label: string | undefined, tool: string) => `${label || tool} ${t("roi.copySuffix")}`,
     };
   };
 
   /** 貼り付け後の後始末（描画・選択・保存予約・「どこへ行ったか」の通知）。 */
-  const afterPaste = (uid: string, imageId: string): void => {
+  const afterPaste = (uids: string[], imageId: string): void => {
     try {
       csToolsUtilities.triggerAnnotationRenderForViewportIds([viewportIdRef.current]);
     } catch {
       /* 破棄途中は無視 */
     }
-    selectRoi(uid);
+    // 貼ったものを選択状態にする（そのまま続けて動かしたり、コピーし直したりできる）。
+    uids.forEach((u, i) => selectRoi(u, i === 0));
     // 一覧から複製したときは「今どのスライスを見ているか」が視野の外にあるので、
     // 複製先を必ず見せる（押したのに何も起きていないように見えるのを防ぐ）。
     emitRoiReveal({
@@ -2539,17 +2557,25 @@ export function Viewer2D({
    * <p>🔴 **失敗を黙って落とさない。** 「押したのに何も起きない」は、この機能で最も質の悪い
    * 出方（利用者は押せていないのかコピーできていないのか判断できない）。
    */
-  const pasteRoi = (): string | null => {
-    if (!hasClipboardRoi()) return null;
-    if (roiEditBlocked()) return null; // 理由は roiEditBlocked が出す
+  const pasteRoi = (): string[] => {
+    if (!hasClipboardRoi()) return [];
+    if (roiEditBlocked()) return []; // 理由は roiEditBlocked が出す
     const ctx = pasteContext();
-    const res = ctx ? pasteRoiInto(ctx) : null;
-    if (!res?.uid || !ctx) {
+    // 基準（コピーした ROI のうち最も若いスライス）を現在のスライスに置き、枚数の差を保って他を置く。
+    const res = ctx
+      ? pasteRoisInto((offset) => {
+          const i = indexRef.current + offset;
+          return i >= 0 && i < imageIdsRef.current.length ? pasteContext(i) : null;
+        })
+      : null;
+    if (!res?.uids.length || !ctx) {
       emitToast(t(res?.reason === "outOfImage" ? "roi.paste.outOfImage" : "roi.paste.failed"));
-      return null;
+      return [];
     }
-    afterPaste(res.uid, ctx.imageId);
-    return res.uid;
+    afterPaste(res.uids, ctx.imageId);
+    if (res.skipped > 0) emitToast(t("roi.paste.partial", { n: res.uids.length, m: res.skipped }));
+    else if (res.uids.length > 1) emitToast(t("roi.paste.doneN", { n: res.uids.length }));
+    return res.uids;
   };
 
   /** ROI をその場で複製する（クリップボードの中身を壊さない）。 */
@@ -2561,7 +2587,7 @@ export function Viewer2D({
       emitToast(t(res?.reason === "outOfImage" ? "roi.paste.outOfImage" : "roi.paste.failed"));
       return null;
     }
-    afterPaste(res.uid, ctx.imageId);
+    afterPaste([res.uid], ctx.imageId);
     return res.uid;
   };
 
@@ -2641,7 +2667,7 @@ export function Viewer2D({
     if (!addSavedRoiToViewport(saved, ctx.imageId, ctx.viewport, { sliceIndex: ctx.sliceIndex, patientKey: ctx.patientKey, seriesLabel: ctx.seriesLabel })) {
       return { ok: false, reason: "failed" };
     }
-    afterPaste(uid, ctx.imageId);
+    afterPaste([uid], ctx.imageId);
     return { ok: true, roiUid: uid, centerLps: handles.centerLps };
   };
 
@@ -2704,7 +2730,7 @@ export function Viewer2D({
     }
     const imageId = (csAnnotation.state.getAnnotation(r.uid) as { metadata?: { referencedImageId?: string } } | undefined)
       ?.metadata?.referencedImageId;
-    if (imageId) afterPaste(r.uid, imageId);
+    if (imageId) afterPaste([r.uid], imageId);
     return r.uid;
   };
 
@@ -2727,7 +2753,7 @@ export function Viewer2D({
     publishAnalysisResult: publishPluginAnalysis,
     setActiveTool, setBrushSize, setWandTolerance,
     getRois, getRoiMeta, setRoiMeta, clearAnnotations, selectRoi,
-    copyRoi, ownsRoi, pasteRoi, duplicateRoi, convertMeasureToRoi: convertMeasureToRoiCmd, createRoi, removeCreatedRoi,
+    copyRoi, copyRois, ownsRoi, pasteRoi, duplicateRoi, convertMeasureToRoi: convertMeasureToRoiCmd, createRoi, removeCreatedRoi,
     undo, redo,
   });
   commandsRef.current = {
@@ -2741,7 +2767,7 @@ export function Viewer2D({
     publishAnalysisResult: publishPluginAnalysis,
     setActiveTool, setBrushSize, setWandTolerance,
     getRois, getRoiMeta, setRoiMeta, clearAnnotations, selectRoi,
-    copyRoi, ownsRoi, pasteRoi, duplicateRoi, convertMeasureToRoi: convertMeasureToRoiCmd, createRoi, removeCreatedRoi,
+    copyRoi, copyRois, ownsRoi, pasteRoi, duplicateRoi, convertMeasureToRoi: convertMeasureToRoiCmd, createRoi, removeCreatedRoi,
     undo, redo,
   };
   useEffect(() => {
@@ -2787,6 +2813,7 @@ export function Viewer2D({
       clearAnnotations: (s) => commandsRef.current.clearAnnotations(s),
       convertMeasureToRoi: (u) => commandsRef.current.convertMeasureToRoi(u),
       copyRoi: (u) => commandsRef.current.copyRoi(u),
+      copyRois: (u) => commandsRef.current.copyRois(u),
       ownsRoi: (u) => commandsRef.current.ownsRoi(u),
       pasteRoi: () => commandsRef.current.pasteRoi(),
       duplicateRoi: (u) => commandsRef.current.duplicateRoi(u),

@@ -3,7 +3,7 @@
  * Author: Tatsuaki Kobayashi
  */
 import { describe, expect, it } from "vitest";
-import { carryOver, entryToSavedRoi, retargetEntry, type ImageGrid, type RoiClipboardEntry } from "./roiClipboard";
+import { carryOver, entryToSavedRoi, retargetEntries, retargetEntry, type ImageGrid, type RoiClipboardEntry } from "./roiClipboard";
 import { buildAnnotationData } from "./roiPersistence";
 import type { PointPx } from "./roiRead";
 
@@ -138,5 +138,36 @@ describe("carryOver（別の患者へは説明と custom を持ち越さない�
   });
   it("同じ患者: すべて引き継ぐ", () => {
     expect(carryOver(e, "P1")).toBe(e);
+  });
+});
+
+describe("retargetEntries（複数をまとめて別の画像へ写す）", () => {
+  const src = grid(512, 512, 0.7);
+  const a = entry({ source: src, pointsPx: [[100, 100], [110, 100], [110, 110], [100, 110]] });
+  const b = entry({ source: src, pointsPx: [[300, 100], [310, 100], [310, 110], [300, 110]] });
+
+  it("同じ寸法・間隔なら恒等", () => {
+    const out = retargetEntries([a, b], grid(512, 512, 0.7))!;
+    expect(out).toEqual([a, b]);
+  });
+
+  it("全体で 1 つの重心・拡大率: ROI 同士の間隔（mm）が保たれる", () => {
+    const out = retargetEntries([a, b], grid(256, 256, 1.4))!;
+    const dx = out[1].pointsPx[0][0] - out[0].pointsPx[0][0];
+    expect(dx * 1.4).toBeCloseTo(200 * 0.7, 9);
+    // 形（大きさ mm）も保たれる
+    expect((out[0].pointsPx[1][0] - out[0].pointsPx[0][0]) * 1.4).toBeCloseTo(10 * 0.7, 9);
+  });
+
+  it("1 件でも画像の外へ出るなら全体を捨てる", () => {
+    const wide = entry({ source: src, pointsPx: [[10, 10], [20, 10], [20, 20], [10, 20]] });
+    const far = entry({ source: src, pointsPx: [[500, 500], [510, 500], [510, 510], [500, 510]] });
+    expect(retargetEntries([wide, far], grid(64, 64, 0.1))).toBeNull();
+  });
+
+  it("空は空、間隔不明は画素のまま", () => {
+    expect(retargetEntries([], grid(64, 64, 0.1))).toEqual([]);
+    const unknown: ImageGrid = { cols: 512, rows: 512, colSpacing: null, rowSpacing: null };
+    expect(retargetEntries([a, b], unknown)).toEqual([a, b]);
   });
 });
