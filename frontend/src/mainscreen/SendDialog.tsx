@@ -17,6 +17,7 @@ import {
 import { useI18n } from "../i18n/i18n";
 import { selectionHasCfm } from "./cfmNotice";
 import { TriCheckbox } from "./TriCheckbox";
+import { DicomDate } from "../i18n/dateFormat";
 
 /**
  * DICOM Send: MainScreen で選択中のスタディ<b>の患者</b>のスタディ/シリーズをツリー表示し、
@@ -290,7 +291,7 @@ export function SendDialog({
                   </button>
                   <TriCheckbox state={cstate} onChange={() => void toggleStudy(st.studyInstanceUid)} />
                   <span style={{ cursor: "pointer" }} onClick={() => void toggleExpand(st.studyInstanceUid)}>
-                    {st.studyDate || "—"} / {st.studyDescription || "—"}
+                    {st.studyDate ? <DicomDate value={st.studyDate} /> : "—"} / {st.studyDescription || "—"}
                     <span style={{ color: "#8a98a6", fontSize: 11 }}>
                       {" "}
                       {st.modality || ""} ({st.numberOfInstances})

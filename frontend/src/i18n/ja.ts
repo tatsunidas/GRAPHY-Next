@@ -3028,6 +3028,12 @@ export const ja: Record<string, string> = {
   "settings.field.language": "言語",
   "settings.opt.lang.ja": "日本語",
   "settings.opt.lang.en": "English",
+  "settings.field.dateFormat": "日付の書式",
+  "settings.field.dateFormat.help": "表示だけを変えます。DICOM の値・検索・CSV は変わりません。",
+  "settings.opt.dateFormat": "日付",
+  "settings.field.timeFormat": "時刻の書式",
+  "settings.opt.timeFormat.24h": "24 時間",
+  "settings.opt.timeFormat.12h": "12 時間",
   "settings.sec.debug": "デバッグ",
   "settings.field.debugMode": "デバッグモード",
   "settings.field.debugMode.help":

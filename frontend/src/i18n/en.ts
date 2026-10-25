@@ -3039,6 +3039,12 @@ export const en: Record<string, string> = {
   "settings.field.language": "Language",
   "settings.opt.lang.ja": "日本語",
   "settings.opt.lang.en": "English",
+  "settings.field.dateFormat": "Date format",
+  "settings.field.dateFormat.help": "Changes the display only. DICOM values, searches and CSV exports are unchanged.",
+  "settings.opt.dateFormat": "Date",
+  "settings.field.timeFormat": "Time format",
+  "settings.opt.timeFormat.24h": "24-hour",
+  "settings.opt.timeFormat.12h": "12-hour",
   "settings.sec.debug": "Debug",
   "settings.field.debugMode": "Debug mode",
   "settings.field.debugMode.help":

@@ -4,6 +4,7 @@
  */
 import dicomImageLoader from "@cornerstonejs/dicom-image-loader";
 import { readDicomString } from "./dicomText";
+import { formatDicomDate, formatDicomTime } from "../i18n/dateFormat";
 import {
   type OverlayConfig,
   type OverlayCorner,
@@ -36,12 +37,6 @@ function rawValue(ds: any, tag: string): string | null {
   return readDicomString(ds, tag);
 }
 
-function fmtDate(v: string): string {
-  return /^\d{8}$/.test(v) ? `${v.slice(0, 4)}-${v.slice(4, 6)}-${v.slice(6, 8)}` : v;
-}
-function fmtTime(v: string): string {
-  return /^\d{6}/.test(v) ? `${v.slice(0, 2)}:${v.slice(2, 4)}:${v.slice(4, 6)}` : v;
-}
 function fmtPN(v: string): string {
   return v.replace(/\^+/g, " ").trim();
 }
@@ -75,10 +70,10 @@ function resolveField(field: OverlayField, ds: any): string | null {
         value = fmtPN(raw);
         break;
       case "DA":
-        value = fmtDate(raw);
+        value = formatDicomDate(raw);
         break;
       case "TM":
-        value = fmtTime(raw);
+        value = formatDicomTime(raw);
         break;
       default:
         value = raw;

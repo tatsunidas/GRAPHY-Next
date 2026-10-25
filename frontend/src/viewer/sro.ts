@@ -29,6 +29,7 @@
 
 import { apiBase } from "../apiBase";
 import type { RegistrationResult } from "./regResult";
+import { formatDicomDate } from "../i18n/dateFormat";
 
 export interface SroDvf {
   dims: [number, number, number];
@@ -171,9 +172,7 @@ export function sroToRegistrationResult(sro: ParsedSro): RegistrationResult {
  * 英語 UI に日本語が出る（i18n は ja/en 両方が要件）。
  */
 export function sroLabel(sro: ParsedSro, kind: string): string {
-  const when = sro.contentDate
-    ? `${sro.contentDate.slice(0, 4)}-${sro.contentDate.slice(4, 6)}-${sro.contentDate.slice(6, 8)}`
-    : "";
+  const when = sro.contentDate ? formatDicomDate(sro.contentDate) : "";
   const name = sro.contentDescription || sro.contentLabel || "";
   return [kind, when, name].filter(Boolean).join(" · ");
 }

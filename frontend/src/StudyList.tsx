@@ -30,6 +30,7 @@ import { useStudyColumnCells, useSeriesColumnCells } from "./hooks/useListColumn
 import { ListColumnsDialog } from "./mainscreen/ListColumnsDialog";
 import { cellView, seriesColumns, studyColumns, useListColumns, type ListColumn } from "./mainscreen/listColumns";
 import type { ColumnCell } from "./api";
+import { DicomDate } from "./i18n/dateFormat";
 
 const PAGE_SIZE = 50;
 
@@ -192,7 +193,7 @@ export function StudyList({
                 >
                   <Td>{s.patientId || "—"}</Td>
                   <Td>{s.patientName || "—"}</Td>
-                  <Td>{formatDate(s.studyDate)}</Td>
+                  <Td>{s.studyDate ? <DicomDate value={s.studyDate} /> : "—"}</Td>
                   <Td>{s.studyDescription || "—"}</Td>
                   <Td>{studyModalities(s) || "—"}</Td>
                   <Td>{imageCount(s)}</Td>
@@ -549,11 +550,6 @@ function ReportBadge({ count }: { count: StudyReportCount | undefined }) {
       <span style={{ fontSize: 12 }}>{n}</span>
     </span>
   );
-}
-
-function formatDate(d: string | null): string {
-  if (!d || d.length !== 8) return d || "—";
-  return `${d.slice(0, 4)}-${d.slice(4, 6)}-${d.slice(6, 8)}`;
 }
 
 function Th({

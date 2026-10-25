@@ -112,6 +112,7 @@ import { dsaNativeImageId, dsaStateForImageId, readXaDsaTags } from "./dsaLoader
 import { readXaCineSource } from "./xaCine";
 import { frameStartTimesMs, isUniformFrameTime, resolveXaFps } from "./xaCineTiming";
 import { worldSpacingOf, worldToImageCoords } from "./imageCoords";
+import { useDateFormat } from "../i18n/dateFormat";
 
 type ViewSnapshot = { transform: ViewTransform; voi: { lower: number; upper: number } | null };
 
@@ -2892,10 +2893,11 @@ export function Viewer2D({
 
   // DICOM 属性テキストオーバーレイ（4 隅、設定可能）。設定 or スライス変化(info)で再解決。
   const overlayCfg = useOverlayConfig();
+  const dateFmt = useDateFormat(); // 日付・時刻の書式が変わったら再解決する
   const dicomText = useMemo(
     () => (ov.text ? resolveOverlay(overlayCfg, imageIds[imageIndex]) : null),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [ov.text, overlayCfg, imageIds, imageIndex, info],
+    [ov.text, overlayCfg, dateFmt, imageIds, imageIndex, info],
   );
 
   // SUV 校正済み(PET)なら SUV 値・単位・W/L を SUV 空間で表示する（本家準拠）。
