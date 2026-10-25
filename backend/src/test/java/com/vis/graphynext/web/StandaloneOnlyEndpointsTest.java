@@ -35,6 +35,7 @@ class StandaloneOnlyEndpointsTest {
             com.vis.graphynext.microscopy.MicroscopyImportController.class,
             com.vis.graphynext.microscopy.PluginMicroscopyController.class,
             com.vis.graphynext.dbadmin.TagEditController.class,
+            com.vis.graphynext.dbadmin.retention.RetentionController.class,
             com.vis.graphynext.dicom.ReceiveAnonymizeController.class,
             com.vis.graphynext.dicom.ReceiveAnonymizeInternalController.class);
 

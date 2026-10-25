@@ -16,6 +16,10 @@ public interface ReportRepository extends JpaRepository<Report, String> {
 
     List<Report> findByPatientIdOrderByCreatedAtDesc(String patientId);
 
+    /** 自動削除の保護: レポートがある検査（本文は読まない）。 */
+    @Query("select distinct r.studyInstanceUid from Report r where r.studyInstanceUid is not null")
+    List<String> studiesWithReports();
+
     /** MainScreen 一覧用: スタディごとの下書き件数・確定件数（`fw/report-design.md` §6）。 */
     @Query("""
             select r.studyInstanceUid as studyInstanceUid,

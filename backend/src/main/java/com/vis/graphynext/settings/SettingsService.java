@@ -69,6 +69,12 @@ public class SettingsService {
      */
     public static final String IMPORT_WATCH_PREFIX = "import.watch.";
 
+    /**
+     * 自動削除の条件（{@code retention.*}）。消す対象が DB フォルダごとなので、条件も DB に置く
+     * （共通ファイルに置くと、DB フォルダを切り替えたとき別の DB の検査に条件が効いてしまう）。
+     */
+    public static final String RETENTION_PREFIX = "retention.";
+
     private static final Logger log = LoggerFactory.getLogger(SettingsService.class);
     private static final TypeReference<LinkedHashMap<String, String>> MAP_TYPE = new TypeReference<>() {
     };
@@ -93,7 +99,8 @@ public class SettingsService {
     }
 
     private static boolean isDbScoped(String key) {
-        return key.startsWith(XA_CALIBRATION_PREFIX) || key.startsWith(IMPORT_WATCH_PREFIX);
+        return key.startsWith(XA_CALIBRATION_PREFIX) || key.startsWith(IMPORT_WATCH_PREFIX)
+                || key.startsWith(RETENTION_PREFIX);
     }
 
     @Transactional(readOnly = true)

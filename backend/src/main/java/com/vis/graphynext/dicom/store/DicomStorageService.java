@@ -43,11 +43,18 @@ public class DicomStorageService {
     private final Path storageDir;
     /** Drive バックアップへの合図。無くても動く（テスト・web モード）。 */
     private org.springframework.context.ApplicationEventPublisher events;
+    /** 受信日時の時計。テストで差し替える。 */
+    private java.time.Clock clock = java.time.Clock.systemUTC();
 
     public DicomStorageService(DicomInstanceRepository repo, StorageLayout layout) {
         this.repo = repo;
         this.layout = layout;
         this.storageDir = layout.root();
+    }
+
+    /** テスト用: 受信日時の時計を差し替える。 */
+    public void setClock(java.time.Clock clock) {
+        this.clock = clock;
     }
 
     @org.springframework.beans.factory.annotation.Autowired(required = false)
@@ -120,6 +127,7 @@ public class DicomStorageService {
         entity.setInstanceNumber(ds.getInt(Tag.InstanceNumber, 0));
         entity.setNumberOfFrames(framesOf(ds));
         entity.setSizeBytes(Files.size(dest));
+        entity.setReceivedAt(clock.millis());
         entity.setUri(layout.toStored(dest));
         DicomInstance saved;
         try {
@@ -329,6 +337,42 @@ public class DicomStorageService {
         }
         if (filled > 0 || unreadable > 0) {
             log.info("NumberOfFrames の埋め直し: 埋めた {} 件・読めず null のまま {} 件", filled, unreadable);
+        }
+        return filled;
+    }
+
+    /**
+     * 受信日時を持たない既存の行を、ファイルの更新時刻で埋める（起動時に 1 回）。
+     *
+     * <p>更新時刻は受信のときに書かれ、その後の書き換え（患者編集など）で新しくなるだけなので、実際の受信より
+     * 新しく見える＝自動削除が遅れる側（安全側）にずれる。ファイルが無い・更新時刻が読めない行は null のまま残す
+     * （日付を作らない。受信日時が不明の検査は自動削除の対象にならない）。ファイルは取り寄せない（Drive が正本の
+     * 手元に無いファイルは読まない）。戻り値は埋めた行数。
+     */
+    @Transactional
+    public int backfillReceivedAt() {
+        int filled = 0;
+        int unknown = 0;
+        for (DicomInstance inst : repo.findByReceivedAtIsNull()) {
+            Long ms = null;
+            try {
+                Path p = layout.resolveForWrite(inst);
+                if (p != null && Files.exists(p)) {
+                    ms = Files.getLastModifiedTime(p).toMillis();
+                }
+            } catch (IOException | RuntimeException e) {
+                ms = null;
+            }
+            if (ms == null) {
+                unknown++;
+                continue;
+            }
+            inst.setReceivedAt(ms);
+            repo.save(inst);
+            filled++;
+        }
+        if (filled > 0 || unknown > 0) {
+            log.info("受信日時の埋め直し: 埋めた {} 件・不明のまま {} 件", filled, unknown);
         }
         return filled;
     }
