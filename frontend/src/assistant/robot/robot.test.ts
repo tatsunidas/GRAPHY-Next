@@ -132,3 +132,84 @@ describe("write 操作（承認つきデータ変更）", () => {
     expect(ran).toEqual(["measure"]);
   });
 });
+
+describe("ロボットの計画 × プラグインのツール", () => {
+  const spec = { type: "object", properties: { n: { type: "integer", minimum: 1, maximum: 5, description: "n" } }, required: ["n"] };
+  const mk = (tool: string, effect: "read" | "display" | "write", enabled = true) => ({
+    name: `plugin__demo__${tool}`,
+    pluginId: "demo",
+    pluginName: "DEMO",
+    tool,
+    effect,
+    description: "d",
+    parameters: spec,
+    enabled,
+  });
+  const entries = [mk("show", "display"), mk("save", "write"), mk("peek", "read"), mk("off", "display", false)];
+
+  it("正例: display / write のツールが計画に入り、引数が整形される", () => {
+    const r = validatePlan({ title: "t", steps: [{ id: "flipH" }, { id: "plugin__demo__show", params: { n: 2 } }, { id: "plugin__demo__save", params: { n: 5 } }] }, entries);
+    expect(r).toEqual({
+      ok: true,
+      title: "t",
+      steps: [
+        { id: "flipH", params: {} },
+        { id: "plugin__demo__show", params: { n: 2 } },
+        { id: "plugin__demo__save", params: { n: 5 } },
+      ],
+    });
+  });
+  it("負例: read・無効・未知・一覧なし・引数不正は計画ごと拒否（built-in だけの計画は不変）", () => {
+    for (const id of ["plugin__demo__peek", "plugin__demo__off", "plugin__demo__nope"]) {
+      expect(validatePlan({ title: "t", steps: [{ id: "flipH" }, { id, params: { n: 1 } }] }, entries), id).toEqual({ ok: false, error: "step-2:unknown-tool" });
+    }
+    expect(validatePlan({ title: "t", steps: [{ id: "plugin__demo__show", params: { n: 1 } }] }).ok).toBe(false);
+    expect(validatePlan({ title: "t", steps: [{ id: "plugin__demo__show", params: { n: 9 } }] }, entries)).toMatchObject({ ok: false, error: "step-1:out-of-range:n" });
+    expect(validatePlan({ title: "t", steps: [{ id: "plugin__demo__show", params: { n: 1, x: 1 } }] }, entries).ok).toBe(false);
+    expect(validatePlan({ title: "t", steps: [{ id: "flipH" }] }, entries).ok).toBe(true);
+  });
+  it("buildRobotTools: 載せられるツールだけが enum に入る", () => {
+    const plan = buildRobotTools(entries).find((t) => t.name === PLAN_TOOL)!;
+    const en = (plan.parameters as { properties: { steps: { items: { properties: { id: { enum: string[] } } } } } }).properties.steps.items.properties.id.enum;
+    expect(en).toContain("plugin__demo__show");
+    expect(en).toContain("plugin__demo__save");
+    expect(en).not.toContain("plugin__demo__peek");
+    expect(en).not.toContain("plugin__demo__off");
+    expect(buildRobotTools().find((t) => t.name === PLAN_TOOL)!.description).not.toContain("plugin__");
+  });
+  it("toolLoop(robot): plan_actions の plugin step は通り、plugin__ の直呼びは拒否", async () => {
+    const plans: string[] = [];
+    const script = [
+      calls({ id: "1", name: PLAN_TOOL, args: { title: "t", steps: [{ id: "plugin__demo__show", params: { n: 1 } }] } }),
+      calls({ id: "2", name: "plugin__demo__show", args: { n: 1 } }),
+      text("done"),
+    ];
+    let i = 0;
+    const toolTexts: string[] = [];
+    let pluginRan = 0;
+    const deps: LoopDeps = {
+      chat: async (m) => {
+        const last = m[m.length - 1];
+        if (last.role === "tool") toolTexts.push(last.text ?? "");
+        return script[Math.min(i++, script.length - 1)];
+      },
+      viewer: async () => ({ ok: true }) as never,
+      pluginTool: async () => {
+        pluginRan++;
+        return { ok: true, source: "p", untrusted: true, data: {} };
+      },
+      pluginTools: entries,
+      onAction: () => {},
+      onActionUpdate: () => {},
+      onProposal: () => {},
+      onPlan: (p) => plans.push(`${p.title}:${p.steps.map((s) => s.id).join(",")}`),
+      mode: "robot",
+      onRoundDone: () => {},
+      aborted: () => false,
+    };
+    await runToolLoop([{ role: "user", text: "x" }], buildRobotTools(entries), deps);
+    expect(plans).toEqual(["t:plugin__demo__show"]);
+    expect(pluginRan).toBe(0);
+    expect(toolTexts.some((t) => t.includes("not-allowed-in-robot-mode") || t.includes("unknown-tool"))).toBe(true);
+  });
+});

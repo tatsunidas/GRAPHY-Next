@@ -6,6 +6,7 @@
 // 再生にモデルは要らない（オフラインでも動く）。
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import type { ActionResult, InverseStep } from "../actions/registry";
+import { isPluginToolName, type PluginToolEntry } from "../pluginTools";
 import { MAX_NAME, checkSteps, type Macro, type MacroStep } from "./macroModel";
 import { runMacro, undoRun } from "./runMacro";
 
@@ -18,9 +19,11 @@ export interface MacroApi {
   viewer: (cmd: { kind: "action"; id: string; params: Record<string, unknown> }) => Promise<ActionResult>;
 }
 
-export function stepLabel(t: T, s: MacroStep): string {
+export function stepLabel(t: T, s: MacroStep, pluginTools?: readonly PluginToolEntry[]): string {
   const p = Object.entries(s.params).map(([k, v]) => `${k}=${String(v)}`).join(" ");
-  return `${t(`assistant.act.${s.id}`)}${p ? ` ${p}` : ""}`;
+  const plugin = isPluginToolName(s.id) ? pluginTools?.find((e) => e.name === s.id) : undefined;
+  const name = isPluginToolName(s.id) ? (plugin ? `${plugin.pluginName}: ${plugin.tool}` : s.id) : t(`assistant.act.${s.id}`);
+  return `${name}${p ? ` ${p}` : ""}`;
 }
 
 export function MacroPanel({ api, candidates, busy, t }: { api: MacroApi; candidates: MacroStep[]; busy: boolean; t: T }) {

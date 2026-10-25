@@ -234,6 +234,7 @@ export const en: Record<string, string> = {
   "assistant.robot.discard": "Discard",
   "assistant.robot.close": "Close",
   "assistant.robot.saveMacro": "Save as macro",
+  "assistant.robot.noMacroPlugin": "A plan that includes plugin operations cannot be saved as a macro.",
   "assistant.robot.savedMacro": "Saved as a macro.",
   "assistant.robot.needSteps": "Select at least one operation to run.",
   "assistant.robot.ran": "Ran {{n}} operations.",

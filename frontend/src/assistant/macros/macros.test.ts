@@ -91,3 +91,44 @@ describe("undoRun", () => {
     expect(await undoRun([[{ id: "rotate90", params: {} }], [{ id: "flipH", params: {} }]], viewer)).toEqual({ ok: false, error: "exec-failed" });
   });
 });
+
+describe("runMacro × プラグインのステップ", () => {
+  const spec = { type: "object", properties: { n: { type: "integer", minimum: 1, maximum: 5, description: "n" } }, required: ["n"] };
+  const entry = { name: "plugin__demo__show", pluginId: "demo", pluginName: "DEMO", tool: "show", effect: "display" as const, description: "d", parameters: spec, enabled: true };
+  const viewer = async () => ({ ok: true, inverse: [{ id: "flipH", params: {} }] }) as never;
+
+  it("pluginTools を渡さなければ plugin ステップは 1 つも実行されずに拒否（マクロ再生の挙動不変）", async () => {
+    const sent: unknown[] = [];
+    const out = await runMacro([{ id: "flipH", params: {} }, { id: "plugin__demo__show", params: { n: 1 } }], {
+      viewer,
+      aborted: () => false,
+      pluginTool: async (c) => (sent.push(c), { ok: true, source: "p", untrusted: true, data: {} }),
+    });
+    expect(out).toMatchObject({ status: "failed", executed: 0, failedAt: 1, error: "unknown-tool" });
+    expect(sent).toEqual([]);
+  });
+  it("渡せば pluginTool 経由で送られ、逆操作は空・undo は戻せない分を数える", async () => {
+    const sent: unknown[] = [];
+    const out = await runMacro([{ id: "flipH", params: {} }, { id: "plugin__demo__show", params: { n: 2 } }], {
+      viewer,
+      aborted: () => false,
+      pluginTools: [entry],
+      pluginTool: async (c) => (sent.push(c), { ok: true, source: "p", untrusted: true, data: {} }),
+    });
+    expect(out.status).toBe("done");
+    expect(sent).toEqual([{ kind: "pluginTool", name: "plugin__demo__show", params: { n: 2 } }]);
+    expect(out.inverses).toEqual([[{ id: "flipH", params: {} }], []]);
+    expect(await undoRun(out.inverses, viewer)).toEqual({ ok: true, skipped: 1 });
+  });
+  it("plugin ステップの失敗で止まり、後続は送られない（拒否=declined を含む）", async () => {
+    const sent: string[] = [];
+    const out = await runMacro([{ id: "plugin__demo__show", params: { n: 1 } }, { id: "flipH", params: {} }], {
+      viewer: async (c) => (sent.push(c.id), { ok: true }) as never,
+      aborted: () => false,
+      pluginTools: [entry],
+      pluginTool: async () => ({ ok: false, error: "declined" }),
+    });
+    expect(out).toMatchObject({ status: "failed", executed: 0, failedAt: 0, error: "declined" });
+    expect(sent).toEqual([]);
+  });
+});

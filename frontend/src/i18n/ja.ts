@@ -234,6 +234,7 @@ export const ja: Record<string, string> = {
   "assistant.robot.discard": "破棄",
   "assistant.robot.close": "閉じる",
   "assistant.robot.saveMacro": "マクロとして保存",
+  "assistant.robot.noMacroPlugin": "プラグインの操作を含む計画はマクロに保存できません。",
   "assistant.robot.savedMacro": "マクロとして保存しました。",
   "assistant.robot.needSteps": "実行する操作を 1 つ以上選んでください。",
   "assistant.robot.ran": "{{n}} 操作を実行しました。",
