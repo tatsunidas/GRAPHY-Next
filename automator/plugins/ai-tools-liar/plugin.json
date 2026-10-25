@@ -1,0 +1,50 @@
+{
+  "id": "ai-tools-liar",
+  "name": "AI Tools Liar",
+  "version": "0.1.0",
+  "engines": { "graphy": ">=0.3.0", "os": ["win32", "darwin", "linux"] },
+  "description": "Verifies that a declared effect is enforced against the host calls an AI tool actually makes.",
+  "author": "automator",
+  "license": "MIT",
+  "contributes": ["viewer2d.menu"],
+  "ui": "ui.js",
+  "permissions": ["ai-tools"],
+  "aiTools": [
+    {
+      "name": "honest_read",
+      "description": "Declared read; only reads (control).",
+      "effect": "read",
+      "parameters": { "type": "object", "properties": {}, "required": [] }
+    },
+    {
+      "name": "honest_display",
+      "description": "Declared display; reads and touches display members only (control).",
+      "effect": "display",
+      "parameters": { "type": "object", "properties": {}, "required": [] }
+    },
+    {
+      "name": "liar_read",
+      "description": "Declared read but creates a ROI.",
+      "effect": "read",
+      "parameters": { "type": "object", "properties": {}, "required": [] }
+    },
+    {
+      "name": "liar_display",
+      "description": "Declared display but writes ROI metadata.",
+      "effect": "display",
+      "parameters": { "type": "object", "properties": {}, "required": [] }
+    },
+    {
+      "name": "liar_swallow",
+      "description": "Declared read; tries to create a ROI, swallows the error and reports success.",
+      "effect": "read",
+      "parameters": { "type": "object", "properties": {}, "required": [] }
+    },
+    {
+      "name": "honest_write",
+      "description": "Declared write; writes ROI metadata (control).",
+      "effect": "write",
+      "parameters": { "type": "object", "properties": {}, "required": [] }
+    }
+  ]
+}

@@ -5,6 +5,7 @@
 // プラグインの読み込み（両モード共通）。
 // 起動時に GET /api/plugins でマニフェストを取得し、クリック時に UI バンドルを
 // 動的 import して activate(host) を呼ぶ。設計: fw/plugin-architecture.md。
+import { EffectViolation, guardHost, type ToolEffect } from "./hostEffects";
 import { importMicroscopyVolume } from "./pluginMicroscopyApi";
 import { runComputeJob, computeStatus, releaseComputeRuntime } from "./pluginComputeApi";
 import { pickSeries } from "./pluginSeriesPickApi";
@@ -168,13 +169,30 @@ export async function loadPluginAiTool(
   m: PluginManifest,
   tool: string,
   makeSeed: (m: PluginManifest) => PluginHostSeed,
+  effect: ToolEffect,
 ): Promise<((args: Record<string, unknown>) => unknown) | null> {
   const mod = await resolveModule(m);
   const fns = mod.aiTools;
   if (!fns || typeof fns !== "object" || !Object.prototype.hasOwnProperty.call(fns, tool) || typeof fns[tool] !== "function") return null;
   const fn = fns[tool];
-  const host = withHostApis(m, makeSeed(m));
-  return (args) => fn(args, host);
+  // 🔴 宣言した effect を超える host 呼び出しは止める。プラグインが例外を握りつぶしても、触れた記録で失敗にする。
+  const guard = guardHost(withHostApis(m, makeSeed(m)), effect);
+  return async (args) => {
+    let out: unknown;
+    let err: unknown;
+    try {
+      out = await fn(args, guard.host);
+    } catch (e) {
+      err = e;
+    }
+    const v = guard.violated();
+    if (v) {
+      log.warn("plugin ai-tool exceeded its declared effect", m.id, tool, effect, v);
+      throw new EffectViolation(v, effect);
+    }
+    if (err) throw err;
+    return out;
+  };
 }
 
 /** backend 面の実行: POST /api/plugins/{id}/run。 */

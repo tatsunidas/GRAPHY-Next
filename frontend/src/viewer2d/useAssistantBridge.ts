@@ -16,9 +16,9 @@ import { getPluginToolHostSeed } from "../plugins/pluginToolHost";
 
 const pluginToolDeps: PluginToolDeps = {
   manifests: loadPluginManifests,
-  load: async (m, tool) => {
+  load: async (m, tool, effect) => {
     const seed = getPluginToolHostSeed();
-    return seed ? loadPluginAiTool(m, tool, seed) : null;
+    return seed ? loadPluginAiTool(m, tool, seed, effect) : null;
   },
 };
 
