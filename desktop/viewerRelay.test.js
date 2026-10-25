@@ -101,29 +101,63 @@ test("readJournal: 新しい順・件数上限・壊れた行と未知のフィ�
   assert.equal(readJournal({ file, limit: 1 }).entries.length, 1);
 });
 
-test("write 操作: 承認すると approved:true で 2D 窓へ届く。承認の関数が無い・拒否・例外では 2D 窓へ送らない", async () => {
+// 検証（dryRun）の往復に自動で返事をする 2D 窓。dryRunReply で検証結果を指定する。
+function replyingTarget(dryRunReply = { ok: true }, runReply = { ok: true }) {
+  const sent = [];
+  let r;
+  const t = { sent, send: (ch, p) => { sent.push([ch, p]); setImmediate(() => r.handleResult(t, p.reqId, p.dryRun ? dryRunReply : runReply)); }, isDestroyed: () => false };
+  return { t, sent, bind: (relay) => { r = relay; } };
+}
+function replyingRelay(dryRunReply, runReply, journal = () => {}) {
+  const x = replyingTarget(dryRunReply, runReply);
+  let n = 0;
+  const relay = createRelay({ resolveTarget: () => x.t, journal, newId: () => `w${++n}` });
+  x.bind(relay);
+  return { relay, sent: x.sent };
+}
+
+test("write 操作: 検証→確認→実行の順。承認すると approved:true で届き、承認の関数が無い・拒否・例外では実行を送らない", async () => {
   assert.ok(WRITE_ACTIONS.has("clearMeasurements"));
   assert.ok(WRITE_ACTIONS.has("createRoi"));
   assert.ok(!WRITE_ACTIONS.has("removeAssistantRoi")); // 作った ROI だけを消す逆操作。確認は付けない（設計）
-  const cmd = { kind: "action", id: "clearMeasurements", params: {}, approved: true /* レンダラが付けてきた値は無視される */ };
+  // レンダラが付けてきた approved / dryRun は無視される
+  const cmd = { kind: "action", id: "clearMeasurements", params: {}, approved: true, dryRun: false };
   // 正例
-  const t = fakeTarget();
   const log = [];
-  const r = createRelay({ resolveTarget: () => t, journal: (e) => log.push(e), newId: () => "w1" });
-  const p = r.relay("s", cmd, { confirm: async (id) => id === "clearMeasurements" });
-  await new Promise((res) => setImmediate(res));
-  assert.deepStrictEqual(t.sent[0][1], { reqId: "w1", kind: "action", id: "clearMeasurements", params: {}, includeLabels: false, withRoi: false, approved: true });
-  r.handleResult(t, "w1", { ok: true });
-  assert.deepStrictEqual(await p, { ok: true });
-  // 負例: 拒否 / 関数なし / 例外 / true 以外の値
+  const { relay, sent } = replyingRelay({ ok: true }, { ok: true }, (e) => log.push(e));
+  let asked = 0;
+  assert.deepStrictEqual(await relay.relay("s", cmd, { confirm: async (id) => { asked++; return id === "clearMeasurements"; } }), { ok: true });
+  assert.strictEqual(asked, 1);
+  assert.strictEqual(sent.length, 2, "検証 1 回 + 実行 1 回");
+  assert.deepStrictEqual(sent[0][1], { reqId: "w1", kind: "action", id: "clearMeasurements", params: {}, includeLabels: false, withRoi: false, approved: false, dryRun: true });
+  assert.deepStrictEqual(sent[1][1], { reqId: "w2", kind: "action", id: "clearMeasurements", params: {}, includeLabels: false, withRoi: false, approved: true });
+  assert.strictEqual(log.length, 1, "検証の往復は記録しない（本実行の 1 件だけ）");
+  // 負例: 拒否 / 関数なし / 例外 / true 以外の値 → 検証は送るが実行は送らない
   for (const opts of [{ confirm: async () => false }, {}, { confirm: async () => { throw new Error("x"); } }, { confirm: async () => "yes" }]) {
-    const t2 = fakeTarget();
     const log2 = [];
-    const r2 = createRelay({ resolveTarget: () => t2, journal: (e) => log2.push(e) });
-    assert.deepStrictEqual(await r2.relay("s", cmd, opts), { ok: false, error: "declined" });
-    assert.strictEqual(t2.sent.length, 0, "承認されなければ 2D 窓へ送らない");
+    const x = replyingRelay({ ok: true }, { ok: true }, (e) => log2.push(e));
+    assert.deepStrictEqual(await x.relay.relay("s", cmd, opts), { ok: false, error: "declined" });
+    assert.strictEqual(x.sent.length, 1, "承認されなければ実行を送らない（検証の 1 回だけ）");
+    assert.strictEqual(x.sent[0][1].dryRun, true);
     assert.strictEqual(log2[0].error, "declined");
   }
+});
+
+test("write 操作: 検証で落ちたら確認を出さず、実行も送らない（エラーはそのまま返り、記録は 1 件）", async () => {
+  const log = [];
+  const { relay, sent } = replyingRelay({ ok: false, error: "out-of-range:u" }, { ok: true }, (e) => log.push(e));
+  let asked = 0;
+  const r = await relay.relay("s", { kind: "action", id: "createRoi", params: { u: 9 } }, { confirm: async () => { asked++; return true; } });
+  assert.deepStrictEqual(r, { ok: false, error: "out-of-range:u" });
+  assert.strictEqual(asked, 0, "🔴 不正な引数では確認が出ない");
+  assert.strictEqual(sent.length, 1);
+  assert.strictEqual(log.length, 1);
+  assert.strictEqual(log[0].error, "out-of-range:u");
+  // 2D 窓が無いときも確認の前に返る
+  const r2 = createRelay({ resolveTarget: () => null });
+  let asked2 = 0;
+  assert.deepStrictEqual(await r2.relay("s", { kind: "action", id: "clearMeasurements", params: {} }, { confirm: async () => { asked2++; return true; } }), { ok: false, error: "no-viewer" });
+  assert.strictEqual(asked2, 0);
 });
 
 test("表示操作は承認を求めず approved:false で届く（レンダラが approved を付けても捨てる）", async () => {

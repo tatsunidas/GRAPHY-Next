@@ -136,6 +136,13 @@ function createRelay({ resolveTarget, journal = () => {}, timeoutMs = DEFAULT_TI
     if (cmd && typeof cmd === "object" && cmd.kind === "getMeasurements") return relayMeasurements(sessionId, cmd, opts);
     if (cmd && typeof cmd === "object" && cmd.kind === "captureView") return relayCapture(sessionId, cmd, opts);
     if (cmd && typeof cmd === "object" && cmd.kind === "action" && WRITE_ACTIONS.has(cmd.id)) {
+      // 検証を先に行う: 2D 窓が引数と対象を確かめ（何も実行しない）、通らなければ確認を出さずに返す。
+      const pre = await relayInner(sessionId, cmd, false, timeoutMs, true);
+      if (!pre || pre.ok !== true) {
+        const error = typeof (pre && pre.error) === "string" ? pre.error.slice(0, 80) : "no-viewer";
+        journal({ sessionId: String(sessionId || "").slice(0, 64), kind: "action", id: cmd.id, params: journalParams(cmd.params), ok: false, error });
+        return { ok: false, error };
+      }
       let approved = false;
       try {
         approved = typeof opts.confirm === "function" && (await opts.confirm(cmd.id)) === true;
@@ -284,11 +291,12 @@ function createRelay({ resolveTarget, journal = () => {}, timeoutMs = DEFAULT_TI
     return { ok: true, image };
   }
 
-  function relayInner(sessionId, cmd, approved, timeout = timeoutMs) {
+  function relayInner(sessionId, cmd, approved, timeout = timeoutMs, dryRun = false) {
     if (!cmd || typeof cmd !== "object" || !KINDS.has(cmd.kind)) return Promise.resolve({ ok: false, error: "bad-command" });
     if (cmd.kind === "action" && (typeof cmd.id !== "string" || cmd.id.length > 64)) return Promise.resolve({ ok: false, error: "bad-command" });
     const target = resolveTarget();
     const log = (res) => {
+      if (dryRun) return res; // 検証だけの往復は記録しない（本実行か、検証失敗の 1 件だけ残す）
       if (cmd.kind === "action") {
         journal({ sessionId: String(sessionId || "").slice(0, 64), kind: "action", id: cmd.id, params: journalParams(cmd.params), ok: !!(res && res.ok), error: res && res.ok ? undefined : res && res.error });
       } else if (cmd.kind === "pluginTool") {
@@ -315,7 +323,7 @@ function createRelay({ resolveTarget, journal = () => {}, timeoutMs = DEFAULT_TI
         const payload =
           cmd.kind === "pluginTool"
             ? { reqId, kind: cmd.kind, pluginId: cmd.pluginId, tool: cmd.tool, params: cmd.params, approved: approved === true }
-            : { reqId, kind: cmd.kind, id: cmd.id, params: cmd.params, includeLabels: cmd.includeLabels === true, withRoi: cmd.withRoi === true, approved: approved === true };
+            : { reqId, kind: cmd.kind, id: cmd.id, params: cmd.params, includeLabels: cmd.includeLabels === true, withRoi: cmd.withRoi === true, approved: approved === true, ...(dryRun ? { dryRun: true } : {}) };
         target.send("graphy:viewer-cmd", payload);
       } catch {
         pending.delete(reqId);
