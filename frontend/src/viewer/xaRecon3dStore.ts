@@ -30,6 +30,7 @@
 import { useSyncExternalStore } from "react";
 import { formatViewAngles, type XaViewGeometry } from "./xaGeometry";
 import { type QcaDiameterMethod } from "./qca";
+import type { XaInputCheck } from "./xaInputCheck";
 
 export interface XaQcaRun {
   /** imageId（どのフレームを解析したか）。**鍵ではない**——{@link runKey} を見ること。 */
@@ -77,6 +78,12 @@ export interface XaQcaRun {
    */
   calibrationSource?: string;
   calibrationTier?: "calibrated" | "approximate" | "uncalibrated";
+  /**
+   * 3D QCA の入力検査（GN-XA-001 P1）。**登録時に**読んだタグで判定する（幾何を読めた時点で
+   * dataSet がキャッシュにある。ダイアログを開いたあとに読み直すと、方向によって読めなかった）。
+   * タグが読めなければ undefined（「読めない」と表示し、合格にはしない）。
+   */
+  inputCheck?: XaInputCheck;
   at: number;
 }
 

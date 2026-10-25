@@ -28,6 +28,7 @@ import { registerVesselModel } from "./xaVesselModelStore";
 import { useI18n } from "../i18n/i18n";
 import { publishXa3dSnapshot } from "./debugApi";
 import { formatViewAngles, type Vec3, viewSeparationDeg } from "./xaGeometry";
+import type { XaInputCheck } from "./xaInputCheck";
 import {
   type CrossSectionProfile,
   type ReconAnchor,
@@ -46,7 +47,7 @@ import { TaskStepRail } from "./TaskStepRail";
 import { deriveQca3dSteps } from "./xaTasks";
 import { viewerOverlayProps } from "./viewerOverlay";
 
-const MIN_SEPARATION_DEG = 30;
+const MIN_SEPARATION_DEG = 25;
 
 /** 中心線の点番号で持つアンカー（画素は再構成時に引く）。 */
 interface AnchorPick {
@@ -102,6 +103,10 @@ export function Xa3dQcaDialog({ onClose }: { onClose: () => void }) {
     () => (runA && runB ? viewSeparationDeg(runA.geometry, runB.geometry) : null),
     [runA, runB],
   );
+
+  /** 入力検査（P1）。警告のみで結果はブロックしない。登録時に読めなかった方向は null（「読めません」と出す）。 */
+  const inputCheckA: XaInputCheck | null = runA?.inputCheck ?? null;
+  const inputCheckB: XaInputCheck | null = runB?.inputCheck ?? null;
 
   /**
    * プラグインへ渡す血管モデル（A7 の H11）。
@@ -433,8 +438,36 @@ export function Xa3dQcaDialog({ onClose }: { onClose: () => void }) {
                     {t("xa3d.separation")}: <b>{separationDeg.toFixed(1)}°</b>
                   </span>
                   {separationDeg < MIN_SEPARATION_DEG ? (
-                    <span style={bad}>{t("xa3d.warn.insufficientSeparation", { min: String(MIN_SEPARATION_DEG) })}</span>
+                    <span style={warn}>{t("xa3d.warn.insufficientSeparation", { min: String(MIN_SEPARATION_DEG) })}</span>
                   ) : null}
+                </div>
+              ) : null}
+              {runA && runB ? (
+                <div data-testid="xa3d-input-check">
+                  {([["A", inputCheckA], ["B", inputCheckB]] as const).map(([side, chk]) => (
+                    <div key={side} style={row} data-testid={`xa3d-input-check-${side.toLowerCase()}`}>
+                      <span style={metric}>
+                        {t("xa3d.input.title", { side })}:{" "}
+                        <b>
+                          {!chk
+                            ? t("xa3d.input.unreadable")
+                            : chk.warnings.length > 0
+                              ? t("xa3d.input.warn")
+                              : chk.unknown.length > 0
+                                ? t("xa3d.input.partial")
+                                : t("xa3d.input.ok")}
+                        </b>
+                      </span>
+                      {chk?.warnings.map((c) => (
+                        <span key={c} style={warn}>
+                          {t(`xa3d.input.warn.${c}`)}
+                        </span>
+                      ))}
+                      {chk && chk.unknown.length > 0 ? (
+                        <span style={hint}>{t("xa3d.input.unknown", { n: String(chk.unknown.length) })}</span>
+                      ) : null}
+                    </div>
+                  ))}
                 </div>
               ) : null}
             </div>

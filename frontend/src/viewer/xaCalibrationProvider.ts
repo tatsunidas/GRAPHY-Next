@@ -207,6 +207,27 @@ export function readXaCalibTags(imageId: string): XaCalibTags | null {
 }
 
 /**
+ * 3D QCA の入力検査（{@link ./xaInputCheck}）の材料。{@link readXaCalibTags} と違い SOP クラスで弾かず、
+ * XA/XRF かどうかを別に返す（SC など XA でない入力を「読めない」ではなく警告にするため）。
+ */
+export function readXaInputTags(imageId: string): { tags: XaCalibTags; isXaSopClass: boolean | null } | null {
+  // 幾何を読む {@link ./xaViewGeometryProvider} と同じ引き方（DSA の読み替えをしない）。
+  const ds = (xaDataSetOf(imageId) as unknown as MinimalDataSet) ?? null;
+  if (!ds) return null;
+  const sopClass = ds.string("x00080016");
+  return {
+    tags: {
+      pixelSpacing: readPair(ds, "x00280030"),
+      imagerPixelSpacing: readPair(ds, "x00181164"),
+      distanceSourceToDetector: ds.floatString("x00181110") ?? null,
+      distanceSourceToPatient: ds.floatString("x00181111") ?? null,
+      estimatedRadiographicMagnificationFactor: ds.floatString("x00181114") ?? null,
+    },
+    isXaSopClass: sopClass ? XA_SOP_CLASSES.has(sopClass) : null,
+  };
+}
+
+/**
  * **Cornerstone の world 座標が使っている**列/行 spacing（＝**画像が作られたときの間隔**）。
  *
  * <p>world は「ローダが画像オブジェクトを作ったときの `imagePlaneModule`」で決まる。ローダはこの provider を通して

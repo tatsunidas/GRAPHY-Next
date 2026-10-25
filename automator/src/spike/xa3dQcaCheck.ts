@@ -537,6 +537,13 @@ async function analyseSegment(
       sel?.separationDeg,
     );
 
+    // ── 入力検査（GN-XA-001 P1）: ファントムは XA の SOP クラスで拡大率も整合しているので「整合」が出る ──
+    for (const side of ["a", "b"] as const) {
+      const text = await viewerB.getByTestId(`xa3d-input-check-${side}`).innerText().catch(() => "");
+      check(text.includes("整合") && !text.includes("⚠"), `[入力検査/${tag}] 方向 ${side.toUpperCase()} が整合と表示される`, text);
+    }
+    await viewerB.screenshot({ path: path.join(OUT_DIR, `2b-${tag}-input-check.png`) }).catch(() => {});
+
     check((sel?.pointsA ?? 0) > 20, `[2D/${tag}] 方向 A の中心線を画像から抽出できている`, sel?.pointsA);
     check((sel?.pointsB ?? 0) > 20, `[2D/${tag}] 方向 B の中心線を画像から抽出できている`, sel?.pointsB);
 
