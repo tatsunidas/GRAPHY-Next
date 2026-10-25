@@ -738,6 +738,8 @@ export interface ViewerCommands {
    * 描き直すと形が変わり、形が変われば値も変わる。
    */
   copyRoi(roiUid?: string): boolean;
+  /** その ROI が、このタイルの表示スタックの画像に付いているか（コピー・複製の宛先タイルを ROI から決める）。 */
+  ownsRoi(roiUid: string): boolean;
   /**
    * クリップボードの ROI を**現在表示中のスライス**へ、面内の同じ位置に貼る。
    * 作った annotationUID（失敗は null）。ThickSlab 中は貼れない（新規作成と同じ理由）。

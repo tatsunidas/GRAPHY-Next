@@ -73,7 +73,7 @@ import {
   assignPatientColors, patientColorOf, patientInitial, type PatientColor, type PatientColorMap,
 } from "./patientColor";
 import { placeNear, reconcileOrder, renameInOrder, swapOrder } from "./globalOrder";
-import { defaultTargets } from "./tileScope";
+import { defaultTargets, ownerTileOf } from "./tileScope";
 import { hasClipboardRoi } from "../viewer/roiClipboard";
 import { annotationRoiKind } from "../viewer/roiKind";
 import { canConvertMeasureToRoi } from "../viewer/measureToRoi";
@@ -1484,6 +1484,12 @@ function TileGrid({
     if (focused && patient.tiles.some((tl) => tl.id === focused)) return focused;
     return null;
   }, [selectedIds, patient.tiles]);
+  // コピー・複製の宛先は、ROI を持つタイル（画像のクリックに頼らない）。
+  const roiOwnerTile = useCallback(
+    (uid: string): string | null =>
+      ownerTileOf(patient.tiles.map((tl) => tl.id), (id) => queryViewerCommand(id, (c) => c.ownsRoi(uid)) === true),
+    [patient.tiles],
+  );
   // プラグインの派生シリーズ保存の確認（H4b）。保存は同意が取れてから実行する。
   const [pluginSave, setPluginSave] = useState<{
     request: PluginSaveRequest;
@@ -2024,10 +2030,10 @@ function TileGrid({
         runViewerCommand(targets, (c) => c.selectRoi(roiUid, exclusive));
       },
       copyRoi: (roiUid) => {
-        const target = resolveRoiEditTarget();
-        if (!target) { notify(t("roi.paste.noTile")); return; }
         const uid = roiUid ?? selectedAnnotations()[0]?.annotationUID;
         if (!uid) { notify(t("roi.copy.none")); return; }
+        const target = roiOwnerTile(uid as string) ?? resolveRoiEditTarget();
+        if (!target) { notify(t("roi.paste.noTile")); return; }
         const ok = queryViewerCommand(target, (c) => c.copyRoi(uid as string));
         notify(t(ok ? "roi.copy.done" : "roi.copy.failed"));
       },
@@ -2039,7 +2045,7 @@ function TileGrid({
         if (!queryViewerCommand(target, (c) => c.pasteRoi())) return;
       },
       duplicateRoi: (roiUid) => {
-        const target = resolveRoiEditTarget();
+        const target = roiOwnerTile(roiUid) ?? resolveRoiEditTarget();
         if (!target) { notify(t("roi.paste.noTile")); return; }
         if (!queryViewerCommand(target, (c) => c.duplicateRoi(roiUid))) return;
       },

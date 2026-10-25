@@ -1288,7 +1288,7 @@ export const en: Record<string, string> = {
   "viewer2d.roi.duplicate": "Duplicate ROI",
   "roi.defaultName": "ROI {{n}}",
   "roi.copySuffix": "(copy)",
-  "roi.copy.none": "No ROI is selected. Click an ROI to select it first.",
+  "roi.copy.none": "No ROI is selected. Click an ROI on the image, or a row in the ROI manager, to select it (the row checkbox is for set operations).",
   "roi.copy.done": "ROI copied.",
   "roi.copy.failed": "This ROI cannot be copied.",
   "roi.paste.empty": "Nothing to paste. Copy an ROI first.",
