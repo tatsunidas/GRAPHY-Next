@@ -157,11 +157,11 @@ export function roiFeatureScaleRequest(form: RoiFeatureForm): {
   };
 }
 
-export type RangeProblem = "ONE_SIDED" | "ORDER" | "INVALID";
+export type RangeProblem = "ORDER" | "INVALID";
 
 /**
- * 範囲で除く欄を数にする。RadiomicsJ は下限と上限の**両方**があるときだけ範囲を適用し、片方だけだと
- * 黙って無視するので、片方だけの入力は問題として返す（送らない）。
+ * 範囲で除く欄を数にする。下限・上限はどちらか片方だけでも有効（RadiomicsJ 2.7.0 から。空の側は開いたまま）。
+ * 数でない入力と、下限が上限より大きい入力は問題として返す（送らない）。
  */
 export function rangeBounds(form: RoiFeatureForm):
   { min: number | null; max: number | null; problem: RangeProblem | null } {
@@ -172,7 +172,6 @@ export function rangeBounds(form: RoiFeatureForm):
   if ((min !== null && !Number.isFinite(min)) || (max !== null && !Number.isFinite(max))) {
     return { min: null, max: null, problem: "INVALID" };
   }
-  if ((min === null) !== (max === null)) return { min, max, problem: "ONE_SIDED" };
   if (min !== null && max !== null && min > max) return { min, max, problem: "ORDER" };
   return { min, max, problem: null };
 }
@@ -196,9 +195,9 @@ export function roiFeatureSettings(form: RoiFeatureForm): Record<string, string>
   }
   for (const f of ROI_FEATURE_FAMILIES) s[f.setting] = form.families[f.key] ? "1" : "0";
   const range = rangeBounds(form);
-  if (range.problem === null && range.min !== null && range.max !== null) {
-    s.DOUBLE_rangeMin = String(range.min);
-    s.DOUBLE_rangeMax = String(range.max);
+  if (range.problem === null) {
+    if (range.min !== null) s.DOUBLE_rangeMin = String(range.min);
+    if (range.max !== null) s.DOUBLE_rangeMax = String(range.max);
   }
   if (form.logOn) {
     // 半径で指定するときの σ は backend がスケールごとに換算して足す

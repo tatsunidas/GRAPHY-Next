@@ -52,6 +52,7 @@ public class RoiFeatureService {
 
     /** 患者名・ID・生年月日を DICOM から書く族。常に切る（版と設定の記録は Next が付ける）。 */
     static final String OPERATIONAL_INFO_KEY = SettingParams.BOOL_enableOperationalInfo.name();
+    static final String USE_GPU_KEY = SettingParams.BOOL_USE_GPU.name();
     static final String LABEL_KEY = SettingParams.INT_label.name();
     static final String FORCE_2D_KEY = SettingParams.BOOL_force2D.name();
     static final String GLAM_KEY = SettingParams.BOOL_enableGLAM.name();
@@ -201,6 +202,8 @@ public class RoiFeatureService {
             throw new IllegalArgumentException(
                     "BOOL_force2D は指定できません。2D は「計算の単位」（roiModes: MAX_SECTION_2D・SLICES_2D）で選びます。");
         }
+        // 本体の抽出は既定で CPU（RadiomicsJ 2.5.2 までと同じ計算経路。値と再現性を変えない）。要求が明示すれば尊重する。
+        out.putIfAbsent(USE_GPU_KEY, "0");
         out.put(OPERATIONAL_INFO_KEY, "0");
         out.put(DIAGNOSTICS_KEY, "1");
         out.put(LABEL_KEY, Integer.toString(label));

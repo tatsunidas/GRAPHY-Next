@@ -654,8 +654,32 @@ class RoiFeatureServiceTest {
         double cut = values(service(engine, dir.resolve("b"), "t")
                 .compute(req("1.2.9", settings("DOUBLE_rangeMin", "200", "DOUBLE_rangeMax", "100000"), false), p -> { }))
                 .get(col);
+        // 下限だけでも効く（RadiomicsJ 2.7.0 から。これまでは両方ないと黙って無視された）
+        double lowerOnly = values(service(engine, dir.resolve("c"), "t")
+                .compute(req("1.2.9", settings("DOUBLE_rangeMin", "200"), false), p -> { })).get(col);
+        assertEquals(roiVoxels(200).length, lowerOnly, 0d);
+        double upperOnly = values(service(engine, dir.resolve("d"), "t")
+                .compute(req("1.2.9", settings("DOUBLE_rangeMax", "200"), false), p -> { })).get(col);
+        assertEquals(java.util.Arrays.stream(roiVoxels(Double.NEGATIVE_INFINITY)).filter(v -> v <= 200).count(),
+                upperOnly, 0d);
         assertEquals(roiVoxels(Double.NEGATIVE_INFINITY).length, all, 0d);
         assertEquals(roiVoxels(200).length, cut, 0d);
         assertTrue(cut < all, "下限で除くとボクセル数が減る（検査が効いている）");
+    }
+
+    @Test
+    void gpuIsOffByDefaultAndRecorded(@TempDir Path dir) throws Exception {
+        assertEquals("0", RoiFeatureService.effectiveSettings(Map.of(), 1).get("BOOL_USE_GPU"));
+        assertEquals("1", RoiFeatureService.effectiveSettings(Map.of("BOOL_USE_GPU", "1"), 1).get("BOOL_USE_GPU"));
+        java.util.concurrent.atomic.AtomicBoolean gpuDuringExtract = new java.util.concurrent.atomic.AtomicBoolean(true);
+        FixedEngine engine = new FixedEngine(volume(phantom(), mask(0)));
+        RoiFeatureService s = new RoiFeatureService(engine, new MapCheckpointStore(new CacheStore(dir, 0), "t"),
+                standalone(), JSON, (rj, img, m, label) -> {
+                    gpuDuringExtract.set(RadiomicsJ.BOOL_USE_GPU);
+                    return rj.extractAll(img, m, label);
+                }, NEXT_VERSION, () -> null);
+        RoiFeatureResult r = s.compute(req("1.2.9", Map.of(), false), p -> { });
+        assertFalse(gpuDuringExtract.get(), "抽出の間は GPU を使わない（RadiomicsJ の既定は true）");
+        assertTrue(r.settingsProperties().contains("BOOL_USE_GPU=0"), "設定の記録に残る");
     }
 }

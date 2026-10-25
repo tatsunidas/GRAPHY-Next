@@ -42,16 +42,23 @@ describe("preset and range", () => {
   it("the auxiliary family is off by default", () => {
     expect(roiFeatureSettings(defaultRoiFeatureForm()).BOOL_enableAuxiliaryStatistics).toBe("0");
   });
-  it("sends the range only when both bounds are valid", () => {
+  it("sends each bound that is given, alone or both, and nothing for an invalid input", () => {
     const f = defaultRoiFeatureForm();
     expect(roiFeatureSettings(f).DOUBLE_rangeMin).toBeUndefined();
+    expect(roiFeatureSettings(f).DOUBLE_rangeMax).toBeUndefined();
     const both = { ...f, rangeMinText: "-50", rangeMaxText: "400" };
     expect(roiFeatureSettings(both)).toMatchObject({ DOUBLE_rangeMin: "-50", DOUBLE_rangeMax: "400" });
-    // one bound alone is ignored by RadiomicsJ, so it is a problem and is not sent
-    const one = { ...f, rangeMinText: "-50" };
-    expect(rangeBounds(one).problem).toBe("ONE_SIDED");
-    expect(roiFeatureSettings(one).DOUBLE_rangeMin).toBeUndefined();
-    expect(rangeBounds({ ...f, rangeMinText: "5", rangeMaxText: "1" }).problem).toBe("ORDER");
+    const lower = roiFeatureSettings({ ...f, rangeMinText: "-50" });
+    expect(lower.DOUBLE_rangeMin).toBe("-50");
+    expect(lower.DOUBLE_rangeMax).toBeUndefined();
+    const upper = roiFeatureSettings({ ...f, rangeMaxText: "400" });
+    expect(upper.DOUBLE_rangeMax).toBe("400");
+    expect(upper.DOUBLE_rangeMin).toBeUndefined();
+    expect(rangeBounds({ ...f, rangeMinText: "-50" }).problem).toBeNull();
+    const reversed = { ...f, rangeMinText: "5", rangeMaxText: "1" };
+    expect(rangeBounds(reversed).problem).toBe("ORDER");
+    expect(roiFeatureSettings(reversed).DOUBLE_rangeMin).toBeUndefined();
     expect(rangeBounds({ ...f, rangeMinText: "abc", rangeMaxText: "1" }).problem).toBe("INVALID");
+    expect(roiFeatureSettings({ ...f, rangeMinText: "abc" }).DOUBLE_rangeMin).toBeUndefined();
   });
 });

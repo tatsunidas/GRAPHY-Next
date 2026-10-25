@@ -4081,7 +4081,6 @@ export const ja: Record<string, string> = {
   "roiFeat.field.range": "範囲で除く（再セグメント）",
   "roiFeat.range.min": "下限",
   "roiFeat.range.max": "上限",
-  "roiFeat.range.problem.ONE_SIDED": "範囲で除くには、下限と上限の両方を入れてください（片方だけだと RadiomicsJ は範囲を適用しません）。空欄にすると除きません。",
   "roiFeat.range.problem.ORDER": "下限が上限より大きくなっています。",
   "roiFeat.range.problem.INVALID": "下限・上限は数で入れてください。",
   "roiFeat.six.title": "6 統計",

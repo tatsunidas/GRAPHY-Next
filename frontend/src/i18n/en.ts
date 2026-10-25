@@ -4090,7 +4090,6 @@ export const en: Record<string, string> = {
   "roiFeat.field.range": "Exclude by range (re-segmentation)",
   "roiFeat.range.min": "min",
   "roiFeat.range.max": "max",
-  "roiFeat.range.problem.ONE_SIDED": "Enter both the lower and the upper bound to exclude by range (RadiomicsJ ignores a range with only one bound). Leave both empty to exclude nothing.",
   "roiFeat.range.problem.ORDER": "The lower bound is above the upper bound.",
   "roiFeat.range.problem.INVALID": "Enter the bounds as numbers.",
   "roiFeat.six.title": "Six statistics",

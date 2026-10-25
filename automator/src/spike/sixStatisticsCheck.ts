@@ -5,8 +5,8 @@
  *
  *   1. プリセット「6 統計」で族が 3 つだけオンになり、計算すると「6 統計」「副次量」の欄が出る。
  *   2. 欄の値は API の結果（同じ要求）の同じ列と一致し、Variance は SD² と一致する。
- *   3. 範囲: 下限だけだと警告が出て「計算」を押せない（負例）。両方入れると要求に DOUBLE_rangeMin/Max が載り、
- *      強度マスクのボクセル数が減る（API で確かめ、画面の ROI の大きさの表示と一致）。
+ *   3. 範囲: 下限だけで要求に DOUBLE_rangeMin だけが載り、強度マスクのボクセル数が減る（API で確かめ、画面の
+ *      ROI の大きさの表示と一致）。下限が上限より大きいと警告が出て「計算」を押せない（負例）。
  *   4. 補助統計をオフにした通常の計算では、まとめ欄の MPP 等の行が出ず、既存の列は変わらない。
  *
  * 前提: backend jar（今のビルド）・python3 と pydicom。
@@ -176,10 +176,12 @@ async function main(): Promise<void> {
       await mainPage.waitForTimeout(500);
     }
     await mainPage.evaluate("localStorage.setItem('graphy.locale', 'ja')");
+    await mainPage.screenshot({ path: path.join(OUT_DIR, "00-main.png") });
     await openFirstSeriesInViewer(mainPage, createStepRecorder());
     const viewer = await d.waitForNewPage(
-      () => mainPage.getByTestId("viewer2d-toolbar-button").click(),
+      () => mainPage.getByTestId("viewer2d-toolbar-button").click({ timeout: 170_000 }),
       (url) => url.includes("2dviewer"),
+      180_000,
     );
     await viewer.getByTestId("series-viewer-root").first().waitFor({ state: "visible", timeout: 20_000 });
     await viewer.waitForTimeout(2000);
@@ -237,19 +239,23 @@ async function main(): Promise<void> {
     await page.getByTestId("roifeat-six").scrollIntoViewIfNeeded();
     await page.screenshot({ path: path.join(OUT_DIR, "01-six.png") });
 
-    console.log("\n[3] 範囲で除く");
+    console.log("\n[3] 範囲で除く（下限だけ・負例として逆順）");
     const baseline = ref.roiSize.intensityVoxels;
+    await page.getByTestId("roifeat-range-min").fill("5");
+    await page.getByTestId("roifeat-range-max").fill("1");
+    check(await page.getByTestId("roifeat-range-problem").isVisible(), "下限が上限より大きいと警告が出る（負例）");
+    check(await page.getByTestId("roifeat-run").isDisabled(), "そのときは「計算」を押せない（負例）");
+    await page.getByTestId("roifeat-range-max").fill("");
     await page.getByTestId("roifeat-range-min").fill(String(shown.Mean));
-    check(await page.getByTestId("roifeat-range-problem").isVisible(), "下限だけだと警告が出る");
-    check(await page.getByTestId("roifeat-run").isDisabled(), "下限だけだと「計算」は押せない（負例）");
-    await page.getByTestId("roifeat-range-max").fill("1000000000");
-    check(!(await page.getByTestId("roifeat-range-problem").isVisible().catch(() => false)), "両方入れると警告は消える");
+    check(!(await page.getByTestId("roifeat-range-problem").isVisible().catch(() => false)), "下限だけなら警告は出ない");
+    check(!(await page.getByTestId("roifeat-run").isDisabled()), "下限だけで「計算」を押せる");
     await runAndWait(page, () => page.getByTestId("roifeat-run").click());
     const sent2 = (posted[posted.length - 1].settings ?? {}) as Record<string, string>;
-    check(Number(sent2.DOUBLE_rangeMin) === shown.Mean && sent2.DOUBLE_rangeMax === "1000000000", "要求に範囲が載る", sent2);
+    check(Number(sent2.DOUBLE_rangeMin) === shown.Mean && sent2.DOUBLE_rangeMax === undefined, "要求に下限だけが載る", sent2);
     const ref2 = await apiFeatures(base, posted[posted.length - 1]);
+    check(ref2.settingsProperties.split("\n").includes("BOOL_USE_GPU=0"), "設定の記録に GPU オフ（BOOL_USE_GPU=0）が残る（本体の既定）");
     check(ref2.roiSize.intensityVoxels < baseline && ref2.roiSize.intensityVoxels > 0,
-      `強度マスクのボクセル数が減る（${baseline} → ${ref2.roiSize.intensityVoxels}）`);
+      `下限だけでも強度マスクのボクセル数が減る（${baseline} → ${ref2.roiSize.intensityVoxels}）`);
     const sizeText = await page.getByTestId("roifeat-roisize").innerText();
     check(sizeText.includes(ref2.roiSize.intensityVoxels.toLocaleString("en-US")), "画面の ROI の大きさが API と一致", sizeText);
 
