@@ -1123,6 +1123,30 @@ export interface PluginCurveFrame {
   arcLengthMm: number;
 }
 
+/** {@link Viewer2DPluginHost.openCurvedMpr} の引数（H73）。 */
+export interface PluginCurvedMprSpec {
+  /** 開いているタイルのシリーズ。 */
+  source: PluginSeriesRef;
+  /** 制御点（患者 LPS mm、2 点以上、順序つき）。 */
+  centerline: [number, number, number][];
+  /** 省略した項目は窓の既定。`frameMode` だけは省略時 `ROTATION_MINIMIZING`。 */
+  options?: {
+    frameMode?: "FIXED_Z" | "ROTATION_MINIMIZING";
+    projection?: "CENTERLINE_ONLY" | "AVERAGE" | "MIP" | "MINIP";
+    bandHalfWidthMm?: number;
+    /** [min, max]（mm、min < max）。 */
+    secondAxisRangeMm?: [number, number];
+    arcStepMm?: number;
+  };
+  /** 窓の札に出す短い説明。出所のプラグイン名は host が必ず付ける。 */
+  title?: string;
+}
+
+export interface PluginCurvedMprResult {
+  ok: boolean;
+  error?: string;
+}
+
 export interface PluginCurveFrameOptions {
   /** フレームどうしの弧長間隔 mm。正の有限値。 */
   spacingMm: number;
@@ -2191,6 +2215,16 @@ export interface Viewer2DPluginHost extends PluginHostBase {
     polylineWorld: readonly [number, number, number][],
     opts: PluginCurveFrameOptions,
   ) => PluginCurveFrame[];
+  /**
+   * **中心線を渡して、本体の Curved MPR 窓を開く**（H73）。渡すのは制御点（患者 LPS mm・2 点以上）と
+   * 見え方のオプションだけで、再構成・表示・保存は本体が行う。窓には「プラグイン <名前> が指定した
+   * 中心線」の札が出る（出所は host が入れる）。窓が既に開いていれば、その窓の中心線が置き換わる。
+   *
+   * <p>🔴 戻り値は**検証と起動要求まで**（2 点未満・非有限・同一点・開いていないシリーズは `ok:false`
+   * で窓を開かない）。ボリュームの範囲外の点は戻り値では返せず、窓の警告として出る。
+   * `options.frameMode` の省略時は `ROTATION_MINIMIZING`（血管向け）。
+   */
+  openCurvedMpr: (spec: PluginCurvedMprSpec) => Promise<PluginCurvedMprResult>;
   /**
    * **シリーズビューパネルをそのまま貸す**（H34・**0.2.1 以降**）。W/L バー・スライダ・
    * ThickSlab・参照線・計測・シネ、そして**フュージョン重畳**が丸ごと付いてくる。

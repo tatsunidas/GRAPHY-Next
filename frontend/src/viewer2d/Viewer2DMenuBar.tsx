@@ -214,6 +214,8 @@ export function Viewer2DMenuBar({
     measureLabels: (labels, values, opts) => measureLabels(labels, values, opts),
     extractCenterline: (mask, opts) => extractCenterline(mask, opts),
     sampleCenterlineFrames: (polyline, opts) => sampleCenterlineFrames(polyline, opts),
+    // H73: 出所（id/name/version）は host がマニフェストから入れる。
+    openCurvedMpr: (spec) => actions.openCurvedMpr(spec, { id: m.id, name: m.name, version: m.version }),
     mountSeriesPanel: (el, series, opts) => actions.mountSeriesPanel(el, series, opts),
   });
   /** 「プラグイン」メニューに出るもの。 */
