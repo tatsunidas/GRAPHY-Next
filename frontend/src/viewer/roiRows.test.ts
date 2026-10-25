@@ -84,6 +84,46 @@ describe("buildRoiPanelModel", () => {
   });
 });
 
+describe("buildRoiPanelModel（全患者表示: shown）", () => {
+  const shownEnv = (metas: Record<string, Meta>, shown: RoiRowEnv["shown"]): RoiRowEnv => ({ ...env(metas), shown });
+  const A = { patientKey: "P1", scope: { seriesUid: "S1" } };
+  const B = { patientKey: "P2", scope: { seriesUid: "S9" } };
+
+  it("表示中の全患者の ROI が出て、行に患者・シリーズの印が付く", () => {
+    const m = buildRoiPanelModel(
+      [ann("a", "RectangleROI"), ann("b", "RectangleROI"), ann("c", "Length")],
+      [], [], shownEnv({ a: A, b: B, c: B }, [{ patientKey: "P1", seriesUid: "S1" }, { patientKey: "P2", seriesUid: "S9" }]), () => [1],
+    );
+    expect(m.rois.map((r) => [r.key, r.patientKey, r.seriesUid])).toEqual([["a", "P1", "S1"], ["b", "P2", "S9"]]);
+    expect(m.measures.map((r) => [r.uid, r.patientKey, r.seriesUid])).toEqual([["c", "P2", "S9"]]);
+  });
+
+  it("表示していないシリーズ・患者の ROI は出さない（負例）", () => {
+    const m = buildRoiPanelModel(
+      [ann("a", "RectangleROI"), ann("b", "RectangleROI"), ann("c", "RectangleROI")],
+      [], [], shownEnv({ a: A, b: { patientKey: "P1", scope: { seriesUid: "OTHER" } }, c: B }, [{ patientKey: "P1", seriesUid: "S1" }]), () => [1],
+    );
+    expect(m.rois.map((r) => r.key)).toEqual(["a"]);
+  });
+
+  it("シリーズ不明の ROI は、患者が表示中なら出す。患者不明は常に出す", () => {
+    const m = buildRoiPanelModel(
+      [ann("a", "RectangleROI"), ann("b", "RectangleROI")],
+      [], [], shownEnv({ a: { patientKey: "P1" } }, [{ patientKey: "P1", seriesUid: "S1" }]), () => [1],
+    );
+    expect(m.rois.map((r) => r.key)).toEqual(["a", "b"]);
+  });
+
+  it("塗り・球も表示中のシリーズで絞る", () => {
+    const m = buildRoiPanelModel(
+      [], [{ segmentationId: "s1" }, { segmentationId: "s2" }],
+      [{ id: "sp1", patientKey: "P1", seriesUid: "S1" }, { id: "sp2", patientKey: "P1", seriesUid: "Z" }],
+      shownEnv({ s1: A, s2: B }, [{ patientKey: "P1", seriesUid: "S1" }]), () => [1],
+    );
+    expect(m.rois.map((r) => r.key)).toEqual(["s1#1", "sp1"]);
+  });
+});
+
 describe("paintedRowName", () => {
   it("segment が 1 つなら属性編集の label を正とする", () => {
     expect(paintedRowName({ label: "Edited", segmentLabels: { "1": "Old" } }, "id", 1, true)).toBe("Edited");
