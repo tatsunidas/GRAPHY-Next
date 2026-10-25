@@ -146,7 +146,7 @@ test("pluginTool: main の一覧にある名前だけ 2D 窓へ届き、pluginId
   // レンダラが偽の pluginId/tool を付けても使われない
   const p = r.relay("s", { kind: "pluginTool", name: ENTRY.name, pluginId: "evil", tool: "x", params: { label: "a" } }, ptOpts());
   await new Promise((res) => setImmediate(res));
-  assert.deepStrictEqual(t.sent[0][1], { reqId: "p1", kind: "pluginTool", pluginId: "demo", tool: "measure", params: { label: "a" } });
+  assert.deepStrictEqual(t.sent[0][1], { reqId: "p1", kind: "pluginTool", pluginId: "demo", tool: "measure", params: { label: "a" }, approved: false });
   r.handleResult(t, "p1", { ok: true, data: { patientName: "SECRET^NAME", n: 3 } });
   const res = await p;
   assert.deepStrictEqual(res, { ok: true, source: "plugin:demo", untrusted: true, data: { patientName: "SECRET^NAME", n: 3 } });
@@ -351,4 +351,67 @@ test("captureView: 2D 窓が無い・タイルが無い・失敗のときは ok:
   assert.deepStrictEqual(await r.relay("s", { kind: "captureView" }, okOpts()), { ok: false, error: "no-viewer" });
   assert.deepStrictEqual((await capture({ ok: false, error: "no-tile" }, okOpts())).res, { ok: false, error: "no-tile" });
   assert.deepStrictEqual((await capture({ ok: false, error: "capture-failed" }, okOpts())).res, { ok: false, error: "capture-failed" });
+});
+
+// ── 書き込み（effect: "write"）のプラグインツール ───────────────────────
+const WENTRY = { name: "plugin__demo__edit", pluginId: "demo", pluginName: "Demo", tool: "edit", effect: "write" };
+async function wcall(opts, entry = WENTRY, params = { n: 1 }, result = { ok: true, data: { done: true } }) {
+  const t = fakeTarget();
+  const log = [];
+  const r = createRelay({ resolveTarget: () => t, journal: (e) => log.push(e), newId: () => "w9" });
+  const p = r.relay("s", { kind: "pluginTool", name: entry.name, params, approved: true }, opts);
+  await new Promise((res) => setImmediate(res));
+  if (t.sent.length) r.handleResult(t, "w9", result);
+  return { res: await p, sent: t.sent, log };
+}
+const wOpts = (confirmWrite, entry = WENTRY, over = {}) => ({ pluginTools: { lookup: (n) => (n === entry.name ? entry : null), external: false, confirmSend: async () => true, confirmWrite, ...over } });
+
+test("pluginTool write: 承認すると approved:true で 2D 窓へ届く。確認には main が引いたエントリと引数の要約が渡る", async () => {
+  const seen = [];
+  const { res, sent, log } = await wcall(wOpts(async (e, a) => { seen.push([e, a]); return true; }), WENTRY, { n: 1, s: "a\nb" });
+  assert.strictEqual(res.ok, true);
+  assert.deepStrictEqual(sent[0][1], { reqId: "w9", kind: "pluginTool", pluginId: "demo", tool: "edit", params: { n: 1, s: "a\nb" }, approved: true });
+  assert.strictEqual(seen.length, 1);
+  assert.strictEqual(seen[0][0], WENTRY);
+  assert.ok(!/[\n]/.test(seen[0][1]) && seen[0][1].length <= 300);
+  assert.strictEqual(log.at(-1).ok, true);
+});
+
+test("🔴 pluginTool write: 拒否・例外・true 以外・関数なし・opts に無いでは 2D 窓へ送らない（送信数 0）", async () => {
+  for (const cw of [async () => false, async () => { throw new Error("x"); }, async () => "yes", async () => 1, undefined]) {
+    const { res, sent, log } = await wcall(wOpts(cw));
+    assert.deepStrictEqual(res, { ok: false, error: "declined" });
+    assert.strictEqual(sent.length, 0);
+    assert.strictEqual(log.at(-1).error, "declined");
+  }
+});
+
+test("pluginTool write: 確認は毎回（2 回目も出る。セッション記憶なし）。外部宛ての結果確認とは別", async () => {
+  let n = 0;
+  const opts = wOpts(async () => { n++; return true; });
+  assert.strictEqual((await wcall(opts)).res.ok, true);
+  assert.strictEqual((await wcall(opts)).res.ok, true);
+  assert.strictEqual(n, 2);
+});
+
+test("pluginTool write: 対照 — read・display は書き込み確認が出ず、approved は false。write は引数が大きすぎても確認の前に弾く", async () => {
+  for (const effect of ["read", "display", undefined]) {
+    let asked = 0;
+    const entry = { ...WENTRY, effect };
+    const { res, sent } = await wcall(wOpts(async () => { asked++; return true; }, entry), entry);
+    assert.strictEqual(res.ok, true);
+    assert.strictEqual(asked, 0, String(effect));
+    assert.strictEqual(sent[0][1].approved, false);
+  }
+  let asked = 0;
+  const { res, sent } = await wcall(wOpts(async () => { asked++; return true; }), WENTRY, { s: "x".repeat(3000) });
+  assert.deepStrictEqual(res, { ok: false, error: "bad-command" });
+  assert.strictEqual(asked, 0);
+  assert.strictEqual(sent.length, 0);
+});
+
+test("🔴 pluginTool write: レンダラが付けた approved は使わない（read のエントリに approved:true を付けても false）", async () => {
+  const entry = { ...WENTRY, effect: "read" };
+  const { sent } = await wcall(wOpts(async () => true, entry), entry);
+  assert.strictEqual(sent[0][1].approved, false);
 });

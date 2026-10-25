@@ -55,14 +55,17 @@ class AiToolSpecTest {
     }
 
     @Test
-    void writeAndUnknownEffectsAreDropped() throws Exception {
+    void writeIsAcceptedButUnknownEffectsAreDropped() throws Exception {
         List<String> why = new ArrayList<>();
         var out = run("""
                 [{"name":"w","description":"d","effect":"write"},
                  {"name":"x","description":"d"},
+                 {"name":"y","description":"d","effect":"Write"},
+                 {"name":"z","description":"d","effect":"write "},
                  {"name":"ok","description":"d","effect":"display"}]""", OK, why);
-        assertEquals(List.of("ok"), out.stream().map(AiToolSpec::name).toList());
-        assertEquals(2, why.size());
+        assertEquals(List.of("w", "ok"), out.stream().map(AiToolSpec::name).toList());
+        assertEquals("write", out.get(0).effect());
+        assertEquals(3, why.size());
     }
 
     @Test

@@ -28,8 +28,15 @@ export const aiTools = {
     rec("big_probe", args, host);
     return { text: "x".repeat(10000) };
   },
-  write_probe: async (args, host) => {
-    rec("write_probe", args, host);
-    return { wrote: true };
+  tag_roi: async (args, host) => {
+    rec("tag_roi", args, host);
+    const roi = host.getRois()[0];
+    if (!roi) return { ok: false, reason: "no-roi" };
+    return { ok: host.setRoiMeta(roi.roiUid, { tag: args.tag }) };
+  },
+  read_tag: async (args, host) => {
+    rec("read_tag", args, host);
+    const roi = host.getRois()[0];
+    return { tag: roi ? host.getRoiMeta(roi.roiUid).tag ?? null : null };
   },
 };

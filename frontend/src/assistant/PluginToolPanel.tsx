@@ -37,7 +37,9 @@ export function PluginToolPanel({ tools, onToggle, busy, t }: { tools: PluginToo
             </label>
             {list.map((e) => (
               <div key={e.name} style={S.tool}>
-                <code>{e.tool}</code> <span style={S.dim}>{e.description.replace(/^\[plugin: [^\]]*\] /, "").slice(0, 120)}</span>
+                <code>{e.tool}</code>{" "}
+                {e.effect === "write" && <span style={S.write} data-testid={`assistant-plugintools-write-${e.pluginId}-${e.tool}`} title={t("assistant.plugintools.writeHelp")}>{t("assistant.plugintools.write")}</span>}{" "}
+                <span style={S.dim}>{e.description.replace(/^\[plugin: [^\]]*\] (\(writes data\) )?/, "").slice(0, 120)}</span>
               </div>
             ))}
           </div>
@@ -55,4 +57,5 @@ const S: Record<string, CSSProperties> = {
   row: { display: "flex", alignItems: "center", gap: 6 },
   tool: { marginLeft: 22, overflowWrap: "anywhere" },
   dim: { color: "#9aa0a6" },
+  write: { color: "#fdd663", border: "1px solid #fdd663", borderRadius: 3, padding: "0 4px", fontSize: 11 },
 };
