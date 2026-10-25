@@ -30,6 +30,7 @@ import { MonitorQcScreen } from "./monitorqc/MonitorQcScreen";
 import { ComputeJobsScreen } from "./computejobs/ComputeJobsScreen";
 import { GlamAnalysisScreen } from "./radiomics/GlamAnalysisScreen";
 import { RoiFeatureScreen } from "./radiomics/RoiFeatureScreen";
+import { IbsiCheckScreen } from "./radiomics/IbsiCheckScreen";
 import { MobileScreen } from "./mobile/MobileScreen";
 import { mobileHash, parseMobileRoute, MOBILE_SHELL_READY } from "./mobile/mobileRoute";
 import { useDeviceClass } from "./mobile/useDeviceClass";
@@ -210,6 +211,10 @@ export function App() {
   // Radiomics 特徴量（ROI）も別ウィンドウ（#radiomics-features）。
   if (screen === "radiomics-features") {
     return <RoiFeatureScreen />;
+  }
+  // IBSI 照合も別ウィンドウ（#ibsi-check）。
+  if (screen === "ibsi-check") {
+    return <IbsiCheckScreen />;
   }
 
   if (screen === "monitorqc") {

@@ -271,6 +271,7 @@ export interface ViewerActions {
   openRoiFeatures(): void;
   /** 保存済みの SEG を選び、その ROI の最大断面のスライスへ移動するダイアログを開く。 */
   openMaxSection(): void;
+  openIbsiCheck(): void;
   /** 対象タイルのスタディでレポート編集ダイアログを開く。 */
   openReport(): void;
   /** 対象タイルの画像をクリップボードへコピーする（ROI・文字の重ね描きは含まない）。 */

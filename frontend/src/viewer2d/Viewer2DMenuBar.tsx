@@ -471,6 +471,7 @@ export function Viewer2DMenuBar({
         { label: `${t("glam.menu")}…`, onClick: () => actions.openGlamAnalysis() },
         { label: `${t("roiFeat.menu")}…`, onClick: () => actions.openRoiFeatures(), testId: "menu-roi-features" },
         { label: `${t("roiFeat.maxSection.menu")}…`, onClick: () => actions.openMaxSection(), testId: "menu-max-section" },
+        { label: `${t("ibsi.menu")}…`, onClick: () => actions.openIbsiCheck(), testId: "menu-ibsi-check" },
         ...(isDemo ? [] : [{ label: t("viewer2d.menu.imagej"), onClick: () => actions.bridgeImageJ() }]),
         // 解析メニューは本体機能の並びなので、プラグイン由来は**必ず見分けられる形**で出す
         // （区切り線で分け、ラベルに印を付ける）。プラグインメニューに出ていたときは
