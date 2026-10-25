@@ -43,7 +43,7 @@ import { getScissors, setScissorsActive, subscribeScissors, scissorsToolName, sc
 import { setViewerContext, clearViewerContext, getViewerContext, type ViewerContext } from "./viewerContext";
 import { deleteRoiMaskMeta, getRoiMaskMeta, setRoiMaskMeta, subscribeRoiMaskStore } from "./roiMaskStore";
 import { noteFocusedTile } from "./focusedTile";
-import { copyRoiToClipboard, duplicateRoi as duplicateRoiEntry, hasClipboardRoi, makePixelToWorld, pasteRoiInto } from "./roiClipboard";
+import { copyRoiToClipboard, duplicateRoi as duplicateRoiEntry, hasClipboardRoi, makePixelToWorld, ownsImage, pasteRoiInto } from "./roiClipboard";
 import { emitRoiReveal } from "./roiReveal";
 import { reconcileGlobalAnnotations } from "./globalRoiSync";
 import { loadRoisCached, scheduleRoiSave } from "./roiSaveStore";
@@ -2477,6 +2477,12 @@ export function Viewer2D({
     return copyRoiToClipboard(uid, roiContextRef.current?.patientKey);
   };
 
+  const ownsRoi = (roiUid: string): boolean => {
+    const refId = (csAnnotation.state as { getAnnotation(uid: string): { metadata?: { referencedImageId?: string } } | undefined })
+      .getAnnotation(roiUid)?.metadata?.referencedImageId;
+    return ownsImage(imageIdsRef.current, refId);
+  };
+
   /** 貼り付け/複製で共通の宛先情報。現在表示中のスライスへ置く。 */
   const pasteContext = () => {
     const v = vp();
@@ -2721,7 +2727,7 @@ export function Viewer2D({
     publishAnalysisResult: publishPluginAnalysis,
     setActiveTool, setBrushSize, setWandTolerance,
     getRois, getRoiMeta, setRoiMeta, clearAnnotations, selectRoi,
-    copyRoi, pasteRoi, duplicateRoi, convertMeasureToRoi: convertMeasureToRoiCmd, createRoi, removeCreatedRoi,
+    copyRoi, ownsRoi, pasteRoi, duplicateRoi, convertMeasureToRoi: convertMeasureToRoiCmd, createRoi, removeCreatedRoi,
     undo, redo,
   });
   commandsRef.current = {
@@ -2735,7 +2741,7 @@ export function Viewer2D({
     publishAnalysisResult: publishPluginAnalysis,
     setActiveTool, setBrushSize, setWandTolerance,
     getRois, getRoiMeta, setRoiMeta, clearAnnotations, selectRoi,
-    copyRoi, pasteRoi, duplicateRoi, convertMeasureToRoi: convertMeasureToRoiCmd, createRoi, removeCreatedRoi,
+    copyRoi, ownsRoi, pasteRoi, duplicateRoi, convertMeasureToRoi: convertMeasureToRoiCmd, createRoi, removeCreatedRoi,
     undo, redo,
   };
   useEffect(() => {
@@ -2781,6 +2787,7 @@ export function Viewer2D({
       clearAnnotations: (s) => commandsRef.current.clearAnnotations(s),
       convertMeasureToRoi: (u) => commandsRef.current.convertMeasureToRoi(u),
       copyRoi: (u) => commandsRef.current.copyRoi(u),
+      ownsRoi: (u) => commandsRef.current.ownsRoi(u),
       pasteRoi: () => commandsRef.current.pasteRoi(),
       duplicateRoi: (u) => commandsRef.current.duplicateRoi(u),
       createRoi: (r, b) => commandsRef.current.createRoi(r, b),

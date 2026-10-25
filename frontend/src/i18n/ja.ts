@@ -1290,7 +1290,7 @@ export const ja: Record<string, string> = {
   "viewer2d.roi.duplicate": "ROI を複製",
   "roi.defaultName": "ROI {{n}}",
   "roi.copySuffix": "(コピー)",
-  "roi.copy.none": "コピーする ROI が選ばれていません。ROI をクリックして選んでください。",
+  "roi.copy.none": "コピーする ROI が選ばれていません。画像上の ROI、または ROI マネージャの行をクリックして選んでください（行頭のチェックは演算用です）。",
   "roi.copy.done": "ROI をコピーしました。",
   "roi.copy.failed": "この ROI はコピーできません。",
   "roi.paste.empty": "貼り付ける ROI がありません。先に ROI をコピーしてください。",

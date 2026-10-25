@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 import { parseViewMode } from "./viewMode";
 import { PATIENT_PALETTE, assignPatientColors, patientInitial } from "./patientColor";
 import { placeNear, reconcileOrder, swapOrder } from "./globalOrder";
-import { defaultTargets, spansPatients } from "./tileScope";
+import { defaultTargets, ownerTileOf, spansPatients } from "./tileScope";
+import { ownsImage } from "../viewer/roiClipboard";
 
 describe("parseViewMode", () => {
   it("未保存・不正値は既定の全患者", () => {
@@ -107,5 +108,19 @@ describe("spansPatients", () => {
     expect(spansPatients(["P1", "P1"])).toBe(false);
     expect(spansPatients(["P1", "P2"])).toBe(true);
     expect(spansPatients([])).toBe(false);
+  });
+});
+
+describe("ownerTileOf / ownsImage（コピー・複製の宛先を ROI から決める）", () => {
+  const imgs: Record<string, string[]> = { a: ["i1", "i2"], b: ["j1"], c: ["k1"] };
+  const owns = (ref: string) => (id: string) => ownsImage(imgs[id], ref);
+  it("ROI を持つタイルを返す（先頭のタイルとは限らない）", () => {
+    expect(ownerTileOf(["a", "b", "c"], owns("j1"))).toBe("b");
+  });
+  it("どのタイルも持たなければ null（従来の宛先解決へ戻す）", () => {
+    expect(ownerTileOf(["a", "b", "c"], owns("zzz"))).toBeNull();
+  });
+  it("参照画像が無い ROI は誰のものでもない", () => {
+    expect(ownsImage(["i1"], undefined)).toBe(false);
   });
 });

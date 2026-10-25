@@ -120,6 +120,11 @@ export function retargetEntry(entry: RoiClipboardEntry, dst: ImageGrid | null): 
 
 let clip: RoiClipboardEntry | null = null;
 
+/** ROI の参照画像が、このスタックの画像のどれかか（コピー・複製の宛先タイルを ROI から決める）。 */
+export function ownsImage(imageIds: readonly string[], referencedImageId: string | undefined): boolean {
+  return !!referencedImageId && imageIds.includes(referencedImageId);
+}
+
 export function hasClipboardRoi(): boolean {
   return clip !== null;
 }

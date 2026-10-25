@@ -37,3 +37,8 @@ export function defaultTargets(
 export function spansPatients(patientKeys: readonly string[]): boolean {
   return new Set(patientKeys).size > 1;
 }
+
+/** ROI を持つタイルの id。どれも持たなければ null（コピー・複製の宛先を、画像のクリックに頼らず ROI から決める）。 */
+export function ownerTileOf(tileIds: readonly string[], owns: (tileId: string) => boolean): string | null {
+  return tileIds.find(owns) ?? null;
+}
