@@ -21,7 +21,9 @@
  */
 import { Enums, cache, metaData } from "@cornerstonejs/core";
 import { dsaNativeImageId } from "./dsaLoader";
-import { xaDataSetOf } from "./xaCine";
+import { readXaCineSource, xaDataSetOf } from "./xaCine";
+import { frameStartTimesMs } from "./xaCineTiming";
+import { cardiacPhaseInfo, type CardiacPhaseInfo } from "./xaCardiacPhase";
 import { readUsRegions, resolveUsCalibration } from "./usCalibration";
 import {
   calibrationScaleFor,
@@ -225,6 +227,27 @@ export function readXaInputTags(imageId: string): { tags: XaCalibTags; isXaSopCl
     },
     isXaSopClass: sopClass ? XA_SOP_CLASSES.has(sopClass) : null,
   };
+}
+
+/**
+ * 解析フレームの心位相（GN-XA-001 P2）。R Wave Pointer (0028,6040) だけから出す（画像からは推定しない）。
+ * dataSet が未取得・フレーム時刻が読めなければ null。R 波ポインタが無い撮影は source:"none"（読めた上で「無い」）。
+ */
+export function readXaCardiacPhase(imageId: string, frameIndex: number): CardiacPhaseInfo | null {
+  const ds = xaDataSetOf(imageId) as unknown as (MinimalDataSet & {
+    uint16(tag: string, index?: number): number | undefined;
+    elements?: Record<string, { length: number } | undefined>;
+  }) | null;
+  const cine = readXaCineSource(imageId);
+  if (!ds || !cine) return null;
+  // US の多値: 要素長 / 2 が値の数。
+  const len = ds.elements?.["x00286040"]?.length ?? 0;
+  const pointers: number[] = [];
+  for (let i = 0; i < Math.floor(len / 2); i++) {
+    const v = ds.uint16("x00286040", i);
+    if (typeof v === "number" && Number.isFinite(v)) pointers.push(v);
+  }
+  return cardiacPhaseInfo(pointers.length > 0 ? pointers : null, frameStartTimesMs(cine), frameIndex);
 }
 
 /**
