@@ -103,6 +103,12 @@ describe("extractVesselTree2D", () => {
     }
   });
 
+  it("雑音が量子化雑音以下の画像（雑音ゼロの合成画像を整数に丸めたもの）には警告が付き、通常の雑音画像には付かない", () => {
+    const rounded = render(Y_SEGS, 2.5, 0).map(Math.round);
+    expect(run(rounded).warnings).toContain("noiseAtQuantizationFloor");
+    expect(run(render(Y_SEGS, 2.5, 4).map(Math.round)).warnings).not.toContain("noiseAtQuantizationFloor");
+  });
+
   it("負例: 画素間隔が無いときは抽出しない（既定値で当てにいかない）", () => {
     const t = run(render(Y_SEGS, 2.5, 4), { mmPerPx: null });
     expect(t.status).toBe("noScale");

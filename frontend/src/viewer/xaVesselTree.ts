@@ -13,7 +13,10 @@
  * <ul>
  *   <li>細線化で**枝の端が径の半分ほど縮む**（径 5 mm・0.3 mm/px で約 8 px）。</li>
  *   <li>径の範囲の両端（1 mm・5 mm 付近）では、余分な短い枝が出ることがある。</li>
- *   <li>雑音が数値上 0 に近い画像では雑音尺度に下限を置く（実画像では効かない）。</li>
+ *   <li>雑音尺度の下限は量子化雑音（階調の刻み q の一様誤差、σ = q/√12）。画像の雑音がこれ以下なら
+ *       warnings に `noiseAtQuantizationFloor` を付ける。雑音ゼロの合成画像では縁の肩の応答が残り、精度は保証しない。</li>
+ *   <li>2 本の血管が画像上で重なる区間（中心線の距離が半径の和未満）は 1 つの塊になり、分岐点が
+ *       約 (d1+d2)/(4·sin(θ/2)) だけ末梢側にずれる（d=径、θ=分岐角）。対応づけ側（P3）で扱う。</li>
  * </ul>
  *
  * <h3>しきい値とスケールの出どころ</h3>
@@ -154,6 +157,30 @@ function ridgeResponse(
     }
   });
   return { response, scaleIdx };
+}
+
+/**
+ * 画像の階調の刻み（量子化ステップ）。隣り合う異なる値の差の最小値。
+ * 浮動小数の丸め誤差による微小な差（値域の 1e-6 未満）は刻みと見なさない。一定値の画像は 0。
+ */
+function quantizationStep(pixels: Float32Array): number {
+  const s = Float32Array.from(pixels).sort();
+  const floor = 1e-6 * (s[s.length - 1] - s[0]);
+  let step = Infinity;
+  for (let i = 1; i < s.length; i++) {
+    const g = s[i] - s[i - 1];
+    if (g > floor && g < step) step = g;
+  }
+  return Number.isFinite(step) ? step : 0;
+}
+
+/** 決定的な正規乱数（LCG + Box-Muller）。量子化雑音の応答を測る小片を作るためだけに使う。 */
+function gaussianPatch(n: number, sd: number): Float32Array {
+  let a = 12345;
+  const u = () => { a = (Math.imul(a, 1664525) + 1013904223) >>> 0; return (a + 0.5) / 4294967296; };
+  const out = new Float32Array(n * n);
+  for (let i = 0; i < out.length; i++) out[i] = sd * Math.sqrt(-2 * Math.log(u())) * Math.cos(2 * Math.PI * u());
+  return out;
 }
 
 function median(values: Float32Array): number {
@@ -384,9 +411,24 @@ export function extractVesselTree2D(
   // 雑音が数値上 0 の画像（雑音の無い合成画像）でも、ゼロ割りにならないよう下限を置く（実画像では効かない）。
   let maxResp = 0;
   for (let i = 0; i < response.length; i++) if (response[i] > maxResp) maxResp = response[i];
-  const noise = Math.max(1.4826 * median(dev), 1e-6 * maxResp);
+  const madNoise = 1.4826 * median(dev);
+  // 雑音の下限は量子化雑音（階調の刻み q の一様誤差、σ = q/√12）。同じスケール列に通した応答の MAD を使う。
+  // これより小さい雑音は、画像に格納された時点で存在しえない（雑音ゼロの合成画像で、縁の肩の応答を雑音扱いしないため）。
+  const q = quantizationStep(pixels);
+  let quantNoise = 0;
+  if (q > 0) {
+    const P = 96;
+    const qResp = ridgeResponse(gaussianPatch(P, q / Math.sqrt(12)), P, P, sigmasPx).response;
+    const qdev = new Float32Array(qResp.length);
+    const qmed = median(qResp);
+    for (let i = 0; i < qdev.length; i++) qdev[i] = Math.abs(qResp[i] - qmed);
+    quantNoise = 1.4826 * median(qdev);
+  }
+  const warnings: string[] = madNoise < quantNoise ? ["noiseAtQuantizationFloor"] : [];
+  // 階調の刻みが取れない（一定値の画像）ときのゼロ割り防止。
+  const noise = Math.max(madNoise, quantNoise, 1e-6 * maxResp);
   const sg = opts.sigma ?? HYSTERESIS_SIGMA;
-  if (!(noise > 0)) return empty("noVessel", []);
+  if (!(noise > 0)) return empty("noVessel", warnings);
   const mask = hysteresis(response, width, height, med + sg.low * noise, med + sg.high * noise);
 
   // 稜線の画素を、その画素のスケールが表す半幅（√3·σ）の円板に膨らませてから細線化する。
@@ -407,7 +449,7 @@ export function extractVesselTree2D(
   }
   const skel = removeStairCorners(thin(filled, width, height), width, height);
   let g = buildGraph(skel, width, height);
-  if (g.branches.length === 0) return empty("noVessel", []);
+  if (g.branches.length === 0) return empty("noVessel", warnings);
 
   // 枝ごとの径（その枝の画素のスケールから）と長さ。
   const branchDiamMm = (pix: number[]): number => {
@@ -494,6 +536,6 @@ export function extractVesselTree2D(
     nodes[sn].degree++; nodes[en].degree++;
     return { id: i, pointsPx: pts, lengthMm: polyLenPx(pts) * mm, diameterMm: branchDiamMm(b.pixels), startNode: sn, endNode: en };
   });
-  if (out.length === 0) return empty("noVessel", []);
-  return { status: "ok", nodes, branches: out, warnings: [] };
+  if (out.length === 0) return empty("noVessel", warnings);
+  return { status: "ok", nodes, branches: out, warnings };
 }
