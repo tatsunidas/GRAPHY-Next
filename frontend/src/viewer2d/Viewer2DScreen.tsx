@@ -1499,10 +1499,11 @@ function TileGrid({
   const resolveRoiEditTarget = useCallback((): string | null => {
     if (selectedIds.size === 1) return [...selectedIds][0];
     if (patient.tiles.length === 1) return patient.tiles[0].id;
-    const focused = getFocusedTile();
+    // ツールバーの「操作の対象」（resolveTargets）と同じ順序。見出しのクリックでも宛先が変わる。
+    const focused = focusedTileId ?? getFocusedTile();
     if (focused && patient.tiles.some((tl) => tl.id === focused)) return focused;
     return null;
-  }, [selectedIds, patient.tiles]);
+  }, [selectedIds, patient.tiles, focusedTileId]);
   // コピー・複製の宛先は、ROI を持つタイル（画像のクリックに頼らない）。
   const roiOwnerTile = useCallback(
     (uid: string): string | null =>
