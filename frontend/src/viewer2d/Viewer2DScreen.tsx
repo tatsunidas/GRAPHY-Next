@@ -2256,6 +2256,12 @@ function TileGrid({
         if (d?.openViewer) void d.openViewer("radiomics-features");
         else window.open(`${window.location.pathname}#radiomics-features`, "graphy-radiomics-features");
       },
+      // IBSI 照合: ビューアの状態に依らない別ウィンドウ。
+      openIbsiCheck: () => {
+        const d = desktop();
+        if (d?.openViewer) void d.openViewer("ibsi-check");
+        else window.open(`${window.location.pathname}#ibsi-check`, "graphy-ibsi-check");
+      },
       openMaxSection: () => {
         const tid = resolveTargets()[0];
         const tile = patient.tiles.find((tl) => tl.id === tid);

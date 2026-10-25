@@ -5,6 +5,7 @@
 import { HttpError, extractErrorMessage, httpGet, httpSend } from "./http";
 import { chunkForQuery } from "./urlChunk";
 import { apiBase } from "./apiBase";
+import type { IbsiCheckResult, IbsiReport } from "./radiomics/ibsiCheck";
 
 // apiBase は apiBase.ts へ分離（循環インポート回避）。互換のため再エクスポート。
 export { apiBase } from "./apiBase";
@@ -2326,3 +2327,11 @@ export const fetchMaxSection = (req: MaxSectionRequest) =>
 /** 取り消しは結果を返さなくするだけ。計算は最後まで走り、結果はキャッシュに入る。 */
 export const cancelRoiFeatureJob = (jobId: string) =>
   httpSend<RoiFeatureJobStatus>(`/api/radiomics/features/jobs/${encodeURIComponent(jobId)}`, "DELETE");
+
+// ---- IBSI 照合（backend: IbsiCheckService。standalone のみ）----
+/** この PC でデジタルファントムの照合を実行する。同じ版で実行済みなら覚えた結果（refresh で再実行）。 */
+export const fetchIbsiCheck = (refresh = false) =>
+  httpGet<IbsiCheckResult>(`/api/radiomics/ibsi-check${refresh ? "?refresh=true" : ""}`);
+
+/** RadiomicsJ のリリース時の記録（CT ファントム 構成 C・D。この PC では実行していない値）。 */
+export const fetchIbsiRecords = () => httpGet<IbsiReport[]>("/api/radiomics/ibsi-check/records");
