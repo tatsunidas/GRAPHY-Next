@@ -317,6 +317,51 @@ class RetentionRunnerTest {
     }
 
     @Test
+    void 最初の1回の対象がすべて保護中なら_使い切らず_見せていない検査も消さない() throws Exception {
+        String seen = ingest("FP1", 100);
+        enableWith(new RetentionConfig(30, null, null));
+        String later = ingest("FP2", 100); // 試算のあとに入った古い検査（見せていない）
+        service.lock(seen);
+        runner.runNow();
+        runner.runNow();
+        assertTrue(exists(seen), "ロック中は消えない");
+        assertTrue(exists(later), "見せていない検査は、対象が保護中の間も消さない");
+        assertEquals(1, firstRun.count(), "保護中の対象は最初の 1 回として残る");
+        service.unlock(seen);
+        runner.runNow();
+        assertFalse(exists(seen), "保護が外れたら、見せた検査として消える");
+        assertTrue(exists(later), "その実行でも見せていない検査は消さない");
+        assertEquals(0, firstRun.count());
+        runner.runNow();
+        assertFalse(exists(later), "そのあとは条件どおり");
+    }
+
+    @Test
+    void 最初の1回の対象の一部だけ保護中なら_ほかは消え_保護分だけ残る() throws Exception {
+        String a = ingest("FQ1", 100);
+        String b = ingest("FQ2", 100);
+        enableWith(new RetentionConfig(30, null, null));
+        service.lock(a);
+        runner.runNow();
+        assertTrue(exists(a));
+        assertFalse(exists(b));
+        assertEquals(1, firstRun.count());
+    }
+
+    @Test
+    void 最初の1回の対象が索引から無くなったら_制限は残らず_2回目から自動() throws Exception {
+        String seen = ingest("FR3", 100);
+        enableWith(new RetentionConfig(30, null, null));
+        String later = ingest("FR4", 100);
+        dbAdmin.deleteStudy(seen); // 手動で消えた
+        runner.runNow();
+        assertEquals(0, firstRun.count(), "決着した対象は残さない");
+        assertTrue(exists(later), "この実行は最初の 1 回の扱い（見せていない検査は消さない）");
+        runner.runNow();
+        assertFalse(exists(later), "2 回目からは条件どおり");
+    }
+
+    @Test
     void ロックした検査と開いている検査は_計画の時点で外れて消えない() throws Exception {
         String locked = ingest("RL", 100);
         String open = ingest("RO", 100);

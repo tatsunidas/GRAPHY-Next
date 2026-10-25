@@ -44,7 +44,7 @@ public final class RetentionPlanner {
     public static RetentionPlan plan(List<StudyStat> studies, Map<String, Set<ProtectionReason>> external,
                                      RetentionConfig cfg, long freeBytes, long storeBytes, long nowMs, long planStartMs) {
         if (cfg == null || !cfg.any()) {
-            return new RetentionPlan(List.of(), 0, Map.of(), true, List.of());
+            return new RetentionPlan(List.of(), 0, Map.of(), true, List.of(), Set.of());
         }
         // 受信日時が分かる検査を古い順に。分からない検査は保護の理由「不明」を付けて別に数える。
         List<StudyStat> ordered = new ArrayList<>(studies);
@@ -127,7 +127,7 @@ public final class RetentionPlanner {
         if (!satisfied) {
             warnings.add("protected:" + skipped.size());
         }
-        return new RetentionPlan(items, total[0], counts, satisfied, warnings);
+        return new RetentionPlan(items, total[0], counts, satisfied, warnings, Set.copyOf(skipped.keySet()));
     }
 
     private static void consider(StudyStat s, String reason, Map<String, Set<ProtectionReason>> prot, Set<String> chosen,
