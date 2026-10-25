@@ -86,7 +86,7 @@ export function useAssistantBridge(input: AssistantBridgeInput): void {
       }
       let result;
       try {
-        result = executeCommand(deps, { kind: cmd.kind, id: cmd.id, params: cmd.params, includeLabels: cmd.includeLabels, approved: cmd.approved === true });
+        result = executeCommand(deps, { kind: cmd.kind, id: cmd.id, params: cmd.params, includeLabels: cmd.includeLabels, approved: cmd.approved === true, dryRun: cmd.dryRun === true });
       } catch (e) {
         result = { ok: false as const, error: `exec-failed:${e instanceof Error ? e.message.slice(0, 80) : "error"}` };
       }

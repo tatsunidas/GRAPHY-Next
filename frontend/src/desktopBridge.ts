@@ -546,6 +546,7 @@ export interface GraphyDesktop {
       params?: unknown;
       includeLabels?: boolean;
       approved?: boolean;
+      dryRun?: boolean;
       pluginId?: string;
       tool?: string;
     }) => void,

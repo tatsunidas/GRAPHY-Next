@@ -9,7 +9,7 @@
  *   2. 🔴 承認: 半径 20×10 mm の楕円 → 面積が π·20·10 ≈ 628.3 mm² の 2% 以内。矩形は 800 mm²
  *   3. 🔴 位置: 中心の画面位置が指定した割合 (u,v) に一致（画面に見えるとおり）
  *   4. 🔴 取り消し: inverse の removeAssistantRoi で作った ROI だけ消え、手描きは残る（手描きの uid を直接指定しても消えない）
- *   5. 🔴 負例: 範囲外の割合・半径は検証で拒否され、ROI が増えない。メイン窓からは forbidden
+ *   5. 🔴 負例: 範囲外の割合・半径は検証で拒否され、確認ダイアログが出ず、ROI が増えない。メイン窓からは forbidden
  * 未達として残すもの: too-large（単体のみ）／実 OS のネイティブ確認の見た目／回転・反転表示での実機確認。
  */
 import fs from "node:fs";
@@ -188,7 +188,7 @@ async function main(): Promise<void> {
     }
     // 検証の拒否は確認ダイアログの前か後かを問わず ROI を増やさない
     check((await anns()).length === 1, "🔴 拒否された作成で ROI は増えない（対象は実在する）", (await anns()).length);
-    console.log(`  （確認ダイアログの出た回数 ${(await dlgCount()) - n0}）`);
+    check((await dlgCount()) - n0 === 0, "🔴 不正な引数では確認ダイアログが出ない（6 回の不正な呼び出しで 0 回。対照: 正しい引数では [1][2] で毎回出ている）", (await dlgCount()) - n0);
     // 半径の上限 500 mm は、この fixture の画像（対角 > 500 mm）では too-large にならず作成される（正しい挙動）。
     // too-large 自体は roiCreate の単体テストで確認済み。ここでは作れてしまう事実を確かめ、取り消して後続の件数検査に備える。
     const big = await act("createRoi", { ...ell, radiusXmm: 500, radiusYmm: 500 });

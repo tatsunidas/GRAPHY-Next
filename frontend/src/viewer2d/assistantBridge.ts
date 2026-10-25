@@ -71,6 +71,8 @@ export interface BridgeCommand {
   withRoi?: boolean;
   /** main が利用者の承認を取ったあとにだけ付ける。データを変える操作はこれが無いと実行しない。 */
   approved?: boolean;
+  /** main が確認の前に付ける。検証（引数・対象）だけして何も実行しない。write 操作にだけ使える。 */
+  dryRun?: boolean;
 }
 
 /** タイル群の現在状態（識別子を含み得る生の値）。必ず projectState を通してから外へ出す。 */
@@ -124,6 +126,10 @@ export function executeCommand(deps: BridgeDeps, cmd: BridgeCommand): ActionResu
   if (cmd.id === GET_STATE_TOOL) return { ok: false, error: "unknown-action" };
   const v = validateAction(cmd.id, cmd.params);
   if (!v.ok) return v;
+  if (cmd.dryRun === true) {
+    if (!isWriteAction(cmd.id)) return { ok: false, error: "bad-command" };
+    return deps.targets().length === 0 ? { ok: false, error: "no-tile" } : { ok: true };
+  }
   if (isWriteAction(cmd.id) && cmd.approved !== true) return { ok: false, error: "approval-required" };
   const targets = deps.targets();
   if (targets.length === 0) return { ok: false, error: "no-tile" };

@@ -295,3 +295,25 @@ describe("createRoi / removeAssistantRoi", () => {
     expect(executeCommand(deps, { kind: "action", id: "removeAssistantRoi", params: { roiUid: "hand-drawn" } })).toEqual({ ok: false, error: "not-removable" });
   });
 });
+
+describe("dryRun（main が確認の前に送る検証だけの往復）", () => {
+  const ok = { shape: "ellipse", u: 0.5, v: 0.5, radiusXmm: 20, radiusYmm: 10 };
+  it("write 操作: 正しい引数なら何も実行せず ok（approved も要らない）", () => {
+    const { deps, calls } = makeDeps();
+    expect(executeCommand(deps, { kind: "action", id: "createRoi", params: ok, dryRun: true })).toEqual({ ok: true });
+    expect(executeCommand(deps, { kind: "action", id: "clearMeasurements", params: {}, dryRun: true })).toEqual({ ok: true });
+    expect(calls).toEqual([]);
+  });
+  it("write 操作: 不正な引数・対象なしは検証のエラーを返す", () => {
+    const { deps } = makeDeps();
+    expect(executeCommand(deps, { kind: "action", id: "createRoi", params: { ...ok, u: 2 }, dryRun: true })).toEqual({ ok: false, error: "out-of-range:u" });
+    const none = makeDeps({ targets: () => [] });
+    expect(executeCommand(none.deps, { kind: "action", id: "createRoi", params: ok, dryRun: true })).toEqual({ ok: false, error: "no-tile" });
+  });
+  it("write 以外に dryRun を付けても実行されず bad-command（表示操作を空振りで成功させない）", () => {
+    const { deps, calls } = makeDeps();
+    expect(executeCommand(deps, { kind: "action", id: "flipH", params: {}, dryRun: true })).toEqual({ ok: false, error: "bad-command" });
+    expect(executeCommand(deps, { kind: "action", id: "setWindowLevel", params: { center: 1, width: 1 }, dryRun: true })).toEqual({ ok: false, error: "bad-command" });
+    expect(calls).toEqual([]);
+  });
+});
