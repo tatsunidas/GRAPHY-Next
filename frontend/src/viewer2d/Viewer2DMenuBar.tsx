@@ -168,6 +168,9 @@ export function Viewer2DMenuBar({
     selectRoi: (tileId, roiUid, exclusive) => actions.selectRoi(tileId, roiUid, exclusive),
     getRoiMeta: (roiUid) => actions.getRoiMeta(roiUid, m.id),
     setRoiMeta: (roiUid, patch) => actions.setRoiMeta(roiUid, m.id, patch),
+    // 作る ROI には「どのプラグインが作ったか」の印を**本体が**付ける（pluginId はここで入れる。名乗らせない）。
+    createRoi: (tileId, req) => actions.createRoi(tileId, { pluginId: m.id, pluginName: m.name }, req),
+    removeCreatedRoi: (roiUid) => actions.removeCreatedRoi(roiUid, m.id),
     subscribeRois: (listener) => actions.subscribeRois(listener),
     // H8: プラグイン専用の保存領域（患者単位・backend 保管）。**pluginId と patientKey は
     // host が入れる**。患者は対象タイルから引くので、プラグインが別患者の領域を勝手に

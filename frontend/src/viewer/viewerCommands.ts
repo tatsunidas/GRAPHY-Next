@@ -745,6 +745,17 @@ export interface ViewerCommands {
   pasteRoi(): string | null;
   /** ROI をその場で複製する（クリップボードの中身は変えない）。 */
   duplicateRoi(roiUid: string): string | null;
+  /**
+   * プラグインが ROI（楕円・矩形）を、**現在表示中のスライス**へ作る。中心は患者座標 LPS（mm）、半径は表示の水平・垂直方向の mm。
+   * 作った ROI には出自の印（`plugin.<pluginId>.created`）とラベルが付き、本体が保存を予約する。
+   * 失敗は理由つき（`off-slice` など。黙って別のスライスへ作らない）。
+   */
+  createRoi(req: import("./roiCreate").CreateRoiRequest, by: { pluginId: string; pluginName: string }): { ok: true; roiUid: string; centerLps: [number, number, number] } | { ok: false; reason: import("./roiCreate").CreateRoiFailure };
+  /**
+   * `createRoi` で**そのプラグインが作った** ROI だけを消す（出自の印が一致するときだけ。本体や他プラグインの ROI・ロック中は消さない）。
+   * 消せたら true。
+   */
+  removeCreatedRoi(roiUid: string, pluginId: string): boolean;
   undo(): void;
   redo(): void;
 }

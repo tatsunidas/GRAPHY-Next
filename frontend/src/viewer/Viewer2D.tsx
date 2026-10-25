@@ -33,19 +33,21 @@ import { OverflowRow } from "./OverflowRow";
 import { ToolIcon } from "../icons/ToolIcon";
 import { UI_ICON_FILES, ACTIVE_ICON_STYLE } from "../icons/toolIcons";
 import { emitToast } from "./toast";
-import { partitionByLock } from "./roiLock";
+import { isRoiLocked, partitionByLock } from "./roiLock";
+import type { SavedRoi } from "./roiPersistence";
+import { buildRoiHandles, maxExtentFromImage, sliceToleranceFromStack } from "./roiCreate";
 import { installTrueMagnification } from "./magnifier";
 import { ERASER_TOOL_ID, WAND2D_TOOL_ID, WAND3D_TOOL_ID, LEVELSET2D_TOOL_ID, SCISSORS_TOOL_ID } from "./toolIds";
 import { commitThreshold } from "./thresholdTool";
 import { getScissors, setScissorsActive, subscribeScissors, scissorsToolName, scissorsStrategy, SCISSORS_TOOL_NAMES } from "./scissorsStore";
 import { setViewerContext, clearViewerContext, getViewerContext, type ViewerContext } from "./viewerContext";
-import { getRoiMaskMeta, setRoiMaskMeta, subscribeRoiMaskStore } from "./roiMaskStore";
+import { deleteRoiMaskMeta, getRoiMaskMeta, setRoiMaskMeta, subscribeRoiMaskStore } from "./roiMaskStore";
 import { noteFocusedTile } from "./focusedTile";
-import { copyRoiToClipboard, duplicateRoi as duplicateRoiEntry, hasClipboardRoi, pasteRoiInto } from "./roiClipboard";
+import { copyRoiToClipboard, duplicateRoi as duplicateRoiEntry, hasClipboardRoi, makePixelToWorld, pasteRoiInto } from "./roiClipboard";
 import { emitRoiReveal } from "./roiReveal";
 import { reconcileGlobalAnnotations } from "./globalRoiSync";
 import { loadRoisCached, scheduleRoiSave } from "./roiSaveStore";
-import { restoreRoisIntoStack } from "./roiRestore";
+import { addSavedRoiToViewport, restoreRoisIntoStack } from "./roiRestore";
 import { listSpheres3D, sphereCanvasCircle, subscribeSphere3D, type SphereCanvasCircle } from "./sphere3dStore";
 import { ensureCornerstoneInitialized } from "./cornerstoneSetup";
 import { applyTransform, isPanned, readTransform, type ViewTransform, FIT_TRANSFORM } from "./transform";
@@ -2557,6 +2559,92 @@ export function Viewer2D({
     return uid;
   };
 
+  /**
+   * プラグインが ROI（楕円・矩形）を、現在表示中のスライスへ作る。
+   * ハンドルの組み立ては純関数 `buildRoiHandles`（患者座標 LPS の中心・表示の軸に沿った mm の半径）。置く処理は
+   * 復元・複製・「計測→ROI」と同じ `addSavedRoiToViewport` と後始末（`afterPaste`）に渡す（新しい幾何・登録の経路を作らない）。
+   * 🔴 作った ROI には出自の印を付ける（`removeCreatedRoi` が、そのプラグインの作った ROI だけを消せるようにするため）。
+   */
+  const createRoi: ViewerCommands["createRoi"] = (req, by) => {
+    if (thickSlabRef.current) return { ok: false, reason: "thick-slab" };
+    const v = vp();
+    const ctx = pasteContext();
+    if (!v || !ctx) return { ok: false, reason: "no-image" };
+    const cam = v.getCamera();
+    const ipp = (id: string | undefined): number[] | undefined => {
+      const p = id ? (metaData.get("imagePlaneModule", id) as { imagePositionPatient?: number[] } | undefined)?.imagePositionPatient : undefined;
+      return Array.isArray(p) ? p : undefined;
+    };
+    const ids = imageIdsRef.current;
+    const i = indexRef.current;
+    const plane = metaData.get("imagePlaneModule", ctx.imageId) as
+      | { rows?: number; columns?: number; rowPixelSpacing?: number; columnPixelSpacing?: number; sliceThickness?: number }
+      | undefined;
+    const tol = sliceToleranceFromStack(ipp(ids[i]), ipp(ids[i + 1] ?? ids[i - 1]), plane?.sliceThickness ?? plane?.columnPixelSpacing ?? null);
+    const maxExtent = maxExtentFromImage(plane?.rows, plane?.columns, plane?.rowPixelSpacing, plane?.columnPixelSpacing);
+    if (tol === null || maxExtent === null || !cam.focalPoint || !cam.viewPlaneNormal) return { ok: false, reason: "no-geometry" };
+    const handles = buildRoiHandles(req, {
+      worldToCanvas: (p) => {
+        const c = v.worldToCanvas(p as Types.Point3);
+        return c && Number.isFinite(c[0]) && Number.isFinite(c[1]) ? [c[0], c[1]] : null;
+      },
+      canvasToWorld: (c) => {
+        const w = v.canvasToWorld(c as Types.Point2);
+        return w && w.every((n) => Number.isFinite(n)) ? [w[0], w[1], w[2]] : null;
+      },
+      focalPoint: Array.from(cam.focalPoint),
+      viewPlaneNormal: Array.from(cam.viewPlaneNormal),
+      pixelToWorld: makePixelToWorld(ctx.imageId),
+      sliceToleranceMm: tol,
+      maxExtentMm: maxExtent,
+    });
+    if (!handles.ok) return handles;
+    const sop = sopFromImageId(ctx.imageId);
+    if (!sop) return { ok: false, reason: "failed" };
+    const uid = (utilities as unknown as { uuidv4: () => string }).uuidv4();
+    const frame = frameOfImageId(ctx.imageId);
+    const label = typeof req.label === "string" && req.label.trim() ? req.label.replace(/\s+/g, " ").trim().slice(0, 60) : by.pluginName.slice(0, 60);
+    const saved: SavedRoi = {
+      roiUid: uid,
+      tool: req.tool,
+      sopInstanceUid: sop,
+      points: handles.points,
+      label,
+      custom: buildPluginMeta(by.pluginId, { created: "1" }),
+    };
+    if (frame !== null) saved.frame = frame;
+    if (ctx.scope) {
+      saved.scope = ctx.scope;
+      saved.origin = ctx.scope;
+      if (ctx.scope.studyUid) saved.studyUid = ctx.scope.studyUid;
+      if (ctx.scope.seriesUid) saved.seriesUid = ctx.scope.seriesUid;
+      if (typeof ctx.scope.c === "number") saved.c = ctx.scope.c;
+      if (typeof ctx.scope.t === "number") saved.t = ctx.scope.t;
+    }
+    if (!addSavedRoiToViewport(saved, ctx.imageId, ctx.viewport, { sliceIndex: ctx.sliceIndex, patientKey: ctx.patientKey, seriesLabel: ctx.seriesLabel })) {
+      return { ok: false, reason: "failed" };
+    }
+    afterPaste(uid, ctx.imageId);
+    return { ok: true, roiUid: uid, centerLps: handles.centerLps };
+  };
+
+  /** そのプラグインが `createRoi` で作った ROI だけを消す。 */
+  const removeCreatedRoi: ViewerCommands["removeCreatedRoi"] = (roiUid, pluginId) => {
+    if (typeof roiUid !== "string" || !csAnnotation.state.getAnnotation(roiUid)) return false;
+    if (pickPluginMeta(getRoiMaskMeta(roiUid)?.custom, pluginId).created !== "1") return false;
+    if (isRoiLocked(roiUid)) return false;
+    try {
+      csAnnotation.state.removeAnnotation(roiUid);
+    } catch {
+      return false;
+    }
+    deleteRoiMaskMeta(roiUid);
+    vp()?.render();
+    const pk = roiContextRef.current?.patientKey;
+    if (pk) scheduleRoiSave(pk);
+    return true;
+  };
+
   // 注釈を種別ごとに全消去する（ROI だけ / 計測だけ）。ロック中は残す。
   // 種別不明（矢印など）は ROI 側で消える——全消去で残り続けるものを作らない。
   const clearAnnotations = (scope: "roi" | "measure") => {
@@ -2622,7 +2710,7 @@ export function Viewer2D({
     publishAnalysisResult: publishPluginAnalysis,
     setActiveTool, setBrushSize, setWandTolerance,
     getRois, getRoiMeta, setRoiMeta, clearAnnotations, selectRoi,
-    copyRoi, pasteRoi, duplicateRoi, convertMeasureToRoi: convertMeasureToRoiCmd,
+    copyRoi, pasteRoi, duplicateRoi, convertMeasureToRoi: convertMeasureToRoiCmd, createRoi, removeCreatedRoi,
     undo, redo,
   });
   commandsRef.current = {
@@ -2636,7 +2724,7 @@ export function Viewer2D({
     publishAnalysisResult: publishPluginAnalysis,
     setActiveTool, setBrushSize, setWandTolerance,
     getRois, getRoiMeta, setRoiMeta, clearAnnotations, selectRoi,
-    copyRoi, pasteRoi, duplicateRoi, convertMeasureToRoi: convertMeasureToRoiCmd,
+    copyRoi, pasteRoi, duplicateRoi, convertMeasureToRoi: convertMeasureToRoiCmd, createRoi, removeCreatedRoi,
     undo, redo,
   };
   useEffect(() => {
@@ -2684,6 +2772,8 @@ export function Viewer2D({
       copyRoi: (u) => commandsRef.current.copyRoi(u),
       pasteRoi: () => commandsRef.current.pasteRoi(),
       duplicateRoi: (u) => commandsRef.current.duplicateRoi(u),
+      createRoi: (r, b) => commandsRef.current.createRoi(r, b),
+      removeCreatedRoi: (u, p) => commandsRef.current.removeCreatedRoi(u, p),
       undo: () => commandsRef.current.undo(),
       redo: () => commandsRef.current.redo(),
     });

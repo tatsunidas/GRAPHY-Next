@@ -1701,6 +1701,18 @@ function TileGrid({
         }
         return false;
       },
+      // プラグインが作る ROI。pluginId / pluginName は host が入れる（プラグインは名乗れない）。
+      createRoi: (tileId, by, req) => {
+        const id = tileId ?? resolveTargets()[0];
+        const r = id ? queryViewerCommand(id, (c) => c.createRoi(req, by)) : null;
+        return r ?? { ok: false, reason: "no-image" };
+      },
+      removeCreatedRoi: (roiUid, pluginId) => {
+        for (const id of resolveTargets()) {
+          if (queryViewerCommand(id, (c) => c.removeCreatedRoi(roiUid, pluginId))) return true;
+        }
+        return false;
+      },
       // ROI 変更の購読。Cornerstone の annotation イベント＋メタ store を束ねて 1 本にする。
       // **何が変わったかは渡さない**（差分を契約にすると本体の内部表現に縛られる）。受け手は読み直す。
       subscribeRois: (listener) => {
