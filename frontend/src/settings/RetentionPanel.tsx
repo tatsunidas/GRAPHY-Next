@@ -7,7 +7,7 @@
  * 判定・削除・保護は backend（standalone のみ）。この画面は条件の保存と状態の表示だけを行い、削除そのものは行わない。
  * 🔴 条件を変えたら試算の結果を捨てる（古い試算で有効にさせない）。有効にできるのは、保存済みの条件で試算した直後だけ。
  */
-import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { emitDbChanged } from "../dbEvents";
 import { useI18n } from "../i18n/i18n";
 import { RetentionLogDialog } from "./RetentionLogDialog";
@@ -24,6 +24,9 @@ import {
   apiErrorKey,
   canApplyForm,
   configFromForm,
+  daysFromForm,
+  type DaysUnit,
+  unitKey,
   formatBytes,
   formatTime,
   formFromConfig,
@@ -128,8 +131,7 @@ export function RetentionPanel() {
       if (!formCfg) return;
       const c = await saveRetentionConfig(formCfg);
       setSaved(c);
-      setForm(formFromConfig(c));
-      setPreview(null);
+      setPreview(null); // 入力中の表示（単位など）は保つ。保存値と同じ条件かは sameConfig で比べる
       setMessage(t("retention.saved"));
       await refreshStatus();
     });
@@ -204,63 +206,69 @@ export function RetentionPanel() {
 
       <h3 style={h3}>{t("retention.conditions")}</h3>
       <p style={muted}>{t("retention.conditions.hint")}</p>
-      <label style={row}>
-        <input
-          type="checkbox"
-          data-testid="retention-days-on"
-          disabled={cacheMode}
-          checked={form.daysOn}
-          onChange={(e) => edit({ daysOn: e.target.checked })}
-        />
-        <span>{t("retention.cond.days.pre")}</span>
-        <input
-          style={{ ...input, width: 80, ...(bad.includes("days") ? badInput : null) }}
-          data-testid="retention-days"
-          inputMode="numeric"
-          disabled={cacheMode || !form.daysOn}
-          value={form.days}
-          onChange={(e) => edit({ days: e.target.value })}
-        />
-        <span>{t("retention.cond.days.post")}</span>
-      </label>
-      <label style={row}>
-        <input
-          type="checkbox"
-          data-testid="retention-max-on"
-          disabled={cacheMode}
-          checked={form.maxOn}
-          onChange={(e) => edit({ maxOn: e.target.checked })}
-        />
-        <span>{t("retention.cond.max.pre")}</span>
-        <input
-          style={{ ...input, width: 90, ...(bad.includes("maxGb") ? badInput : null) }}
-          data-testid="retention-max"
-          inputMode="decimal"
-          disabled={cacheMode || !form.maxOn}
-          value={form.maxGb}
-          onChange={(e) => edit({ maxGb: e.target.value })}
-        />
-        <span>{t("retention.cond.max.post")}</span>
-      </label>
-      <label style={row}>
-        <input
-          type="checkbox"
-          data-testid="retention-free-on"
-          disabled={cacheMode}
-          checked={form.freeOn}
-          onChange={(e) => edit({ freeOn: e.target.checked })}
-        />
-        <span>{t("retention.cond.free.pre")}</span>
-        <input
-          style={{ ...input, width: 90, ...(bad.includes("minFreeGb") ? badInput : null) }}
-          data-testid="retention-free"
-          inputMode="decimal"
-          disabled={cacheMode || !form.freeOn}
-          value={form.minFreeGb}
-          onChange={(e) => edit({ minFreeGb: e.target.value })}
-        />
-        <span>{t("retention.cond.free.post")}</span>
-      </label>
+      <CondRow
+        on={form.daysOn}
+        onToggle={(v) => edit({ daysOn: v })}
+        disabled={cacheMode}
+        testId="retention-days"
+        title={t("retention.cond.days.title")}
+        help={t("retention.cond.days.help")}
+        value={form.days}
+        onValue={(v) => edit({ days: v })}
+        invalid={bad.includes("days")}
+        width={70}
+        numeric
+        suffix={
+          <>
+            <select
+              style={input}
+              data-testid="retention-days-unit"
+              disabled={cacheMode || !form.daysOn}
+              value={form.daysUnit}
+              onChange={(e) => edit({ daysUnit: e.target.value as DaysUnit })}
+            >
+              {(["day", "week", "month"] as const).map((u) => (
+                <option key={u} value={u}>
+                  {t(unitKey(u))}
+                </option>
+              ))}
+            </select>
+            {form.daysOn && form.daysUnit !== "day" && daysFromForm(form) != null && (
+              <span style={muted} data-testid="retention-days-equiv">
+                {t("retention.cond.days.equiv", { days: daysFromForm(form) ?? 0 })}
+              </span>
+            )}
+          </>
+        }
+      />
+      <CondRow
+        on={form.maxOn}
+        onToggle={(v) => edit({ maxOn: v })}
+        disabled={cacheMode}
+        testId="retention-max"
+        onTestId="retention-max-on"
+        title={t("retention.cond.max.title")}
+        help={t("retention.cond.max.help")}
+        value={form.maxGb}
+        onValue={(v) => edit({ maxGb: v })}
+        invalid={bad.includes("maxGb")}
+        width={90}
+        suffix={<span style={unitText}>GB</span>}
+      />
+      <CondRow
+        on={form.freeOn}
+        onToggle={(v) => edit({ freeOn: v })}
+        disabled={cacheMode}
+        testId="retention-free"
+        onTestId="retention-free-on"
+        title={t("retention.cond.free.title")}
+        help={t("retention.cond.free.help")}
+        value={form.minFreeGb}
+        onValue={(v) => edit({ minFreeGb: v })}
+        invalid={bad.includes("minFreeGb")}
+        width={90}
+        suffix={<span style={unitText}>GB</span>}
+      />
       {bad.length > 0 && <p style={{ ...muted, color: "#b00020" }}>{t("retention.invalid")}</p>}
       {lowFreeWarning(saved.minFreeGb, status.largestStudyBytes) && (
         <p style={{ ...muted, color: "#8a5a00" }} data-testid="retention-low-free">
@@ -436,6 +444,56 @@ export function RetentionPanel() {
   );
 }
 
+/** 条件 1 行: 1 行目に「チェック・見出し・入力・単位」、2 行目に薄い説明。 */
+function CondRow(props: {
+  on: boolean;
+  onToggle: (v: boolean) => void;
+  disabled: boolean;
+  testId: string;
+  /** チェックボックスの testid（既定は `${testId}-on`）。 */
+  onTestId?: string;
+  title: string;
+  help: string;
+  value: string;
+  onValue: (v: string) => void;
+  invalid: boolean;
+  width: number;
+  numeric?: boolean;
+  suffix: ReactNode;
+}) {
+  return (
+    <div style={condBox}>
+      <div style={condLine}>
+        <label style={condTitle}>
+          <input
+            type="checkbox"
+            data-testid={props.onTestId ?? `${props.testId}-on`}
+            disabled={props.disabled}
+            checked={props.on}
+            onChange={(e) => props.onToggle(e.target.checked)}
+          />
+          <span>{props.title}</span>
+        </label>
+        <input
+          style={{ ...input, width: props.width, ...(props.invalid ? badInput : null) }}
+          data-testid={props.testId}
+          inputMode={props.numeric ? "numeric" : "decimal"}
+          disabled={props.disabled || !props.on}
+          value={props.value}
+          onChange={(e) => props.onValue(e.target.value)}
+        />
+        {props.suffix}
+      </div>
+      <div style={condHelp}>{props.help}</div>
+    </div>
+  );
+}
+
+const condBox: CSSProperties = { margin: "10px 0" };
+const condLine: CSSProperties = { display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" };
+const condTitle: CSSProperties = { display: "flex", alignItems: "center", gap: 6, width: 190, fontSize: 13, color: "#223", fontWeight: 600 };
+const condHelp: CSSProperties = { color: "#889", fontSize: 12, margin: "2px 0 0 24px" };
+const unitText: CSSProperties = { fontSize: 13, color: "#445" };
 const muted: CSSProperties = { color: "#889", fontSize: 12, margin: "4px 0" };
 const row: CSSProperties = { display: "flex", alignItems: "center", gap: 8, margin: "8px 0", flexWrap: "wrap" };
 const lbl: CSSProperties = { width: 110, fontSize: 13, color: "#223" };

@@ -7,6 +7,8 @@ import {
   apiErrorKey,
   canApplyForm,
   configFromForm,
+  daysFromForm,
+  splitDays,
   formFromConfig,
   formatBytes,
   invalidFields,
@@ -28,7 +30,7 @@ const GB = 1024 ** 3;
 
 describe("retentionView", () => {
   it("条件が 1 つも無いと適用できない（既定値は置かない）", () => {
-    expect(empty).toEqual({ daysOn: false, days: "", maxOn: false, maxGb: "", freeOn: false, minFreeGb: "" });
+    expect(empty).toEqual({ daysOn: false, days: "", daysUnit: "day", maxOn: false, maxGb: "", freeOn: false, minFreeGb: "" });
     expect(canApplyForm(empty)).toBe(false);
   });
 
@@ -47,6 +49,39 @@ describe("retentionView", () => {
     expect(canApplyForm(f)).toBe(true);
     expect(configFromForm(f)).toEqual({ days: 30, maxGb: null, minFreeGb: 50.5 });
     expect(configFromForm({ ...f, days: "x" })).toEqual({ days: null, maxGb: null, minFreeGb: 50.5 });
+  });
+
+  it("期間は単位（日・週・ヶ月）で入れ、1 週間 = 7 日・1 ヶ月 = 30 日に換算する", () => {
+    expect(daysFromForm({ days: "3", daysUnit: "month" })).toBe(90);
+    expect(daysFromForm({ days: "2", daysUnit: "week" })).toBe(14);
+    expect(daysFromForm({ days: "10", daysUnit: "day" })).toBe(10);
+    expect(configFromForm({ ...empty, daysOn: true, days: "3", daysUnit: "month" }).days).toBe(90);
+    expect(canApplyForm({ ...empty, daysOn: true, days: "3", daysUnit: "month" })).toBe(true);
+  });
+
+  it("単位をまたいでも、小数・0・空・換算後が上限を超える値は誤り", () => {
+    for (const unit of ["day", "week", "month"] as const) {
+      expect(invalidFields({ ...empty, daysOn: true, days: "1.5", daysUnit: unit })).toEqual(["days"]);
+      expect(invalidFields({ ...empty, daysOn: true, days: "0", daysUnit: unit })).toEqual(["days"]);
+      expect(invalidFields({ ...empty, daysOn: true, days: "", daysUnit: unit })).toEqual(["days"]);
+    }
+    // 2147483647 日が上限。ヶ月に直すと 71582788 ヶ月まで（×30 で超える）
+    expect(daysFromForm({ days: "71582788", daysUnit: "month" })).toBe(2147483640);
+    expect(daysFromForm({ days: "71582789", daysUnit: "month" })).toBeNull();
+    expect(daysFromForm({ days: "2147483648", daysUnit: "day" })).toBeNull();
+    expect(daysFromForm({ days: "99999999999999999999", daysUnit: "week" })).toBeNull();
+  });
+
+  it("保存済みの日数は割り切れる最大の単位で開く（値は同じ）", () => {
+    expect(splitDays(90)).toEqual({ value: 3, unit: "month" });
+    expect(splitDays(14)).toEqual({ value: 2, unit: "week" });
+    expect(splitDays(10)).toEqual({ value: 10, unit: "day" });
+    expect(splitDays(210)).toEqual({ value: 7, unit: "month" });
+    expect(formFromConfig({ days: 90, maxGb: null, minFreeGb: null })).toMatchObject({ daysOn: true, days: "3", daysUnit: "month" });
+    // どの単位で入れても、換算後が同じなら同じ条件
+    const a = configFromForm({ ...empty, daysOn: true, days: "3", daysUnit: "month" });
+    const b = configFromForm({ ...empty, daysOn: true, days: "90", daysUnit: "day" });
+    expect(sameConfig(a, b)).toBe(true);
   });
 
   it("誤りが 1 つでもあれば適用できない", () => {

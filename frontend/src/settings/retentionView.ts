@@ -93,9 +93,19 @@ export interface RetentionHold {
 }
 
 /** 入力欄。数値は文字列のまま持つ（空は未入力）。 */
+export type DaysUnit = "day" | "week" | "month";
+
+/** 単位 → 日数（1 週間 = 7 日、1 ヶ月 = 30 日。暦の月は使わない）。 */
+export const UNIT_DAYS: Record<DaysUnit, number> = { day: 1, week: 7, month: 30 };
+
+/** backend が受ける日数の上限（32 ビット整数）。 */
+const MAX_DAYS = 2147483647;
+
 export interface RetentionForm {
   daysOn: boolean;
   days: string;
+  /** `days` の単位。保存は日数に換算した値。 */
+  daysUnit: DaysUnit;
   maxOn: boolean;
   maxGb: string;
   freeOn: boolean;
@@ -104,10 +114,19 @@ export interface RetentionForm {
 
 export type FieldKey = "days" | "maxGb" | "minFreeGb";
 
+/** 保存済みの日数を、割り切れる最大の単位で表す（90 日 → 3 ヶ月。値は同じ）。 */
+export function splitDays(days: number): { value: number; unit: DaysUnit } {
+  if (days % UNIT_DAYS.month === 0) return { value: days / UNIT_DAYS.month, unit: "month" };
+  if (days % UNIT_DAYS.week === 0) return { value: days / UNIT_DAYS.week, unit: "week" };
+  return { value: days, unit: "day" };
+}
+
 export function formFromConfig(c: RetentionConfig): RetentionForm {
+  const d = c.days != null ? splitDays(c.days) : null;
   return {
     daysOn: c.days != null,
-    days: c.days != null ? String(c.days) : "",
+    days: d ? String(d.value) : "",
+    daysUnit: d ? d.unit : "day",
     maxOn: c.maxGb != null,
     maxGb: c.maxGb != null ? String(c.maxGb) : "",
     freeOn: c.minFreeGb != null,
@@ -127,10 +146,18 @@ function positiveInt(s: string): number | null {
   return n != null && Number.isInteger(n) ? n : null;
 }
 
+/** 期間欄を日数に換算する。正の整数でない・換算後が上限を超えるときは null。 */
+export function daysFromForm(f: Pick<RetentionForm, "days" | "daysUnit">): number | null {
+  const v = positiveInt(f.days);
+  if (v == null) return null;
+  const d = v * UNIT_DAYS[f.daysUnit];
+  return Number.isSafeInteger(d) && d <= MAX_DAYS ? d : null;
+}
+
 /** 入力に誤りがある欄（オンなのに値が正でない）。 */
 export function invalidFields(f: RetentionForm): FieldKey[] {
   const bad: FieldKey[] = [];
-  if (f.daysOn && positiveInt(f.days) == null) bad.push("days");
+  if (f.daysOn && daysFromForm(f) == null) bad.push("days");
   if (f.maxOn && positiveNumber(f.maxGb) == null) bad.push("maxGb");
   if (f.freeOn && positiveNumber(f.minFreeGb) == null) bad.push("minFreeGb");
   return bad;
@@ -144,7 +171,7 @@ export function canApplyForm(f: RetentionForm): boolean {
 /** オフの欄は null。呼ぶ前に {@link canApplyForm} を確かめる。 */
 export function configFromForm(f: RetentionForm): RetentionConfig {
   return {
-    days: f.daysOn ? positiveInt(f.days) : null,
+    days: f.daysOn ? daysFromForm(f) : null,
     maxGb: f.maxOn ? positiveNumber(f.maxGb) : null,
     minFreeGb: f.freeOn ? positiveNumber(f.minFreeGb) : null,
   };
@@ -189,6 +216,10 @@ const PROTECTIONS = [
   "unknownReceived",
   "nonImageDicom",
 ];
+
+export function unitKey(u: DaysUnit): string {
+  return `retention.unit.${u}`;
+}
 
 export function protectionKey(code: string): string {
   return PROTECTIONS.includes(code) ? `retention.protect.${code}` : "retention.protect.unknown";
