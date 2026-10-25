@@ -24,6 +24,11 @@ export interface CreateRoiRequest {
    * 本体が LPS へ変換する（スライスの面内なので面外にはならない）。`centerLps` とどちらか**一方だけ**。
    */
   centerPx?: [number, number];
+  /**
+   * 中心（表示キャンバスに対する割合 `[0〜1, 0〜1]`、左上原点）。**画面に見えている位置**で指す（回転・反転・拡大の後でも見たまま）。
+   * 本体が表示中の面上の LPS へ変換する（`Viewer2D.createRoi`）。他の中心指定とは併用できない。アシスタント用。
+   */
+  centerView?: [number, number];
   /** 表示の水平方向・垂直方向の半径（楕円）／半幅（矩形）。mm。 */
   radiiMm: [number, number];
   label?: string;

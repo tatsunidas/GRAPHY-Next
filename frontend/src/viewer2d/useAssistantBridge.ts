@@ -22,6 +22,9 @@ const pluginToolDeps: PluginToolDeps = {
   },
 };
 
+/** アシスタントが作った ROI の出自。プラグイン用の印と同じ仕組みを使う（`removeCreatedRoi` が他の ROI を消さない）。 */
+const ASSISTANT_ROI_ORIGIN = { pluginId: "graphy-assistant", pluginName: "AI アシスタント" };
+
 const TOOL_BY_SYMBOL: Record<DisplayTool, string> = {
   windowLevel: TOOL_IDS.windowLevel,
   pan: TOOL_IDS.pan,
@@ -66,6 +69,8 @@ export function useAssistantBridge(input: AssistantBridgeInput): void {
       setLayoutCols: (n) => ref.current.setLayoutCols(n),
       presets: () => ref.current.presets,
       toolId: (s) => TOOL_BY_SYMBOL[s],
+      createRoi: (id, req) => queryViewerCommand(id, (c) => c.createRoi(req, ASSISTANT_ROI_ORIGIN)),
+      removeAssistantRoi: (uid) => ref.current.tileIds.some((id) => queryViewerCommand(id, (c) => c.removeCreatedRoi(uid, ASSISTANT_ROI_ORIGIN.pluginId)) === true),
     };
     return d.onViewerCmd((cmd) => {
       if (cmd.kind === "pluginTool") {

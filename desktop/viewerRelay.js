@@ -58,7 +58,7 @@ const MAX_MEASUREMENTS_BYTES = 20000;
  * 🔴 実行のたびに main が利用者の承認を取る。承認の関門は**ここ（main の描くダイアログ）**で、レンダラが渡す値は信用しない:
  *    承認フラグ `approved` は main が承認後にだけ付け、レンダラが付けてきた値は捨てる。
  */
-const WRITE_ACTIONS = new Set(["clearMeasurements"]);
+const WRITE_ACTIONS = new Set(["clearMeasurements", "createRoi"]);
 
 /** ジャーナルの上限。1 世代だけ残して上書きする。暫定値（利用実績で見直す）。 */
 const DEFAULT_JOURNAL_MAX_BYTES = 1024 * 1024;
