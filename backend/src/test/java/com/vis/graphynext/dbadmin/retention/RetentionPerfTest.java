@@ -32,7 +32,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
         webEnvironment = SpringBootTest.WebEnvironment.NONE,
         properties = {
                 "spring.datasource.url=jdbc:h2:mem:retentionperf;DB_CLOSE_DELAY=-1",
-                "graphy.dicom.scp.enabled=false"
+                "graphy.dicom.scp.enabled=false",
+                "graphy.retention.auto-run=false"
         })
 class RetentionPerfTest {
 

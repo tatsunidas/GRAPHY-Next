@@ -150,6 +150,49 @@ public class DbAdminService {
         return new DeleteResult(rows.size(), related);
     }
 
+    /** 自動削除の 1 検査ぶんの結果。removed は索引から外した行、failed はファイルを消せず索引に残した行。 */
+    public record RetentionDeleteResult(int rows, int removed, int failed, long bytesFreed,
+                                        PatientRecordMover.Cleanup cleanup) {
+    }
+
+    /**
+     * 自動削除: 検査 1 件を消す。{@link #deleteStudy} と違い、<b>ファイルを消せた行だけ</b>索引から外す
+     * （消せなかった行は索引に残り、一覧から見えたまま、次の判定でもう一度消そうとする）。
+     * 設定 {@code data.deleteFilesOnDisk} に関わらずファイルも消す（目的はディスクを空けること）。
+     * ファイル操作は一時的な失敗だけ {@link FileRetry} でやり直す。付随データの片付けも消えた行だけ。
+     * 検査ごとに別のトランザクションなので、1 件の失敗が他の検査を巻き込まない。
+     */
+    @Transactional
+    public RetentionDeleteResult deleteStudyForRetention(String studyUid) {
+        List<DicomInstance> rows = repo.findByStudyInstanceUid(studyUid);
+        List<DicomInstance> removed = new ArrayList<>();
+        int failed = 0;
+        long freed = 0;
+        for (DicomInstance r : rows) {
+            try {
+                Path file = layout.resolveForWrite(r);
+                if (file != null) {
+                    final Path f = file;
+                    fileRetry.run("自動削除のファイル削除", f, () -> Files.deleteIfExists(f));
+                    layout.pruneEmptyDirs(f);
+                    layout.notifyChanged(f);
+                }
+                removed.add(r);
+                freed += r.getSizeBytes() == null ? 0 : r.getSizeBytes();
+            } catch (IOException | RuntimeException e) {
+                failed++;
+                log.warn("自動削除: ファイルを消せなかったので索引に残す: study={} ({})", studyUid, e.toString());
+            }
+        }
+        PatientRecordMover.Cleanup cleanup = null;
+        if (!removed.isEmpty()) {
+            repo.deleteAll(removed);
+            forgetComputeInputs(removed);
+            cleanup = records.afterDelete(removed);
+        }
+        return new RetentionDeleteResult(rows.size(), removed.size(), failed, freed, cleanup);
+    }
+
     /**
      * 保管庫からシリーズが無くなったら、計算ジョブの台帳の入力の UID を空にする（行は「削除済み・再実行不可」になる）。
      * ファイルを残す設定でも、索引から消えたものは保管庫から見えないので同じ扱い。台帳の不具合で削除を失敗させない。

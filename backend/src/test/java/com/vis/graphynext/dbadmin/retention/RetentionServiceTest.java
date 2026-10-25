@@ -61,7 +61,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
         webEnvironment = SpringBootTest.WebEnvironment.NONE,
         properties = {
                 "spring.datasource.url=jdbc:h2:mem:retention;DB_CLOSE_DELAY=-1",
-                "graphy.dicom.scp.enabled=false"
+                "graphy.dicom.scp.enabled=false",
+                "graphy.retention.auto-run=false"
         })
 class RetentionServiceTest {
 
@@ -88,6 +89,9 @@ class RetentionServiceTest {
     @Autowired RegistrationDocumentRepository registrations;
     @Autowired PluginDocumentRepository plugins;
     @Autowired SettingsService settings;
+    @Autowired RetentionRunner runner;
+    @Autowired RetentionEventRepository eventsRepo;
+    @Autowired RetentionRunRepository runsRepo;
     /** 空きは実ディスクに依らず、テストで決める。 */
     @MockBean FreeSpaceProvider freeSpace;
 
@@ -380,7 +384,7 @@ class RetentionServiceTest {
 
     @Test
     void API_不正な条件は400で保存されず_試算の前後で何も消えない() throws Exception {
-        RetentionController c = new RetentionController(service, inUse);
+        RetentionController c = new RetentionController(service, inUse, runner, eventsRepo, runsRepo);
         service.saveConfig(new RetentionConfig(60, null, null));
         var e = assertThrows(org.springframework.web.server.ResponseStatusException.class,
                 () -> c.saveConfig(new RetentionConfig(0, null, null)));
@@ -392,7 +396,7 @@ class RetentionServiceTest {
         ingest("API1", System.currentTimeMillis() - 400 * DAY);
         long files = filesUnder(tmp.resolve("store"));
         long rows = repo.count();
-        RetentionPlan p = c.preview();
+        RetentionPlan p = c.preview().plan();
         assertFalse(p.items().isEmpty());
         assertEquals(files, filesUnder(tmp.resolve("store")));
         assertEquals(rows, repo.count());

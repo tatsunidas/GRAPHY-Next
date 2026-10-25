@@ -5,7 +5,9 @@
 package com.vis.graphynext.dbadmin.retention;
 
 import org.springframework.context.annotation.Profile;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -13,6 +15,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
 
@@ -30,10 +33,17 @@ public class RetentionController {
 
     private final RetentionService service;
     private final InUseRegistry inUse;
+    private final RetentionRunner runner;
+    private final RetentionEventRepository events;
+    private final RetentionRunRepository runs;
 
-    public RetentionController(RetentionService service, InUseRegistry inUse) {
+    public RetentionController(RetentionService service, InUseRegistry inUse, RetentionRunner runner,
+                               RetentionEventRepository events, RetentionRunRepository runs) {
         this.service = service;
         this.inUse = inUse;
+        this.runner = runner;
+        this.events = events;
+        this.runs = runs;
     }
 
     @GetMapping("/config")
@@ -46,9 +56,62 @@ public class RetentionController {
         return bad(() -> service.saveConfig(cfg));
     }
 
+    /** 試算。計画と、有効化に添える previewId を返す（何も消さない）。 */
     @PostMapping("/preview")
-    public RetentionPlan preview() {
-        return bad(service::preview);
+    public RetentionService.Preview preview() {
+        return bad(service::previewWithId);
+    }
+
+    /** 有効にする。今の条件で試算した previewId が要る。最初の 1 回は、その試算で見た検査だけを消す。 */
+    @PostMapping("/enable")
+    public RetentionService.Status enable(@RequestBody Map<String, String> body) {
+        try {
+            service.enable(body.get("previewId"));
+        } catch (IllegalArgumentException e) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, e.getMessage(), e);
+        } catch (IllegalStateException e) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, e.getMessage(), e);
+        }
+        return service.status();
+    }
+
+    @PostMapping("/disable")
+    public RetentionService.Status disable() {
+        service.disable();
+        return service.status();
+    }
+
+    /** 今すぐ実行（有効なときだけ）。走行中・無効なら 409。 */
+    @PostMapping("/run")
+    public RetentionRun run() {
+        try {
+            return runner.runNow();
+        } catch (IllegalStateException e) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, e.getMessage(), e);
+        }
+    }
+
+    /** 削除の記録（新しい順）。 */
+    @GetMapping("/events")
+    public List<RetentionEvent> events(@RequestParam(defaultValue = "100") int limit) {
+        return events.findAllByOrderByAtDesc(PageRequest.of(0, Math.max(1, Math.min(limit, 1000))));
+    }
+
+    @GetMapping("/runs")
+    public List<RetentionRun> runs(@RequestParam(defaultValue = "50") int limit) {
+        return runs.findAllByOrderByAtDesc(PageRequest.of(0, Math.max(1, Math.min(limit, 1000))));
+    }
+
+    /** まだ見ていない、知らせる価値のある実行（無ければ 204）。 */
+    @GetMapping("/notice")
+    public ResponseEntity<RetentionRun> notice() {
+        RetentionRun r = service.notice();
+        return r == null ? ResponseEntity.noContent().build() : ResponseEntity.ok(r);
+    }
+
+    @PostMapping("/notice/ack")
+    public void ack() {
+        service.ackNotice();
     }
 
     @GetMapping("/status")

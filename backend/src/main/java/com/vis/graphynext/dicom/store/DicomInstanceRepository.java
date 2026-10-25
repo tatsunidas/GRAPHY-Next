@@ -191,6 +191,27 @@ public interface DicomInstanceRepository extends JpaRepository<DicomInstance, St
             """)
     List<StudyRetentionRow> studyRetentionRows();
 
+    /** 自動削除の直前の再確認: 1 検査の集計（無ければ空）。 */
+    @Query("""
+            select i.studyInstanceUid as studyInstanceUid,
+                   max(i.patientId) as patientId,
+                   max(i.patientName) as patientName,
+                   max(i.studyDate) as studyDate,
+                   max(i.modality) as modality,
+                   count(i) as instanceCount,
+                   sum(i.sizeBytes) as sizeBytes,
+                   max(i.receivedAt) as lastReceivedAt,
+                   sum(case when i.receivedAt is null then 1L else 0L end) as unknownReceived
+            from DicomInstance i
+            where i.studyInstanceUid = :uid
+            group by i.studyInstanceUid
+            """)
+    List<StudyRetentionRow> studyRetentionRowOf(@Param("uid") String uid);
+
+    /** 保管庫の合計（索引の sizeBytes の合計）。自動削除の軽い門に使う。 */
+    @Query("select coalesce(sum(i.sizeBytes), 0L) from DicomInstance i")
+    long totalSizeBytes();
+
     /** 自動削除の保護: その SOP を含む検査。 */
     @Query("select distinct i.studyInstanceUid from DicomInstance i where i.sopInstanceUid in :sops")
     List<String> studiesOfSops(@Param("sops") java.util.Collection<String> sops);
