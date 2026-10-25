@@ -5,6 +5,8 @@
 // マクロの再生。モデルは使わず、各ステップを検証して既存の口（main 中継 → 2D 窓）で順に実行する。
 // 失敗したらそこで止める。実行できた分の逆操作は呼び出し側が保持し、undoRun で逆順に戻せる。
 import type { ActionResult, InverseStep } from "../actions/registry";
+import type { PluginToolEntry, PluginToolResult } from "../pluginTools";
+import { isPluginToolName } from "../pluginTools";
 import { checkSteps, type MacroStep } from "./macroModel";
 
 export type Viewer = (cmd: { kind: "action"; id: string; params: Record<string, unknown> }) => Promise<ActionResult>;
@@ -12,6 +14,9 @@ export type Viewer = (cmd: { kind: "action"; id: string; params: Record<string, 
 export interface RunDeps {
   viewer: Viewer;
   aborted: () => boolean;
+  /** ロボットの計画だけが渡す: plugin__ のステップを受け付ける一覧と、その実行口（逆操作は無い）。マクロの再生では渡さない。 */
+  pluginTools?: readonly PluginToolEntry[];
+  pluginTool?: (cmd: { kind: "pluginTool"; name: string; params: Record<string, unknown> }) => Promise<PluginToolResult>;
   /** i 番目の実行を始める直前。 */
   onStep?: (i: number) => void;
 }
@@ -29,12 +34,20 @@ export interface RunOutcome {
 export async function runMacro(steps: readonly MacroStep[], deps: RunDeps): Promise<RunOutcome> {
   const inverses: InverseStep[][] = [];
   // 1 つも実行しないうちに全体を検証する（途中で不正に気づいて中途半端に動かさない）。
-  const chk = checkSteps(steps);
+  const chk = checkSteps(steps, deps.pluginTools);
   if (!chk.ok) return { status: "failed", executed: 0, inverses, failedAt: chk.index >= 0 ? chk.index : undefined, error: chk.error };
   for (let i = 0; i < chk.steps.length; i++) {
     if (deps.aborted()) return { status: "aborted", executed: i, inverses };
     deps.onStep?.(i);
-    const r = await deps.viewer({ kind: "action", id: chk.steps[i].id, params: chk.steps[i].params });
+    const step = chk.steps[i];
+    if (isPluginToolName(step.id)) {
+      if (!deps.pluginTool) return { status: "failed", executed: i, inverses, failedAt: i, error: "unknown-tool" };
+      const r = await deps.pluginTool({ kind: "pluginTool", name: step.id, params: step.params });
+      if (!r.ok) return { status: "failed", executed: i, inverses, failedAt: i, error: r.error };
+      inverses.push([]);
+      continue;
+    }
+    const r = await deps.viewer({ kind: "action", id: step.id, params: step.params });
     if (!r.ok) return { status: "failed", executed: i, inverses, failedAt: i, error: r.error };
     inverses.push(r.inverse ?? []);
   }

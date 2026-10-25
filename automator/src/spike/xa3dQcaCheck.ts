@@ -544,6 +544,18 @@ async function analyseSegment(
     }
     await viewerB.screenshot({ path: path.join(OUT_DIR, `2b-${tag}-input-check.png`) }).catch(() => {});
 
+    // ── 心位相（GN-XA-001 P2）: ファントムは R 波ポインタを持たない ＝ 「位相は不明」と出て、数値は出さない（負例側）。
+    //    R 波あり（正例）の画面確認は、R 波タグ入りの多フレーム DICOM が要るためこのスパイクでは未達。
+    for (const side of ["a", "b"] as const) {
+      const text = await viewerB.getByTestId(`xa3d-phase-${side}`).innerText().catch(() => "");
+      check(
+        text.includes("位相は不明") && !text.includes("直前の R 波から"),
+        `[心位相/${tag}] 方向 ${side.toUpperCase()}: ECG なしは「位相は不明」で、数値を出さない`,
+        text,
+      );
+    }
+    await viewerB.screenshot({ path: path.join(OUT_DIR, `2b-${tag}-phase.png`) }).catch(() => {});
+
     check((sel?.pointsA ?? 0) > 20, `[2D/${tag}] 方向 A の中心線を画像から抽出できている`, sel?.pointsA);
     check((sel?.pointsB ?? 0) > 20, `[2D/${tag}] 方向 B の中心線を画像から抽出できている`, sel?.pointsB);
 

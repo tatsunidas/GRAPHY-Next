@@ -107,6 +107,10 @@ export function Xa3dQcaDialog({ onClose }: { onClose: () => void }) {
   /** 入力検査（P1）。警告のみで結果はブロックしない。登録時に読めなかった方向は null（「読めません」と出す）。 */
   const inputCheckA: XaInputCheck | null = runA?.inputCheck ?? null;
   const inputCheckB: XaInputCheck | null = runB?.inputCheck ?? null;
+  const phaseA = runA?.cardiacPhase ?? null;
+  const phaseB = runB?.cardiacPhase ?? null;
+  const phaseDeltaPct =
+    phaseA?.phase && phaseB?.phase ? Math.abs(phaseA.phase.rrFraction - phaseB.phase.rrFraction) * 100 : null;
 
   /**
    * プラグインへ渡す血管モデル（A7 の H11）。
@@ -468,6 +472,41 @@ export function Xa3dQcaDialog({ onClose }: { onClose: () => void }) {
                       ) : null}
                     </div>
                   ))}
+                </div>
+              ) : null}
+              {runA && runB ? (
+                <div data-testid="xa3d-phase">
+                  {([["A", runA, phaseA], ["B", runB, phaseB]] as const).map(([side, run, info]) => (
+                    <div key={side} style={row} data-testid={`xa3d-phase-${side.toLowerCase()}`}>
+                      <span style={metric}>
+                        {t("xa3d.phase.title", { side })}:{" "}
+                        <b>
+                          {!info
+                            ? t("xa3d.phase.unreadable")
+                            : info.source === "none"
+                              ? t("xa3d.phase.noEcg")
+                              : info.phase
+                                ? t("xa3d.phase.value", {
+                                    n: String(run.frameIndex + 1),
+                                    ms: info.phase.msSincePrevR.toFixed(0),
+                                    rr: info.phase.rrMs.toFixed(0),
+                                    pct: (info.phase.rrFraction * 100).toFixed(0),
+                                  })
+                                : t("xa3d.phase.outOfBeat", { n: String(run.frameIndex + 1) })}
+                        </b>
+                      </span>
+                      {info && info.source === "ecg" ? (
+                        <span style={hint}>
+                          {t("xa3d.phase.candidates", { list: info.candidates.map((f) => `#${f + 1}`).join(", ") })}
+                        </span>
+                      ) : null}
+                    </div>
+                  ))}
+                  {phaseDeltaPct != null ? (
+                    <div style={row} data-testid="xa3d-phase-delta">
+                      <span style={hint}>{t("xa3d.phase.delta", { pct: phaseDeltaPct.toFixed(0) })}</span>
+                    </div>
+                  ) : null}
                 </div>
               ) : null}
             </div>

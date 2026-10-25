@@ -204,10 +204,10 @@ async function main(): Promise<void> {
     console.log("\n[1] 一覧（宣言したもの・既定オフ）");
     const l0 = await list();
     const names = (l0.tools ?? []).map((t) => t.name).sort();
-    check(l0.ok === true && names.length === 6, "宣言したツール 6 件が出る（echo_size / phi_probe / boom / big_probe / tag_roi / read_tag）", names);
+    check(l0.ok === true && names.length === 7, "宣言したツール 7 件が出る（echo_size / phi_probe / boom / big_probe / tag_roi / mark_display / read_tag）", names);
     const tagEntry = (l0.tools ?? []).find((t) => t.tool === "tag_roi");
     check(tagEntry?.effect === "write" && tagEntry.description.startsWith("[plugin: AI Tools Demo] (writes data) "), "🔴 write の宣言は effect:write で出て、説明に (writes data) が付く", tagEntry);
-    check((l0.tools ?? []).filter((t) => t.effect === "write").length === 1, "対照: write は tag_roi の 1 件だけ（他は read）", (l0.tools ?? []).map((t) => [t.tool, t.effect]));
+    check((l0.tools ?? []).filter((t) => t.effect === "write").length === 1, "対照: write は tag_roi の 1 件だけ（他は read / display）", (l0.tools ?? []).map((t) => [t.tool, t.effect]));
     check(!names.some((n) => n.includes("noperm")), "🔴 ai-tools 権限の無いプラグインのツールは一覧に出ない", names);
     check((l0.tools ?? []).every((t) => t.enabled === false), "🔴 既定はすべてオフ", l0.tools?.map((t) => t.enabled));
     const echo = (l0.tools ?? []).find((t) => t.tool === "echo_size");

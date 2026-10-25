@@ -65,7 +65,7 @@ async function runOne(call: AiToolCall, deps: LoopDeps): Promise<string> {
     // ロボットでは計画の提示だけ。tools に載せていない名前（操作の直呼び・propose_steps）は実行しない。
     if (call.name !== PLAN_TOOL) return JSON.stringify({ ok: false, error: "not-allowed-in-robot-mode" });
     if (call.argsError) return JSON.stringify({ ok: false, error: `bad-arguments: ${call.argsError}` });
-    const v = validatePlan(call.args);
+    const v = validatePlan(call.args, deps.pluginTools);
     if (!v.ok) return JSON.stringify({ ok: false, error: v.error });
     deps.onPlan?.({ id: call.id, title: v.title, steps: v.steps });
     return JSON.stringify({ ok: true, note: "plan shown to the user; nothing was executed until they approve" });

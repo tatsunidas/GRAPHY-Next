@@ -6,6 +6,7 @@
 // （保存ファイルが書き換えられても、許可リストにない操作は実行されない）。
 import { validateAction } from "../actions/registry";
 import type { UiAction } from "../chatState";
+import { isPluginToolName, validatePluginArgs, type PluginToolEntry } from "../pluginTools";
 
 /** desktop/assistantMacros.js と同じ上限（暫定値）。 */
 export const MAX_STEPS = 30;
@@ -36,12 +37,22 @@ export function candidatesFromActions(actions: readonly UiAction[]): MacroStep[]
 
 export type StepsCheck = { ok: true; steps: MacroStep[] } | { ok: false; index: number; error: string };
 
-/** 全ステップを registry で検証して整形する。最初の不正で止める。 */
-export function checkSteps(steps: readonly MacroStep[]): StepsCheck {
+/**
+ * 全ステップを registry で検証して整形する。最初の不正で止める。
+ * `pluginTools`（ロボットの計画に載せられるツール）を渡したときだけ plugin__ のステップを受け付ける（省略時はマクロと同じ built-in のみ）。
+ */
+export function checkSteps(steps: readonly MacroStep[], pluginTools?: readonly PluginToolEntry[]): StepsCheck {
   if (!steps.length || steps.length > MAX_STEPS) return { ok: false, index: -1, error: "bad-length" };
   const out: MacroStep[] = [];
   for (let i = 0; i < steps.length; i++) {
-    const v = validateAction(steps[i].id, steps[i].params);
+    const id = steps[i].id;
+    let v;
+    if (isPluginToolName(id)) {
+      const entry = pluginTools?.find((e) => e.name === id);
+      v = entry ? validatePluginArgs(entry.parameters, steps[i].params) : ({ ok: false, error: "unknown-tool" } as const);
+    } else {
+      v = validateAction(id, steps[i].params);
+    }
     if (!v.ok) return { ok: false, index: i, error: v.error };
     out.push({ id: steps[i].id, params: v.params });
   }

@@ -34,6 +34,10 @@ export const aiTools = {
     if (!roi) return { ok: false, reason: "no-roi" };
     return { ok: host.setRoiMeta(roi.roiUid, { tag: args.tag }) };
   },
+  mark_display: async (args, host) => {
+    rec("mark_display", args, host);
+    return { ok: true };
+  },
   read_tag: async (args, host) => {
     rec("read_tag", args, host);
     const roi = host.getRois()[0];
