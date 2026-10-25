@@ -1267,6 +1267,7 @@ export function SeriesViewer({
     if (!syncOn) return;
     const unregister = registerSliceSync({
       id: sliceSyncId,
+      group: patientKey ?? "",
       getState: () => {
         const lay = layoutRef.current;
         // ThickSlab ON はデジタル枚数＋各デジタル Z→ネイティブ IPP 写像で座標同期する
@@ -1288,7 +1289,7 @@ export function SeriesViewer({
       },
     });
     return unregister;
-  }, [syncOn, sliceSyncId]);
+  }, [syncOn, sliceSyncId, patientKey]);
 
   // 別ウィンドウ（ROI 特徴量の画面）からの「見せて」を受けるため、自分のシリーズを登録する。
   useEffect(() => {
@@ -1534,16 +1535,22 @@ export function SeriesViewer({
         </button>
       )}
       {/* パネルを畳んでいても、ラン（XA の撮影）が複数あることが分かり、切り替えられるようにする。 */}
-      {layoutReady && chrome && !showControls && otherCount > 1 && (
-        <DimSlider
-          label={axisLabel(t, otherAxisSpec)}
-          dim={otherAxisSpec.dim}
-          idx={otherIdx}
-          count={otherCount}
-          onChange={setTIdx}
-          testId="dim-slider-other-compact"
-        />
-      )}
+      {/* タイル（fillHeight）では、ラン切り替えの有無・タイルの幅で画像（黒枠）の高さが変わらないよう、
+          固定高さの枠（折り返さない 1 行）に入れる。ランが無いタイルも同じ高さの空き枠を持つ。 */}
+      {layoutReady && chrome && !showControls && (otherCount > 1 || fillHeight) && (() => {
+        const slider = otherCount > 1 ? (
+          <DimSlider
+            label={axisLabel(t, otherAxisSpec)}
+            dim={otherAxisSpec.dim}
+            idx={otherIdx}
+            count={otherCount}
+            onChange={setTIdx}
+            testId="dim-slider-other-compact"
+            nowrap={fillHeight}
+          />
+        ) : null;
+        return fillHeight ? <div style={dimSlot} data-testid="dim-slot">{slider}</div> : slider;
+      })()}
       {/* 畳んでいる間も**マウントしたまま隠す**（display:none）。アンマウントすると CineControls の再生が止まる。 */}
       <div style={showControls ? controls : { ...controls, display: "none" }} data-testid="series-controls">
         {/* GridView の操作バー（W/L・Pan・Zoom はドラッグ、回転/反転/Fit はボタン。全セルにリンク）。 */}
@@ -2237,6 +2244,7 @@ function DimSlider({
   trailing,
   testId,
   ticks,
+  nowrap,
 }: {
   label: string;
   dim?: string | null;
@@ -2247,10 +2255,12 @@ function DimSlider({
   testId?: string;
   /** スライダー上に目盛りを出す位置（連結の継ぎ目）。 */
   ticks?: number[];
+  /** 折り返さず 1 行に収める（固定高さの枠の中で使う）。 */
+  nowrap?: boolean;
 }) {
   const listId = ticks && ticks.length > 0 && testId ? `${testId}-ticks` : undefined;
   return (
-    <div style={row}>
+    <div style={nowrap ? { ...row, flexWrap: "nowrap", width: "100%" } : row}>
       <span style={dimLabel}>
         {label} {idx + 1}/{count}
         {dim ? ` (${dim})` : ""}
@@ -2350,6 +2360,11 @@ const controls: React.CSSProperties = {
  * 併せて {@link btn} 側で `flexShrink: 0` と `whiteSpace: "nowrap"` を指定し、
  * 「ボタンは自然な幅を保ち、入り切らなければ次の行へ送る」に統一する。
  */
+// タイル内でラン切り替えスライダーを置く枠の高さ。スライダー 1 行（入力欄込み）が収まる高さ。
+const DIM_SLOT_PX = 24;
+const dimSlot: React.CSSProperties = {
+  flex: "none", height: DIM_SLOT_PX, boxSizing: "border-box", display: "flex", alignItems: "center", overflow: "hidden", marginTop: 6,
+};
 const row: React.CSSProperties = {
   display: "flex",
   alignItems: "center",

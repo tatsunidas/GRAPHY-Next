@@ -278,6 +278,7 @@ export function Viewer2DToolbar({
   activeTool,
   selectedCount,
   targetCount,
+  targetLabel,
 }: {
   actions: ViewerActions;
   layoutCols: number;
@@ -285,6 +286,8 @@ export function Viewer2DToolbar({
   activeTool: string;
   selectedCount: number;
   targetCount: number;
+  /** 全患者モードで複数の患者を表示中のとき、「対象」の表示を差し替える（誰に効くかを明示する）。 */
+  targetLabel?: string;
 }) {
   const { t } = useI18n();
   const presets = useWlPresets();
@@ -373,7 +376,7 @@ export function Viewer2DToolbar({
       <span style={{ marginLeft: "auto", fontSize: 11, color: "#6b7785", whiteSpace: "nowrap", flexShrink: 0 }}>
         {selectedCount > 0
           ? t("viewer2d.tb.targetSelected", { n: selectedCount })
-          : t("viewer2d.tb.targetAll", { n: targetCount })}
+          : (targetLabel ?? t("viewer2d.tb.targetAll", { n: targetCount }))}
       </span>
     </OverflowRow>
   );
