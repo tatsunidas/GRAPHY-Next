@@ -62,6 +62,8 @@ export interface RoiClipboardEntry {
   sourcePatientKey?: string;
   /** コピー元の画像の寸法と画素間隔。画像の違う先へ貼るとき、実寸（mm）を保つために使う。 */
   source?: ImageGrid;
+  /** コピー元スタックでのスライス番号。複数コピーで、スライス間の位置関係を貼り付け先にも写すために使う。 */
+  stackIndex?: number;
 }
 
 /** 画像の寸法（画素）と画素間隔（mm）。不明な要素は null。 */
@@ -118,7 +120,40 @@ export function retargetEntry(entry: RoiClipboardEntry, dst: ImageGrid | null): 
   return inside ? { ...entry, pointsPx, polylinePx } : null;
 }
 
-let clip: RoiClipboardEntry | null = null;
+/**
+ * 複数の ROI をまとめて別の画像へ写す（純関数）。{@link retargetEntry} の複数版。
+ *
+ * <p>重心と拡大率を**全体で 1 つ**にする。ROI ごとに重心を取ると、それぞれが別々の位置へ動いて
+ * 元の配置関係（対側比較・多点サンプリングの並び）が崩れる。1 件でも画像の外へ出るなら全体を捨てる
+ * （1 件だけ貼られて残りが黙って消えるのは、「同じ配置の複製」ではない）。
+ */
+export function retargetEntries(entries: readonly RoiClipboardEntry[], dst: ImageGrid | null): RoiClipboardEntry[] | null {
+  if (entries.length === 0) return [];
+  const src = entries[0].source;
+  if (!src || !dst) return [...entries];
+  const { cols: sw, rows: sh, colSpacing: sc, rowSpacing: sr } = src;
+  const { cols: dw, rows: dh, colSpacing: dc, rowSpacing: dr } = dst;
+  if (sw === null || sh === null || sc === null || sr === null) return [...entries];
+  if (dw === null || dh === null || dc === null || dr === null) return [...entries];
+  if (sw === dw && sh === dh && sameNum(sc, dc) && sameNum(sr, dr)) return [...entries];
+
+  const all = entries.flatMap((e) => [...e.pointsPx, ...e.polylinePx]);
+  if (!all.length) return [...entries];
+  const cx = all.reduce((a, p) => a + p[0], 0) / all.length;
+  const cy = all.reduce((a, p) => a + p[1], 0) / all.length;
+  const nx = (cx / sw) * dw;
+  const ny = (cy / sh) * dh;
+  const kx = sc / dc;
+  const ky = sr / dr;
+  const map = (pts: PointPx[]): PointPx[] => pts.map((p) => [nx + (p[0] - cx) * kx, ny + (p[1] - cy) * ky]);
+  const out = entries.map((e) => ({ ...e, pointsPx: map(e.pointsPx), polylinePx: map(e.polylinePx) }));
+  const inside = out.every((e) =>
+    ([...e.pointsPx, ...e.polylinePx] as PointPx[]).every((p) => p[0] >= 0 && p[0] <= dw && p[1] >= 0 && p[1] <= dh),
+  );
+  return inside ? out : null;
+}
+
+let clip: RoiClipboardEntry[] = [];
 
 /** ROI の参照画像が、このスタックの画像のどれかか（コピー・複製の宛先タイルを ROI から決める）。 */
 export function ownsImage(imageIds: readonly string[], referencedImageId: string | undefined): boolean {
@@ -126,7 +161,7 @@ export function ownsImage(imageIds: readonly string[], referencedImageId: string
 }
 
 export function hasClipboardRoi(): boolean {
-  return clip !== null;
+  return clip.length > 0;
 }
 
 /**
@@ -214,12 +249,28 @@ function mapWorld(
   return out;
 }
 
-/** ROI を 1 件クリップボードへ取る。取れなければ false。 */
-export function copyRoiToClipboard(roiUid: string, sourcePatientKey?: string): boolean {
-  const entry = readRoiAsEntry(roiUid);
-  if (!entry) return false;
-  clip = { ...entry, sourcePatientKey };
-  return true;
+/**
+ * ROI をクリップボードへ取る（複数可）。**取れた件数**を返す（0 のときは前のクリップボードを残す）。
+ * `stackIndexOf` は ROI が乗っているスライスの番号。貼り付けで、スライス間の位置関係を保つのに使う。
+ */
+export function copyRoisToClipboard(
+  roiUids: readonly string[],
+  sourcePatientKey?: string,
+  stackIndexOf?: (roiUid: string) => number | undefined,
+): number {
+  const next: RoiClipboardEntry[] = [];
+  for (const uid of roiUids) {
+    const entry = readRoiAsEntry(uid);
+    if (entry) next.push({ ...entry, sourcePatientKey, stackIndex: stackIndexOf?.(uid) });
+  }
+  if (next.length === 0) return 0;
+  clip = next;
+  return next.length;
+}
+
+/** 1 件だけ取る（行の操作用）。 */
+export function copyRoiToClipboard(roiUid: string, sourcePatientKey?: string, stackIndex?: number): boolean {
+  return copyRoisToClipboard([roiUid], sourcePatientKey, () => stackIndex) === 1;
 }
 
 /** ROI を読んでクリップボード形（画素座標）にする。複製にも使うので分けてある。 */
@@ -284,9 +335,39 @@ export interface PasteContext {
  * クリップボードの ROI を貼り付ける。作った annotationUID を返す（失敗は null）。
  */
 export function pasteRoiInto(ctx: PasteContext): PasteResult {
-  const entry = clip;
-  if (!entry) return { uid: null, reason: "failed" };
-  return placeEntry(entry, ctx);
+  const r = pasteRoisInto(() => ctx);
+  return { uid: r.uids[0] ?? null, reason: r.reason };
+}
+
+/**
+ * クリップボードの ROI をすべて貼る。`ctxAt(offset)` は、貼り付け先で「基準のスライスから offset 枚ずれた」
+ * スライスへの貼り付け情報（スタックの外なら null）。基準は、コピーした ROI のうち**最も若いスライス**で、
+ * それが現在表示中のスライスに載る（複数スライスにまたがるコピーも、枚数の差を保って貼れる）。
+ */
+export function pasteRoisInto(ctxAt: (offset: number) => PasteContext | null): PasteManyResult {
+  const entries = clip;
+  const base = ctxAt(0);
+  if (entries.length === 0 || !base) return { uids: [], skipped: 0, reason: "failed" };
+  const moved = retargetEntries(entries.map((e) => carryOver(e, base.patientKey)), imageGridOf(base.imageId));
+  if (!moved) return { uids: [], skipped: 0, reason: "outOfImage" };
+  const indices = moved.map((e) => e.stackIndex).filter((n): n is number => typeof n === "number");
+  const minIndex = indices.length ? Math.min(...indices) : 0;
+  const uids: string[] = [];
+  let skipped = 0;
+  for (const e of moved) {
+    const ctx = ctxAt(typeof e.stackIndex === "number" ? e.stackIndex - minIndex : 0);
+    const r = ctx ? placeMoved(e, ctx) : null;
+    if (r?.uid) uids.push(r.uid);
+    else skipped++;
+  }
+  return { uids, skipped, reason: uids.length === 0 ? "failed" : undefined };
+}
+
+/** 貼り付け（複数）の結果。`skipped` は、スタックの外・変換不能で置けなかった件数。 */
+export interface PasteManyResult {
+  uids: string[];
+  skipped: number;
+  reason?: "failed" | "outOfImage";
 }
 
 /** 貼り付けの結果。失敗の理由を分けるのは、画像の外にはみ出すときだけ別の案内を出すため。 */
@@ -320,7 +401,17 @@ function placeEntry(source: RoiClipboardEntry, ctx: PasteContext): PasteResult {
   }
   const moved = retargetEntry(carryOver(source, ctx.patientKey), imageGridOf(ctx.imageId));
   if (!moved) return { uid: null, reason: "outOfImage" };
-  const entry = moved;
+  return placeMoved(moved, ctx);
+}
+
+/** 貼り付け先の画像へ写し終えた ROI を、その画像に置く。 */
+function placeMoved(entry: RoiClipboardEntry, ctx: PasteContext): PasteResult {
+  const failed: PasteResult = { uid: null, reason: "failed" };
+  const sop = sopOfImageId(ctx.imageId);
+  if (!sop) {
+    log.warn("roi paste: cannot resolve SOP for", ctx.imageId);
+    return failed;
+  }
   const uid = (csCoreUtilities as Any).uuidv4() as string;
   const saved = entryToSavedRoi(
     entry,
