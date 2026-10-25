@@ -235,13 +235,26 @@ describe("reconstructCenterline3d", () => {
     expect(Math.abs(r.lengthMm - polylineLength(truth)) / polylineLength(truth)).toBeLessThan(0.03);
   });
 
-  it("視点が近すぎると blocking 警告を出し、acceptable=false になる", () => {
+  it("視点が近すぎる（25° 未満）と警告を出すが、ブロックはしない（GN-XA-001 P1: 30° ブロックから変更）", () => {
     const gA = geom(-30, 0);
     const gB = geom(-25, 2);
     const r = reconstructCenterline3d(centerline(truth, gA, 200), centerline(truth, gB, 200), { samples: 120 })!;
+    expect(r.separationDeg).toBeLessThan(25);
+    const w = r.warnings.find((x) => x.code === "insufficientSeparation");
+    expect(w?.blocking).toBe(false);
+    expect(w?.threshold).toBe(25);
+  });
+
+  it("25° 以上なら角度差の警告は出ない（28.1° は Case2 の角度差）", () => {
+    const gA = geom(-30, 0);
+    const gB = geom(-1.9, 0);
+    const r = reconstructCenterline3d(centerline(truth, gA, 200), centerline(truth, gB, 200), { samples: 120 })!;
+    expect(r.separationDeg).toBeGreaterThan(25);
     expect(r.separationDeg).toBeLessThan(30);
-    expect(r.acceptable).toBe(false);
-    expect(r.warnings.find((w) => w.code === "insufficientSeparation")?.blocking).toBe(true);
+    expect(r.warnings.find((x) => x.code === "insufficientSeparation")).toBeUndefined();
+    // 負例: 閾値を旧既定の 30° にすれば同じ入力で警告が立つ（上の「出ない」が空振りでないことの確認）。
+    const old = reconstructCenterline3d(centerline(truth, gA, 200), centerline(truth, gB, 200), { samples: 120, minSeparationDeg: 30 })!;
+    expect(old.warnings.find((x) => x.code === "insufficientSeparation")?.threshold).toBe(30);
   });
 
   it("角度が狂っていればアンカーの再投影誤差が跳ね上がり、結果を出さない", () => {
