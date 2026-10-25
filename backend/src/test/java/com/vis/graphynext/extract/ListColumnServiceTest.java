@@ -102,9 +102,14 @@ class ListColumnServiceTest {
 
     /** 1 枚を取り込み、保管庫の中のパスを返す。 */
     private Path ingest(String study, String series, String sop, Consumer<Attributes> edit) throws Exception {
+        return ingest(study, series, sop, UID.ExplicitVRLittleEndian, edit);
+    }
+
+    private Path ingest(String study, String series, String sop, String transferSyntax, Consumer<Attributes> edit)
+            throws Exception {
         Attributes ds = DicomPhantomFactory.scImage("PID-" + study, study, series, sop);
         edit.accept(ds);
-        Path f = DicomPhantomFactory.writeFile(Files.createTempFile("lc", ".dcm"), ds, UID.ExplicitVRLittleEndian);
+        Path f = DicomPhantomFactory.writeFile(Files.createTempFile("lc", ".dcm"), ds, transferSyntax);
         storage.ingest(f);
         DicomInstance inst = repo.findBySeries(study, series).stream()
                 .filter(i -> sop.equals(i.getSopInstanceUid())).findFirst().orElseThrow();
@@ -164,6 +169,16 @@ class ListColumnServiceTest {
         assertEquals("SPS123", cells.get("sq").values().get(0), "検査が空振りでないこと（期待値が実在する）");
         assertEquals("PRIVVAL", cells.get("pv").values().get(0));
         assertEquals("DERIVED\\SECONDARY", cells.get("mv").values().get(0));
+    }
+
+    @Test
+    void implicitVrPrivateTextIsShownAsText() throws Exception {
+        ingest("ST.IV", "SE.IV", "SOP.IV", UID.ImplicitVRLittleEndian,
+                d -> d.setString("VIS-PRIVATE", 0x00190001, VR.LO, "PRIV-1"));
+        Column priv = col("pv", new Seg("00190001", "VIS-PRIVATE"));
+
+        Map<String, Cell> cells = service.studyCells(List.of("ST.IV"), List.of(priv)).get("ST.IV");
+        assertEquals("PRIV-1", cells.get("pv").values().get(0));
     }
 
     @Test

@@ -225,6 +225,10 @@ public class TagExtractService {
             String creator = (seg.creator() == null || seg.creator().isBlank()) ? null : seg.creator();
             boolean last = j == segments.size() - 1;
             if (last) {
+                String text = unknownVrText(cur, creator, tag);
+                if (text != null) {
+                    return text;
+                }
                 String[] vals = creator != null ? cur.getStrings(creator, tag) : cur.getStrings(tag);
                 if (vals != null && vals.length > 0) {
                     return String.join(MULTI_VALUE_DELIM, java.util.Arrays.stream(vals)
@@ -239,6 +243,36 @@ public class TagExtractService {
             }
         }
         return "";
+    }
+
+    /**
+     * Implicit VR の Private タグは VR が分からず UN で読まれ、getStrings がバイト値の 10 進列になる。
+     * UN で、全バイトが印字可能 ASCII（末尾の 0x00 / 0x20 の詰めは除く）のときだけ文字列として返す。
+     * Implicit VR では文字列かバイナリかを原理的に判別できないための近似で、それ以外は null（従来の表示）。
+     */
+    private static String unknownVrText(Attributes cur, String creator, int tag) {
+        if ((creator != null ? cur.getVR(creator, tag) : cur.getVR(tag)) != org.dcm4che3.data.VR.UN) {
+            return null;
+        }
+        byte[] b;
+        try {
+            b = creator != null ? cur.getBytes(creator, tag) : cur.getBytes(tag);
+        } catch (java.io.IOException e) {
+            return null;
+        }
+        int end = b == null ? 0 : b.length;
+        while (end > 0 && (b[end - 1] == 0 || b[end - 1] == ' ')) {
+            end--;
+        }
+        if (end == 0) {
+            return null;
+        }
+        for (int i = 0; i < end; i++) {
+            if (b[i] < 0x20 || b[i] > 0x7E) {
+                return null;
+            }
+        }
+        return new String(b, 0, end, java.nio.charset.StandardCharsets.US_ASCII);
     }
 
     private static int parseTag(String hex) {

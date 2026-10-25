@@ -110,4 +110,28 @@ class TagExtractServiceTest {
         assertEquals(1, r.rows().size());
         assertEquals("", r.rows().get(0).get(r.columns().indexOf("Missing.SPSID")), "未検出パスは空文字");
     }
+
+    /** Implicit VR では Private タグの VR が分からず UN で読まれる。文字列として読める値は文字列で返す。 */
+    @Test
+    void extractTable_implicitVrPrivateTextIsDecoded_binaryIsNot() throws Exception {
+        Attributes ds = DicomPhantomFactory.scImage("PIDI", "ST.IVR", "SE.IVR", "SOP.IVR");
+        ds.setString("VIS-PRIVATE", 0x00190001, VR.LO, "PRIV-1");
+        ds.setString("VIS-PRIVATE", 0x00190003, VR.LO, "A", "B");
+        ds.setBytes("VIS-PRIVATE", 0x00190002, VR.OB, new byte[] {0x00, (byte) 0xFF, 0x01});
+
+        Path f = DicomPhantomFactory.writeFile(Files.createTempFile("phantom", ".dcm"), ds, UID.ImplicitVRLittleEndian);
+        storage.ingest(f);
+
+        List<TagExtractService.TagPath> paths = List.of(
+                new TagExtractService.TagPath(List.of(new TagExtractService.Seg("00190001", "VIS-PRIVATE")), "Text"),
+                new TagExtractService.TagPath(List.of(new TagExtractService.Seg("00190003", "VIS-PRIVATE")), "Multi"),
+                new TagExtractService.TagPath(List.of(new TagExtractService.Seg("00190002", "VIS-PRIVATE")), "Binary"));
+        TagExtractService.TableResult r = service.extractTable(List.of("ST.IVR"), paths);
+
+        List<String> cols = r.columns();
+        List<String> row = r.rows().get(0);
+        assertEquals("PRIV-1", row.get(cols.indexOf("Text")), "Implicit VR の Private 文字列");
+        assertEquals("A\\B", row.get(cols.indexOf("Multi")), "Implicit VR の複数値は \\ 連結のまま");
+        assertEquals("0\\-1\\1\\0", row.get(cols.indexOf("Binary")), "文字列と読めないバイナリは従来どおり");
+    }
 }
