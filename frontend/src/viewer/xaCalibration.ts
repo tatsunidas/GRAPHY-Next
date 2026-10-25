@@ -122,7 +122,7 @@ const EQUAL_REL_EPS = 1e-6;
 /** 人の校正と装置の校正がこれ以上ずれたら警告する。 */
 const USER_VS_DEVICE_WARN = 0.1;
 /** SID/SOD 由来と拡大率由来がこれ以上ずれたら警告する。 */
-const GEOMETRIC_DISAGREE_WARN = 0.05;
+export const GEOMETRIC_DISAGREE_WARN = 0.05;
 
 function pos(v: number | null | undefined): number | null {
   return typeof v === "number" && Number.isFinite(v) && v > 0 ? v : null;

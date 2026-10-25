@@ -1123,6 +1123,30 @@ export interface PluginCurveFrame {
   arcLengthMm: number;
 }
 
+/** {@link Viewer2DPluginHost.openCurvedMpr} の引数（H73）。 */
+export interface PluginCurvedMprSpec {
+  /** 開いているタイルのシリーズ。 */
+  source: PluginSeriesRef;
+  /** 制御点（患者 LPS mm、2 点以上、順序つき）。 */
+  centerline: [number, number, number][];
+  /** 省略した項目は窓の既定。`frameMode` だけは省略時 `ROTATION_MINIMIZING`。 */
+  options?: {
+    frameMode?: "FIXED_Z" | "ROTATION_MINIMIZING";
+    projection?: "CENTERLINE_ONLY" | "AVERAGE" | "MIP" | "MINIP";
+    bandHalfWidthMm?: number;
+    /** [min, max]（mm、min < max）。 */
+    secondAxisRangeMm?: [number, number];
+    arcStepMm?: number;
+  };
+  /** 窓の札に出す短い説明。出所のプラグイン名は host が必ず付ける。 */
+  title?: string;
+}
+
+export interface PluginCurvedMprResult {
+  ok: boolean;
+  error?: string;
+}
+
 export interface PluginCurveFrameOptions {
   /** フレームどうしの弧長間隔 mm。正の有限値。 */
   spacingMm: number;
@@ -1164,8 +1188,9 @@ interface PluginHostBase {
    *
    * <p>⚠ **患者の画素を第三者クラウドへ出す API である。** 使うには `plugin.json` の
    * `permissions` に `"ai-egress"` を宣言すること（未宣言なら `permission-denied` で弾かれる。
-   * これは実際に強制される数少ない権限のひとつ）。送信のたびに、**送る画像とプロンプト全文を
-   * 見せた同意ダイアログ**が本体側で出る。同意が効くのはセッション内・同一 `scopeKey` のみ。
+   * これは実際に強制される数少ない権限のひとつ）。送信前に、**宛先・指示・画像のサムネイルを
+   * 見せた確認ダイアログ**が本体（Electron main）から出る（宛先がローカルのときは出ない）。確認が効くのはセッション内・
+   * 同一 `scopeKey` のみ。確認と監査ログは本体の main が行うので、`host.ai` を経由せず直接呼んでも省けない。
    *
    * <p>例外は投げず `{ok:false, error}` で返る。`error:"canceled"` はユーザーが送信を
    * 取り消しただけなので、**エラーとして表示しないこと**。デスクトップ専用。
@@ -2079,6 +2104,28 @@ export interface Viewer2DPluginHost extends PluginHostBase {
    */
   setRoiMeta: (roiUid: string, patch: Record<string, string>) => boolean;
   /**
+   * **ROI（楕円・矩形）を、表示中のスライスへ作る。**（次の版以降）`tileId` 省略時は対象タイルの先頭。
+   *
+   * <p>中心は、患者座標 LPS（mm）の `centerLps`、または表示中のスライスの画素座標 `[列, 行]` の `centerPx`
+   * （`getRois()` の `points` と同じ座標。2D の画素だけを扱うプラグイン用）の**どちらか一方**。LPS の中心は表示中の
+   * スライスの面内であること。面外は `off-slice` で拒否される（黙って別のスライスへ作らない）。成功すると、作った ROI の中心（LPS）も返る。半径（矩形は半幅）`radiiMm` は**表示の水平・垂直方向**の mm。
+   * 楕円・矩形は Cornerstone の定義で表示の軸に揃うため、回転・反転した表示でも、見えている向きの半径になる。
+   *
+   * <p>作った ROI には**本体が**出自の印（このプラグイン）とラベルを付けるので、ROI マネージャで見分けられる。
+   * 保存は本体が予約する。`removeCreatedRoi` で、**このプラグインが作った ROI だけ**を消せる
+   * （本体や他プラグインの ROI は消せない）。
+   *
+   * <p>AI ツール（`effect: "write"`）の中から呼ぶ場合、その実行の前に本体が利用者の確認を出す。
+   * 失敗の理由: `bad-request`（ツール・数値が不正）／`off-slice`／`too-large`（半径が画像の大きさを超える）／
+   * `no-geometry`／`no-image`／`thick-slab`（ThickSlab 表示中は作れない）／`failed`。
+   */
+  createRoi: (
+    tileId: string | undefined,
+    req: { tool: "EllipticalROI" | "RectangleROI"; centerLps?: [number, number, number]; centerPx?: [number, number]; radiiMm: [number, number]; label?: string },
+  ) => { ok: true; roiUid: string; centerLps: [number, number, number] } | { ok: false; reason: "bad-request" | "off-slice" | "no-geometry" | "too-large" | "no-image" | "thick-slab" | "failed" };
+  /** `createRoi` で**このプラグインが作った** ROI だけを消す（ロック中・他の ROI は消えず false）。（次の版以降） */
+  removeCreatedRoi: (roiUid: string) => boolean;
+  /**
    * ROI の追加・変更・削除を購読する。返り値を呼ぶと解除（ダイアログを閉じるときは必ず解除する）。
    * **何が変わったかは渡さない**ので、通知を受けたら `getRois()` を読み直すこと。
    */
@@ -2190,6 +2237,16 @@ export interface Viewer2DPluginHost extends PluginHostBase {
     polylineWorld: readonly [number, number, number][],
     opts: PluginCurveFrameOptions,
   ) => PluginCurveFrame[];
+  /**
+   * **中心線を渡して、本体の Curved MPR 窓を開く**（H73）。渡すのは制御点（患者 LPS mm・2 点以上）と
+   * 見え方のオプションだけで、再構成・表示・保存は本体が行う。窓には「プラグイン <名前> が指定した
+   * 中心線」の札が出る（出所は host が入れる）。窓が既に開いていれば、その窓の中心線が置き換わる。
+   *
+   * <p>🔴 戻り値は**検証と起動要求まで**（2 点未満・非有限・同一点・開いていないシリーズは `ok:false`
+   * で窓を開かない）。ボリュームの範囲外の点は戻り値では返せず、窓の警告として出る。
+   * `options.frameMode` の省略時は `ROTATION_MINIMIZING`（血管向け）。
+   */
+  openCurvedMpr: (spec: PluginCurvedMprSpec) => Promise<PluginCurvedMprResult>;
   /**
    * **シリーズビューパネルをそのまま貸す**（H34・**0.2.1 以降**）。W/L バー・スライダ・
    * ThickSlab・参照線・計測・シネ、そして**フュージョン重畳**が丸ごと付いてくる。
@@ -2438,7 +2495,8 @@ export interface PluginModule {
   activate(host: PluginHost): void | Promise<void>;
   /**
    * AI アシスタントから呼ばれるツールの実装。`plugin.json` の `permissions` に `"ai-tools"`、`aiTools` に同名の宣言が要る
-   * （無いものは呼ばれない）。読み取り・表示のみ。2D 窓が呼び出し時にだけ読み込み、`activate` は呼ばない。
+   * （無いものは呼ばれない）。宣言の `effect` は `"read"`・`"display"`・`"write"`。`"write"`（データを変える）は**実行のたびに本体が
+   * 利用者の確認を出し**、拒否されると呼ばれない。2D 窓が呼び出し時にだけ読み込み、`activate` は呼ばない。
    * 戻り値は JSON にできる値（深さ 3・4 KB まで）。AI には信用できないデータとして渡る。
    */
   aiTools?: Record<string, (args: Record<string, unknown>, host: PluginHost) => unknown | Promise<unknown>>;

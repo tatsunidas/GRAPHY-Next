@@ -24,6 +24,7 @@ import type {
   PluginRtDoseRequest,
   PluginRtDoseResult,
 } from "../plugins/pluginTypes";
+import type { PluginCurvedMprResult, PluginCurvedMprSpec } from "../plugins/pluginCurvedMprApi";
 import { ToolIcon } from "../icons/ToolIcon";
 import { OverflowRow } from "../viewer/OverflowRow";
 import { UI_ICON_FILES } from "../icons/toolIcons";
@@ -106,6 +107,10 @@ export interface ViewerActions {
   getRoiMeta(roiUid: string, pluginId: string): Record<string, string>;
   /** ROI に紐付くプラグイン属性を書く（H5）。ROI が無ければ false。 */
   setRoiMeta(roiUid: string, pluginId: string, patch: Record<string, string>): boolean;
+  /** プラグインが ROI（楕円・矩形）を表示中のスライスへ作る。`tileId` 省略時は対象タイルの先頭。`pluginId` / `pluginName` は host が入れる。 */
+  createRoi(tileId: string | undefined, by: { pluginId: string; pluginName: string }, req: import("../viewer/roiCreate").CreateRoiRequest): { ok: true; roiUid: string; centerLps: [number, number, number] } | { ok: false; reason: import("../viewer/roiCreate").CreateRoiFailure };
+  /** そのプラグインが作った ROI だけを消す（出自の印が一致するときだけ）。 */
+  removeCreatedRoi(roiUid: string, pluginId: string): boolean;
   /**
    * ROI の追加・変更・削除を購読する（H5）。返り値で解除。
    * 通知はまとめられる（**何が変わったかは渡さない**ので、受け取ったら `getRois()` を読み直す）。
@@ -241,6 +246,8 @@ export interface ViewerActions {
   launchSlicer(): void;
   /** 対象タイルのシリーズで Curved MPR ウィンドウを開く。 */
   launchCurvedMpr(): void;
+  /** プラグインから中心線を渡して Curved MPR 窓を開く（H73）。出所は呼び出し側（host）が渡す。 */
+  openCurvedMpr(spec: PluginCurvedMprSpec, producer: { id: string; name: string; version: string }): Promise<PluginCurvedMprResult>;
   /** 対象タイルのシリーズで Histogram 解析ダイアログを開く。 */
   openHistogram(): void;
   /** 対象タイルのシリーズで値の点検（Probe の点の時間曲線）ダイアログを開く。 */
@@ -278,6 +285,7 @@ export function Viewer2DToolbar({
   activeTool,
   selectedCount,
   targetCount,
+  targetLabel,
 }: {
   actions: ViewerActions;
   layoutCols: number;
@@ -285,6 +293,8 @@ export function Viewer2DToolbar({
   activeTool: string;
   selectedCount: number;
   targetCount: number;
+  /** 全患者モードで複数の患者を表示中のとき、「対象」の表示を差し替える（誰に効くかを明示する）。 */
+  targetLabel?: string;
 }) {
   const { t } = useI18n();
   const presets = useWlPresets();
@@ -373,7 +383,7 @@ export function Viewer2DToolbar({
       <span style={{ marginLeft: "auto", fontSize: 11, color: "#6b7785", whiteSpace: "nowrap", flexShrink: 0 }}>
         {selectedCount > 0
           ? t("viewer2d.tb.targetSelected", { n: selectedCount })
-          : t("viewer2d.tb.targetAll", { n: targetCount })}
+          : (targetLabel ?? t("viewer2d.tb.targetAll", { n: targetCount }))}
       </span>
     </OverflowRow>
   );

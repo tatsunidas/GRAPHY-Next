@@ -6,16 +6,19 @@
 // main が中継してきた命令を**もう一度検証**してから、既存の ViewerCommands / SeriesCommands を呼ぶ
 // （送信側の検証は信用しない）。registry に載っていない操作は実行できない。
 import type { ViewerCommands, ViewerTargetInfo, ViewerViewState } from "../viewer/viewerCommands";
+import type { CreateRoiRequest } from "../viewer/roiCreate";
 import type { SeriesCommands } from "../viewer/seriesCommands";
 import {
   DISPLAY_TOOLS,
   GET_STATE_TOOL,
   isWriteAction,
+  projectRois,
   projectState,
   validateAction,
   type ActionResult,
   type DisplayTool,
   type InverseStep,
+  type RawRoi,
   type RawViewerState,
 } from "../assistant/actions/registry";
 
@@ -26,12 +29,23 @@ export interface WlPresetLite {
   width: number;
 }
 
+export interface CapturedImage {
+  dataUrl: string;
+  mimeType: "image/png" | "image/jpeg";
+  w: number;
+  h: number;
+}
+
 export interface BridgeDeps {
   /** 命令の対象タイル（選択があれば選択、無ければ全タイル）。 */
   targets(): string[];
   allTiles(): string[];
   readInfo(id: string): ViewerTargetInfo | null;
   readView(id: string): ViewerViewState | null;
+  /** 全タイルの ROI（識別子・座標を含み得る生の値）。必ず projectRois を通してから外へ出す。 */
+  readRois(): RawRoi[];
+  /** タイルの表示画像（縮小済み）。ROI を重ねるか選べる。取れなければ null。 */
+  captureTile(id: string, withRoi: boolean): Promise<CapturedImage | null>;
   run(ids: string[], fn: (c: ViewerCommands) => void): void;
   runSeries(ids: string[], fn: (c: SeriesCommands) => void): void;
   activeTool(): string;
@@ -41,16 +55,24 @@ export interface BridgeDeps {
   presets(): WlPresetLite[];
   /** 表示系ツールのシンボル名 → 実ツール ID。 */
   toolId(sym: DisplayTool): string;
+  /** 表示中のスライスへ ROI を作る（出自の印は呼び出し側＝アシスタントとして付く）。 */
+  createRoi(id: string, req: CreateRoiRequest): ReturnType<ViewerCommands["createRoi"]> | null;
+  /** アシスタントが作った ROI だけを消す。 */
+  removeAssistantRoi(roiUid: string): boolean;
 }
 
 export interface BridgeCommand {
-  kind: "action" | "getState";
+  kind: "action" | "getState" | "getMeasurements" | "captureView";
   id?: string;
   params?: unknown;
   /** ローカル宛のときだけ true（seriesLabel を含める）。 */
   includeLabels?: boolean;
+  /** captureView: ROI の線と計測文字を重ねるか。 */
+  withRoi?: boolean;
   /** main が利用者の承認を取ったあとにだけ付ける。データを変える操作はこれが無いと実行しない。 */
   approved?: boolean;
+  /** main が確認の前に付ける。検証（引数・対象）だけして何も実行しない。write 操作にだけ使える。 */
+  dryRun?: boolean;
 }
 
 /** タイル群の現在状態（識別子を含み得る生の値）。必ず projectState を通してから外へ出す。 */
@@ -82,13 +104,32 @@ function symbolOfTool(deps: BridgeDeps, toolId: string): DisplayTool | undefined
   return DISPLAY_TOOLS.find((s) => deps.toolId(s) === toolId);
 }
 
+/**
+ * 表示中のタイルの画像を取る（読み取りだけ。表示状態・ROI・ファイルは変えない）。利用者のボタンからだけ呼ばれる＝モデルのツールではない。
+ * 対象は選択中の先頭タイル（無ければ先頭）。
+ */
+export async function executeCaptureView(deps: BridgeDeps, cmd: BridgeCommand): Promise<ActionResult> {
+  const id = deps.targets()[0] ?? deps.allTiles()[0];
+  if (!id) return { ok: false, error: "no-tile" };
+  const image = await deps.captureTile(id, cmd.withRoi === true).catch(() => null);
+  if (!image) return { ok: false, error: "capture-failed" };
+  return { ok: true, image };
+}
+
 export function executeCommand(deps: BridgeDeps, cmd: BridgeCommand): ActionResult {
   if (cmd.kind === "getState") {
     return { ok: true, state: projectState(collectRawState(deps), { includeLabels: cmd.includeLabels === true }) };
   }
+  if (cmd.kind === "getMeasurements") {
+    return { ok: true, measurements: projectRois(deps.readRois(), { includeLabels: cmd.includeLabels === true }) };
+  }
   if (cmd.id === GET_STATE_TOOL) return { ok: false, error: "unknown-action" };
   const v = validateAction(cmd.id, cmd.params);
   if (!v.ok) return v;
+  if (cmd.dryRun === true) {
+    if (!isWriteAction(cmd.id)) return { ok: false, error: "bad-command" };
+    return deps.targets().length === 0 ? { ok: false, error: "no-tile" } : { ok: true };
+  }
   if (isWriteAction(cmd.id) && cmd.approved !== true) return { ok: false, error: "approval-required" };
   const targets = deps.targets();
   if (targets.length === 0) return { ok: false, error: "no-tile" };
@@ -159,6 +200,21 @@ export function executeCommand(deps: BridgeDeps, cmd: BridgeCommand): ActionResu
     case "clearMeasurements":
       // 取り消せない（ROI/計測は 2D の undo の対象外）。inverse は返さない。
       deps.run(targets, (x) => x.clearAnnotations("measure"));
+      break;
+    case "createRoi": {
+      const r = deps.createRoi(first, {
+        tool: p.shape === "rectangle" ? "RectangleROI" : "EllipticalROI",
+        centerView: [p.u as number, p.v as number],
+        radiiMm: [p.radiusXmm as number, p.radiusYmm as number],
+      });
+      if (!r) return { ok: false, error: "no-tile" };
+      if (!r.ok) return { ok: false, error: `roi-${r.reason}` };
+      // 取り消しは「作った ROI だけ消す」。手描きの ROI には触れない。
+      inverse.push({ id: "removeAssistantRoi", params: { roiUid: r.roiUid } });
+      break;
+    }
+    case "removeAssistantRoi":
+      if (!deps.removeAssistantRoi(p.roiUid as string)) return { ok: false, error: "not-removable" };
       break;
     default:
       return { ok: false, error: "unknown-action" };

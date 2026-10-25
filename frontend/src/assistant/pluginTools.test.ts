@@ -134,12 +134,14 @@ describe("executePluginTool (2D window)", () => {
     expect(await executePluginTool(b.deps, { pluginId: "demo", tool: "measure", params: { n: 2 } })).toEqual({ ok: true, data: { v: 1 } });
     expect(b.ran).toEqual([{ n: 2 }]);
   });
-  it("negative: undeclared tool / unknown plugin / no ai-tools permission / write effect / bad args never run", async () => {
+  it("negative: undeclared tool / unknown plugin / no ai-tools permission / write without approval / unknown effect / bad args never run", async () => {
     for (const [cmd, m] of [
       [{ pluginId: "demo", tool: "nope", params: {} }, manifest()],
       [{ pluginId: "other", tool: "measure", params: { n: 1 } }, manifest()],
       [{ pluginId: "demo", tool: "measure", params: { n: 1 } }, manifest({ permissions: [] })],
       [{ pluginId: "demo", tool: "measure", params: { n: 1 } }, manifest({ aiTools: [{ name: "measure", description: "d", effect: "write" as never, parameters: PARAMS }] })],
+      [{ pluginId: "demo", tool: "measure", params: { n: 1 }, approved: "true" as never }, manifest({ aiTools: [{ name: "measure", description: "d", effect: "write" as never, parameters: PARAMS }] })],
+      [{ pluginId: "demo", tool: "measure", params: { n: 1 }, approved: true }, manifest({ aiTools: [{ name: "measure", description: "d", effect: "delete" as never, parameters: PARAMS }] })],
       [{ pluginId: "demo", tool: "measure", params: { n: 99 } }, manifest()],
       [{ pluginId: 5, tool: "measure", params: {} }, manifest()],
     ] as const) {
@@ -148,6 +150,17 @@ describe("executePluginTool (2D window)", () => {
       expect(r.ok, JSON.stringify(cmd)).toBe(false);
       expect(b.ran).toEqual([]);
     }
+  });
+  it("write effect: runs only with approved:true; approval is irrelevant for read/display (control)", async () => {
+    const w = manifest({ aiTools: [{ name: "measure", description: "d", effect: "write" as never, parameters: PARAMS }] });
+    const denied = bridgeDeps({}, w);
+    expect(await executePluginTool(denied.deps, { pluginId: "demo", tool: "measure", params: { n: 2 } })).toEqual({ ok: false, error: "approval-required" });
+    expect(denied.ran).toEqual([]);
+    const ok = bridgeDeps({}, w);
+    expect(await executePluginTool(ok.deps, { pluginId: "demo", tool: "measure", params: { n: 2 }, approved: true })).toEqual({ ok: true, data: { v: 1 } });
+    expect(ok.ran).toEqual([{ n: 2 }]);
+    const read = bridgeDeps();
+    expect((await executePluginTool(read.deps, { pluginId: "demo", tool: "measure", params: { n: 2 } })).ok).toBe(true);
   });
   it("missing function, thrown error (message not returned) and timeout", async () => {
     expect(await executePluginTool(bridgeDeps({ load: async () => null }).deps, { pluginId: "demo", tool: "measure", params: { n: 1 } })).toEqual({ ok: false, error: "no-function" });

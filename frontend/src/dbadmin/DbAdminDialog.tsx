@@ -20,6 +20,7 @@ import {
   type SplitGroup,
 } from "./dbAdminApi";
 import { fetchSettings } from "../settings/settingsApi";
+import { fetchRetentionHolds, lockStudy, unlockStudy } from "../settings/retentionApi";
 import { fetchInstances, fetchSeries, fetchStudies, type Instance, type Series, type Study } from "../api";
 import { emitDbChanged, type DbChangedDetail } from "../dbEvents";
 import { VBarChart, HBarChart, PieChart, formatBytes } from "./charts";
@@ -145,6 +146,33 @@ function PatientsTab({
   const [patients, setPatients] = useState<Patient[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // 自動削除から守る「ロック」中のスタディ。取得できなければ（古い backend）切り替えを出さない
+  const [locks, setLocks] = useState<Set<string> | null>(null);
+  useEffect(() => {
+    let stop = false;
+    fetchRetentionHolds()
+      .then((h) => !stop && setLocks(new Set(h.map((x) => x.studyUid))))
+      .catch(() => undefined);
+    return () => {
+      stop = true;
+    };
+  }, []);
+  const toggleLock = async (studyUid: string) => {
+    if (!locks) return;
+    const was = locks.has(studyUid);
+    try {
+      if (was) await unlockStudy(studyUid);
+      else await lockStudy(studyUid);
+      setLocks((cur) => {
+        const n = new Set(cur ?? []);
+        if (was) n.delete(studyUid);
+        else n.add(studyUid);
+        return n;
+      });
+    } catch (e) {
+      setError(String(e));
+    }
+  };
 
   // ドリルダウン（Patient → Study → Series）
   const [expandedPatients, setExpandedPatients] = useState<Set<string>>(new Set());
@@ -402,6 +430,17 @@ function PatientsTab({
                               {studyLabel(s)}
                               <span style={muted}> ({s.numberOfInstances})</span>
                             </span>
+                            {locks && (
+                              <button
+                                data-testid={`dbadmin-study-lock-${s.studyInstanceUid}`}
+                                data-locked={locks.has(s.studyInstanceUid) ? "true" : "false"}
+                                title={t(locks.has(s.studyInstanceUid) ? "retention.lock.on.title" : "retention.lock.off.title")}
+                                onClick={() => void toggleLock(s.studyInstanceUid)}
+                                style={{ ...smallBtn, opacity: locks.has(s.studyInstanceUid) ? 1 : 0.55 }}
+                              >
+                                {locks.has(s.studyInstanceUid) ? "🔒" : "🔓"}
+                              </button>
+                            )}
                             <button
                               data-testid={`dbadmin-study-edit-${s.studyInstanceUid}`}
                               onClick={() => setEditingStudy({ study: s, patient: p })}

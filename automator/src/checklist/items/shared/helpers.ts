@@ -23,7 +23,7 @@ export async function selectFirstStudy(page: Page, recorder: StepRecorder): Prom
   await page.waitForTimeout(2500);
   await dismissStartupDialogs(page);
 
-  page.once("dialog", (d) => void d.accept());
+  page.once("dialog", (d) => void d.accept().catch(() => {}));
   const dateInputs = page.locator('input[type="date"]');
   await dateInputs.nth(0).fill("");
   await dateInputs.nth(1).fill("");

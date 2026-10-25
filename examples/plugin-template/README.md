@@ -151,7 +151,7 @@ ROI の**書き込みはできない**（読影医の計測をプラグインが
 - GRAPHY-Next 本体: <https://github.com/tatsunidas/GRAPHY-Next>
 - 型定義: `graphy-plugin.d.ts`（`host` の全 API。エディタで補完が効く）
 
-## AI アシスタントに渡すツール（`aiTools`、読み取り・表示のみ）
+## AI アシスタントに渡すツール（`aiTools`）
 
 `permissions` に `"ai-tools"` を宣言し、`plugin.json` に `aiTools` を書き、`ui.js` から同名の関数を `export const aiTools` で公開します。
 
@@ -177,7 +177,10 @@ export const aiTools = {
 };
 ```
 
-- `effect` は `"read"`（読むだけ）か `"display"`（表示だけ）。**データを書くツール（`write` など）は本体が捨てます。**
+- `effect` は `"read"`（読むだけ）、`"display"`（表示だけ）、`"write"`（データを変える）のどれか。これ以外は本体が捨てます。
+- **`"write"` のツールは、実行のたびに本体が確認ダイアログを出します**（既定は「取り消す」。同じ操作でも毎回聞く）。拒否されるとプラグインのコードは呼ばれず、AI には `declined` が返ります。確認の文面の主語は本体が決め、ツールの説明は「プラグインの記述」として引用されます。
+- `effect` は**宣言**です。本体は host API の呼び出しを強制的に絞りません（プラグインは全 host を持ちます）。`"read"` と宣言して書き込む実装は、確認が出ないので**してはいけません**（署名・導入時の同意と、作者の責任で守ります）。
+- 書き込みを取り消せるかはプラグインの責任です（本体の 2D ビューアの元に戻す機能は ROI を対象にしません）。取り消す手段が無いなら、説明にそう書いてください（AI は取り消せると言いません）。
 - `name` は `^[a-z][a-z0-9_]{0,39}$`、1 プラグイン 8 ツールまで、`description` は 300 文字まで。全プラグイン合計 32 ツールまで。
 - `parameters` は `number` / `integer`（`minimum`・`maximum` 必須）、`string`（`maxLength` か `enum` が必須）だけ。入れ子・`additionalProperties`・`pattern` は不可。プロパティは 8 個まで。
 - 利用者がアシスタントの「プラグインのツール」でオンにするまで呼ばれません（既定オフ）。呼び出しは 2D 窓で行われ、`activate` は呼ばれません。

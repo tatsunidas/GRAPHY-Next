@@ -5,6 +5,7 @@
 import { useEffect, useState } from "react";
 import { useI18n } from "../i18n/i18n";
 import { type ViewerActions } from "./Viewer2DToolbar";
+import { spansPatients } from "./tileScope";
 import { presetLabel } from "./wlPresets";
 import { useWlPresets } from "./wlPresetStore";
 import { TOOL_IDS } from "../viewer/toolIds";
@@ -68,7 +69,12 @@ const LAYOUT_PRESETS: [number, number][] = [
  * プラグインに患者を名乗らせると、取り違えたときに別患者の記録へ書き込む事故になる。
  */
 function currentPatientKey(actions: ViewerActions): string {
-  return actions.getTargets()[0]?.patientKey ?? "";
+  const keys = actions.getTargets().map((tg) => tg.patientKey);
+  // 全患者モードでは対象が複数の患者にまたがりうる。先頭の患者に黙って書くと別患者の記録を壊すので断る。
+  if (spansPatients(keys)) {
+    throw new Error("対象のタイルが複数の患者にまたがっているため、患者単位の保存領域は使えません（1 人の患者のタイルだけを選んでください）");
+  }
+  return keys[0] ?? "";
 }
 
 export function Viewer2DMenuBar({
@@ -162,6 +168,9 @@ export function Viewer2DMenuBar({
     selectRoi: (tileId, roiUid, exclusive) => actions.selectRoi(tileId, roiUid, exclusive),
     getRoiMeta: (roiUid) => actions.getRoiMeta(roiUid, m.id),
     setRoiMeta: (roiUid, patch) => actions.setRoiMeta(roiUid, m.id, patch),
+    // 作る ROI には「どのプラグインが作ったか」の印を**本体が**付ける（pluginId はここで入れる。名乗らせない）。
+    createRoi: (tileId, req) => actions.createRoi(tileId, { pluginId: m.id, pluginName: m.name }, req),
+    removeCreatedRoi: (roiUid) => actions.removeCreatedRoi(roiUid, m.id),
     subscribeRois: (listener) => actions.subscribeRois(listener),
     // H8: プラグイン専用の保存領域（患者単位・backend 保管）。**pluginId と patientKey は
     // host が入れる**。患者は対象タイルから引くので、プラグインが別患者の領域を勝手に
@@ -214,6 +223,8 @@ export function Viewer2DMenuBar({
     measureLabels: (labels, values, opts) => measureLabels(labels, values, opts),
     extractCenterline: (mask, opts) => extractCenterline(mask, opts),
     sampleCenterlineFrames: (polyline, opts) => sampleCenterlineFrames(polyline, opts),
+    // H73: 出所（id/name/version）は host がマニフェストから入れる。
+    openCurvedMpr: (spec) => actions.openCurvedMpr(spec, { id: m.id, name: m.name, version: m.version }),
     mountSeriesPanel: (el, series, opts) => actions.mountSeriesPanel(el, series, opts),
   });
   /** 「プラグイン」メニューに出るもの。 */

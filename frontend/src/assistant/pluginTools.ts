@@ -20,6 +20,8 @@ export interface PluginToolEntry {
   pluginId: string;
   pluginName: string;
   tool: string;
+  /** 宣言された効果。`write` は実行のたびに main が利用者の確認を取る。 */
+  effect?: "read" | "display" | "write";
   /** main が `[plugin: 名前]` を前置し、整形した説明。 */
   description: string;
   parameters: Record<string, unknown>;

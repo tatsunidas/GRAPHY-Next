@@ -16,9 +16,9 @@ test("buildEntries: 正例（名前の接頭辞と説明の名乗りは main が
   assert.ok(!/[\n\t]/.test(e[0].description));
 });
 
-test("buildEntries: 負例 — 権限なし・write・effect 無し・名前規則外・長すぎる id は出ない", () => {
+test("buildEntries: 負例 — 権限なし・未知の effect（大文字・空白付き含む）・effect 無し・名前規則外・長すぎる id は出ない", () => {
   assert.strictEqual(buildEntries([plugin("a", [tool("t")], { permissions: [] })]).length, 0);
-  assert.strictEqual(buildEntries([plugin("a", [tool("t", { effect: "write" })])]).length, 0);
+  for (const effect of ["Write", "write ", "delete", "", 5, null]) assert.strictEqual(buildEntries([plugin("a", [tool("t", { effect })])]).length, 0, String(effect));
   assert.strictEqual(buildEntries([plugin("a", [tool("t", { effect: undefined })])]).length, 0);
   assert.strictEqual(buildEntries([plugin("a.b", [tool("t")])]).length, 0); // '.' はモデル向けの名前規則外
   assert.strictEqual(buildEntries([plugin("x".repeat(60), [tool("t")])]).length, 0);
@@ -61,4 +61,9 @@ test("toggle store: 既定はオフ・書いたものだけオン・壊れたフ
   fs.writeFileSync(file, "{ broken");
   assert.strictEqual(s.enabled().size, 0);
   fs.rmSync(dir, { recursive: true });
+});
+
+test("buildEntries: write は effect つきで出る。read・display の対照も effect を持つ", () => {
+  const e = buildEntries([plugin("a", [tool("w", { effect: "write" }), tool("r"), tool("d", { effect: "display" })])]);
+  assert.deepStrictEqual(e.map((x) => [x.tool, x.effect]), [["w", "write"], ["r", "read"], ["d", "display"]]);
 });

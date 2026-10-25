@@ -33,6 +33,7 @@ const { isAssistantSender } = require("./assistantSender");
 const { createRelay, createJournal, readJournal } = require("./viewerRelay");
 const { createStore: createMacroStore } = require("./assistantMacros");
 const assistantPluginTools = require("./assistantPluginTools");
+const { createGate: createAiEgressGate } = require("./aiEgressGate");
 const aiProviders = require("./aiProviders");
 const computeEndpoints = require("./computeEndpoints");
 const localPython = require("./localPython");
@@ -1239,7 +1240,44 @@ function migrateTlsPasswords() {
 
 // AI 中継。CSP によりレンダラからは外部 API を叩けないため main が肩代わりする。
 // 用途 → 提供元の解決と応答の正規化は aiGateway / aiAdapters が行う（fw/ai-routing-design.md）。
-ipcMain.handle("graphy:ai-generate", async (_e, req) => aiGateway.generate(req || {}));
+// 🔴 プラグインは renderer に import() されるので、この口は直接呼べてしまう。同意と監査は renderer ではなくここ（aiEgressGate）で行う。
+//    呼び出し元プラグインは区別できないため、claimedPluginId は自己申告（インストール済みで ai-egress を宣言した id のみ受理）。
+const aiEgressGate = createAiEgressGate({
+  lookupPlugin: async (id) => {
+    const list = await fetchPluginList();
+    return (list || []).find((p) => p && p.id === id) || null;
+  },
+  resolve: (capability) => aiGateway.resolveCapability(capability),
+  confirm: async (info) => {
+    const win = BrowserWindow.getFocusedWindow() || BrowserWindow.getAllWindows().find((w) => !w.isDestroyed()) || undefined;
+    let icon;
+    try {
+      const img = nativeImage.createFromBuffer(Buffer.from(info.imageBase64, "base64"));
+      if (!img.isEmpty()) icon = img.resize({ width: 160 });
+    } catch {
+      icon = undefined;
+    }
+    const r = await dialog.showMessageBox(win, {
+      type: "warning",
+      buttons: ["送る", "取り消す"],
+      defaultId: 1,
+      cancelId: 1,
+      title: "外部 AI への送信の確認",
+      message: `プラグイン「${info.pluginName}」（自己申告）が、画像を外部の AI（${info.host}）へ送ろうとしています。`,
+      detail:
+        `モデル: ${info.model}\n指示: ${info.prompt}${info.plaintext ? "\n⚠ 暗号化されない通信で送られます。" : ""}\n\n` +
+        "DICOM タグは含まれませんが、画素に焼き込まれた患者情報（バーンドイン注釈）は消えません。サムネイルで確認してください。送りますか？",
+      ...(icon ? { icon } : {}),
+      ...(info.canRemember ? { checkboxLabel: "このシリーズでは再確認しない", checkboxChecked: false } : {}),
+    });
+    return { ok: r.response === 0, remember: r.response === 0 && r.checkboxChecked === true };
+  },
+  audit: (line) => console.log(line),
+});
+ipcMain.handle("graphy:ai-generate", async (_e, req) => {
+  const g = await aiEgressGate.check(req);
+  return g.ok ? aiGateway.generate(g.req) : { ok: false, error: g.error };
+});
 
 // 会話（text-to-text・ツール・ストリーミング）。**アシスタント窓（#assistant）だけが呼べる**——
 // プラグインは viewer / main 窓の同じ realm にいて、この口が見えてしまうため（assistantSender.js）。
@@ -1288,6 +1326,10 @@ const WRITE_CONFIRM_TEXT = {
     message: "2D ビューアの計測線（長さ・角度など）をすべて消します。",
     detail: "元に戻せません。ロックされた計測は残ります。実行しますか？",
   },
+  createRoi: {
+    message: "2D ビューアの表示中のスライスに、ROI（楕円または矩形）を 1 つ追加します。",
+    detail: "アシスタントの「元に戻す」で、この ROI だけを消せます。追加しますか？",
+  },
 };
 const viewerRelay = createRelay({
   resolveTarget: () => {
@@ -1323,6 +1365,64 @@ ipcMain.handle("graphy:assistant-viewer-cmd", (e, sessionId, cmd) => {
         });
         return r.response === 0;
       },
+      // 書き込み（effect:"write"）のツールは、実行のたびに承認を取る。既定は「取り消す」。文面の主語は main が決める。
+      // ツールの説明はプラグインが書いた信用できない文字列なので、そう示して引用する。
+      confirmWrite: async (entry, argsPreview) => {
+        if (!win || win.isDestroyed()) return false;
+        const r = await dialog.showMessageBox(win, {
+          type: "warning",
+          buttons: ["実行する", "取り消す"],
+          defaultId: 1,
+          cancelId: 1,
+          title: "アシスタントの操作の確認",
+          message: `プラグイン「${entry.pluginName}」のツール「${entry.tool}」が、データを変更します。`,
+          detail: `ツールの説明（プラグインの記述）: ${entry.description.replace(/^\[plugin: [^\]]*\] (\(writes data\) )?/, "")}\n引数: ${argsPreview}\n\n元に戻せない場合があります。実行しますか？`,
+        });
+        return r.response === 0;
+      },
+    },
+    // ROI の計測値: 外部宛てのときは、返す前に承認を取る（セッションに 1 回）。宛先がローカルと判定できたときだけ省く。
+    measurements: {
+      external: !(dest && dest.ok && dest.local === true),
+      confirmSend: async (preview) => {
+        if (!win || win.isDestroyed()) return false;
+        const r = await dialog.showMessageBox(win, {
+          type: "warning",
+          buttons: ["送る", "取り消す"],
+          defaultId: 1,
+          cancelId: 1,
+          title: "アシスタントの操作の確認",
+          message: `2D ビューアの ROI の計測値を、外部の AI（${dest && dest.label ? dest.label : "不明"}）へ送ります。`,
+          detail: `結果の先頭: ${preview}\n\n患者情報が含まれていないか確認してください。送りますか？`,
+        });
+        return r.response === 0;
+      },
+    },
+    // 表示中のタイルの画像（焼き込み文字に患者情報がありうる）: 画像を返す前に毎回承認を取る。宛先がローカルと判定できたときだけ省く。
+    // 会話は text-to-text の提供元が image-to-text のモデルを持つときだけ画像を送るので、同じ提供元のときだけ「対応」とする。
+    capture: {
+      external: !(dest && dest.ok && dest.local === true),
+      imageModelOk: (() => {
+        const img = aiGateway.resolveCapability("image-to-text");
+        return !!(dest && dest.ok && img && img.ok && img.providerId === dest.providerId);
+      })(),
+      confirmSend: async (image) => {
+        if (!win || win.isDestroyed()) return false;
+        const thumb = nativeImage.createFromBuffer(Buffer.from(image.base64, "base64"));
+        if (thumb.isEmpty()) return false;
+        const img = aiGateway.resolveCapability("image-to-text");
+        const r = await dialog.showMessageBox(win, {
+          type: "warning",
+          icon: thumb.resize({ width: 160 }),
+          buttons: ["添付する", "取り消す"],
+          defaultId: 1,
+          cancelId: 1,
+          title: "アシスタントの操作の確認",
+          message: `2D ビューアの表示中の画像を、外部の AI（${dest && dest.label ? dest.label : "不明"}）へ送る質問に添付します。`,
+          detail: `送り先: ${dest && dest.endpointHost ? dest.endpointHost : "不明"}${img && img.model ? `（モデル: ${img.model}）` : ""}\n\n画像に患者の氏名・ID などの文字が焼き込まれていないか確認してください。添付しますか？`,
+        });
+        return r.response === 0;
+      },
     },
     // 🔴 データを変える操作は、実行のたびにここ（main の描くダイアログ）で承認を取る。文面は main が持つ（レンダラの値は使わない）。
     confirm: async (id) => {
@@ -1345,20 +1445,27 @@ ipcMain.handle("graphy:assistant-viewer-cmd", (e, sessionId, cmd) => {
 // 既定は全プラグインがオフ。アシスタント窓の設定パネルで利用者が切り替える。
 const pluginToolStore = assistantPluginTools.createToggleStore({ file: path.join(app.getPath("userData"), "assistant-plugin-tools.json") });
 let pluginToolEntries = [];
-async function refreshPluginToolEntries() {
+// backend の GET /api/plugins（検査済み・有効なプラグインのみ）。取れなければ null。
+async function fetchPluginList() {
   try {
     const ctl = new AbortController();
     const timer = setTimeout(() => ctl.abort(), 5000);
     try {
       const res = await fetch(`${API_BASE}/api/plugins`, { signal: ctl.signal });
-      if (!res.ok) return { ok: false, error: "backend" };
-      pluginToolEntries = assistantPluginTools.buildEntries(await res.json());
+      if (!res.ok) return null;
+      const body = await res.json();
+      return Array.isArray(body) ? body : null;
     } finally {
       clearTimeout(timer);
     }
   } catch {
-    return { ok: false, error: "backend" };
+    return null;
   }
+}
+async function refreshPluginToolEntries() {
+  const list = await fetchPluginList();
+  if (!list) return { ok: false, error: "backend" };
+  pluginToolEntries = assistantPluginTools.buildEntries(list);
   return { ok: true };
 }
 async function listPluginTools() {

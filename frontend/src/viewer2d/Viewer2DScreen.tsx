@@ -30,6 +30,7 @@ import { fetchSeriesLayout } from "../api";
 import { reconcileSolo, toggleSolo } from "./soloTile";
 import { RegistrationPanel } from "./RegistrationPanel";
 import type { RenderOverlay } from "../viewer/Viewer2D";
+import { OverflowRow } from "../viewer/OverflowRow";
 import { buildSeriesLayout, type SeriesLayout } from "../viewer/seriesLayout";
 import { LutDialog, ColorBar } from "../viewer/LutDialog";
 import { eventTarget, getEnabledElement } from "@cornerstonejs/core";
@@ -67,6 +68,12 @@ import { MaxSectionDialog } from "./MaxSectionDialog";
 import { frameOfImageId, sopFromImageId } from "../viewer/imageId";
 import { derivePatientKey } from "../viewer/patientKey";
 import { getFocusedTile } from "../viewer/focusedTile";
+import { VIEW_MODE_KEY, parseViewMode, type ViewMode } from "./viewMode";
+import {
+  assignPatientColors, patientColorOf, patientInitial, type PatientColor, type PatientColorMap,
+} from "./patientColor";
+import { placeNear, reconcileOrder, renameInOrder, swapOrder } from "./globalOrder";
+import { defaultTargets, ownerTileOf } from "./tileScope";
 import { hasClipboardRoi } from "../viewer/roiClipboard";
 import { annotationRoiKind } from "../viewer/roiKind";
 import { canConvertMeasureToRoi } from "../viewer/measureToRoi";
@@ -78,7 +85,7 @@ import { useAssistantBridge } from "./useAssistantBridge";
 import { useWlPresets } from "./wlPresetStore";
 import { presetLabel } from "./wlPresets";
 import { emitToast, subscribeToast } from "../viewer/toast";
-import { composeTileWithAnnotations, visibleRoiCount } from "../viewer/tileCapture";
+import { composeTileWithAnnotations, downscaleDataUrl, visibleRoiCount } from "../viewer/tileCapture";
 import { askCopyWithRoi, CopyImageAskHost } from "./CopyImageAsk";
 import { classifySeriesRenderability } from "../viewer/seriesRenderable";
 import { subscribeSeriesRefresh } from "../viewer/viewerRefresh";
@@ -118,6 +125,7 @@ import {
   registerPluginVolumes,
 } from "../plugins/pluginVolumeApi";
 import { resamplePluginVolume } from "../plugins/pluginResample";
+import { openCurvedMprFromPlugin } from "../plugins/pluginCurvedMprApi";
 import {
   commitRtDoseExport,
   commitSegExport,
@@ -137,9 +145,9 @@ import { LEFT_PANEL_OPEN_KEY, parseLeftPanelOpen, tileListLabel } from "./leftPa
 import { concatTileId, tileIdFor, type ConcatOpened, type ZRange } from "../viewer/virtualLayout";
 import { concatFailureMessage, resolveConcatStack } from "../viewer/concatVolume";
 import { desktop } from "../desktopBridge";
+import { studyUidsOfTiles, useStudyInUse } from "../retention/useStudyInUse";
 import { closeAllPluginWindows } from "../plugins/pluginWindowApi";
 import { mountSeriesPanel, closeAllSeriesPanels, PluginSeriesPanels } from "../plugins/pluginSeriesPanelApi";
-import { AiEgressConsentHost } from "../plugins/pluginAiApi";
 
 // ── 型定義 ────────────────────────────────────────────────────
 
@@ -202,6 +210,9 @@ async function openConcatWindow(
   else window.open(`${window.location.pathname}#${view}`, `graphy-${view}`);
 }
 
+/** 全患者モードで TileGrid に渡す仮の「患者」の鍵。実在の患者の鍵とは衝突しない。この鍵で患者を引く処理は無い（持ち主は各タイルの study から引く）。 */
+const GLOBAL_KEY = "\u0000global";
+
 interface PatientSession {
   patientKey: string; // patientId || patientName || studyUid（同一患者判定キー）
   patientId: string;
@@ -261,6 +272,9 @@ function getDropZone(e: React.DragEvent<HTMLElement>): "before" | "after" | "cen
   return "center";
 }
 
+/** アシスタントへ添える表示画像の長辺（px）。暫定値（実モデルで見直す）。 */
+const ASSISTANT_IMAGE_MAX_EDGE = 1024;
+
 /**
  * 指定タイルの canvas から PNG dataURL を取得する。
  * Cornerstone3D の WebGL canvas に対して toDataURL を試みる。
@@ -309,18 +323,21 @@ function tileVisibleRoiCount(tileId: string): number {
   );
 }
 
+/** 指定タイルの画像（PNG の dataURL）。withRoi なら ROI の線と計測の文字を重ねる（四隅の文字は含まない）。コピーとアシスタントの添付が共用する。 */
+async function captureTileImage(tileId: string, withRoi: boolean): Promise<string | null> {
+  const url = captureTileDataUrl(tileId);
+  if (!url || !withRoi) return url;
+  const element = tileViewportElement(tileId);
+  const canvas = element?.querySelector("canvas") as HTMLCanvasElement | null;
+  const svg = element?.querySelector(".svg-layer") as SVGSVGElement | null;
+  if (!canvas || !svg) return null;
+  return composeTileWithAnnotations(canvas, svg).catch(() => null);
+}
+
 /** 指定タイルの画像をクリップボードへコピーする。withRoi なら ROI の線と計測の文字を重ねる（四隅の文字は含まない）。 */
 async function copyTileImage(tileId: string, withRoi: boolean): Promise<boolean> {
-  let url = captureTileDataUrl(tileId);
+  const url = await captureTileImage(tileId, withRoi);
   if (!url) return false;
-  if (withRoi) {
-    const element = tileViewportElement(tileId);
-    const canvas = element?.querySelector("canvas") as HTMLCanvasElement | null;
-    const svg = element?.querySelector(".svg-layer") as SVGSVGElement | null;
-    if (!canvas || !svg) return false;
-    url = await composeTileWithAnnotations(canvas, svg).catch(() => null);
-    if (!url) return false;
-  }
   const copy = desktop()?.copyImage;
   if (copy) return copy(url).catch(() => false);
   try {
@@ -415,6 +432,16 @@ export function Viewer2DScreen({ status }: { status: AppStatus | null }) {
 
   const [patients, setPatients] = useState<PatientSession[]>([]);
   const [activeKey, setActiveKey] = useState<string>("");
+
+  // タイルの見せ方（全患者 / 患者タブ）。選んだ状態は保存する。読み書きできなければ既定（全患者）のまま。
+  const [viewMode, setViewMode] = useState<ViewMode>(() => {
+    try { return parseViewMode(localStorage.getItem(VIEW_MODE_KEY)); } catch { return "global"; }
+  });
+  const isGlobal = viewMode === "global";
+  const changeViewMode = (m: ViewMode) => {
+    setViewMode(m);
+    try { localStorage.setItem(VIEW_MODE_KEY, m); } catch { /* 保存できなくても今回は切り替える */ }
+  };
 
   // 左ツリー用: コンテキストから自動設定される患者ID・スタディUID。
   const [initialPatientId, setInitialPatientId] = useState<string | null>(null);
@@ -728,13 +755,15 @@ export function Viewer2DScreen({ status }: { status: AppStatus | null }) {
 
     // シリーズが選択されている場合。
     const existingPatient = patients.find((p) => p.patientKey === pKey);
-    if (existingPatient) {
+    // 患者タブ: 同じ患者のタブは置き換える。全患者モード: 比べるために並べているので、置き換えずに追加する
+    // （同じ患者・同じ ID の別の人でも、既に開いているタイルを消さない）。
+    if (existingPatient && viewMode === "tabs") {
       await replacePatientTiles(pKey, study, series);
     } else {
       await addTile(study, series);
     }
     setActiveKey(pKey);
-  }, [patients, addTile, replacePatientTiles]);
+  }, [patients, addTile, replacePatientTiles, viewMode]);
 
   const applyCtxRef = useRef(applyCtx);
   useEffect(() => {
@@ -757,6 +786,93 @@ export function Viewer2DScreen({ status }: { status: AppStatus | null }) {
 
   const activePatient = patients.find((p) => p.patientKey === activeKey) ?? null;
 
+  // 患者ごとの色（出現順。表示中の患者の色は変えない）。
+  const colorMapRef = useRef<PatientColorMap>(new Map());
+  const colorMap = useMemo(() => {
+    const m = assignPatientColors(colorMapRef.current, patients.map((p) => p.patientKey));
+    colorMapRef.current = m;
+    return m;
+  }, [patients]);
+
+  // 全患者モードの表示順・グリッド・単独表示。**患者のデータ（patients）は書き換えず**、見せ方だけをここに持つ。
+  const allTiles = useMemo(() => patients.flatMap((p) => p.tiles), [patients]);
+  // 開いているタイルの検査は自動削除から守る（backend に使用中と知らせる）
+  useStudyInUse(studyUidsOfTiles(allTiles));
+  const [orderPref, setOrderPref] = useState<string[]>([]);
+  const orderedIds = useMemo(() => reconcileOrder(orderPref, allTiles.map((tl) => tl.id)), [orderPref, allTiles]);
+  const orderedIdsRef = useRef(orderedIds);
+  orderedIdsRef.current = orderedIds;
+  useEffect(() => {
+    setOrderPref((prev) => (prev.length === orderedIds.length && prev.every((x, i) => x === orderedIds[i]) ? prev : orderedIds));
+  }, [orderedIds]);
+  const [globalGrid, setGlobalGrid] = useState<{ rows: number; cols: number; solo: string | null }>({ rows: 0, cols: 0, solo: null });
+  const globalPatient = useMemo<PatientSession>(() => {
+    const byId = new Map(allTiles.map((tl) => [tl.id, tl] as const));
+    return {
+      patientKey: GLOBAL_KEY,
+      patientId: "",
+      patientName: "",
+      tiles: orderedIds.flatMap((id) => {
+        const tl = byId.get(id);
+        return tl ? [tl] : [];
+      }),
+      gridRows: globalGrid.rows,
+      gridCols: globalGrid.cols,
+      soloTileId: globalGrid.solo,
+    };
+  }, [allTiles, orderedIds, globalGrid]);
+
+  // 全患者モードでは TileGrid の操作を、タイルの持ち主の患者へ振り分ける。
+  const patientsRef = useRef(patients);
+  patientsRef.current = patients;
+  const ownerOf = (tileId: string) => patientsRef.current.find((p) => p.tiles.some((tl) => tl.id === tileId))?.patientKey;
+  const globalOps = {
+    onRemoveTile: (_pk: string, tileId: string) => { const o = ownerOf(tileId); if (o) removeTile(o, tileId); },
+    onSetGrid: (_pk: string, rows: number, cols: number) =>
+      setGlobalGrid({ rows: Math.max(0, Math.floor(rows)), cols: Math.max(0, Math.floor(cols)), solo: null }),
+    onToggleSolo: (_pk: string, tileId: string) =>
+      setGlobalGrid((g) => ({
+        ...g,
+        solo: toggleSolo(reconcileSolo(g.solo, orderedIdsRef.current), tileId, orderedIdsRef.current.length),
+      })),
+    onInsertAdjacent: async (_pk: string, targetId: string, before: boolean, study: Study, series: Series) => {
+      await addTile(study, series);
+      const newId = tileIdFor(study.studyInstanceUid, series.seriesInstanceUid);
+      setOrderPref((prev) => placeNear(reconcileOrder(prev, orderedIdsRef.current), newId, targetId, before));
+      setGlobalGrid((g) => ({ ...g, solo: null }));
+    },
+    onSwap: (_pk: string, fromId: string, toId: string) =>
+      setOrderPref((prev) => swapOrder(reconcileOrder(prev, orderedIdsRef.current), fromId, toId)),
+    onSetSync: (_pk: string, tileId: string, enabled: boolean) => { const o = ownerOf(tileId); if (o) setTileSync(o, tileId, enabled); },
+    onSetFusion: (_pk: string, tileId: string, overlay: FusionOverlay | undefined) => {
+      const o = ownerOf(tileId);
+      if (o) setTileFusion(o, tileId, overlay);
+    },
+    onTileRangeEdit: (_pk: string, tile: Tile) =>
+      setRangeDlg({ study: tile.study, series: tile.series, patientKey: ownerOf(tile.id), tileId: tile.id, initial: tile.range }),
+    onTileRangeClear: (_pk: string, tileId: string) => {
+      const o = ownerOf(tileId);
+      const cur = allTiles.find((tl) => tl.id === tileId);
+      if (!o || !cur) return;
+      setTileRange(o, tileId, undefined);
+      const newId = tileIdFor(cur.study.studyInstanceUid, cur.series.seriesInstanceUid);
+      setOrderPref((prev) => renameInOrder(reconcileOrder(prev, orderedIdsRef.current), tileId, newId));
+    },
+  };
+  const tabOps = {
+    onRemoveTile: removeTile,
+    onSetGrid: setPatientGrid,
+    onToggleSolo: toggleTileSolo,
+    onInsertAdjacent: insertAdjacentTile,
+    onSwap: swapTiles,
+    onSetSync: setTileSync,
+    onSetFusion: setTileFusion,
+    onTileRangeEdit: (patientKey: string, tile: Tile) =>
+      setRangeDlg({ study: tile.study, series: tile.series, patientKey, tileId: tile.id, initial: tile.range }),
+    onTileRangeClear: (patientKey: string, tileId: string) => setTileRange(patientKey, tileId, undefined),
+  };
+  const gridPatient = isGlobal ? (patients.length > 0 ? globalPatient : null) : activePatient;
+
   return (
     <div
       style={shell}
@@ -778,6 +894,16 @@ export function Viewer2DScreen({ status }: { status: AppStatus | null }) {
           title={t(leftOpen ? "viewer2d.leftPanel.hide" : "viewer2d.leftPanel.show")}
           onClick={toggleLeftPanel}
         >{leftOpen ? "◀" : "▶"} {t("viewer2d.leftPanel.label")}</button>
+        <div role="group" aria-label={t("viewer2d.viewMode.label")} style={segGroup} title={t("viewer2d.viewMode.hint")}>
+          <button
+            type="button" data-testid="viewer2d-mode-global" aria-pressed={isGlobal}
+            style={{ ...segBtn, ...(isGlobal ? segBtnOn : null) }} onClick={() => changeViewMode("global")}
+          >{t("viewer2d.viewMode.global")}</button>
+          <button
+            type="button" data-testid="viewer2d-mode-tabs" aria-pressed={!isGlobal}
+            style={{ ...segBtn, ...(!isGlobal ? segBtnOn : null) }} onClick={() => changeViewMode("tabs")}
+          >{t("viewer2d.viewMode.tabs")}</button>
+        </div>
         <span style={{ flex: 1 }} />
         <button onClick={() => window.close()} style={hbtn}>
           {t("common.close")}
@@ -792,6 +918,8 @@ export function Viewer2DScreen({ status }: { status: AppStatus | null }) {
           onOpenConcat={setConcatDlg}
           hidden={!leftOpen}
           activeKey={activeKey}
+          global={isGlobal}
+          colors={colorMap}
           onRemoveTile={removeTile}
           initialPatientId={initialPatientId}
           initialPatientName={initialPatientName}
@@ -803,27 +931,25 @@ export function Viewer2DScreen({ status }: { status: AppStatus | null }) {
             <div style={emptyMsg}>{t("viewer2d.empty")}</div>
           ) : (
             <>
-              <PatientTabBar
-                patients={patients}
-                activeKey={activeKey}
-                onSelect={setActiveKey}
-                onRemove={removePatient}
-              />
-              {activePatient && (
+              {!isGlobal && (
+                <PatientTabBar
+                  patients={patients}
+                  activeKey={activeKey}
+                  colors={colorMap}
+                  onSelect={setActiveKey}
+                  onRemove={removePatient}
+                />
+              )}
+              {/* 同じ位置の同じ部品のまま props だけ切り替える（モードを替えてもタイルの表示状態を作り直さない）。 */}
+              {gridPatient && (
                 <TileGrid
-                  patient={activePatient}
+                  patient={gridPatient}
+                  global={isGlobal}
+                  colors={colorMap}
+                  onRemovePatient={removePatient}
                   mode={mode}
                   isDemo={isDemo}
-                  onRemoveTile={removeTile}
-                  onSetGrid={setPatientGrid}
-                  onToggleSolo={toggleTileSolo}
-                  onInsertAdjacent={insertAdjacentTile}
-                  onSwap={swapTiles}
-                  onSetSync={setTileSync}
-                  onSetFusion={setTileFusion}
-                  onTileRangeEdit={(patientKey, tile) =>
-                    setRangeDlg({ study: tile.study, series: tile.series, patientKey, tileId: tile.id, initial: tile.range })}
-                  onTileRangeClear={(patientKey, tileId) => setTileRange(patientKey, tileId, undefined)}
+                  {...(isGlobal ? globalOps : tabOps)}
                 />
               )}
             </>
@@ -854,8 +980,12 @@ export function Viewer2DScreen({ status }: { status: AppStatus | null }) {
           onOpen={(range) => {
             const d = rangeDlg;
             setRangeDlg(null);
-            if (d.patientKey && d.tileId) setTileRange(d.patientKey, d.tileId, range);
-            else void addTile(d.study, d.series, range);
+            if (d.patientKey && d.tileId) {
+              setTileRange(d.patientKey, d.tileId, range);
+              const newId = tileIdFor(d.study.studyInstanceUid, d.series.seriesInstanceUid, range);
+              const oldId = d.tileId;
+              setOrderPref((prev) => renameInOrder(reconcileOrder(prev, orderedIdsRef.current), oldId, newId));
+            } else void addTile(d.study, d.series, range);
           }}
         />
       )}
@@ -868,11 +998,13 @@ export function Viewer2DScreen({ status }: { status: AppStatus | null }) {
 function PatientTabBar({
   patients,
   activeKey,
+  colors,
   onSelect,
   onRemove,
 }: {
   patients: PatientSession[];
   activeKey: string;
+  colors: PatientColorMap;
   onSelect: (key: string) => void;
   onRemove: (key: string) => void;
 }) {
@@ -885,6 +1017,7 @@ function PatientTabBar({
         return (
           <div key={p.patientKey} style={{ ...tabItem, ...(isActive ? tabItemActive : {}) }}>
             <button onClick={() => onSelect(p.patientKey)} style={tabLabel}>
+              <span aria-hidden="true" style={{ ...colorDot, background: patientColorOf(colors, p.patientKey).solid }} />
               {label}
               <span style={{ fontSize: 11, color: "#8a98a6", marginLeft: 4 }}>({p.tiles.length})</span>
             </button>
@@ -902,10 +1035,73 @@ function PatientTabBar({
   );
 }
 
+// ── 全患者モードの患者標識 ─────────────────────────────────────
+
+interface PatientTag {
+  name: string;
+  id: string;
+  initial: string;
+  color: PatientColor;
+}
+
+interface LegendEntry extends PatientTag {
+  key: string;
+  count: number;
+}
+
+/** 全患者モードの凡例。誰のタイルが開いているか・今の操作がどの患者に効くかを常に見せる（取り違え防止）。 */
+function PatientLegend({
+  entries,
+  targetKey,
+  onFlash,
+  onRemove,
+}: {
+  entries: LegendEntry[];
+  /** 操作の対象の患者（最後に触ったタイルの患者）。 */
+  targetKey: string | null;
+  onFlash: (key: string) => void;
+  onRemove: (key: string) => void;
+}) {
+  const { t } = useI18n();
+  return (
+    <div style={legendBar} data-testid="patient-legend">
+      <span style={legendLabel}>{t("viewer2d.legend.label")}</span>
+      {entries.map((e) => {
+        const isTarget = e.key === targetKey;
+        return (
+          <div
+            key={e.key}
+            data-testid="patient-legend-chip"
+            data-target={isTarget || undefined}
+            style={{ ...legendChip, borderColor: e.color.solid, background: e.color.tint, ...(isTarget ? { boxShadow: `0 0 0 2px ${e.color.solid}` } : null) }}
+          >
+            <button
+              type="button"
+              onClick={() => onFlash(e.key)}
+              style={legendChipMain}
+              title={t("viewer2d.legend.flash")}
+            >
+              <span aria-hidden="true" style={{ ...patientBadge, background: e.color.solid, color: e.color.onSolid }}>{e.initial}</span>
+              <strong style={patientNameText}>{e.name || e.id || "—"}</strong>
+              {e.name && e.id && e.id !== e.name ? <span style={patientIdText}>{e.id}</span> : null}
+              <span style={legendCount}>{e.count}</span>
+              {isTarget && <span style={legendTarget}>{t("viewer2d.legend.target")}</span>}
+            </button>
+            <button type="button" onClick={() => onRemove(e.key)} style={legendClose} title={t("viewer2d.removePatient")}>×</button>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 // ── TileGrid ──────────────────────────────────────────────────
 
 function TileGrid({
   patient,
+  global,
+  colors,
+  onRemovePatient,
   mode,
   isDemo,
   onRemoveTile,
@@ -918,7 +1114,12 @@ function TileGrid({
   onTileRangeEdit,
   onTileRangeClear,
 }: {
+  /** 患者タブでは表示中の患者。全患者モードでは全タイルを並べた仮の患者（GLOBAL_KEY）。 */
   patient: PatientSession;
+  /** 全患者モード（タイルに患者の色枠・ラベルを付け、操作の対象を最後に触ったタイルの患者に絞る）。 */
+  global: boolean;
+  colors: PatientColorMap;
+  onRemovePatient: (patientKey: string) => void;
   mode: "standalone" | "web";
   /** 公開デモ（backendが該当APIを403にする）。Viewer2DMenuBar/RoiManagerPanelへ伝播する。 */
   isDemo: boolean;
@@ -945,10 +1146,15 @@ function TileGrid({
   // 収集は患者単位（annotation state は本体でグローバル）。復元は各タイル（Viewer2D）が行う。
   // **収集に `getLoadedRois()` を渡すのが要点**: 表示していないシリーズの ROI を持ち越さないと、
   // 差分検出が「消えた」と判定して墓標を立て、実際に消えてしまう。
+  // 全患者モードでは見えている**患者ごと**に収集を登録する（タイルの持ち主は study から引く）。
+  const visiblePatientKeys = useMemo(
+    () => [...new Set(patient.tiles.map((tl) => derivePatientKey(tl.study)))].filter(Boolean).sort().join("\u0000"),
+    [patient.tiles],
+  );
   useEffect(() => {
-    const pk = patient.patientKey;
-    if (!pk) return;
-    const unregister = registerRoiCollector(pk, () => collectRoisForPatient(pk, getLoadedRois(pk)));
+    const pks = visiblePatientKeys ? visiblePatientKeys.split("\u0000") : [];
+    if (pks.length === 0) return;
+    const unregisters = pks.map((pk) => registerRoiCollector(pk, () => collectRoisForPatient(pk, getLoadedRois(pk))));
     const ev = csToolsEnums.Events;
     // ロックと表示の切り替えも保存項目（isLocked・isVisible）なので聞く。
     const names = [
@@ -958,7 +1164,7 @@ function TileGrid({
       ev.ANNOTATION_LOCK_CHANGE,
       ev.ANNOTATION_VISIBILITY_CHANGE,
     ].filter(Boolean) as string[];
-    const onChange = () => scheduleRoiSave(pk);
+    const onChange = () => pks.forEach((pk) => scheduleRoiSave(pk));
     for (const name of names) eventTarget.addEventListener(name, onChange);
     // ラベル・scope・プラグイン属性の変更も保存対象なのでメタ store も見る。
     const unsubMeta = subscribeRoiMaskStore(onChange);
@@ -966,9 +1172,9 @@ function TileGrid({
       for (const name of names) eventTarget.removeEventListener(name, onChange);
       unsubMeta();
       // 解除時に保留中の保存を流し切る（ウィンドウを閉じて計測が消えるのを防ぐ）。
-      unregister();
+      unregisters.forEach((u) => u());
     };
-  }, [patient.patientKey]);
+  }, [visiblePatientKeys]);
 
   // Row×Col レイアウト: どちらか未指定(0)なら他方 or タイル数から自動導出。
   const rows = patient.gridRows > 0 ? patient.gridRows : 0;
@@ -1122,11 +1328,30 @@ function TileGrid({
   // シリーズ Sync は SeriesViewer がグローバル coordinator（sliceSync）＋
   // Cornerstone synchronizer（表示状態）で直接連動する。ここでは Sync ON 枚数のみ把握し、
   // 2 枚以上で枠線ハイライト（実同期の成立判定は coordinator 側）。
-  const syncedCount = useMemo(
-    () => patient.tiles.filter((t) => t.syncEnabled).length,
-    [patient.tiles],
-  );
-  const isSyncActive = syncedCount >= 2;
+  // Sync は患者ごとに閉じる（sliceSync の group）ので、枠の強調も同じ患者の中で 2 枚以上のときだけ。
+  const syncedByPatient = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const tl of patient.tiles) {
+      if (!tl.syncEnabled) continue;
+      const k = derivePatientKey(tl.study);
+      m.set(k, (m.get(k) ?? 0) + 1);
+    }
+    return m;
+  }, [patient.tiles]);
+
+  // 最後に操作したタイル（全患者モードの「操作の対象の患者」の表示と、ROI マネージャの対象に使う）。
+  const [focusedTileId, setFocusedTileId] = useState<string | null>(null);
+  const focusedTile = patient.tiles.find((tl) => tl.id === focusedTileId) ?? null;
+  const focusedPatientKey = focusedTile ? derivePatientKey(focusedTile.study) : null;
+  // 凡例のチップを押したとき、その患者のタイルを短く強調する。
+  const [flashKey, setFlashKey] = useState<string | null>(null);
+  const flashTimer = useRef<number | null>(null);
+  useEffect(() => () => { if (flashTimer.current) window.clearTimeout(flashTimer.current); }, []);
+  const flashPatient = (pk: string) => {
+    setFlashKey(pk);
+    if (flashTimer.current) window.clearTimeout(flashTimer.current);
+    flashTimer.current = window.setTimeout(() => setFlashKey(null), 1400);
+  };
 
   // ドロップ処理（DnD ペイロード種別によってタイル操作を振り分け）
   const handleDrop = useCallback(
@@ -1136,9 +1361,15 @@ function TileGrid({
 
       if (payload.type === "series") {
         if (zone === "center") {
+          const targetTile = patient.tiles.find((tl) => tl.id === targetTileId);
           // 連結タイルは Fusion の重ね先にできない（背景の座標系が複数シリーズにまたがる）。
-          if (patient.tiles.find((tl) => tl.id === targetTileId)?.concat) {
+          if (targetTile?.concat) {
             emitToast(t("series.concat.disabled"));
+            return;
+          }
+          // 別の患者のシリーズは重ねない（患者の取り違え防止）。
+          if (targetTile && derivePatientKey(payload.study) !== derivePatientKey(targetTile.study)) {
+            emitToast(t("viewer2d.fusion.crossPatient"));
             return;
           }
           // センタードロップ → Fusion オーバーレイに設定（既ロード済みシリーズも可）
@@ -1175,12 +1406,18 @@ function TileGrid({
           }
         }
       } else if (payload.type === "tile") {
-        if (payload.patientKey === patient.patientKey && payload.tileId !== targetTileId) {
+        // 患者タブでは別の患者のタイルは来ない。全患者モードでは来るので、並べ替えは通し、Fusion だけ断る。
+        if ((global || payload.patientKey === patient.patientKey) && payload.tileId !== targetTileId) {
           if (zone === "center") {
             // タイルヘッダを中央ドロップ → そのタイルのシリーズを Fusion に設定。
             // ドロップ元タイルで表示中だった C/T を引き継ぐ（1ch 目固定を避ける）。
             const srcTile = patient.tiles.find((t) => t.id === payload.tileId);
-            if (srcTile?.concat || patient.tiles.find((t) => t.id === targetTileId)?.concat) {
+            const dstTile = patient.tiles.find((t) => t.id === targetTileId);
+            if (srcTile && dstTile && derivePatientKey(srcTile.study) !== derivePatientKey(dstTile.study)) {
+              emitToast(t("viewer2d.fusion.crossPatient"));
+              return;
+            }
+            if (srcTile?.concat || dstTile?.concat) {
               emitToast(t("series.concat.disabled"));
               return;
             }
@@ -1206,7 +1443,7 @@ function TileGrid({
     },
     // patient 全体に依存させる。patient.patientKey だけだとタイル追加後も
     // 古い patient.tiles を握ったままになり、srcTile / 重複判定が壊れる。
-    [patient, onInsertAdjacent, onSwap, onSetFusion],
+    [patient, global, onInsertAdjacent, onSwap, onSetFusion, t],
   );
 
   // メニュー/ツールバーのコマンド対象: 選択タイル → 無ければ全タイル。
@@ -1219,10 +1456,21 @@ function TileGrid({
     setTagTarget({ tile, sop: imageId ? sopFromImageId(imageId) : null });
     return true;
   };
-  const resolveTargets = useCallback(
-    () => (selectedIds.size > 0 ? [...selectedIds] : patient.tiles.map((tl) => tl.id)),
-    [selectedIds, patient.tiles],
-  );
+  const lastAmbiguousToast = useRef(0);
+  const resolveTargets = useCallback(() => {
+    if (selectedIds.size > 0) return [...selectedIds];
+    // 全患者モードでは、全患者に一斉に効かせない。最後に触ったタイルの患者のタイルだけ。
+    const r = defaultTargets(
+      patient.tiles.map((tl) => ({ id: tl.id, patientKey: derivePatientKey(tl.study) })),
+      focusedTileId ?? getFocusedTile(),
+      global,
+    );
+    if (r.ambiguous && Date.now() - lastAmbiguousToast.current > 2000) {
+      lastAmbiguousToast.current = Date.now();
+      emitToast(t("viewer2d.scope.ambiguous"));
+    }
+    return r.ids;
+  }, [selectedIds, patient.tiles, focusedTileId, global, t]);
   /**
    * ROI の**貼り付け先タイルを 1 つに決める**。決まらなければ null。
    *
@@ -1239,6 +1487,12 @@ function TileGrid({
     if (focused && patient.tiles.some((tl) => tl.id === focused)) return focused;
     return null;
   }, [selectedIds, patient.tiles]);
+  // コピー・複製の宛先は、ROI を持つタイル（画像のクリックに頼らない）。
+  const roiOwnerTile = useCallback(
+    (uid: string): string | null =>
+      ownerTileOf(patient.tiles.map((tl) => tl.id), (id) => queryViewerCommand(id, (c) => c.ownsRoi(uid)) === true),
+    [patient.tiles],
+  );
   // プラグインの派生シリーズ保存の確認（H4b）。保存は同意が取れてから実行する。
   const [pluginSave, setPluginSave] = useState<{
     request: PluginSaveRequest;
@@ -1451,6 +1705,18 @@ function TileGrid({
       setRoiMeta: (roiUid, pluginId, patch) => {
         for (const id of resolveTargets()) {
           if (queryViewerCommand(id, (c) => c.setRoiMeta(roiUid, pluginId, patch))) return true;
+        }
+        return false;
+      },
+      // プラグインが作る ROI。pluginId / pluginName は host が入れる（プラグインは名乗れない）。
+      createRoi: (tileId, by, req) => {
+        const id = tileId ?? resolveTargets()[0];
+        const r = id ? queryViewerCommand(id, (c) => c.createRoi(req, by)) : null;
+        return r ?? { ok: false, reason: "no-image" };
+      },
+      removeCreatedRoi: (roiUid, pluginId) => {
+        for (const id of resolveTargets()) {
+          if (queryViewerCommand(id, (c) => c.removeCreatedRoi(roiUid, pluginId))) return true;
         }
         return false;
       },
@@ -1767,10 +2033,10 @@ function TileGrid({
         runViewerCommand(targets, (c) => c.selectRoi(roiUid, exclusive));
       },
       copyRoi: (roiUid) => {
-        const target = resolveRoiEditTarget();
-        if (!target) { notify(t("roi.paste.noTile")); return; }
         const uid = roiUid ?? selectedAnnotations()[0]?.annotationUID;
         if (!uid) { notify(t("roi.copy.none")); return; }
+        const target = roiOwnerTile(uid as string) ?? resolveRoiEditTarget();
+        if (!target) { notify(t("roi.paste.noTile")); return; }
         const ok = queryViewerCommand(target, (c) => c.copyRoi(uid as string));
         notify(t(ok ? "roi.copy.done" : "roi.copy.failed"));
       },
@@ -1782,7 +2048,7 @@ function TileGrid({
         if (!queryViewerCommand(target, (c) => c.pasteRoi())) return;
       },
       duplicateRoi: (roiUid) => {
-        const target = resolveRoiEditTarget();
+        const target = roiOwnerTile(roiUid) ?? resolveRoiEditTarget();
         if (!target) { notify(t("roi.paste.noTile")); return; }
         if (!queryViewerCommand(target, (c) => c.duplicateRoi(roiUid))) return;
       },
@@ -1892,6 +2158,8 @@ function TileGrid({
         if (d?.openViewer) void d.openViewer("curvedmpr");
         else window.open(`${window.location.pathname}#curvedmpr`, "graphy-curvedmpr");
       },
+      // プラグインが中心線を渡して Curved MPR 窓を開く（H73）。開いているタイルのシリーズからしか引かない。
+      openCurvedMpr: (spec, producer) => openCurvedMprFromPlugin(spec, producer, studyUidOfSeries),
       // 対象（選択→無ければ先頭）タイルのシリーズで Histogram 解析ダイアログを開く。
       openHistogram: () => {
         const tid = resolveTargets()[0];
@@ -2012,6 +2280,42 @@ function TileGrid({
   );
 
   // AI アシスタント窓からの表示操作（main 中継）。許可リストの操作だけを受け、引数は実行器が再検証する。
+  // 全患者モードのタイルに付ける患者の標識（色・頭文字・名前・ID）。
+  const tagFor = (tile: Tile): PatientTag => {
+    const pk = derivePatientKey(tile.study);
+    const name = tile.study.patientName || "";
+    const id = tile.study.patientId || "";
+    return { name, id, initial: patientInitial(name, id), color: patientColorOf(colors, pk) };
+  };
+  const legendEntries = useMemo<LegendEntry[]>(() => {
+    const m = new Map<string, LegendEntry>();
+    for (const tl of patient.tiles) {
+      const pk = derivePatientKey(tl.study);
+      const e = m.get(pk);
+      if (e) e.count++;
+      else {
+        const name = tl.study.patientName || "";
+        const id = tl.study.patientId || "";
+        m.set(pk, { key: pk, name, id, initial: patientInitial(name, id), color: patientColorOf(colors, pk), count: 1 });
+      }
+    }
+    return [...m.values()];
+  }, [patient.tiles, colors]);
+
+  // 全患者モードで複数の患者を表示中は、ツールバーに「誰に効くか」を出す。
+  const toolbarTargetLabel = (() => {
+    if (!global || legendEntries.length <= 1) return undefined;
+    const r = defaultTargets(
+      patient.tiles.map((tl) => ({ id: tl.id, patientKey: derivePatientKey(tl.study) })),
+      focusedTileId ?? getFocusedTile(),
+      true,
+    );
+    if (r.ambiguous) return t("viewer2d.tb.targetNone");
+    const first = patient.tiles.find((tl) => tl.id === r.ids[0]);
+    const name = first ? first.study.patientName || first.study.patientId || "—" : "—";
+    return t("viewer2d.tb.targetPatient", { name, n: r.ids.length });
+  })();
+
   const wlPresets = useWlPresets();
   useAssistantBridge({
     tileIds: patient.tiles.map((tl) => tl.id),
@@ -2021,6 +2325,10 @@ function TileGrid({
     setTool: actions.setTool,
     setLayoutCols: (c) => onSetGrid(patient.patientKey, 0, c),
     presets: wlPresets.map((p) => ({ key: p.key, label: presetLabel(p, t), center: p.center, width: p.width })),
+    captureTile: async (tileId, withRoi) => {
+      const url = await captureTileImage(tileId, withRoi);
+      return url ? downscaleDataUrl(url, ASSISTANT_IMAGE_MAX_EDGE) : null;
+    },
   });
 
   /**
@@ -2089,7 +2397,6 @@ function TileGrid({
       */}
       <PluginSeriesPanels />
       {/* 外部 AI 送信の同意ダイアログ。本体のツリー内に置かないと i18n が効かない。 */}
-      <AiEgressConsentHost />
       <Viewer2DMenuBar
         actions={actions}
         refLines={refLines}
@@ -2107,6 +2414,7 @@ function TileGrid({
         activeTool={activeTool}
         selectedCount={selectedIds.size}
         targetCount={n}
+        targetLabel={toolbarTargetLabel}
       />
       {lutOpen && (
         <LutDialog
@@ -2137,6 +2445,14 @@ function TileGrid({
       <ScissorsDialog />
       <ThresholdDialog />
       <LevelSetsDialog />
+      {global && (
+        <PatientLegend
+          entries={legendEntries}
+          targetKey={focusedPatientKey}
+          onFlash={flashPatient}
+          onRemove={onRemovePatient}
+        />
+      )}
       <div style={{ display: "flex", flex: 1, minHeight: 0 }}>
       {/* 単独表示のタイルは、このグリッドの外枠いっぱいに重ねる（他のタイルの大きさは変えない）。 */}
       <div style={{ position: "relative", flex: 1, minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column" }}>
@@ -2158,6 +2474,8 @@ function TileGrid({
           flex: 1,
           minHeight: 0,
           overflowY: "auto",
+          // スクロールバーの出入りでセルの幅が約 15px 動かないよう、余白を常に確保する。
+          scrollbarGutter: "stable",
         }}
       >
         {patient.tiles.flatMap((tile) => [
@@ -2168,8 +2486,11 @@ function TileGrid({
             hiddenBySolo={soloTileId !== null && soloTileId !== tile.id}
             onToggleSolo={() => onToggleSolo(patient.patientKey, tile.id)}
             mode={mode}
-            patientKey={patient.patientKey}
-            syncActive={isSyncActive && tile.syncEnabled}
+            patientKey={derivePatientKey(tile.study)}
+            patientTag={global ? tagFor(tile) : undefined}
+            flash={flashKey !== null && flashKey === derivePatientKey(tile.study)}
+            onFocusTile={() => setFocusedTileId(tile.id)}
+            syncActive={tile.syncEnabled && (syncedByPatient.get(derivePatientKey(tile.study)) ?? 0) >= 2}
             syncEnabled={tile.syncEnabled}
             referenceLinesEnabled={refLines}
             showControls={panelVisible}
@@ -2334,7 +2655,9 @@ function TileGrid({
       )}
       {showRoiMgr && (
         <RoiManagerPanel
-          activePatientKey={patient.patientKey}
+          activePatientKey={
+            global ? (focusedPatientKey ?? (patient.tiles[0] ? derivePatientKey(patient.tiles[0].study) : "")) : patient.patientKey
+          }
           isDemo={isDemo}
           mode={mode}
           onRevealRoi={revealRoi}
@@ -2507,6 +2830,9 @@ function TileCell({
   onToggleSolo,
   mode,
   patientKey,
+  patientTag,
+  flash,
+  onFocusTile,
   syncActive,
   syncEnabled,
   referenceLinesEnabled,
@@ -2531,6 +2857,12 @@ function TileCell({
   onToggleSolo: () => void;
   mode: "standalone" | "web";
   patientKey: string;
+  /** 全患者モードのときだけ。患者の色枠・ヘッダの患者表示に使う（取り違え防止）。 */
+  patientTag?: PatientTag;
+  /** 凡例のチップを押した患者のタイルを短く強調する。 */
+  flash?: boolean;
+  /** このタイルを触った（操作の対象の患者を決める）。 */
+  onFocusTile?: () => void;
   syncActive: boolean;
   syncEnabled: boolean;
   referenceLinesEnabled: boolean;
@@ -2885,11 +3217,18 @@ function TileCell({
   return (
     <div
       data-tile-id={tile.id}
+      onPointerDownCapture={onFocusTile}
       style={{
         ...tileBox,
+        // 全患者モード: 患者の色で太い枠。同期（青 outline）・選択（橙の影）とは別の経路（border）で出す。
+        ...(patientTag ? { border: `${PATIENT_BORDER_PX}px solid ${patientTag.color.solid}` } : null),
         outline: syncActive ? "2px solid #0b5cad" : undefined,
         // 選択中はオレンジのリングで明示（sync の青アウトラインと併存可能）。
-        boxShadow: selected ? "0 0 0 3px #ff9800" : undefined,
+        boxShadow: selected
+          ? "0 0 0 3px #ff9800"
+          : flash && patientTag
+            ? `0 0 0 4px ${patientTag.color.solid}`
+            : undefined,
         position: "relative",
         ...(solo ? { position: "absolute", inset: 0, height: "auto", zIndex: 2 } : null),
         ...(hiddenBySolo ? { visibility: "hidden" } : null),
@@ -2935,7 +3274,11 @@ function TileCell({
 
       {/* ── ヘッダー（ドラッグハンドル） ── */}
       <div
-        style={{ ...tileHead, cursor: "grab" }}
+        style={{
+          ...tileHead,
+          cursor: "grab",
+          ...(patientTag ? { background: patientTag.color.tint, borderBottom: `1px solid ${patientTag.color.solid}` } : null),
+        }}
         draggable
         onDragStart={handleHeaderDragStart}
         onDragEnd={handleHeaderDragEnd}
@@ -2950,6 +3293,21 @@ function TileCell({
           title={solo ? t("viewer2d.tile.soloExit") : t("viewer2d.tile.soloEnter")}
         >
           {solo ? "◱ " : ""}
+          {patientTag && (
+            <>
+              <span
+                aria-hidden="true"
+                style={{ ...patientBadge, background: patientTag.color.solid, color: patientTag.color.onSolid }}
+              >{patientTag.initial}</span>
+              <strong data-testid="tile-patient-label" title={`${patientTag.name} ${patientTag.id}`.trim()} style={patientNameText}>
+                {patientTag.name || patientTag.id || "—"}
+              </strong>
+              {patientTag.name && patientTag.id && patientTag.id !== patientTag.name ? (
+                <span style={patientIdText}>{patientTag.id}</span>
+              ) : null}
+              {" · "}
+            </>
+          )}
           {[dateLabel, studyDesc, seriesLabel].filter(Boolean).join(" / ")}
         </span>
 
@@ -3288,7 +3646,7 @@ function FusionControlBar({
     if (isoText.trim() !== "" && Number.isFinite(v) && v !== isolineLevel) onIsolineLevelChange(v);
   };
   return (
-    <div style={fusionBar}>
+    <OverflowRow style={fusionBar} moreTestId="fusion-bar-more">
       <div style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
         <span style={{ fontSize: 11, color: "#0b5cad", flex: "none" }}>🔀</span>
         <span
@@ -3556,7 +3914,7 @@ function FusionControlBar({
           </span>
         </div>
       )}
-    </div>
+    </OverflowRow>
   );
 }
 
@@ -3616,6 +3974,8 @@ function StudyBrowser({
   onOpenConcat,
   hidden,
   activeKey,
+  global,
+  colors,
   onRemoveTile,
   initialPatientId,
   initialPatientName,
@@ -3628,6 +3988,9 @@ function StudyBrowser({
   /** true で非表示。アンマウントはしない（検索結果・チェック・展開を保つ）。 */
   hidden: boolean;
   activeKey: string | null;
+  /** 全患者モード（「表示中」に全患者のタイルを出す）。 */
+  global: boolean;
+  colors: PatientColorMap;
   onRemoveTile: (patientKey: string, tileId: string) => void;
   initialPatientId?: string | null;
   initialPatientName?: string | null;
@@ -3713,6 +4076,10 @@ function StudyBrowser({
   }, [initialPatientId, initialPatientName, initialStudyUid, search]);
 
   const activePatient = patients.find((p) => p.patientKey === activeKey);
+  // 「表示中」に出すタイル。全患者モードは全患者ぶん（色の点で誰のものか分かるようにする）。
+  const openTiles = (global ? patients : activePatient ? [activePatient] : []).flatMap((p) =>
+    p.tiles.map((tile) => ({ tile, pk: p.patientKey })),
+  );
 
   return (
     <div style={hidden ? { ...tree, display: "none" } : tree} data-testid="left-panel">
@@ -3737,17 +4104,18 @@ function StudyBrowser({
       </div>
 
       <details open style={listBox} data-testid="left-open-list">
-        <summary style={listHead}>{t("viewer2d.leftPanel.open", { count: activePatient?.tiles.length ?? 0 })}</summary>
-        {(activePatient?.tiles ?? []).map((tile) => {
+        <summary style={listHead}>{t("viewer2d.leftPanel.open", { count: openTiles.length })}</summary>
+        {openTiles.map(({ tile, pk }) => {
           const l = tileListLabel(tile);
           return (
             <div key={tile.id} style={listRow} data-testid="left-open-row">
+              {global && <span aria-hidden="true" style={{ ...colorDot, background: patientColorOf(colors, pk).solid }} />}
               <span style={listText} title={l.text}>
                 {l.concat && <span style={concatTag}>{t("viewer2d.leftPanel.concat")}</span>}{l.text}
               </span>
               <button
                 type="button" style={listX} title={t("viewer2d.removeTile")}
-                onClick={() => activePatient && onRemoveTile(activePatient.patientKey, tile.id)}
+                onClick={() => onRemoveTile(pk, tile.id)}
               >✕</button>
             </div>
           );
@@ -3791,6 +4159,10 @@ function StudyBrowser({
             key={`${s.studyInstanceUid}:${treeVersion}`}
             study={s}
             tileOwner={tileOwner}
+            dot={(() => {
+              const pk = derivePatientKey(s);
+              return colors.has(pk) ? patientColorOf(colors, pk) : undefined;
+            })()}
             onRemoveTile={onRemoveTile}
             onAdd={onAdd}
             onOpenRange={onOpenRange}
@@ -3808,6 +4180,7 @@ function StudyBrowser({
 function StudyNode({
   study,
   tileOwner,
+  dot,
   onRemoveTile,
   onAdd,
   onOpenRange,
@@ -3817,6 +4190,8 @@ function StudyNode({
 }: {
   study: Study;
   tileOwner: Map<string, string>;
+  /** この患者が表示中ならその色（検索結果のどれが開いている患者かを色で示す）。 */
+  dot?: PatientColor;
   onRemoveTile: (patientKey: string, tileId: string) => void;
   onAdd: (study: Study, series: Series) => void;
   onOpenRange: (study: Study, series: Series) => void;
@@ -3857,6 +4232,7 @@ function StudyNode({
     <div style={{ marginBottom: 2 }}>
       <div onClick={toggle} style={studyRow}>
         <span style={{ flex: "none", color: "#6b7785", fontSize: 11 }}>{open ? "▾" : "▸"}</span>
+        {dot && <span aria-hidden="true" style={{ ...colorDot, background: dot.solid }} />}
         <div style={{ overflow: "hidden", minWidth: 0 }}>
           <div
             style={{
@@ -4158,6 +4534,35 @@ const ctxMenuItem: React.CSSProperties = {
   cursor: "pointer",
   borderRadius: 4,
 };
+// 全患者モードのタイル枠の太さ。どのタイルも同じ太さにして、画像の大きさを揃える。
+const PATIENT_BORDER_PX = 3;
+const colorDot: React.CSSProperties = {
+  display: "inline-block", width: 9, height: 9, borderRadius: "50%", flex: "none", marginRight: 5, verticalAlign: "middle",
+};
+const segGroup: React.CSSProperties = { display: "inline-flex", border: "1px solid #cdd5de", borderRadius: 6, overflow: "hidden", marginLeft: 8 };
+const segBtn: React.CSSProperties = {
+  padding: "3px 10px", border: "none", background: "#fff", color: "#33404d", fontSize: 12, cursor: "pointer",
+};
+const segBtnOn: React.CSSProperties = { background: "#0b5cad", color: "#fff", fontWeight: 600 };
+const patientBadge: React.CSSProperties = {
+  display: "inline-flex", alignItems: "center", justifyContent: "center", width: 16, height: 16, borderRadius: 4,
+  fontSize: 10, fontWeight: 700, flex: "none", marginRight: 4, verticalAlign: "middle",
+};
+const patientNameText: React.CSSProperties = { fontWeight: 700, color: "#1a2530" };
+const patientIdText: React.CSSProperties = { fontSize: 10, color: "#5a6672", marginLeft: 4 };
+// 1 行固定（患者が増えても折り返さず横スクロール）。折り返すと高さが変わって画像タイルが縮む。
+const legendBar: React.CSSProperties = {
+  display: "flex", flexWrap: "nowrap", alignItems: "center", gap: 6, padding: "0 8px", height: 34, boxSizing: "border-box",
+  overflowX: "auto", overflowY: "hidden", borderBottom: "1px solid #e1e7ee", background: "#fafbfc", flex: "none",
+};
+const legendLabel: React.CSSProperties = { fontSize: 11, color: "#6b7785", marginRight: 2, flex: "none", whiteSpace: "nowrap" };
+const legendChip: React.CSSProperties = { display: "inline-flex", alignItems: "center", border: "2px solid", borderRadius: 6, overflow: "hidden", flex: "none" };
+const legendChipMain: React.CSSProperties = {
+  display: "inline-flex", alignItems: "center", gap: 2, padding: "2px 6px", border: "none", background: "transparent", cursor: "pointer", fontSize: 12,
+};
+const legendCount: React.CSSProperties = { fontSize: 10, color: "#5a6672", marginLeft: 6 };
+const legendTarget: React.CSSProperties = { fontSize: 10, color: "#0b5cad", fontWeight: 600, marginLeft: 6 };
+const legendClose: React.CSSProperties = { border: "none", background: "transparent", cursor: "pointer", padding: "2px 6px", color: "#6b7785", fontSize: 13 };
 const tileBox: React.CSSProperties = {
   border: "1px solid #d7dde3",
   borderRadius: 8,
@@ -4197,10 +4602,11 @@ const xbtn: React.CSSProperties = {
   lineHeight: 1,
   padding: "1px 6px",
 };
+// 折り返さない 1 行（溢れた分は OverflowRow の「⋯」へ）。折り返すと高さが変わって画像タイルが縮む。
 const fusionBar: React.CSSProperties = {
   display: "flex",
   alignItems: "center",
-  flexWrap: "wrap",
+  flexWrap: "nowrap",
   gap: 8,
   padding: "5px 10px",
   borderTop: "1px solid #e1e7ee",

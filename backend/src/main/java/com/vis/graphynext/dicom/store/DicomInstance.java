@@ -63,6 +63,14 @@ public class DicomInstance {
     /** 保存した DICOM ファイルのバイトサイズ（容量統計用）。 */
     private Long sizeBytes;
 
+    /**
+     * 受信（取り込み）した日時（epoch ミリ秒）。自動削除の「受信からの日数」の元。同じ SOP の再受信は新しい行で
+     * 上書きされるので、最後の受信日時になる。統合・分割・患者編集は既存の行を書き換えるだけで、値は変わらない。
+     * この列を足す前に保存した行は null（起動時に {@link DicomStorageService#backfillReceivedAt()} がファイルの
+     * 更新時刻で埋める。取れない行は null のまま＝受信日時は不明で、自動削除の対象にしない）。
+     */
+    private Long receivedAt;
+
     @Column(length = 1024)
     private String uri;
 
@@ -212,6 +220,14 @@ public class DicomInstance {
 
     public void setSizeBytes(Long v) {
         this.sizeBytes = v;
+    }
+
+    public Long getReceivedAt() {
+        return receivedAt;
+    }
+
+    public void setReceivedAt(Long v) {
+        this.receivedAt = v;
     }
 
     public String getUri() {

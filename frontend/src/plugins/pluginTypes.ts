@@ -24,6 +24,7 @@ import type {
   PluginCurveFrameOptions,
 } from "./pluginCenterlineApi";
 import type { Vec3 } from "../viewer/reslice";
+import type { PluginCurvedMprResult, PluginCurvedMprSpec } from "./pluginCurvedMprApi";
 import type { PluginSeriesPanelHandle, PluginSeriesPanelOptions } from "./pluginSeriesPanelApi";
 import type { ViewerDerivedSeriesRequest, ViewerDerivedSeriesResult, ViewerOverlay, ViewerPixelDataOptions, ViewerRoiMeasurements, ViewerTarget, ViewerAngioReportRequest, ViewerPresentationStateRequest, ViewerTilePixelData, ViewerTileSpatialCalibration, ViewerTileXaState, ViewerTileXaCine, ViewerTileRoi, ViewerTileViewState, ViewerSrMeasurementGroup, ViewerSrRequest, ViewerSrResult, ViewerLabelVolume, ViewerLabelVolumeResult } from "../viewer/viewerCommands";
 
@@ -218,7 +219,7 @@ export interface PluginManifest {
   category?: PluginCategory;
   /**
    * AI アシスタントに渡すツール（`plugin.json` の `aiTools`。backend が検査・組み直した後の形）。
-   * `permissions` に `ai-tools` が無い、または `effect` が `read` / `display` 以外のものは backend が落とすので、ここには来ない。
+   * `permissions` に `ai-tools` が無い、または `effect` が `read` / `display` / `write` 以外のものは backend が落とすので、ここには来ない。
    */
   aiTools?: PluginAiToolSpec[];
 }
@@ -227,7 +228,7 @@ export interface PluginManifest {
 export interface PluginAiToolSpec {
   name: string;
   description: string;
-  effect: "read" | "display";
+  effect: "read" | "display" | "write";
   parameters: Record<string, unknown>;
 }
 
@@ -893,6 +894,19 @@ export interface Viewer2DPluginHost extends PluginHostBase {
    */
   setRoiMeta: (roiUid: string, patch: Record<string, string>) => boolean;
   /**
+   * **ROI（楕円・矩形）を、表示中のスライスへ作る。** `tileId` 省略時は対象タイルの先頭。
+   * 中心は患者座標 LPS（mm）の `centerLps`、または表示中のスライスの画素座標 `[列, 行]` の `centerPx`（`getRois()` の `points` と同じ座標）の**どちらか一方**。
+   * LPS の中心は表示中のスライスの面内であること（面外は `off-slice` で拒否。別のスライスへは作らない）。成功すると、作った ROI の中心（LPS）も返る。
+   * 半径（矩形は半幅）は**表示の水平・垂直方向**の mm。作った ROI には本体が出自の印（このプラグイン）とラベルを付け、
+   * ROI マネージャで見分けられる。保存は本体が予約する。AI ツール（`effect: "write"`）から呼ぶときは、その実行前に本体が利用者の確認を出す。
+   */
+  createRoi: (
+    tileId: string | undefined,
+    req: import("../viewer/roiCreate").CreateRoiRequest,
+  ) => { ok: true; roiUid: string; centerLps: [number, number, number] } | { ok: false; reason: import("../viewer/roiCreate").CreateRoiFailure };
+  /** `createRoi` で**このプラグインが作った** ROI だけを消す（本体や他プラグインの ROI・ロック中は消えず false）。 */
+  removeCreatedRoi: (roiUid: string) => boolean;
+  /**
    * **表示位置を移動する**（H14）。結果の一覧から「その ROI のスライス」へ飛ぶ用途。
    *
    * <p>範囲外は端に丸める。**読み出し（`getPixelData`）とは別**にしてあるので、
@@ -1102,6 +1116,18 @@ export interface Viewer2DPluginHost extends PluginHostBase {
     polylineWorld: readonly Vec3[],
     opts: PluginCurveFrameOptions,
   ) => PluginCurveFrame[];
+  /**
+   * **中心線を渡して、本体の Curved MPR 窓を開く**（H73）。渡すのは制御点（患者 LPS mm・2 点以上）と
+   * 見え方のオプションだけで、再構成・表示・保存は本体が行う（プラグインに CPR を書かせない）。
+   * 窓には「プラグイン <名前> が指定した中心線」の札が出る（出所は host が入れる）。
+   * 窓が既に開いていれば、その窓の中心線が置き換わる。
+   *
+   * <p>🔴 戻り値は**検証と起動要求まで**（点が 2 点未満・非有限・同一点・開いていないシリーズは
+   * `ok:false` で窓を開かない）。窓は非同期に開くので、ボリュームの範囲外の点は戻り値では返せず、
+   * 窓の警告として出る（範囲外を 0 で埋めた絵を正常として出さない）。
+   * `options.frameMode` の省略時は `ROTATION_MINIMIZING`（血管向け）。
+   */
+  openCurvedMpr: (spec: PluginCurvedMprSpec) => Promise<PluginCurvedMprResult>;
   /**
    * **シリーズビューパネルをそのまま貸す**（H34）。W/L バー・スライダ・ThickSlab・参照線・
    * 計測・シネ、そして**フュージョン重畳**が丸ごと付いてくる。

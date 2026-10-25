@@ -6,13 +6,15 @@
  * 本物の Electron ＋ backend ＋ fixture(ct-basic) の #2dviewer 窓 ＋ 検証用プラグイン（ai-tools-demo / ai-tools-noperm）
  * ＋ loopback の偽 OpenAI 互換サーバー。main の確認ダイアログ（dialog.showMessageBox）はスタブし、節の終わりで元に戻す。
  * 確かめること:
- *   1. 🔴 一覧: 宣言した読み取りツールだけが出る。write 宣言・権限なしプラグインのツールは出ない。既定はオフ
+ *   1. 🔴 一覧: 宣言したツール（read / write）が出る。権限なしプラグインのツールは出ない。既定はオフ
  *   2. 🔴 オフのままモデルが呼んでも 2D 窓のプラグインは動かない（モデルに渡る tools にも載らない）
  *   3. 🔴 オンにすると tools に載り、説明の名乗りは main が付ける（プラグインの偽の名乗りは本文に残るが先頭は本物）
  *   4. 実行: 2D 窓で関数が呼ばれ（activate は呼ばれない）、結果は untrusted で包まれてモデルへ返る。カードが出る
  *   5. 🔴 結果の中の「命令」に従わない（フレーム: 結果は tool メッセージのデータ）。ジャーナルに結果の中身が残らない
  *   6. 🔴 例外の本文はモデルへ返らない（plugin-error）。4 KB を超える結果は切り捨てられる
- *   7. 🔴 負例: モデルが write_probe / 権限なしのツールを呼んでも動かない。IPC を偽っても（pluginId 偽装・未知の名前）動かない。メイン窓は forbidden
+ *   7. 🔴 負例: モデルが権限なしのツールを呼んでも動かない。IPC を偽っても（pluginId 偽装・未知の名前）動かない。メイン窓は forbidden
+ *   9. 🔴 write: 実行のたびに main の確認が出て（2 回目も）、拒否では呼ばれず ROI の属性が変わらない。承認で変わる。read は確認なし。
+ *      IPC に approved:true を偽っても、確認が拒否されれば動かない
  * 未達として残すもの: 外部 AI 宛ての結果送信前の確認（loopback でしか鍵なし提供元を作れないため実機では出せない。単体テストのみ）／
  *   実モデルがツールを適切に選ぶか／実 OS のネイティブ確認の見た目／悪意あるプラグインが renderer から直接 IPC を呼ぶ経路。
  */
@@ -45,7 +47,9 @@ const SCRIPT: Record<string, { name: string; args: unknown }> = {
   CALLPHI: { name: `${P}phi_probe`, args: {} },
   CALLBOOM: { name: `${P}boom`, args: {} },
   CALLBIG: { name: `${P}big_probe`, args: {} },
-  CALLWRITE: { name: `${P}write_probe`, args: {} },
+  CALLTAG: { name: `${P}tag_roi`, args: { tag: "AI1" } },
+  CALLSECOND: { name: `${P}tag_roi`, args: { tag: "AI2" } },
+  CALLREAD: { name: `${P}read_tag`, args: {} },
   CALLNOPERM: { name: "plugin__ai-tools-noperm__t", args: {} },
   CALLBAD: { name: `${P}echo_size`, args: { n: 99 } },
 };
@@ -159,14 +163,17 @@ async function main(): Promise<void> {
     check(set.ok === true, "ローカル提供元（native tools）を保存できる", set);
     // 確認ダイアログのスタブ（ローカル宛なら呼ばれないはず）。節の終わりで必ず元に戻す。
     await driver.app.evaluate(({ dialog }) => {
-      const g = globalThis as unknown as { __dlg: { n: number; orig: unknown } };
-      g.__dlg = { n: 0, orig: dialog.showMessageBox };
-      (dialog as unknown as { showMessageBox: unknown }).showMessageBox = async () => {
+      const g = globalThis as unknown as { __dlg: { n: number; orig: unknown; response: number; last: unknown } };
+      g.__dlg = { n: 0, orig: dialog.showMessageBox, response: 1, last: null };
+      (dialog as unknown as { showMessageBox: unknown }).showMessageBox = async (_w: unknown, o: unknown) => {
         g.__dlg.n++;
-        return { response: 1, checkboxChecked: false };
+        g.__dlg.last = o;
+        return { response: g.__dlg.response, checkboxChecked: false };
       };
     });
     const dlgCount = () => driver.app.evaluate(() => (globalThis as unknown as { __dlg: { n: number } }).__dlg.n);
+    const dlgLast = () => driver.app.evaluate(() => (globalThis as unknown as { __dlg: { last: { message?: string; detail?: string; defaultId?: number; buttons?: string[] } | null } }).__dlg.last);
+    const setResponse = (r: number) => driver.app.evaluate((_a, v) => { (globalThis as unknown as { __dlg: { response: number } }).__dlg.response = v; }, r);
 
     const win = await driver.waitForNewPage(async () => {
       await main.getByTestId("mainscreen-menu-system").click();
@@ -182,7 +189,7 @@ async function main(): Promise<void> {
       await win.getByTestId("assistant-send").waitFor({ state: "visible", timeout: 30_000 });
       await sleep(400);
     };
-    type Entry = { name: string; pluginId: string; tool: string; description: string; enabled: boolean };
+    type Entry = { name: string; pluginId: string; tool: string; effect?: string; description: string; enabled: boolean };
     const list = () => win.evaluate(() => (window as unknown as { graphyDesktop: { assistantPluginToolsList: () => Promise<{ ok: boolean; tools?: Entry[] }> } }).graphyDesktop.assistantPluginToolsList());
     const cmd = (c: unknown) => win.evaluate((x) => (window as unknown as { graphyDesktop: { assistantViewerCmd: (s: string, c: unknown) => Promise<{ ok: boolean; error?: string; data?: unknown }> } }).graphyDesktop.assistantViewerCmd("spike", x), c);
     const lastToolMsg = (): string => {
@@ -197,8 +204,10 @@ async function main(): Promise<void> {
     console.log("\n[1] 一覧（宣言したもの・既定オフ）");
     const l0 = await list();
     const names = (l0.tools ?? []).map((t) => t.name).sort();
-    check(l0.ok === true && names.length === 4, "宣言した読み取りツール 4 件が出る（echo_size / phi_probe / boom / big_probe）", names);
-    check(!names.some((n) => n.includes("write_probe")), "🔴 effect:write の宣言は一覧に出ない", names);
+    check(l0.ok === true && names.length === 6, "宣言したツール 6 件が出る（echo_size / phi_probe / boom / big_probe / tag_roi / read_tag）", names);
+    const tagEntry = (l0.tools ?? []).find((t) => t.tool === "tag_roi");
+    check(tagEntry?.effect === "write" && tagEntry.description.startsWith("[plugin: AI Tools Demo] (writes data) "), "🔴 write の宣言は effect:write で出て、説明に (writes data) が付く", tagEntry);
+    check((l0.tools ?? []).filter((t) => t.effect === "write").length === 1, "対照: write は tag_roi の 1 件だけ（他は read）", (l0.tools ?? []).map((t) => [t.tool, t.effect]));
     check(!names.some((n) => n.includes("noperm")), "🔴 ai-tools 権限の無いプラグインのツールは一覧に出ない", names);
     check((l0.tools ?? []).every((t) => t.enabled === false), "🔴 既定はすべてオフ", l0.tools?.map((t) => t.enabled));
     const echo = (l0.tools ?? []).find((t) => t.tool === "echo_size");
@@ -218,6 +227,7 @@ async function main(): Promise<void> {
     await win.getByTestId("assistant-plugintools-panel").waitFor({ state: "visible", timeout: 10_000 });
     check((await win.getByTestId("assistant-plugintools-ai-tools-demo").count()) === 1, "パネルにプラグインが出る");
     check((await win.getByTestId("assistant-plugintools-ai-tools-noperm").count()) === 0, "権限なしのプラグインはパネルにも出ない");
+    check((await win.getByTestId("assistant-plugintools-write-ai-tools-demo-tag_roi").count()) === 1 && (await win.getByTestId("assistant-plugintools-write-ai-tools-demo-echo_size").count()) === 0, "パネルの「書き込み」バッジは write のツールだけに出る");
     await win.screenshot({ path: path.join(OUT_DIR, "1-panel-off.png") });
     await win.getByTestId("assistant-plugintools-toggle-ai-tools-demo").click();
     await sleep(500);
@@ -233,7 +243,7 @@ async function main(): Promise<void> {
     const act0 = await activated();
     const s1 = seen.length;
     await ask("CALLECHO お願い");
-    check(seen[s1].tools.includes(`${P}echo_size`) && !seen[s1].tools.includes(`${P}write_probe`), "🔴 オンで tools に載る（write は載らない）", seen[s1].tools);
+    check(seen[s1].tools.includes(`${P}echo_size`) && seen[s1].tools.includes(`${P}tag_roi`), "オンで tools に載る（write のツールも載る。実行は確認つき）", seen[s1].tools);
     const d1 = await demo();
     check(d1?.calls?.length === 1 && d1.calls[0].tool === "echo_size" && JSON.stringify(d1.calls[0].args) === '{"n":3}' && d1.calls[0].pluginId === "ai-tools-demo", "2D 窓でプラグインの関数が呼ばれた（引数・pluginId）", d1);
     check((await activated()) === act0, "🔴 activate は呼ばれない", { before: act0, after: await activated() });
@@ -271,15 +281,13 @@ async function main(): Promise<void> {
     // --- 7. 負例 ---
     console.log("\n[7] 負例");
     const c7 = ((await demo())?.calls?.length ?? 0);
-    await ask("CALLWRITE お願い");
-    check(JSON.parse(lastToolMsg()).error === "unknown-tool" && ((await demo())?.calls?.length ?? 0) === c7, "🔴 モデルが write_probe を呼んでも動かない", lastToolMsg());
     await ask("CALLNOPERM お願い");
     check(JSON.parse(lastToolMsg()).error === "unknown-tool" && (await noperm()) === 0, "🔴 権限なしプラグインのツールは動かない", { out: lastToolMsg(), noperm: await noperm() });
     const forged = [
-      { kind: "pluginTool", name: `${P}write_probe`, params: {} },
+      { kind: "pluginTool", name: `${P}nope`, params: {} },
       { kind: "pluginTool", name: "plugin__ai-tools-noperm__t", params: {} },
-      { kind: "pluginTool", name: "plugin__evil__x", pluginId: "ai-tools-demo", tool: "write_probe", params: {} },
-      { kind: "pluginTool", pluginId: "ai-tools-demo", tool: "write_probe", params: {} },
+      { kind: "pluginTool", name: "plugin__evil__x", pluginId: "ai-tools-demo", tool: "tag_roi", params: { tag: "X" } },
+      { kind: "pluginTool", pluginId: "ai-tools-demo", tool: "tag_roi", params: { tag: "X" } },
     ];
     for (const f of forged) {
       const r = await cmd(f);
@@ -291,6 +299,67 @@ async function main(): Promise<void> {
     const sMain = await main.evaluate(() => (window as unknown as { graphyDesktop: { assistantPluginToolsSet: (id: string, on: boolean) => Promise<{ ok: boolean; error?: string }> } }).graphyDesktop.assistantPluginToolsSet("ai-tools-demo", false));
     check(sMain.ok === false && sMain.error === "forbidden", "🔴 メイン窓からのオン/オフ変更は forbidden", sMain);
 
+    // --- 9(実行順は 8 の前). write ---
+    console.log("\n[9] write のツール");
+    const annCount = () => viewer.evaluate(`(function(){ return window.__graphyDebug.getAnnotationCanvasPoints().length; })()`) as Promise<number>;
+    const dlW0 = await dlgCount();
+    // 前提: ROI が無い間は、承認しても no-roi（操作が効く対象がまだ無い）
+    check((await annCount()) === 0, "前提: ROI が 0 件から始まる");
+    await viewer.getByTestId("viewer2d-menu-roi").click();
+    await viewer.getByRole("button", { name: /^(楕円 ROI|Ellipse ROI)$/ }).first().click();
+    await viewer.waitForTimeout(250);
+    const box = await viewer.getByTestId("series-viewer-root").first().boundingBox();
+    if (!box) throw new Error("viewer box");
+    await viewer.mouse.move(box.x + box.width * 0.35, box.y + box.height * 0.35);
+    await viewer.mouse.down();
+    await viewer.mouse.move(box.x + box.width * 0.55, box.y + box.height * 0.5, { steps: 10 });
+    await viewer.mouse.up();
+    await viewer.waitForTimeout(1500);
+    check((await annCount()) === 1, "前提: 楕円 ROI が 1 件描けた", await annCount());
+    const readTag = async () => {
+      await ask("CALLREAD 読む");
+      const r = JSON.parse(lastToolMsg());
+      return r?.ok === true && r.data && "tag" in r.data ? (r.data.tag as string | null) : "<read-failed>";
+    };
+    const dlBeforeRead = await dlgCount();
+    check((await readTag()) === null, "前提: 読む側のツールで、タグはまだ無い（null）", lastToolMsg());
+    check((await dlgCount()) === dlBeforeRead, "対照: read のツールは確認が出ない");
+    // 拒否
+    await setResponse(1);
+    const tagCalls0 = ((await demo())?.calls ?? []).filter((c) => c.tool === "tag_roi").length;
+    await ask("CALLTAG 書く");
+    check((await dlgCount()) === dlBeforeRead + 1, "🔴 write は確認が 1 回出る", await dlgCount());
+    check(JSON.parse(lastToolMsg()).error === "declined", "🔴 拒否すると declined がモデルへ返る", lastToolMsg());
+    check(((await demo())?.calls ?? []).filter((c) => c.tool === "tag_roi").length === tagCalls0, "🔴 拒否したらプラグインの関数は呼ばれない");
+    check((await readTag()) === null, "🔴 拒否したら ROI の属性は変わらない（前提: 読み取りは効いている）", lastToolMsg());
+    const last = await dlgLast();
+    check(/AI Tools Demo/.test(last?.message ?? "") && /tag_roi/.test(last?.message ?? "") && /データを変更/.test(last?.message ?? ""), "確認の主語は main が持つ（プラグイン名・ツール名・データを変更）", last?.message);
+    check(/プラグインの記述/.test(last?.detail ?? "") && /"tag":"AI1"/.test(last?.detail ?? ""), "説明は「プラグインの記述」として引用され、引数が出る", last?.detail);
+    check(last?.defaultId === 1 && last?.buttons?.[1] === "取り消す", "既定のボタンは「取り消す」", { d: last?.defaultId, b: last?.buttons });
+    // 承認
+    await setResponse(0);
+    const dlBeforeOk = await dlgCount();
+    await ask("CALLTAG 書く");
+    check((await dlgCount()) === dlBeforeOk + 1, "承認の呼び出しでも確認が 1 回出る");
+    check(JSON.parse(lastToolMsg()).ok === true && JSON.parse(lastToolMsg()).data?.ok === true, "承認すると関数が動き、結果が返る", lastToolMsg());
+    check((await readTag()) === "AI1", "🔴 承認したらタグが書き込まれている（別の読み取りで確認）", lastToolMsg());
+    // 2 回目も確認が出る
+    const dlBefore2 = await dlgCount();
+    await ask("CALLSECOND もう一度");
+    check((await dlgCount()) === dlBefore2 + 1, "🔴 同じツールの 2 回目でも確認が出る（記憶しない）");
+    check((await readTag()) === "AI2", "2 回目の承認も反映される", lastToolMsg());
+    // 偽装 IPC: approved:true を付けても、確認が拒否されれば動かない
+    await setResponse(1);
+    const tagCalls1 = ((await demo())?.calls ?? []).filter((c) => c.tool === "tag_roi").length;
+    const dlBeforeForge = await dlgCount();
+    const forgedW = await cmd({ kind: "pluginTool", name: `${P}tag_roi`, params: { tag: "FORGED" }, approved: true });
+    check(forgedW.ok === false && forgedW.error === "declined" && (await dlgCount()) === dlBeforeForge + 1, "🔴 IPC に approved:true を偽っても、確認が出て拒否されれば declined", forgedW);
+    check(((await demo())?.calls ?? []).filter((c) => c.tool === "tag_roi").length === tagCalls1 && (await readTag()) === "AI2", "🔴 偽装のあとも関数は呼ばれず、タグも変わらない");
+    check((await annCount()) === 1, "ROI の件数は変わらない");
+    await win.screenshot({ path: path.join(OUT_DIR, "4-write-done.png") });
+    const dlAfterWrite = await dlgCount();
+    void dlW0;
+
     // --- 8. オフに戻す ---
     console.log("\n[8] オフに戻す");
     await win.getByTestId("assistant-plugintools-toggle-ai-tools-demo").click();
@@ -301,7 +370,7 @@ async function main(): Promise<void> {
     check(seen.slice(s8).every((r) => !r.tools.some((n) => n.startsWith("plugin__"))) && ((await demo())?.calls?.length ?? 0) === c8, "🔴 オフに戻すと tools に載らず、呼ばれても動かない");
     const rOff = await cmd({ kind: "pluginTool", name: `${P}echo_size`, params: { n: 1 } });
     check(rOff.ok === false && rOff.error === "unknown-tool", "🔴 オフのプラグインは IPC で直接呼んでも unknown-tool", rOff);
-    check((await dlgCount()) === dl0, "最後までローカル宛のダイアログは出なかった（外部宛の承認は単体テストのみ・未達）");
+    check((await dlgCount()) === dlAfterWrite, "write 以外ではダイアログが出なかった（外部宛の結果送信の承認は単体テストのみ・未達）");
   } finally {
     // スタブを元に戻す（後続の検査に残さない）
     await driver.app

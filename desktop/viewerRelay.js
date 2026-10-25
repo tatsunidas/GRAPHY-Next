@@ -11,7 +11,7 @@
 const crypto = require("node:crypto");
 const fs = require("node:fs");
 const path = require("node:path");
-const { sanitizeResult } = require("./assistantPluginTools");
+const { oneLine, sanitizeResult } = require("./assistantPluginTools");
 
 /**
  * 応答待ちの上限。2D 窓の実行は同期的で数十 ms のはずなので、数秒で十分という見立ての**暫定値**。
@@ -22,15 +22,43 @@ const DEFAULT_TIMEOUT_MS = 5000;
 /** プラグインのツールの実行は、プラグインのコード（外部由来）が動くので表示操作より長く待つ。暫定値。 */
 const PLUGIN_TOOL_TIMEOUT_MS = 30000;
 const MAX_PLUGIN_ARGS_BYTES = 2000;
+/** 書き込みの確認ダイアログに出す引数の長さ。 */
+const MAX_WRITE_ARGS_PREVIEW = 300;
 
-const KINDS = new Set(["action", "getState", "pluginTool"]);
+const KINDS = new Set(["action", "getState", "getMeasurements", "captureView", "pluginTool"]);
+
+/** 表示画像の base64 の上限（desktop/aiGateway.js MAX_IMAGE_BYTES と同じ。1 枚）。 */
+const MAX_CAPTURE_B64 = 8 * 1024 * 1024;
+/** 画像取得は描画の合成を待つので、表示操作より少し長く待つ。暫定値。 */
+const CAPTURE_TIMEOUT_MS = 10000;
+const CAPTURE_MAGIC = { "image/png": "iVBORw0KGgo", "image/jpeg": "/9j/" };
+
+/**
+ * 2D 窓が返した画像を洗う。🔴 レンダラの値は信用しない: png / jpeg の base64 の dataURL だけを受け、
+ * 中身の先頭（マジック）が宣言と合うか、大きさが上限内かを確かめる。mime は検証結果から main が決め、他のフィールドは捨てる。
+ * @returns {{base64: string, mimeType: string, w: number, h: number} | null}
+ */
+function sanitizeCapturedImage(image) {
+  if (!image || typeof image !== "object" || typeof image.dataUrl !== "string") return null;
+  const m = /^data:(image\/png|image\/jpeg);base64,/.exec(image.dataUrl.slice(0, 40));
+  if (!m) return null;
+  const base64 = image.dataUrl.slice(m[0].length);
+  if (base64.length === 0 || base64.length > MAX_CAPTURE_B64) return null;
+  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(base64)) return null;
+  if (!base64.startsWith(CAPTURE_MAGIC[m[1]])) return null;
+  const dim = (n) => (Number.isInteger(n) && n > 0 && n <= 16384 ? n : 0);
+  return { base64, mimeType: m[1], w: dim(image.w), h: dim(image.h) };
+}
+
+/** ROI 計測値の結果の上限（バイト）。50 件ぶんが入る大きさ。超えたら切り詰める。暫定値。 */
+const MAX_MEASUREMENTS_BYTES = 20000;
 
 /**
  * データを変える操作（frontend/src/assistant/actions/registry.ts の `effect: "write"` と同じ集合）。
  * 🔴 実行のたびに main が利用者の承認を取る。承認の関門は**ここ（main の描くダイアログ）**で、レンダラが渡す値は信用しない:
  *    承認フラグ `approved` は main が承認後にだけ付け、レンダラが付けてきた値は捨てる。
  */
-const WRITE_ACTIONS = new Set(["clearMeasurements"]);
+const WRITE_ACTIONS = new Set(["clearMeasurements", "createRoi"]);
 
 /** ジャーナルの上限。1 世代だけ残して上書きする。暫定値（利用実績で見直す）。 */
 const DEFAULT_JOURNAL_MAX_BYTES = 1024 * 1024;
@@ -105,7 +133,16 @@ function createRelay({ resolveTarget, journal = () => {}, timeoutMs = DEFAULT_TI
    */
   async function relay(sessionId, cmd, opts = {}) {
     if (cmd && typeof cmd === "object" && cmd.kind === "pluginTool") return relayPluginTool(sessionId, cmd, opts);
+    if (cmd && typeof cmd === "object" && cmd.kind === "getMeasurements") return relayMeasurements(sessionId, cmd, opts);
+    if (cmd && typeof cmd === "object" && cmd.kind === "captureView") return relayCapture(sessionId, cmd, opts);
     if (cmd && typeof cmd === "object" && cmd.kind === "action" && WRITE_ACTIONS.has(cmd.id)) {
+      // 検証を先に行う: 2D 窓が引数と対象を確かめ（何も実行しない）、通らなければ確認を出さずに返す。
+      const pre = await relayInner(sessionId, cmd, false, timeoutMs, true);
+      if (!pre || pre.ok !== true) {
+        const error = typeof (pre && pre.error) === "string" ? pre.error.slice(0, 80) : "no-viewer";
+        journal({ sessionId: String(sessionId || "").slice(0, 64), kind: "action", id: cmd.id, params: journalParams(cmd.params), ok: false, error });
+        return { ok: false, error };
+      }
       let approved = false;
       try {
         approved = typeof opts.confirm === "function" && (await opts.confirm(cmd.id)) === true;
@@ -128,7 +165,9 @@ function createRelay({ resolveTarget, journal = () => {}, timeoutMs = DEFAULT_TI
    * プラグインのツール。**pluginId / tool はレンダラが名乗った値を使わない**: 名前を main の一覧（opts.pluginTools.lookup。
    * 無効・未許可なら null）で引き直した組だけを 2D 窓へ送る。結果は切り詰めて `untrusted` を付け、
    * 送信先が外部なら返す前に利用者の承認を取る。
-   * @param {{pluginTools?: {lookup: (name: string) => ({pluginId: string, tool: string}|null), external: boolean, confirmSend: (entry: object, preview: string) => Promise<boolean>}}} opts
+   * 書き込み（`effect: "write"`）のツールは、**2D 窓へ送る前**に実行のたびに利用者の承認を取る（`confirmWrite`。セッション記憶なし）。
+   * 承認の関門は main のダイアログで、`approved` は承認後にだけ main が付ける（レンダラが付けた値は使わない）。
+   * @param {{pluginTools?: {lookup: (name: string) => ({pluginId: string, tool: string, effect?: string}|null), external: boolean, confirmSend: (entry: object, preview: string) => Promise<boolean>, confirmWrite?: (entry: object, argsPreview: string) => Promise<boolean>}}} opts
    */
   async function relayPluginTool(sessionId, cmd, opts) {
     const sid = String(sessionId || "").slice(0, 64);
@@ -150,7 +189,20 @@ function createRelay({ resolveTarget, journal = () => {}, timeoutMs = DEFAULT_TI
       journal({ sessionId: sid, kind: "pluginTool", id, ok: false, error: "bad-command" });
       return { ok: false, error: "bad-command" };
     }
-    const res = await relayInner(sid, { kind: "pluginTool", pluginId: entry.pluginId, tool: entry.tool, params }, false, PLUGIN_TOOL_TIMEOUT_MS);
+    const isWrite = entry.effect === "write";
+    if (isWrite) {
+      let ok = false;
+      try {
+        ok = typeof pt.confirmWrite === "function" && (await pt.confirmWrite(entry, oneLine(JSON.stringify(params), MAX_WRITE_ARGS_PREVIEW))) === true;
+      } catch {
+        ok = false;
+      }
+      if (!ok) {
+        journal({ sessionId: sid, kind: "pluginTool", id, effect: "write", ok: false, error: "declined" });
+        return { ok: false, error: "declined" };
+      }
+    }
+    const res = await relayInner(sid, { kind: "pluginTool", pluginId: entry.pluginId, tool: entry.tool, params }, isWrite, PLUGIN_TOOL_TIMEOUT_MS);
     if (!res || res.ok !== true) return { ok: false, error: typeof (res && res.error) === "string" ? res.error.slice(0, 80) : "plugin-error" };
     const r = sanitizeResult(res.data);
     if (pt.external) {
@@ -172,11 +224,79 @@ function createRelay({ resolveTarget, journal = () => {}, timeoutMs = DEFAULT_TI
     return { ok: true, source: `plugin:${entry.pluginId}`, untrusted: true, data: r.data, ...(r.truncated ? { truncated: true } : {}) };
   }
 
-  function relayInner(sessionId, cmd, approved, timeout = timeoutMs) {
+  /**
+   * ROI の計測値（患者由来）。2D 窓が許可リストで作った結果を受け、型を洗って切り詰め、`untrusted` を付ける。
+   * 送信先が外部なら返す前に利用者の承認を取る（セッションに 1 回）。ジャーナルには ok と error だけ（値は残さない）。
+   * @param {{measurements?: {external: boolean, confirmSend: (preview: string) => Promise<boolean>}}} opts
+   */
+  async function relayMeasurements(sessionId, cmd, opts) {
+    const sid = String(sessionId || "").slice(0, 64);
+    const res = await relayInner(sid, { kind: "getMeasurements", includeLabels: cmd.includeLabels === true }, false);
+    if (!res || res.ok !== true) {
+      const error = typeof (res && res.error) === "string" ? res.error.slice(0, 80) : "no-viewer";
+      journal({ sessionId: sid, kind: "getMeasurements", id: "getMeasurements", ok: false, error });
+      return { ok: false, error };
+    }
+    const r = sanitizeResult(res.measurements, MAX_MEASUREMENTS_BYTES);
+    const m = opts.measurements;
+    if (!m || m.external !== false) {
+      // 既定は外部扱い（ローカルと判定できたときだけ省く）
+      const key = `${sid}|measurements`;
+      if (!granted.has(key)) {
+        let ok = false;
+        try {
+          ok = typeof m?.confirmSend === "function" && (await m.confirmSend(r.preview.slice(0, 200))) === true;
+        } catch {
+          ok = false;
+        }
+        if (!ok) {
+          journal({ sessionId: sid, kind: "getMeasurements", id: "getMeasurements", ok: false, error: "declined" });
+          return { ok: false, error: "declined" };
+        }
+        granted.add(key);
+      }
+    }
+    journal({ sessionId: sid, kind: "getMeasurements", id: "getMeasurements", ok: true });
+    return { ok: true, untrusted: true, measurements: r.data, ...(r.truncated ? { truncated: true } : {}) };
+  }
+
+  /**
+   * 表示中のタイルの画像（患者情報が焼き込まれていることがある）。利用者のボタンからだけ呼ばれる。
+   * 画像モデルが無ければ 2D 窓へ送る前に返す。外部宛て（既定）は、画像を返す前に**毎回**承認を取る（画像ごとに中身が違う）。
+   * ジャーナルには ok と error だけ（画像は残さない）。
+   * @param {{capture?: {external: boolean, imageModelOk: boolean, confirmSend: (image: object) => Promise<boolean>}}} opts
+   */
+  async function relayCapture(sessionId, cmd, opts) {
+    const sid = String(sessionId || "").slice(0, 64);
+    const fail = (error) => {
+      journal({ sessionId: sid, kind: "captureView", id: "captureView", ok: false, error });
+      return { ok: false, error };
+    };
+    const c = opts.capture;
+    if (!c || c.imageModelOk !== true) return fail("image-model-not-set");
+    const res = await relayInner(sid, { kind: "captureView", withRoi: cmd.withRoi === true }, false, CAPTURE_TIMEOUT_MS);
+    if (!res || res.ok !== true) return fail(typeof (res && res.error) === "string" ? res.error.slice(0, 80) : "no-viewer");
+    const image = sanitizeCapturedImage(res.image);
+    if (!image) return fail("bad-result");
+    if (c.external !== false) {
+      let ok = false;
+      try {
+        ok = typeof c.confirmSend === "function" && (await c.confirmSend(image)) === true;
+      } catch {
+        ok = false;
+      }
+      if (!ok) return fail("declined");
+    }
+    journal({ sessionId: sid, kind: "captureView", id: "captureView", ok: true });
+    return { ok: true, image };
+  }
+
+  function relayInner(sessionId, cmd, approved, timeout = timeoutMs, dryRun = false) {
     if (!cmd || typeof cmd !== "object" || !KINDS.has(cmd.kind)) return Promise.resolve({ ok: false, error: "bad-command" });
     if (cmd.kind === "action" && (typeof cmd.id !== "string" || cmd.id.length > 64)) return Promise.resolve({ ok: false, error: "bad-command" });
     const target = resolveTarget();
     const log = (res) => {
+      if (dryRun) return res; // 検証だけの往復は記録しない（本実行か、検証失敗の 1 件だけ残す）
       if (cmd.kind === "action") {
         journal({ sessionId: String(sessionId || "").slice(0, 64), kind: "action", id: cmd.id, params: journalParams(cmd.params), ok: !!(res && res.ok), error: res && res.ok ? undefined : res && res.error });
       } else if (cmd.kind === "pluginTool") {
@@ -202,8 +322,8 @@ function createRelay({ resolveTarget, journal = () => {}, timeoutMs = DEFAULT_TI
       try {
         const payload =
           cmd.kind === "pluginTool"
-            ? { reqId, kind: cmd.kind, pluginId: cmd.pluginId, tool: cmd.tool, params: cmd.params }
-            : { reqId, kind: cmd.kind, id: cmd.id, params: cmd.params, includeLabels: cmd.includeLabels === true, approved: approved === true };
+            ? { reqId, kind: cmd.kind, pluginId: cmd.pluginId, tool: cmd.tool, params: cmd.params, approved: approved === true }
+            : { reqId, kind: cmd.kind, id: cmd.id, params: cmd.params, includeLabels: cmd.includeLabels === true, withRoi: cmd.withRoi === true, approved: approved === true, ...(dryRun ? { dryRun: true } : {}) };
         target.send("graphy:viewer-cmd", payload);
       } catch {
         pending.delete(reqId);
@@ -226,4 +346,4 @@ function createRelay({ resolveTarget, journal = () => {}, timeoutMs = DEFAULT_TI
   return { relay, handleResult, pendingCount: () => pending.size };
 }
 
-module.exports = { WRITE_ACTIONS, createRelay, createJournal, journalParams, readJournal, DEFAULT_TIMEOUT_MS };
+module.exports = { sanitizeCapturedImage, WRITE_ACTIONS, createRelay, createJournal, journalParams, readJournal, DEFAULT_TIMEOUT_MS };

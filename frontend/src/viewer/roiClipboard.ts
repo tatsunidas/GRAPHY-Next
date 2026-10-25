@@ -58,9 +58,72 @@ export interface RoiClipboardEntry {
   custom?: Record<string, string>;
   /** 色・線幅・塗りなど（`annotation.config.style` の per-annotation 設定）。 */
   style?: Record<string, unknown>;
+  /** コピー元の患者。貼り付け先が別の患者なら、説明と custom は持ち越さない。 */
+  sourcePatientKey?: string;
+  /** コピー元の画像の寸法と画素間隔。画像の違う先へ貼るとき、実寸（mm）を保つために使う。 */
+  source?: ImageGrid;
+}
+
+/** 画像の寸法（画素）と画素間隔（mm）。不明な要素は null。 */
+export interface ImageGrid {
+  cols: number | null;
+  rows: number | null;
+  colSpacing: number | null;
+  rowSpacing: number | null;
+}
+
+export function imageGridOf(imageId: string): ImageGrid {
+  const plane = metaData.get("imagePlaneModule", imageId) as Any;
+  const n = (v: unknown) => (typeof v === "number" && Number.isFinite(v) && v > 0 ? v : null);
+  return {
+    cols: n(plane?.columns),
+    rows: n(plane?.rows),
+    colSpacing: n(plane?.columnPixelSpacing),
+    rowSpacing: n(plane?.rowPixelSpacing),
+  };
+}
+
+const sameNum = (a: number, b: number) => Math.abs(a - b) <= 1e-6 * Math.max(Math.abs(a), Math.abs(b), 1);
+
+/**
+ * 別の画像へ貼るために、画素座標を貼り付け先の画像へ写す（純関数）。
+ *
+ * <p>実寸（mm）を保ち、重心は画像内の同じ相対位置に置く。画素間隔と寸法が同じ画像（同じシリーズ）では
+ * 恒等。間隔か寸法のどちらかが不明（XA など）なら画素のまま。変換後に画像の外へ出るなら null
+ * （切り詰めると形が変わり、「同じ形の複製」でなくなる）。
+ */
+export function retargetEntry(entry: RoiClipboardEntry, dst: ImageGrid | null): RoiClipboardEntry | null {
+  const src = entry.source;
+  if (!src || !dst) return entry;
+  const { cols: sw, rows: sh, colSpacing: sc, rowSpacing: sr } = src;
+  const { cols: dw, rows: dh, colSpacing: dc, rowSpacing: dr } = dst;
+  if (sw === null || sh === null || sc === null || sr === null) return entry;
+  if (dw === null || dh === null || dc === null || dr === null) return entry;
+  if (sw === dw && sh === dh && sameNum(sc, dc) && sameNum(sr, dr)) return entry;
+
+  const all = [...entry.pointsPx, ...entry.polylinePx];
+  if (!all.length) return entry;
+  const cx = all.reduce((a, p) => a + p[0], 0) / all.length;
+  const cy = all.reduce((a, p) => a + p[1], 0) / all.length;
+  const nx = (cx / sw) * dw;
+  const ny = (cy / sh) * dh;
+  const kx = sc / dc;
+  const ky = sr / dr;
+  const map = (pts: PointPx[]): PointPx[] => pts.map((p) => [nx + (p[0] - cx) * kx, ny + (p[1] - cy) * ky]);
+  const pointsPx = map(entry.pointsPx);
+  const polylinePx = map(entry.polylinePx);
+  const inside = ([...pointsPx, ...polylinePx] as PointPx[]).every(
+    (p) => p[0] >= 0 && p[0] <= dw && p[1] >= 0 && p[1] <= dh,
+  );
+  return inside ? { ...entry, pointsPx, polylinePx } : null;
 }
 
 let clip: RoiClipboardEntry | null = null;
+
+/** ROI の参照画像が、このスタックの画像のどれかか（コピー・複製の宛先タイルを ROI から決める）。 */
+export function ownsImage(imageIds: readonly string[], referencedImageId: string | undefined): boolean {
+  return !!referencedImageId && imageIds.includes(referencedImageId);
+}
 
 export function hasClipboardRoi(): boolean {
   return clip !== null;
@@ -152,10 +215,10 @@ function mapWorld(
 }
 
 /** ROI を 1 件クリップボードへ取る。取れなければ false。 */
-export function copyRoiToClipboard(roiUid: string): boolean {
+export function copyRoiToClipboard(roiUid: string, sourcePatientKey?: string): boolean {
   const entry = readRoiAsEntry(roiUid);
   if (!entry) return false;
-  clip = entry;
+  clip = { ...entry, sourcePatientKey };
   return true;
 }
 
@@ -197,6 +260,7 @@ function readRoiAsEntry(roiUid: string): RoiClipboardEntry | null {
     description: meta?.description,
     custom: meta?.custom ? { ...meta.custom } : undefined,
     style: readAnnotationStyle(roiUid),
+    source: imageGridOf(refId),
   };
   return entry;
 }
@@ -219,25 +283,44 @@ export interface PasteContext {
 /**
  * クリップボードの ROI を貼り付ける。作った annotationUID を返す（失敗は null）。
  */
-export function pasteRoiInto(ctx: PasteContext): string | null {
+export function pasteRoiInto(ctx: PasteContext): PasteResult {
   const entry = clip;
-  if (!entry) return null;
+  if (!entry) return { uid: null, reason: "failed" };
   return placeEntry(entry, ctx);
+}
+
+/** 貼り付けの結果。失敗の理由を分けるのは、画像の外にはみ出すときだけ別の案内を出すため。 */
+export interface PasteResult {
+  uid: string | null;
+  reason?: "failed" | "outOfImage";
 }
 
 /** ROI をその場で複製する（クリップボードを経由しない＝コピー内容を壊さない）。 */
-export function duplicateRoi(roiUid: string, ctx: PasteContext): string | null {
+export function duplicateRoi(roiUid: string, ctx: PasteContext): PasteResult {
   const entry = readRoiAsEntry(roiUid);
-  if (!entry) return null;
+  if (!entry) return { uid: null, reason: "failed" };
   return placeEntry(entry, ctx);
 }
 
-function placeEntry(entry: RoiClipboardEntry, ctx: PasteContext): string | null {
+/**
+ * 貼り付け先の患者が違うとき、説明と custom は持ち越さない（別の患者に元の所見や個人情報、
+ * プラグインの結果が混ざる＝取り違えの元になる）。ラベルは残す。
+ */
+export function carryOver(entry: RoiClipboardEntry, destPatientKey: string): RoiClipboardEntry {
+  const other = !!entry.sourcePatientKey && !!destPatientKey && entry.sourcePatientKey !== destPatientKey;
+  return other ? { ...entry, description: undefined, custom: undefined } : entry;
+}
+
+function placeEntry(source: RoiClipboardEntry, ctx: PasteContext): PasteResult {
+  const failed: PasteResult = { uid: null, reason: "failed" };
   const sop = sopOfImageId(ctx.imageId);
   if (!sop) {
     log.warn("roi paste: cannot resolve SOP for", ctx.imageId);
-    return null;
+    return failed;
   }
+  const moved = retargetEntry(carryOver(source, ctx.patientKey), imageGridOf(ctx.imageId));
+  if (!moved) return { uid: null, reason: "outOfImage" };
+  const entry = moved;
   const uid = (csCoreUtilities as Any).uuidv4() as string;
   const saved = entryToSavedRoi(
     entry,
@@ -247,14 +330,14 @@ function placeEntry(entry: RoiClipboardEntry, ctx: PasteContext): string | null 
   );
   if (!saved) {
     log.warn("roi paste: could not map points onto", ctx.imageId);
-    return null;
+    return failed;
   }
   const ok = addSavedRoiToViewport(saved, ctx.imageId, ctx.viewport, {
     sliceIndex: ctx.sliceIndex,
     patientKey: ctx.patientKey,
     seriesLabel: ctx.seriesLabel,
   });
-  if (!ok) return null;
+  if (!ok) return failed;
   if (entry.style && Object.keys(entry.style).length) {
     try {
       (csAnnotation.config.style as Any).setAnnotationStyles(uid, entry.style);
@@ -262,7 +345,7 @@ function placeEntry(entry: RoiClipboardEntry, ctx: PasteContext): string | null 
       /* スタイルが写らなくても複製自体は成立している */
     }
   }
-  return uid;
+  return { uid };
 }
 
 function readAnnotationStyle(roiUid: string): Record<string, unknown> | undefined {

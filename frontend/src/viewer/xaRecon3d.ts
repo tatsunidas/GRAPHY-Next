@@ -457,7 +457,7 @@ export function reconstructCenterline3d(
   if (!match || match.sampledA.length < 2) return null;
 
   const separationDeg = viewSeparationDeg(a.geometry, b.geometry);
-  const minSeparation = opts?.minSeparationDeg ?? 30;
+  const minSeparation = opts?.minSeparationDeg ?? 25;
   const maxReproj = opts?.maxReprojectionPx ?? 2.0;
 
   const raw: Vec3[] = [];
@@ -489,7 +489,7 @@ export function reconstructCenterline3d(
 
   const warnings: ReconWarning[] = [];
   if (separationDeg < minSeparation) {
-    warnings.push({ code: "insufficientSeparation", value: separationDeg, threshold: minSeparation, blocking: true });
+    warnings.push({ code: "insufficientSeparation", value: separationDeg, threshold: minSeparation, blocking: false });
   }
   if (anchors.length === 0) {
     // 検算する手段が無い。§10.3 の「無言で歪んだモデルを出さない」に従い、ここで止める。

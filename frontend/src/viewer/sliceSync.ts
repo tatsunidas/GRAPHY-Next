@@ -32,6 +32,12 @@ export interface SliceSyncState {
 
 interface Entry {
   id: string;
+  /**
+   * 同期の仲間の範囲（患者の鍵）。**違うグループ同士は連動しない**。
+   * 全患者モードでは別の患者のタイルが同時に見えるので、これが無いと別患者のスライスが勝手に動く。
+   * 未指定は空文字のグループ（従来どおり全員が仲間）。
+   */
+  group?: string;
   getState: () => SliceSyncState;
   applyIndex: (z: number) => void;
 }
@@ -129,6 +135,7 @@ export function publishSlice(sourceId: string): void {
   lastIndex.set(sourceId, srcState.index);
 
   if (entries.size < 2) return; // 同期は 2 つ以上で成立
+  const srcGroup = src.group ?? "";
 
   // source の現在スライス位置（テーブル位置 mm = IPP·法線）。
   const srcIpp = srcState.ipps[srcState.index] ?? null;
@@ -137,6 +144,7 @@ export function publishSlice(sourceId: string): void {
 
   for (const [id, e] of entries) {
     if (id === sourceId) continue;
+    if ((e.group ?? "") !== srcGroup) continue;
     let st: SliceSyncState;
     try {
       st = e.getState();

@@ -4,7 +4,7 @@
  */
 // 2D 窓でプラグインの AI ツールを実行する薄い実行器。main が中継してきた命令を**もう一度検証**する
 // （送信側の検証は信用しない）。manifest（backend が検査した宣言）に無いツール・権限の無いプラグイン・
-// 実装の無いツールは実行しない。例外の本文はモデルに返さない（`plugin-error` 固定）。
+// 実装の無いツール・承認の無い書き込みツールは実行しない。例外の本文はモデルに返さない（`plugin-error` 固定）。
 import { validatePluginArgs } from "../assistant/pluginTools";
 import type { PluginManifest } from "../plugins/pluginTypes";
 
@@ -20,7 +20,7 @@ export interface PluginToolDeps {
 
 export type PluginToolOutcome = { ok: true; data: unknown } | { ok: false; error: string };
 
-export async function executePluginTool(deps: PluginToolDeps, cmd: { pluginId?: unknown; tool?: unknown; params?: unknown }): Promise<PluginToolOutcome> {
+export async function executePluginTool(deps: PluginToolDeps, cmd: { pluginId?: unknown; tool?: unknown; params?: unknown; approved?: unknown }): Promise<PluginToolOutcome> {
   if (typeof cmd.pluginId !== "string" || typeof cmd.tool !== "string") return { ok: false, error: "bad-command" };
   let manifests: PluginManifest[];
   try {
@@ -31,7 +31,9 @@ export async function executePluginTool(deps: PluginToolDeps, cmd: { pluginId?: 
   const m = manifests.find((x) => x.id === cmd.pluginId);
   if (!m || !m.permissions?.includes("ai-tools")) return { ok: false, error: "unknown-tool" };
   const spec = m.aiTools?.find((t) => t.name === cmd.tool);
-  if (!spec || (spec.effect !== "read" && spec.effect !== "display")) return { ok: false, error: "unknown-tool" };
+  if (!spec || (spec.effect !== "read" && spec.effect !== "display" && spec.effect !== "write")) return { ok: false, error: "unknown-tool" };
+  // 🔴 データを書くツールは、main が利用者の承認を取ったあとにだけ付ける `approved` が無ければ実行しない（送信側の検証は信用しない）。
+  if (spec.effect === "write" && cmd.approved !== true) return { ok: false, error: "approval-required" };
   const v = validatePluginArgs(spec.parameters, cmd.params);
   if (!v.ok) return v;
   let timer: ReturnType<typeof setTimeout> | undefined;

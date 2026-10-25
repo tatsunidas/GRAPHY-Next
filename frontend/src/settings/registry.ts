@@ -596,6 +596,13 @@ export const SETTINGS_REGISTRY: CategoryDef[] = [
     sections: [],
   },
   {
+    // 自動削除は専用パネル（条件・試算・確認）。SettingsDialog で特別扱い。standalone のみ動く。
+    id: "retention",
+    labelKey: "settings.cat.retention",
+    icon: "🗑",
+    sections: [],
+  },
+  {
     id: "dicom",
     labelKey: "settings.cat.dicom",
     icon: "🌐",

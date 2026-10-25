@@ -1,0 +1,103 @@
+{
+  "id": "ai-tools-roi",
+  "name": "AI Tools ROI",
+  "version": "0.1.0",
+  "engines": {
+    "graphy": ">=0.3.0",
+    "os": [
+      "win32",
+      "darwin",
+      "linux"
+    ]
+  },
+  "description": "Verifies host.createRoi / removeCreatedRoi through AI write tools.",
+  "author": "automator",
+  "license": "MIT",
+  "contributes": [
+    "viewer2d.menu"
+  ],
+  "ui": "ui.js",
+  "permissions": [
+    "ai-tools"
+  ],
+  "aiTools": [
+    {
+      "name": "list_roi_uids",
+      "description": "List the ids of the ROIs on the current tile.",
+      "effect": "read",
+      "parameters": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      }
+    },
+    {
+      "name": "make_roi",
+      "description": "Create an elliptical or rectangular ROI around the first ROI of the current tile (verification of host.createRoi). mode \"lps\" reuses the LPS center returned by the previous call, shifted by dz.",
+      "effect": "write",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "shape": {
+            "type": "string",
+            "enum": [
+              "EllipticalROI",
+              "RectangleROI"
+            ],
+            "description": "ROI shape."
+          },
+          "rx": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1000,
+            "description": "Horizontal radius (mm)."
+          },
+          "ry": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1000,
+            "description": "Vertical radius (mm)."
+          },
+          "dz": {
+            "type": "number",
+            "minimum": -200,
+            "maximum": 200,
+            "description": "Offset along z in lps mode (mm); a large value is expected to be rejected as off-slice."
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "px",
+              "lps"
+            ],
+            "description": "Center source: px = centroid of the first ROI, lps = previous result."
+          }
+        },
+        "required": [
+          "shape",
+          "rx",
+          "ry",
+          "mode"
+        ]
+      }
+    },
+    {
+      "name": "remove_roi",
+      "description": "Remove a ROI this plugin created (verification of host.removeCreatedRoi).",
+      "effect": "write",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "roiUid": {
+            "type": "string",
+            "maxLength": 100,
+            "description": "ROI id."
+          }
+        },
+        "required": [
+          "roiUid"
+        ]
+      }
+    }
+  ]
+}

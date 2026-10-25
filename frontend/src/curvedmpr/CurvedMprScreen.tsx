@@ -19,7 +19,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { imageLoader, metaData, cache } from "@cornerstonejs/core";
-import { fetchSeries, fetchInstances, fetchSeriesLayout, prefetchSeries, type AppStatus, type Study, type Series, type SeriesLayoutDto } from "../api";
+import { fetchSeries, fetchInstances, fetchSeriesLayout, prefetchSeries, type AppStatus, type SeriesLayoutDto } from "../api";
 import { ensureCornerstoneInitialized } from "../viewer/cornerstoneSetup";
 import { imageIdForInstance, imageIdForCell } from "../viewer/imageId";
 import { getAppliedVolumeMaxMb, isCacheSizeExceeded } from "../viewer/volumeMemory";
@@ -30,19 +30,20 @@ import { reformat, defaultCurvedParams, type ProjectionMode, type CurvedResult }
 import { httpSend } from "../http";
 import { emitDbChanged } from "../dbEvents";
 import { useI18n } from "../i18n/i18n";
+import {
+  readCurvedMprContext,
+  subscribeCurvedMprContext,
+  type CurvedMprContext,
+  type CurvedMprProvenance,
+} from "./curvedMprContext";
+import { countOutOfBounds, toVoxelIndex, type OutOfBoundsSummary } from "./curveBounds";
 
 const FRAME_MODES: FrameMode[] = ["FIXED_Z", "ROTATION_MINIMIZING"];
 const PROJECTION_MODES: ProjectionMode[] = ["CENTERLINE_ONLY", "AVERAGE", "MIP", "MINIP"];
 
-interface CurvedMprContext {
-  study: Study;
-  series?: Series;
-  c?: number;
-  t?: number;
-  ts: number;
-  /** マスク由来中心線を 3D Viewer から渡す場合の制御点列（world mm, LPS）。
-   * `fw/mask-driven-pipelines-gap-analysis.md` 課題#5: マスク駆動 CPR の入口を単独 Curved MPR 画面に統合。 */
-  centerline?: [number, number, number][];
+/** 読み込み済みの内容と、新しく渡されたコンテキストが同じシリーズ・位相かを見る鍵。 */
+function ctxKey(ctx: CurvedMprContext): string {
+  return `${ctx.study.studyInstanceUid}|${ctx.series?.seriesInstanceUid ?? ""}|${ctx.c ?? 0}|${ctx.t ?? 0}`;
 }
 
 type Phase = "idle" | "loading" | "ready" | "error" | "unsupported";
@@ -74,16 +75,6 @@ const normalize = (a: Vec3): Vec3 => {
 const clampInt = (v: number, lo: number, hi: number): number => Math.max(lo, Math.min(hi, Math.round(v)));
 
 // ── VolumeSampler 相当（純関数・direction は正規直交前提） ──
-/** 物理(LPS mm) → 連続ボクセル index (i,j,k)。 */
-function toVoxelIndex(vol: ResliceVolume, p: Vec3): Vec3 {
-  const d = vol.direction, o = vol.origin, s = vol.spacing;
-  const dx = p[0] - o[0], dy = p[1] - o[1], dz = p[2] - o[2];
-  return [
-    (dx * d[0] + dy * d[1] + dz * d[2]) / s[0],
-    (dx * d[3] + dy * d[4] + dz * d[5]) / s[1],
-    (dx * d[6] + dy * d[7] + dz * d[8]) / s[2],
-  ];
-}
 /** 連続ボクセル index (i,j,k) → 物理(LPS mm)。 */
 function toPhysical(vol: ResliceVolume, i: number, j: number, k: number): Vec3 {
   const d = vol.direction, o = vol.origin, s = vol.spacing;
@@ -240,12 +231,20 @@ export function CurvedMprScreen({ status }: { status: AppStatus | null }) {
     secondAxisMaxMm: 50,
   });
   const [curveVersion, setCurveVersion] = useState(0);
+  // プラグインが渡した中心線の出所と、渡された点列（［指定に戻す］用）。手動・3D ビューア経由では null。
+  const pluginCurveRef = useRef<[number, number, number][] | null>(null);
+  const loadedKeyRef = useRef("");
+  const [provenance, setProvenance] = useState<CurvedMprProvenance | null>(null);
+  const [curveEdited, setCurveEdited] = useState(false);
+  const [outOfBounds, setOutOfBounds] = useState<OutOfBoundsSummary | null>(null);
   const [previewInfo, setPreviewInfo] = useState("");
   const [saving, setSaving] = useState(false);
   const [saveMsg, setSaveMsg] = useState("");
   const [dimInfo, setDimInfo] = useState<{ nC: number; nT: number; c: number; t: number } | null>(null);
   const [hover, setHover] = useState<{ world: Vec3; hu: number } | null>(null);
 
+  const phaseRef = useRef<Phase>("idle");
+  phaseRef.current = phase;
   const paramsRef = useRef(params);
   paramsRef.current = params;
   const sliceZRef = useRef(sliceZ);
@@ -412,15 +411,39 @@ export function CurvedMprScreen({ status }: { status: AppStatus | null }) {
     );
   }, [t]);
 
+  // 起動コンテキストの中心線・見え方を画面に反映する（起動時と、開いたままの差し替えの両方）。
+  const applyContextCurve = useCallback((ctx: CurvedMprContext, vol: ResliceVolume) => {
+    const pts = ctx.centerline;
+    if (pts && pts.length >= 2) {
+      const cl = new Centerline3D();
+      for (const p of pts) cl.addControlPoint(p);
+      curveRef.current = cl;
+      pluginCurveRef.current = ctx.provenance ? pts.map((p) => [p[0], p[1], p[2]] as [number, number, number]) : null;
+      const sum = countOutOfBounds(vol, pts);
+      setOutOfBounds(sum.outside > 0 ? sum : null);
+    } else {
+      pluginCurveRef.current = null;
+      setOutOfBounds(null);
+    }
+    setProvenance(ctx.provenance ?? null);
+    setCurveEdited(false);
+    const o = ctx.options;
+    if (o) {
+      setParams((p) => ({
+        ...p,
+        ...(o.frameMode ? { frameMode: o.frameMode } : {}),
+        ...(o.projection ? { projectionMode: o.projection } : {}),
+        ...(o.bandHalfWidthMm !== undefined ? { bandHalfWidthMm: o.bandHalfWidthMm } : {}),
+        ...(o.secondAxisRangeMm ? { secondAxisMinMm: o.secondAxisRangeMm[0], secondAxisMaxMm: o.secondAxisRangeMm[1] } : {}),
+      }));
+      if (o.arcStepMm) outSpacingRef.current = o.arcStepMm;
+    }
+    setCurveVersion((n) => n + 1);
+  }, []);
+
   // ── 起動 ──
   const start = useCallback(async () => {
-    let ctx: CurvedMprContext | null = null;
-    try {
-      const raw = localStorage.getItem("graphy-curvedmpr-ctx");
-      if (raw) ctx = JSON.parse(raw) as CurvedMprContext;
-    } catch {
-      ctx = null;
-    }
+    const ctx: CurvedMprContext | null = readCurvedMprContext();
     if (!ctx?.study) {
       setPhase("error");
       setMessage(t("curvedMpr.noContext"));
@@ -512,13 +535,6 @@ export function CurvedMprScreen({ status }: { status: AppStatus | null }) {
         return;
       }
       volRef.current = vol;
-      // 3D Viewer からマスク由来中心線を受け取っていれば、手動クリック無しでそのまま初期曲線にする。
-      if (ctx.centerline && ctx.centerline.length >= 2) {
-        const cl = new Centerline3D();
-        for (const p of ctx.centerline) cl.addControlPoint(p);
-        curveRef.current = cl;
-        setCurveVersion((n) => n + 1);
-      }
       const inPlane = (vol.spacing[0] + vol.spacing[1]) / 2;
       outSpacingRef.current = Math.max(0.1, inPlane);
       const midZ = Math.floor(vol.dimensions[2] / 2);
@@ -531,8 +547,19 @@ export function CurvedMprScreen({ status }: { status: AppStatus | null }) {
       const zExtent = vol.spacing[2] * (vol.dimensions[2] - 1);
       const half = Math.max(10, zExtent / 2);
       setParams((p) => ({ ...p, secondAxisMinMm: -half, secondAxisMaxMm: half }));
+      // 3D Viewer のマスク由来中心線・プラグインから渡された中心線と見え方を反映する
+      // （上の既定値を上書きするので、この順序を保つ）。
+      loadedKeyRef.current = ctxKey(ctx);
+      applyContextCurve(ctx, vol);
 
       setPhase("ready");
+      phaseRef.current = "ready";
+      // 読み込み中にプラグインから渡し直されていたら、最新を拾う。
+      const latest = readCurvedMprContext();
+      if (latest && latest.ts !== ctx.ts) {
+        if (ctxKey(latest) === loadedKeyRef.current) applyContextCurve(latest, vol);
+        else void startRef.current();
+      }
       requestAnimationFrame(() => {
         redrawAll();
         recomputePreview();
@@ -547,7 +574,27 @@ export function CurvedMprScreen({ status }: { status: AppStatus | null }) {
           : `${t("curvedMpr.error")}: ${String(e)}`,
       );
     }
-  }, [mode, t, redrawAll, recomputePreview]);
+  }, [mode, t, redrawAll, recomputePreview, applyContextCurve]);
+
+  // 開いたままの窓へ、プラグインから中心線が渡し直されたとき。同じシリーズなら中心線とオプションだけ差し替え、
+  // 別のシリーズなら読み込み直す（窓は増やさない）。読み込み中の通知は、完了後の最新確認で拾う。
+  const startRef = useRef(start);
+  startRef.current = start;
+  const reloadFromContext = useCallback(() => {
+    const ctx = readCurvedMprContext();
+    const vol = volRef.current;
+    if (!ctx || phaseRef.current === "loading") return;
+    if (vol && phaseRef.current === "ready" && ctxKey(ctx) === loadedKeyRef.current) {
+      applyContextCurve(ctx, vol);
+      requestAnimationFrame(() => {
+        redrawAll();
+        recomputePreview();
+      });
+    } else if (startedRef.current) {
+      void startRef.current();
+    }
+  }, [applyContextCurve, redrawAll, recomputePreview]);
+  useEffect(() => subscribeCurvedMprContext(reloadFromContext), [reloadFromContext]);
 
   useEffect(() => {
     if (startedRef.current || !status) return;
@@ -610,6 +657,7 @@ export function CurvedMprScreen({ status }: { status: AppStatus | null }) {
       const [i, j] = screenToImage(e.clientX - rect.left, e.clientY - rect.top);
       const w = toPhysical(vol, i, j, sliceZRef.current);
       curveRef.current.addControlPoint(w);
+      setCurveEdited(true);
       setCurveVersion((v) => v + 1);
       recomputePreview();
     },
@@ -628,6 +676,7 @@ export function CurvedMprScreen({ status }: { status: AppStatus | null }) {
         // 右クリック: 点上なら削除、そうでなければ W/L ドラッグ開始。
         if (idx >= 0) {
           curveRef.current.removeControlPoint(idx);
+          setCurveEdited(true);
           setCurveVersion((v) => v + 1);
           recomputePreview();
         } else {
@@ -658,6 +707,7 @@ export function CurvedMprScreen({ status }: { status: AppStatus | null }) {
         const old = toVoxelIndex(vol, curveRef.current.getControlPoint(drag.index));
         const w = toPhysical(vol, i, j, old[2]); // 深さ(k)は元の値を保持
         curveRef.current.setControlPoint(drag.index, w);
+        setCurveEdited(true);
         setCurveVersion((v) => v + 1);
         return;
       }
@@ -704,6 +754,21 @@ export function CurvedMprScreen({ status }: { status: AppStatus | null }) {
     const d = e.deltaY > 0 ? 1 : -1;
     setSliceZ((z) => clampInt(z + d, 0, vol.dimensions[2] - 1));
   }, []);
+
+  // プラグインが渡した点列に戻す（利用者の編集を捨てる）。
+  const resetToPluginCurve = useCallback(() => {
+    const pts = pluginCurveRef.current;
+    const vol = volRef.current;
+    if (!pts || !vol) return;
+    const cl = new Centerline3D();
+    for (const p of pts) cl.addControlPoint(p);
+    curveRef.current = cl;
+    const sum = countOutOfBounds(vol, pts);
+    setOutOfBounds(sum.outside > 0 ? sum : null);
+    setCurveEdited(false);
+    setCurveVersion((v) => v + 1);
+    recomputePreview();
+  }, [recomputePreview]);
 
   const resetCurve = useCallback(() => {
     curveRef.current.clear();
@@ -776,9 +841,29 @@ export function CurvedMprScreen({ status }: { status: AppStatus | null }) {
         )}
       </div>
 
+      {phase === "ready" && provenance && (
+        <div style={pluginBanner} data-testid="curvedmpr-plugin-banner">
+          <span>
+            {t("curvedMpr.pluginBanner", { name: provenance.pluginName, n: String(pluginCurveRef.current?.length ?? nPoints) })}
+            {provenance.title ? ` — ${provenance.title}` : ""}
+            {curveEdited ? ` (${t("curvedMpr.pluginEdited")})` : ""}
+          </span>
+          <button style={btn} onClick={resetToPluginCurve} data-testid="curvedmpr-plugin-reset">{t("curvedMpr.pluginReset")}</button>
+        </div>
+      )}
+      {phase === "ready" && outOfBounds && (
+        <div style={oobBanner} data-testid="curvedmpr-outofbounds-warning">
+          {t("curvedMpr.outOfBounds", {
+            m: String(outOfBounds.outside),
+            n: String(outOfBounds.total),
+            pos: outOfBounds.first ? outOfBounds.first.map((x) => x.toFixed(1)).join(", ") : "",
+          })}
+        </div>
+      )}
       {phase === "ready" && (
         <div style={ctrlBar}>
           <span style={hint}>{t("curvedMpr.hint")}</span>
+          <span style={hint} data-testid="curvedmpr-point-count">{t("curvedMpr.pointCount", { n: String(nPoints) })}</span>
           <div style={{ flex: 1 }} />
           <label style={selWrap}>
             <span style={fieldLabel}>{t("curvedMpr.secondAxis")}</span>
@@ -921,6 +1006,8 @@ const header: React.CSSProperties = { display: "flex", alignItems: "center", gap
 const hTitle: React.CSSProperties = { fontWeight: 600 };
 const hSeries: React.CSSProperties = { color: "#9aa6b2" };
 const dimChip: React.CSSProperties = { fontSize: 11, color: "#9fd3ff", border: "1px solid #2a465a", background: "#0f1e2a", borderRadius: 4, padding: "1px 7px" };
+const pluginBanner: React.CSSProperties = { display: "flex", alignItems: "center", gap: 12, padding: "4px 12px", background: "#0f1e2a", borderBottom: "1px solid #2a465a", color: "#9fd3ff", fontSize: 12 };
+const oobBanner: React.CSSProperties = { padding: "4px 12px", background: "#3a2a0a", borderBottom: "1px solid #6a4a10", color: "#ffd27a", fontSize: 12 };
 const ctrlBar: React.CSSProperties = { display: "flex", alignItems: "center", gap: 10, padding: "5px 12px", background: "#0d1013", borderBottom: "1px solid #23292f", fontSize: 12, flexWrap: "wrap" };
 const grid: React.CSSProperties = { position: "relative", flex: 1, display: "grid", gridTemplateColumns: "1fr 1fr", minHeight: 0 };
 const cell: React.CSSProperties = { position: "relative", minWidth: 0, minHeight: 0, border: "1px solid #23292f", overflow: "hidden" };

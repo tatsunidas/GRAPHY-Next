@@ -33,7 +33,7 @@ export interface CurveFrame {
 }
 
 const CATMULL_ROM_ALPHA = 0.5; // centripetal
-const MIN_CHORD = 1e-6;
+export const MIN_CHORD = 1e-6;
 const SAMPLES_PER_SEGMENT = 20; // 弧長サンプル表の密度
 
 // ── ベクトル小道具（新規配列を返す純関数） ─────────────────────────

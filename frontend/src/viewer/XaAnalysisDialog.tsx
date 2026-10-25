@@ -54,7 +54,8 @@ import { publishAnalysisResult } from "../report/analysisResultStore";
 import { qcaRecord } from "../report/xaAnalysisRecords";
 import { describeView, qcaRunKey, registerQcaRun, removeQcaRun } from "./xaRecon3dStore";
 import { readXaViewGeometry } from "./xaViewGeometryProvider";
-import { calibrationForImageId, loaderSpacingFor } from "./xaCalibrationProvider";
+import { calibrationForImageId, loaderSpacingFor, readXaInputTags } from "./xaCalibrationProvider";
+import { checkXaInput } from "./xaInputCheck";
 import { persistXaUserCalibration } from "./xaCalibrationPersistence";
 import { clearedBy, deriveQcaSteps, type ManualInputKey } from "./xaTasks";
 import { viewerOverlayProps } from "./viewerOverlay";
@@ -716,6 +717,7 @@ export function XaAnalysisDialog({
     // 3D QCA（A6a）で選べるように登録する。投影幾何が読めない装置・データでは登録しない
     // （角度や SID/SOD が無ければ 3D にはできない。§10.1 の表）。
     const view = readXaViewGeometry(imageId, saveContext.frameIndex);
+    const inputTags = view.geometry ? readXaInputTags(imageId) : null;
     if (view.geometry) {
       registerQcaRun({
         imageId,
@@ -744,6 +746,7 @@ export function XaAnalysisDialog({
         // 校正の出自は 3D（A7 の H11）まで運ぶ。落とすと近似が実測として外部モジュールへ渡る。
         calibrationSource: c?.source,
         calibrationTier: c?.tier,
+        inputCheck: inputTags ? checkXaInput(inputTags.tags, inputTags.isXaSopClass) : undefined,
         at: Date.now(),
       });
     }
