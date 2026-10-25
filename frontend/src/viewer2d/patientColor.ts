@@ -20,10 +20,10 @@ export interface PatientColor {
 }
 
 export const PATIENT_PALETTE: readonly PatientColor[] = [
-  { solid: "#009E73", tint: "#e3f4ee", onSolid: "#ffffff" }, // 緑
+  { solid: "#009E73", tint: "#e3f4ee", onSolid: "#1a1a1a" }, // 緑
   { solid: "#CC79A7", tint: "#f8e8f0", onSolid: "#1a1a1a" }, // ピンク
   { solid: "#7A5BC8", tint: "#ece7f8", onSolid: "#ffffff" }, // 紫
-  { solid: "#D55E00", tint: "#f9e6d9", onSolid: "#ffffff" }, // 朱
+  { solid: "#D55E00", tint: "#f9e6d9", onSolid: "#1a1a1a" }, // 朱
   { solid: "#56B4E9", tint: "#e1f1fb", onSolid: "#1a1a1a" }, // 空
   { solid: "#B8A100", tint: "#f5f1d2", onSolid: "#1a1a1a" }, // 黄土
   { solid: "#8C564B", tint: "#efe5e2", onSolid: "#ffffff" }, // 茶

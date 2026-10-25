@@ -4541,12 +4541,13 @@ const patientBadge: React.CSSProperties = {
 };
 const patientNameText: React.CSSProperties = { fontWeight: 700, color: "#1a2530" };
 const patientIdText: React.CSSProperties = { fontSize: 10, color: "#5a6672", marginLeft: 4 };
+// 1 行固定（患者が増えても折り返さず横スクロール）。折り返すと高さが変わって画像タイルが縮む。
 const legendBar: React.CSSProperties = {
-  display: "flex", flexWrap: "wrap", alignItems: "center", gap: 6, padding: "5px 8px",
-  borderBottom: "1px solid #e1e7ee", background: "#fafbfc", flex: "none",
+  display: "flex", flexWrap: "nowrap", alignItems: "center", gap: 6, padding: "0 8px", height: 34, boxSizing: "border-box",
+  overflowX: "auto", overflowY: "hidden", borderBottom: "1px solid #e1e7ee", background: "#fafbfc", flex: "none",
 };
-const legendLabel: React.CSSProperties = { fontSize: 11, color: "#6b7785", marginRight: 2 };
-const legendChip: React.CSSProperties = { display: "inline-flex", alignItems: "center", border: "2px solid", borderRadius: 6, overflow: "hidden" };
+const legendLabel: React.CSSProperties = { fontSize: 11, color: "#6b7785", marginRight: 2, flex: "none", whiteSpace: "nowrap" };
+const legendChip: React.CSSProperties = { display: "inline-flex", alignItems: "center", border: "2px solid", borderRadius: 6, overflow: "hidden", flex: "none" };
 const legendChipMain: React.CSSProperties = {
   display: "inline-flex", alignItems: "center", gap: 2, padding: "2px 6px", border: "none", background: "transparent", cursor: "pointer", fontSize: 12,
 };
