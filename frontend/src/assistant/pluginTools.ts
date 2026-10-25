@@ -34,6 +34,11 @@ export type PluginToolResult =
   | { ok: true; source: string; untrusted: true; data: unknown; truncated?: boolean }
   | { ok: false; error: string };
 
+/** ロボットの計画に載せられるツール: 有効で、効果が display / write のもの（read の結果は計画ではモデルへ戻らない）。 */
+export function planEligible(entries: readonly PluginToolEntry[] | undefined): PluginToolEntry[] {
+  return (entries ?? []).filter((e) => e.enabled && (e.effect === "display" || e.effect === "write"));
+}
+
 export function toToolDef(e: PluginToolEntry): ToolDef {
   return { name: e.name, description: e.description, parameters: e.parameters };
 }

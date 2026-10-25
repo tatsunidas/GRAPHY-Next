@@ -41,6 +41,12 @@
       "parameters": { "type": "object", "properties": { "tag": { "type": "string", "maxLength": 20, "description": "Tag text." } }, "required": ["tag"] }
     },
     {
+      "name": "mark_display",
+      "description": "Records a display-only call (verification of plans that include display tools).",
+      "effect": "display",
+      "parameters": { "type": "object", "properties": { "n": { "type": "integer", "minimum": 1, "maximum": 5, "description": "A small integer." } }, "required": ["n"] }
+    },
+    {
       "name": "read_tag",
       "description": "Reads back the tag of the first ROI (verification of the write path).",
       "effect": "read",

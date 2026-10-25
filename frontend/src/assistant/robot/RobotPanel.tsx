@@ -9,6 +9,7 @@ import { isWriteAction, type InverseStep } from "../actions/registry";
 import { MAX_NAME, checkSteps, type MacroStep } from "../macros/macroModel";
 import { stepLabel, type MacroApi } from "../macros/MacroPanel";
 import { runMacro, undoRun } from "../macros/runMacro";
+import { isPluginToolName, planEligible, type PluginToolEntry, type PluginToolResult } from "../pluginTools";
 
 type T = (k: string, v?: Record<string, string | number>) => string;
 
@@ -29,6 +30,9 @@ export interface JournalEntry {
 export interface RobotApi {
   viewer: MacroApi["viewer"];
   save?: MacroApi["save"];
+  /** 計画に載せられるプラグインのツール（有効・display/write）と、その実行口。 */
+  pluginTools?: readonly PluginToolEntry[];
+  pluginTool?: (cmd: { kind: "pluginTool"; name: string; params: Record<string, unknown> }) => Promise<PluginToolResult>;
   journal?: () => Promise<{ ok: boolean; entries?: JournalEntry[] }>;
 }
 
@@ -59,15 +63,18 @@ export function RobotPanel({ plan, api, t, onDiscard }: { plan: RobotPlan | null
 
   if (!plan && history === null && !api.journal) return null;
   const chosen = plan ? plan.steps.filter((_, i) => picked[i]) : [];
+  const eligible = planEligible(api.pluginTools);
+  const entryOf = (id: string) => (isPluginToolName(id) ? eligible.find((e) => e.name === id) : undefined);
+  const hasPlugin = chosen.some((s) => isPluginToolName(s.id));
 
   const run = async () => {
     if (!plan) return;
-    const chk = checkSteps(chosen);
+    const chk = checkSteps(chosen, eligible);
     if (!chk.ok) return setMsg({ kind: "err", text: t("assistant.robot.needSteps") });
     setMsg(null);
     abortRef.current = false;
     setPhase("running");
-    const out = await runMacro(chk.steps, { viewer: api.viewer, aborted: () => abortRef.current, onStep: setCur });
+    const out = await runMacro(chk.steps, { viewer: api.viewer, pluginTools: eligible, pluginTool: api.pluginTool, aborted: () => abortRef.current, onStep: setCur });
     setCur(-1);
     setPhase("finished");
     setInverses(out.inverses.length ? out.inverses : null);
@@ -116,15 +123,15 @@ export function RobotPanel({ plan, api, t, onDiscard }: { plan: RobotPlan | null
                 onChange={(e) => setPicked((c) => c.map((v, j) => (j === i ? e.target.checked : v)))}
                 data-testid="assistant-robot-pick"
               />
-              {i + 1}. {stepLabel(t, s)}
-              {isWriteAction(s.id) && <span style={P.warn} data-testid="assistant-robot-write-mark">{t("assistant.robot.writeMark")}</span>}
+              {i + 1}. {stepLabel(t, s, eligible)}
+              {(isWriteAction(s.id) || entryOf(s.id)?.effect === "write") && <span style={P.warn} data-testid="assistant-robot-write-mark">{t("assistant.robot.writeMark")}</span>}
             </label>
           ))}
           <div style={P.row}>
             {phase === "review" && (
               <>
                 <button style={P.btnPrimary} disabled={chosen.length === 0} onClick={() => void run()} data-testid="assistant-robot-run">{t("assistant.robot.run")}</button>
-                {api.save && <button style={P.btn} disabled={chosen.length === 0} onClick={() => void saveMacro()} data-testid="assistant-robot-save">{t("assistant.robot.saveMacro")}</button>}
+                {api.save && <button style={P.btn} disabled={chosen.length === 0 || hasPlugin} title={hasPlugin ? t("assistant.robot.noMacroPlugin") : undefined} onClick={() => void saveMacro()} data-testid="assistant-robot-save">{t("assistant.robot.saveMacro")}</button>}
                 <button style={P.btn} onClick={onDiscard} data-testid="assistant-robot-discard">{t("assistant.robot.discard")}</button>
               </>
             )}

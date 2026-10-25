@@ -17,7 +17,7 @@ import { RobotPanel, type RobotPlan } from "./robot/RobotPanel";
 import { buildRobotTools } from "./robot/planModel";
 import { MacroPanel, type MacroApi } from "./macros/MacroPanel";
 import { PluginToolPanel } from "./PluginToolPanel";
-import { toToolDef, type PluginToolEntry, type PluginToolResult } from "./pluginTools";
+import { planEligible, toToolDef, type PluginToolEntry, type PluginToolResult } from "./pluginTools";
 import { candidatesFromActions } from "./macros/macroModel";
 import { DOC_CHUNKS } from "./docsBundle";
 import { searchDocs } from "./docsIndex";
@@ -226,7 +226,7 @@ export function AssistantScreen() {
     // ツールを送るのは、使える口があり、提供元がツール呼び出しに対応するとき（toolMode:none は案内のみ）。
     const canOperate = !!bridge.assistantViewerCmd && !!resolved?.ok && resolved.toolMode !== "none";
     const req: AiChatMessage[] = [
-      { role: "system", text: buildSystemPrompt(locale, hits, { canOperate, robot, pluginTools: canOperate && !robot && enabledPluginTools.length > 0 }) },
+      { role: "system", text: buildSystemPrompt(locale, hits, { canOperate, robot, pluginTools: canOperate && !robot && enabledPluginTools.length > 0, robotPluginTools: canOperate && robot && planEligible(enabledPluginTools).length > 0 }) },
       ...history,
       { role: "user", text: composed.text, images: allImages.length ? allImages.map((i) => ({ base64: i.base64, mimeType: i.mimeType })) : undefined },
     ];
@@ -241,7 +241,7 @@ export function AssistantScreen() {
     const viewer = (cmd: { kind: "action" | "getState" | "getMeasurements"; id?: string; params?: unknown }) =>
       bridge.assistantViewerCmd!(sessionId, cmd);
     if (robot) setPlan(null);
-    const result = await runToolLoop(req, canOperate ? (robot ? buildRobotTools() : [...buildTools(), ...enabledPluginTools.map(toToolDef)]) : [], {
+    const result = await runToolLoop(req, canOperate ? (robot ? buildRobotTools(enabledPluginTools) : [...buildTools(), ...enabledPluginTools.map(toToolDef)]) : [], {
       mode: robot ? "robot" : "chat",
       onPlan: (p) => setPlan(p),
       chat: (messages, tools) => bridge.aiChat!({ sessionId, messages, tools: tools.length ? tools : undefined, stream: true }),
@@ -301,11 +301,14 @@ export function AssistantScreen() {
       bridge?.assistantViewerCmd
         ? {
             viewer: (cmd: { kind: "action"; id: string; params: Record<string, unknown> }) => bridge.assistantViewerCmd!(sessionId, cmd),
+            pluginTools: enabledPluginTools,
+            pluginTool: (cmd: { kind: "pluginTool"; name: string; params: Record<string, unknown> }) =>
+              bridge.assistantViewerCmd!(sessionId, cmd) as Promise<PluginToolResult>,
             save: bridge.assistantMacrosSave,
             journal: bridge.assistantJournalList,
           }
         : null,
-    [bridge, sessionId],
+    [bridge, sessionId, enabledPluginTools],
   );
   const macroCandidates = useMemo(() => candidatesFromActions(state.messages.flatMap((m) => m.actions ?? [])), [state.messages]);
 
