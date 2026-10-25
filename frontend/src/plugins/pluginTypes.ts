@@ -894,6 +894,19 @@ export interface Viewer2DPluginHost extends PluginHostBase {
    */
   setRoiMeta: (roiUid: string, patch: Record<string, string>) => boolean;
   /**
+   * **ROI（楕円・矩形）を、表示中のスライスへ作る。** `tileId` 省略時は対象タイルの先頭。
+   * 中心は患者座標 LPS（mm）の `centerLps`、または表示中のスライスの画素座標 `[列, 行]` の `centerPx`（`getRois()` の `points` と同じ座標）の**どちらか一方**。
+   * LPS の中心は表示中のスライスの面内であること（面外は `off-slice` で拒否。別のスライスへは作らない）。成功すると、作った ROI の中心（LPS）も返る。
+   * 半径（矩形は半幅）は**表示の水平・垂直方向**の mm。作った ROI には本体が出自の印（このプラグイン）とラベルを付け、
+   * ROI マネージャで見分けられる。保存は本体が予約する。AI ツール（`effect: "write"`）から呼ぶときは、その実行前に本体が利用者の確認を出す。
+   */
+  createRoi: (
+    tileId: string | undefined,
+    req: import("../viewer/roiCreate").CreateRoiRequest,
+  ) => { ok: true; roiUid: string; centerLps: [number, number, number] } | { ok: false; reason: import("../viewer/roiCreate").CreateRoiFailure };
+  /** `createRoi` で**このプラグインが作った** ROI だけを消す（本体や他プラグインの ROI・ロック中は消えず false）。 */
+  removeCreatedRoi: (roiUid: string) => boolean;
+  /**
    * **表示位置を移動する**（H14）。結果の一覧から「その ROI のスライス」へ飛ぶ用途。
    *
    * <p>範囲外は端に丸める。**読み出し（`getPixelData`）とは別**にしてあるので、

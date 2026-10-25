@@ -107,6 +107,10 @@ export interface ViewerActions {
   getRoiMeta(roiUid: string, pluginId: string): Record<string, string>;
   /** ROI に紐付くプラグイン属性を書く（H5）。ROI が無ければ false。 */
   setRoiMeta(roiUid: string, pluginId: string, patch: Record<string, string>): boolean;
+  /** プラグインが ROI（楕円・矩形）を表示中のスライスへ作る。`tileId` 省略時は対象タイルの先頭。`pluginId` / `pluginName` は host が入れる。 */
+  createRoi(tileId: string | undefined, by: { pluginId: string; pluginName: string }, req: import("../viewer/roiCreate").CreateRoiRequest): { ok: true; roiUid: string; centerLps: [number, number, number] } | { ok: false; reason: import("../viewer/roiCreate").CreateRoiFailure };
+  /** そのプラグインが作った ROI だけを消す（出自の印が一致するときだけ）。 */
+  removeCreatedRoi(roiUid: string, pluginId: string): boolean;
   /**
    * ROI の追加・変更・削除を購読する（H5）。返り値で解除。
    * 通知はまとめられる（**何が変わったかは渡さない**ので、受け取ったら `getRois()` を読み直す）。

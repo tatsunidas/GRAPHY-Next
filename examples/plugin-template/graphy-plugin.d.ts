@@ -2104,6 +2104,28 @@ export interface Viewer2DPluginHost extends PluginHostBase {
    */
   setRoiMeta: (roiUid: string, patch: Record<string, string>) => boolean;
   /**
+   * **ROI（楕円・矩形）を、表示中のスライスへ作る。**（次の版以降）`tileId` 省略時は対象タイルの先頭。
+   *
+   * <p>中心は、患者座標 LPS（mm）の `centerLps`、または表示中のスライスの画素座標 `[列, 行]` の `centerPx`
+   * （`getRois()` の `points` と同じ座標。2D の画素だけを扱うプラグイン用）の**どちらか一方**。LPS の中心は表示中の
+   * スライスの面内であること。面外は `off-slice` で拒否される（黙って別のスライスへ作らない）。成功すると、作った ROI の中心（LPS）も返る。半径（矩形は半幅）`radiiMm` は**表示の水平・垂直方向**の mm。
+   * 楕円・矩形は Cornerstone の定義で表示の軸に揃うため、回転・反転した表示でも、見えている向きの半径になる。
+   *
+   * <p>作った ROI には**本体が**出自の印（このプラグイン）とラベルを付けるので、ROI マネージャで見分けられる。
+   * 保存は本体が予約する。`removeCreatedRoi` で、**このプラグインが作った ROI だけ**を消せる
+   * （本体や他プラグインの ROI は消せない）。
+   *
+   * <p>AI ツール（`effect: "write"`）の中から呼ぶ場合、その実行の前に本体が利用者の確認を出す。
+   * 失敗の理由: `bad-request`（ツール・数値が不正）／`off-slice`／`too-large`（半径が画像の大きさを超える）／
+   * `no-geometry`／`no-image`／`thick-slab`（ThickSlab 表示中は作れない）／`failed`。
+   */
+  createRoi: (
+    tileId: string | undefined,
+    req: { tool: "EllipticalROI" | "RectangleROI"; centerLps?: [number, number, number]; centerPx?: [number, number]; radiiMm: [number, number]; label?: string },
+  ) => { ok: true; roiUid: string; centerLps: [number, number, number] } | { ok: false; reason: "bad-request" | "off-slice" | "no-geometry" | "too-large" | "no-image" | "thick-slab" | "failed" };
+  /** `createRoi` で**このプラグインが作った** ROI だけを消す（ロック中・他の ROI は消えず false）。（次の版以降） */
+  removeCreatedRoi: (roiUid: string) => boolean;
+  /**
    * ROI の追加・変更・削除を購読する。返り値を呼ぶと解除（ダイアログを閉じるときは必ず解除する）。
    * **何が変わったかは渡さない**ので、通知を受けたら `getRois()` を読み直すこと。
    */
