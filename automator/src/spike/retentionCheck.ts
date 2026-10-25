@@ -135,6 +135,35 @@ async function main(): Promise<void> {
     check(!(await page.getByTestId("retention-run-now").isEnabled()), "有効にする前は「今すぐ実行」を押せない（負例）");
     check(!(await page.getByTestId("retention-save").isEnabled()), "条件が空のままでは保存できない（負例）");
     check(!(await page.getByTestId("retention-preview").isEnabled()), "保存前は試算できない（負例）");
+    // 期間の単位（日・週・ヶ月）。1 週間 = 7 日、1 ヶ月 = 30 日に換算して保存する
+    await page.getByTestId("retention-days-on").check();
+    await page.getByTestId("retention-days-unit").selectOption("month");
+    await page.getByTestId("retention-days").fill("3");
+    check((await page.getByTestId("retention-days-equiv").innerText()).includes("90"), "3 ヶ月は「90 日」と換算表示される", await page.getByTestId("retention-days-equiv").innerText());
+    await page.getByTestId("retention-days-unit").selectOption("week");
+    check((await page.getByTestId("retention-days-equiv").innerText()).includes("21"), "3 週間は「21 日」と換算表示される");
+    await page.getByTestId("retention-days-unit").selectOption("day");
+    check((await page.getByTestId("retention-days-equiv").count()) === 0, "単位が日のときは換算を出さない");
+    await page.getByTestId("retention-days-unit").selectOption("month");
+    await page.getByTestId("retention-days").fill("1.5");
+    check(!(await page.getByTestId("retention-save").isEnabled()), "小数は保存できない（負例）");
+    await page.getByTestId("retention-days").fill("0");
+    check(!(await page.getByTestId("retention-save").isEnabled()), "0 ヶ月は保存できない（負例）");
+    await page.getByTestId("retention-days").fill("3");
+    await shot(page, "02b-days-unit");
+    await page.getByTestId("retention-save").click();
+    await page.getByTestId("retention-message").waitFor({ state: "visible", timeout: 5_000 });
+    const cfgDays = (await (await fetch(`${R}/config`)).json()) as { days: number | null };
+    check(cfgDays.days === 90, "3 ヶ月は backend に 90 日で保存された（API）", cfgDays);
+    await page.getByTestId("retention-preview").click();
+    await page.getByTestId("retention-preview-result").waitFor({ state: "visible", timeout: 10_000 });
+    check((await page.getByTestId("retention-preview-table").count()) === 0 && (await studies()).length === 3,
+      "受信直後の検査は 3 ヶ月条件では消えない（試算は該当なし・索引 3）");
+    await page.keyboard.press("Escape");
+    await openSettingsPanel(page);
+    check((await page.getByTestId("retention-days-unit").inputValue()) === "month" && (await page.getByTestId("retention-days").inputValue()) === "3",
+      "開き直すと「3 ヶ月」で表示される（保存は 90 日）");
+    await page.getByTestId("retention-days-on").uncheck();
     await page.getByTestId("retention-max-on").check();
     check(!(await page.getByTestId("retention-save").isEnabled()), "オンの欄が空だと保存できない（負例）");
     await page.getByTestId("retention-max").fill("0");
