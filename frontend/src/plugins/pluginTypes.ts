@@ -1196,7 +1196,8 @@ export interface PluginModule {
   /**
    * AI アシスタントから呼ばれるツールの実装（`plugin.json` の `aiTools` と同じ名前）。2D 窓が呼び出し時にだけ読み込み、
    * `activate` は呼ばない。引数は宣言した仕様で検証済み。戻り値は JSON にできる値（4 KB を超える分は切り捨てられ、
-   * 外部の AI へ渡るときは利用者の確認が入る）。
+   * 外部の AI へ渡るときは利用者の確認が入る）。宣言した `effect` を超える `host` の呼び出し（`read` / `display` のツールが書き込み系に
+   * 触れる）は `effect-violation` で止まる（`hostEffects.ts`）。
    */
   aiTools?: Record<string, (args: Record<string, unknown>, host: PluginHost) => unknown | Promise<unknown>>;
 }
