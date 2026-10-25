@@ -274,6 +274,49 @@ async function main(): Promise<void> {
     await page.getByTestId("retention-disable").click();
     await page.waitForFunction(() => document.querySelector('[data-testid="retention-state"]')?.getAttribute("data-enabled") === "false", null, { timeout: 10_000 });
     check(true, "無効に戻せる");
+
+    console.log("\n[10] 最初の1回の対象が保護中でも、使い切られず、見せていない検査は消えない（API）");
+    const J = { "Content-Type": "application/json" };
+    const post = async (u: string, body?: unknown) => fetch(u, { method: "POST", headers: J, body: body === undefined ? undefined : JSON.stringify(body) });
+    const status = async () => (await (await fetch(`${R}/status`)).json()) as { enabled: boolean; firstRunPending: boolean; storeBytes: number };
+    check((await studies()).sort().join() === [s1.studyUid, s3.studyUid].sort().join(), "前提: 残っているのは s1（ロック中）と s3 の 2 検査", await studies());
+    const two = (await status()).storeBytes;
+    const max10 = ((two * 0.75) / GB).toFixed(10); // 2 検査のうち 1 検査を消せば満たせる
+    const put = await fetch(`${R}/config`, { method: "PUT", headers: J, body: JSON.stringify({ days: null, maxGb: Number(max10), minFreeGb: null }) });
+    check(put.ok, "上限の条件を保存できた", put.status);
+    const prev = await post(`${R}/preview`);
+    check(prev.ok, "試算できた", prev.status);
+    const pv = (await prev.json()) as { previewId: string; plan: { items: { studyUid: string }[] } };
+    check(pv.plan.items.length === 1 && pv.plan.items[0].studyUid === s3.studyUid, "試算に入るのは s3 だけ（s1 はロックで除外）", pv.plan.items);
+    check((await post(`${R}/enable`, { previewId: pv.previewId })).ok, "有効にした（最初の1回の対象は s3）");
+    check((await status()).firstRunPending === true, "最初の1回が待機中");
+    // 対象をロックしてから、試算のあとに入った検査（見せていない）を取り込む。取り込みでも自動の判定が動く
+    check((await fetch(`${R}/holds/${encodeURIComponent(s3.studyUid)}`, { method: "PUT" })).ok, "対象の s3 をロックした");
+    const imp2 = await importPaths(driver.ports.http, [path.join(dir, "s2")]);
+    check(imp2.imported === 4, "s2 を取り込み直した（試算のあとに入った検査）", imp2);
+    check(filesOnDisk(s2.sops) === 4, "検出器の確認: 取り込み直した s2 のファイルが実在する");
+    check((await status()).storeBytes > two * 1.2, "保管庫が上限を超えている（条件が効く状態）", await status());
+    for (let i = 0; i < 2; i++) {
+      const r = await post(`${R}/run`);
+      check(r.ok, `今すぐ実行 ${i + 1} 回目が受け付けられた`, r.status);
+      await sleep(1_500);
+    }
+    const mid = await studies();
+    check(mid.includes(s3.studyUid) && filesOnDisk(s3.sops) === 4, "ロック中の対象 s3 は消えない");
+    check(mid.includes(s2.studyUid) && filesOnDisk(s2.sops) === 4, "見せていない s2 は、対象が保護中でも消えない（修正の要点）", mid);
+    check((await status()).firstRunPending === true, "対象が保護中の間は、最初の1回が残る");
+    check((await fetch(`${R}/holds/${encodeURIComponent(s3.studyUid)}`, { method: "DELETE" })).ok, "s3 のロックを外した");
+    check((await post(`${R}/run`)).ok, "今すぐ実行（最初の1回）");
+    for (let i = 0; i < 30 && (await studies()).includes(s3.studyUid); i++) await sleep(500);
+    const after1 = await studies();
+    check(!after1.includes(s3.studyUid) && filesOnDisk(s3.sops) === 0, "保護が外れたら、見せた s3 だけが消える（索引・ファイルとも）", after1);
+    check(after1.includes(s2.studyUid) && filesOnDisk(s2.sops) === 4, "その実行でも、見せていない s2 は消えない", after1);
+    check((await status()).firstRunPending === false, "最初の1回は終わった");
+    check((await post(`${R}/run`)).ok, "今すぐ実行（2 回目）");
+    for (let i = 0; i < 30 && (await studies()).includes(s2.studyUid); i++) await sleep(500);
+    const after2 = await studies();
+    check(!after2.includes(s2.studyUid) && after2.includes(s1.studyUid), "2 回目からは条件どおり s2 が消え、ロック中の s1 は残る", after2);
+    await post(`${R}/disable`);
   } finally {
     await driver.stop();
   }
