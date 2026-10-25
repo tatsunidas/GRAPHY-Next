@@ -31,6 +31,7 @@ import { useSyncExternalStore } from "react";
 import { formatViewAngles, type XaViewGeometry } from "./xaGeometry";
 import { type QcaDiameterMethod } from "./qca";
 import type { XaInputCheck } from "./xaInputCheck";
+import type { CardiacPhaseInfo } from "./xaCardiacPhase";
 
 export interface XaQcaRun {
   /** imageId（どのフレームを解析したか）。**鍵ではない**——{@link runKey} を見ること。 */
@@ -84,6 +85,11 @@ export interface XaQcaRun {
    * タグが読めなければ undefined（「読めない」と表示し、合格にはしない）。
    */
   inputCheck?: XaInputCheck;
+  /**
+   * 解析フレームの心位相（GN-XA-001 P2。R 波ポインタのみ。画像からは推定しない）。**登録時に**読む（理由は inputCheck と同じ）。
+   * undefined = 読めなかった。source:"none" = 読めたが ECG 情報が無い。
+   */
+  cardiacPhase?: CardiacPhaseInfo;
   at: number;
 }
 

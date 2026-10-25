@@ -54,7 +54,7 @@ import { publishAnalysisResult } from "../report/analysisResultStore";
 import { qcaRecord } from "../report/xaAnalysisRecords";
 import { describeView, qcaRunKey, registerQcaRun, removeQcaRun } from "./xaRecon3dStore";
 import { readXaViewGeometry } from "./xaViewGeometryProvider";
-import { calibrationForImageId, loaderSpacingFor, readXaInputTags } from "./xaCalibrationProvider";
+import { calibrationForImageId, loaderSpacingFor, readXaCardiacPhase, readXaInputTags } from "./xaCalibrationProvider";
 import { checkXaInput } from "./xaInputCheck";
 import { persistXaUserCalibration } from "./xaCalibrationPersistence";
 import { clearedBy, deriveQcaSteps, type ManualInputKey } from "./xaTasks";
@@ -747,6 +747,7 @@ export function XaAnalysisDialog({
         calibrationSource: c?.source,
         calibrationTier: c?.tier,
         inputCheck: inputTags ? checkXaInput(inputTags.tags, inputTags.isXaSopClass) : undefined,
+        cardiacPhase: readXaCardiacPhase(imageId, saveContext.frameIndex) ?? undefined,
         at: Date.now(),
       });
     }
