@@ -145,6 +145,7 @@ import { LEFT_PANEL_OPEN_KEY, parseLeftPanelOpen, tileListLabel } from "./leftPa
 import { concatTileId, tileIdFor, type ConcatOpened, type ZRange } from "../viewer/virtualLayout";
 import { concatFailureMessage, resolveConcatStack } from "../viewer/concatVolume";
 import { desktop } from "../desktopBridge";
+import { studyUidsOfTiles, useStudyInUse } from "../retention/useStudyInUse";
 import { closeAllPluginWindows } from "../plugins/pluginWindowApi";
 import { mountSeriesPanel, closeAllSeriesPanels, PluginSeriesPanels } from "../plugins/pluginSeriesPanelApi";
 
@@ -795,6 +796,8 @@ export function Viewer2DScreen({ status }: { status: AppStatus | null }) {
 
   // 全患者モードの表示順・グリッド・単独表示。**患者のデータ（patients）は書き換えず**、見せ方だけをここに持つ。
   const allTiles = useMemo(() => patients.flatMap((p) => p.tiles), [patients]);
+  // 開いているタイルの検査は自動削除から守る（backend に使用中と知らせる）
+  useStudyInUse(studyUidsOfTiles(allTiles));
   const [orderPref, setOrderPref] = useState<string[]>([]);
   const orderedIds = useMemo(() => reconcileOrder(orderPref, allTiles.map((tl) => tl.id)), [orderPref, allTiles]);
   const orderedIdsRef = useRef(orderedIds);

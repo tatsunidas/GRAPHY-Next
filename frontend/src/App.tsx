@@ -14,6 +14,8 @@ import { KeyboardHelp } from "./shortcuts/KeyboardHelp";
 import { useGlobalShortcuts } from "./shortcuts/useGlobalShortcuts";
 import { MainScreen } from "./mainscreen/MainScreen";
 import { InboxNotice } from "./dbadmin/InboxNotice";
+import { RetentionNotice } from "./dbadmin/RetentionNotice";
+import { useCtxWindowInUse } from "./retention/useStudyInUse";
 import { Viewer2DScreen } from "./viewer2d/Viewer2DScreen";
 import { MprScreen } from "./mpr/MprScreen";
 import { Viewer3DScreen } from "./viewer3d/Viewer3DScreen";
@@ -55,6 +57,8 @@ export function App() {
   const [screen, setScreen] = useState(() => window.location.hash.replace(/^#/, ""));
   const { uiMode, setOverride } = useDeviceClass();
   const mobileView = parseMobileRoute(screen);
+  // 別ウィンドウ（#mpr など）が開いている検査を、自動削除から守る
+  useCtxWindowInUse(screen);
 
   useEffect(() => {
     const onHash = () => setScreen(window.location.hash.replace(/^#/, ""));
@@ -258,6 +262,8 @@ export function App() {
         />
         {/* 他の DB から届いた検査を、この DB を開いたときに取り込んだ結果（standalone のみ・一度だけ） */}
         {status?.mode === "standalone" && <InboxNotice onImported={() => setDbVersion((v) => v + 1)} />}
+        {/* 自動削除が動いたあとの知らせ（見ていない実行があるとき・閉じるまで） */}
+        {status?.mode === "standalone" && <RetentionNotice onChanged={() => setDbVersion((v) => v + 1)} />}
         </>
       )}
       <SettingsDialog
