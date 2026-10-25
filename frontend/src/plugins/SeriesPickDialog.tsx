@@ -17,11 +17,12 @@ import { MODALITY_OPTIONS } from "../mainscreen/SearchPanel";
 import { TriCheckbox } from "../mainscreen/TriCheckbox";
 import { imageCount } from "../imageCount";
 import { isEligible, pickKey, studyState, toResult, toggleSeries, toggleStudy, type PickedSeries } from "./seriesPickLogic";
+import { formatDicomDate } from "../i18n/dateFormat";
 
 const SEARCH_DEBOUNCE_MS = 250;
 
 /** "YYYYMMDD" → "YYYY-MM-DD"（表示用）。形が違えばそのまま。 */
-const showDate = (v: string | null): string => (v && /^\d{8}$/.test(v) ? `${v.slice(0, 4)}-${v.slice(4, 6)}-${v.slice(6, 8)}` : v ?? "");
+const showDate = (v: string | null): string => (v ? formatDicomDate(v) : "");
 const fromInputDate = (v: string) => v.replace(/-/g, "");
 
 export function SeriesPickDialog({

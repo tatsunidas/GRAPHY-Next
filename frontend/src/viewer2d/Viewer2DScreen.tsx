@@ -148,6 +148,7 @@ import { desktop } from "../desktopBridge";
 import { studyUidsOfTiles, useStudyInUse } from "../retention/useStudyInUse";
 import { closeAllPluginWindows } from "../plugins/pluginWindowApi";
 import { mountSeriesPanel, closeAllSeriesPanels, PluginSeriesPanels } from "../plugins/pluginSeriesPanelApi";
+import { formatDicomDate, useDateFormat } from "../i18n/dateFormat";
 
 // ── 型定義 ────────────────────────────────────────────────────
 
@@ -3027,7 +3028,8 @@ function TileCell({
     ? t("series.concat.heading", { parts: tile.concat.labels.join(" + "), count: tile.concat.layout.nZ })
     : tile.series.seriesDescription ||
       `#${tile.series.seriesNumber ?? "?"} ${tile.series.modality ?? ""}`.trim();
-  const dateLabel = tile.study.studyDate || "";
+  const dateFmt = useDateFormat(); // 書式が変わったら見出しを描き直す
+  const dateLabel = tile.study.studyDate ? formatDicomDate(tile.study.studyDate, dateFmt.date) : "";
   const studyDesc = tile.study.studyDescription || "";
 
   // 既定 W/L の受け取り。**useCallback で識別子を固定する**。
@@ -4257,7 +4259,8 @@ function StudyNode({
   };
 
   const patientLabel = study.patientName || study.patientId || "—";
-  const studyMeta = [study.studyDate, study.studyDescription, study.modality]
+  useDateFormat(); // 書式が変わったら描き直す
+  const studyMeta = [study.studyDate ? formatDicomDate(study.studyDate) : "", study.studyDescription, study.modality]
     .filter(Boolean)
     .join(" · ");
 
