@@ -11,6 +11,7 @@ function makeDeps(over: Partial<BridgeDeps> = {}) {
     readInfo: () =>
       ({ sliceIndex: 7, sliceCount: 50, modality: "CT", patientKey: "PID123", studyUid: "1.2.3", seriesUid: "1.2.4", imageId: "wadouri:http://x/1.2.3", apiBase: "http://localhost:1", seriesLabel: "TARO YAMADA CT" }) as never,
     readView: () => ({ windowCenter: 40, windowWidth: 400, unit: "HU", colormap: null, invert: false, flipH: false, flipV: false, rotation: 0, zoom: 1 }) as never,
+    readRois: () => [],
     run: (_ids, fn) => fn(cmds as never),
     runSeries: (_ids, fn) => fn({ goTo: (d: unknown) => calls.push(`goTo(${JSON.stringify(d)})`) } as never),
     activeTool: () => "WindowLevel",
@@ -137,5 +138,69 @@ describe("executeCommand", () => {
   it("no tiles → no-tile", () => {
     const { deps } = makeDeps({ targets: () => [] });
     expect(executeCommand(deps, { kind: "action", id: "flipH" })).toEqual({ ok: false, error: "no-tile" });
+  });
+});
+
+describe("getMeasurements (PHI allow-list)", () => {
+  const roi = (over: Record<string, unknown> = {}) => ({
+    tileIndex: 1,
+    roiUid: "UID-SECRET-1",
+    patientKey: "PID123",
+    studyUid: "1.2.3.STUDY",
+    seriesUid: "1.2.4.SERIES",
+    sopInstanceUid: "1.2.5.SOP",
+    studyDate: "2026-01-02",
+    points: [[10.5, 20.5]],
+    spacing: [0.7, 0.7],
+    tool: "EllipticalROI",
+    label: "TARO YAMADA liver",
+    sliceIndex: 12,
+    visible: true,
+    zScope: 12,
+    measurements: { area: 123.4, mean: 55.5, stdDev: 6.1, min: 10, max: 99, unit: "HU", longAxisMm: 14.2, shortAxisMm: 9.9, hidden: "X" },
+    ...over,
+  });
+  const run = (rois: unknown[], labels = false) => {
+    const { deps } = makeDeps({ readRois: () => rois as never });
+    const r = executeCommand(deps, { kind: "getMeasurements", includeLabels: labels });
+    expect(r.ok).toBe(true);
+    return (r as unknown as { measurements: { rois: Record<string, unknown>[]; truncated?: boolean } }).measurements;
+  };
+  it("passes the values the viewer shows", () => {
+    expect(run([roi()]).rois[0]).toEqual({
+      roi: "roi1", tile: "tile2", tool: "EllipticalROI", sliceIndex: 12, visible: true,
+      areaMm2: 123.4, mean: 55.5, stdDev: 6.1, min: 10, max: 99, unit: "HU", longAxisMm: 14.2, shortAxisMm: 9.9,
+    });
+  });
+  it("never contains identifiers, coordinates or unknown fields", () => {
+    const s = JSON.stringify(run([roi()], false));
+    for (const secret of ["UID-SECRET", "PID123", "STUDY", "SERIES", "SOP", "2026-01-02", "10.5", "0.7", "YAMADA", "hidden", "zScope"]) expect(s).not.toContain(secret);
+  });
+  it("label only for local", () => {
+    expect(JSON.stringify(run([roi()], true))).toContain("YAMADA");
+    expect(JSON.stringify(run([roi()], false))).not.toContain("YAMADA");
+  });
+  it("omits missing values instead of filling them", () => {
+    const r = run([roi({ measurements: { mean: 3, unit: "HU", area: undefined, stdDev: NaN } })]).rois[0];
+    expect(r).not.toHaveProperty("areaMm2");
+    expect(r).not.toHaveProperty("stdDev");
+    expect(r.mean).toBe(3);
+  });
+  it("flags an uncalibrated (raw) unit", () => {
+    expect(run([roi({ measurements: { mean: 3, unit: "raw" } })]).rois[0].calibrated).toBe(false);
+    expect(run([roi()]).rois[0]).not.toHaveProperty("calibrated");
+  });
+  it("caps at 50 and reports truncation; empty is an empty list", () => {
+    const m = run(Array.from({ length: 51 }, () => roi()));
+    expect(m.rois).toHaveLength(50);
+    expect(m.truncated).toBe(true);
+    expect(run([])).toEqual({ rois: [] });
+  });
+  it("is not an action and does not touch the viewer", () => {
+    const { deps, calls } = makeDeps({ readRois: () => [roi()] as never });
+    expect(validateAction("getMeasurements", {}).ok).toBe(false);
+    executeCommand(deps, { kind: "getMeasurements" });
+    expect(calls).toEqual([]);
+    expect(buildTools().map((t) => t.name)).toContain("getMeasurements");
   });
 });

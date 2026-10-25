@@ -23,7 +23,10 @@ const DEFAULT_TIMEOUT_MS = 5000;
 const PLUGIN_TOOL_TIMEOUT_MS = 30000;
 const MAX_PLUGIN_ARGS_BYTES = 2000;
 
-const KINDS = new Set(["action", "getState", "pluginTool"]);
+const KINDS = new Set(["action", "getState", "getMeasurements", "pluginTool"]);
+
+/** ROI 計測値の結果の上限（バイト）。50 件ぶんが入る大きさ。超えたら切り詰める。暫定値。 */
+const MAX_MEASUREMENTS_BYTES = 20000;
 
 /**
  * データを変える操作（frontend/src/assistant/actions/registry.ts の `effect: "write"` と同じ集合）。
@@ -105,6 +108,7 @@ function createRelay({ resolveTarget, journal = () => {}, timeoutMs = DEFAULT_TI
    */
   async function relay(sessionId, cmd, opts = {}) {
     if (cmd && typeof cmd === "object" && cmd.kind === "pluginTool") return relayPluginTool(sessionId, cmd, opts);
+    if (cmd && typeof cmd === "object" && cmd.kind === "getMeasurements") return relayMeasurements(sessionId, cmd, opts);
     if (cmd && typeof cmd === "object" && cmd.kind === "action" && WRITE_ACTIONS.has(cmd.id)) {
       let approved = false;
       try {
@@ -170,6 +174,42 @@ function createRelay({ resolveTarget, journal = () => {}, timeoutMs = DEFAULT_TI
       }
     }
     return { ok: true, source: `plugin:${entry.pluginId}`, untrusted: true, data: r.data, ...(r.truncated ? { truncated: true } : {}) };
+  }
+
+  /**
+   * ROI の計測値（患者由来）。2D 窓が許可リストで作った結果を受け、型を洗って切り詰め、`untrusted` を付ける。
+   * 送信先が外部なら返す前に利用者の承認を取る（セッションに 1 回）。ジャーナルには ok と error だけ（値は残さない）。
+   * @param {{measurements?: {external: boolean, confirmSend: (preview: string) => Promise<boolean>}}} opts
+   */
+  async function relayMeasurements(sessionId, cmd, opts) {
+    const sid = String(sessionId || "").slice(0, 64);
+    const res = await relayInner(sid, { kind: "getMeasurements", includeLabels: cmd.includeLabels === true }, false);
+    if (!res || res.ok !== true) {
+      const error = typeof (res && res.error) === "string" ? res.error.slice(0, 80) : "no-viewer";
+      journal({ sessionId: sid, kind: "getMeasurements", id: "getMeasurements", ok: false, error });
+      return { ok: false, error };
+    }
+    const r = sanitizeResult(res.measurements, MAX_MEASUREMENTS_BYTES);
+    const m = opts.measurements;
+    if (!m || m.external !== false) {
+      // 既定は外部扱い（ローカルと判定できたときだけ省く）
+      const key = `${sid}|measurements`;
+      if (!granted.has(key)) {
+        let ok = false;
+        try {
+          ok = typeof m?.confirmSend === "function" && (await m.confirmSend(r.preview.slice(0, 200))) === true;
+        } catch {
+          ok = false;
+        }
+        if (!ok) {
+          journal({ sessionId: sid, kind: "getMeasurements", id: "getMeasurements", ok: false, error: "declined" });
+          return { ok: false, error: "declined" };
+        }
+        granted.add(key);
+      }
+    }
+    journal({ sessionId: sid, kind: "getMeasurements", id: "getMeasurements", ok: true });
+    return { ok: true, untrusted: true, measurements: r.data, ...(r.truncated ? { truncated: true } : {}) };
   }
 
   function relayInner(sessionId, cmd, approved, timeout = timeoutMs) {

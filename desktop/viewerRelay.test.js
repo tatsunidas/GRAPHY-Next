@@ -206,3 +206,50 @@ test("pluginTool: 2D 窓のエラーは data を持たず ok:false で返る。�
   r.handleResult(t, "e1", { ok: false, error: "plugin-error" });
   assert.deepStrictEqual(await p, { ok: false, error: "plugin-error" });
 });
+
+// ---- ROI の計測値 ----
+test("getMeasurements: 2D 窓へ届き(includeLabels を引き継ぐ)、untrusted で返り、ジャーナルに値が残らない。ローカルは確認なし", async () => {
+  const t = fakeTarget();
+  const log = [];
+  const r = createRelay({ resolveTarget: () => t, journal: (e) => log.push(e), newId: () => "m1" });
+  let asked = 0;
+  const p = r.relay("s", { kind: "getMeasurements", includeLabels: true }, { measurements: { external: false, confirmSend: async () => { asked++; return true; } } });
+  await new Promise((res) => setImmediate(res));
+  assert.deepStrictEqual(t.sent[0][1], { reqId: "m1", kind: "getMeasurements", id: undefined, params: undefined, includeLabels: true, approved: false });
+  r.handleResult(t, "m1", { ok: true, measurements: { rois: [{ roi: "roi1", mean: 55.5, label: "SECRET" }] } });
+  assert.deepStrictEqual(await p, { ok: true, untrusted: true, measurements: { rois: [{ roi: "roi1", mean: 55.5, label: "SECRET" }] } });
+  assert.strictEqual(asked, 0);
+  assert.strictEqual(log.length, 1);
+  assert.strictEqual(log[0].kind, "getMeasurements");
+  assert.ok(!JSON.stringify(log).includes("55.5") && !JSON.stringify(log).includes("SECRET"));
+});
+
+test("getMeasurements: 外部宛て(既定)は初回だけ確認。拒否・例外・関数なし・opts なしでは結果を返さない。上限超過は切り詰め", async () => {
+  const run = async (opts) => {
+    const t = fakeTarget();
+    let n = 0;
+    const r = createRelay({ resolveTarget: () => t, newId: () => `g${++n}` });
+    return async (payload = { rois: [{ roi: "roi1" }] }) => {
+      const p = r.relay("s", { kind: "getMeasurements" }, opts);
+      await new Promise((res) => setImmediate(res));
+      r.handleResult(t, `g${n}`, { ok: true, measurements: payload });
+      return p;
+    };
+  };
+  for (const opts of [undefined, {}, { measurements: { external: true } }, { measurements: { external: true, confirmSend: async () => false } }, { measurements: { external: true, confirmSend: async () => { throw new Error("x"); } } }, { measurements: { external: true, confirmSend: async () => "yes" } }]) {
+    assert.deepStrictEqual(await (await run(opts))(), { ok: false, error: "declined" });
+  }
+  let asked = 0;
+  const call = await run({ measurements: { external: true, confirmSend: async (pv) => { asked++; assert.ok(pv.length <= 200); return true; } } });
+  assert.strictEqual((await call()).ok, true);
+  assert.strictEqual((await call()).ok, true);
+  assert.strictEqual(asked, 1);
+  const big = await call({ rois: Array.from({ length: 50 }, (_, i) => ({ roi: `roi${i}`, pad: "x".repeat(900) })) });
+  assert.strictEqual(big.truncated, true);
+  assert.strictEqual(typeof big.measurements, "string");
+});
+
+test("getMeasurements: 2D 窓が無い・エラーのときは ok:false", async () => {
+  const r = createRelay({ resolveTarget: () => null });
+  assert.deepStrictEqual(await r.relay("s", { kind: "getMeasurements" }, { measurements: { external: false } }), { ok: false, error: "no-viewer" });
+});

@@ -5,6 +5,7 @@
 import { useEffect, useState } from "react";
 import { useI18n } from "../i18n/i18n";
 import { type ViewerActions } from "./Viewer2DToolbar";
+import { spansPatients } from "./tileScope";
 import { presetLabel } from "./wlPresets";
 import { useWlPresets } from "./wlPresetStore";
 import { TOOL_IDS } from "../viewer/toolIds";
@@ -68,7 +69,12 @@ const LAYOUT_PRESETS: [number, number][] = [
  * プラグインに患者を名乗らせると、取り違えたときに別患者の記録へ書き込む事故になる。
  */
 function currentPatientKey(actions: ViewerActions): string {
-  return actions.getTargets()[0]?.patientKey ?? "";
+  const keys = actions.getTargets().map((tg) => tg.patientKey);
+  // 全患者モードでは対象が複数の患者にまたがりうる。先頭の患者に黙って書くと別患者の記録を壊すので断る。
+  if (spansPatients(keys)) {
+    throw new Error("対象のタイルが複数の患者にまたがっているため、患者単位の保存領域は使えません（1 人の患者のタイルだけを選んでください）");
+  }
+  return keys[0] ?? "";
 }
 
 export function Viewer2DMenuBar({
