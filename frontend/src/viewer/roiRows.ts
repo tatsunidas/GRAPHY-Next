@@ -15,10 +15,24 @@
  */
 import { annotationRoiKind, isRoiKind, type RoiKind } from "./roiKind";
 
-export interface RoiRowEnv {
-  /** 表示中の患者（未紐付けのものは常に表示）。 */
+/** いま画面に出ているシリーズ（タイル）。ROI マネージャはこの集合に属する ROI だけを並べる。 */
+export interface ShownSeries {
   patientKey: string;
-  metaOf(id: string): { patientKey?: string; label?: string; segments?: number[]; segmentLabels?: Record<string, string> } | undefined;
+  seriesUid: string;
+}
+
+export interface RoiRowEnv {
+  /** フォーカス中の患者。`shown` が無いときは、この患者だけを出す（未紐付けのものは常に表示）。 */
+  patientKey: string;
+  /** 画面に出ている（患者, シリーズ）。あれば、これに属する ROI だけを出す（全患者表示用）。 */
+  shown?: ReadonlyArray<ShownSeries>;
+  metaOf(id: string): {
+    patientKey?: string;
+    label?: string;
+    segments?: number[];
+    segmentLabels?: Record<string, string>;
+    scope?: { seriesUid?: string };
+  } | undefined;
   isAnnotationVisible(uid: string): boolean;
   isLocked(uid: string): boolean;
   scopeText(id: string): string;
@@ -33,9 +47,16 @@ export interface SegmentationInput {
 export interface SphereInput {
   id: string;
   patientKey?: string;
+  seriesUid?: string;
 }
 
-export interface ShapeRoiRow {
+/** 行がどの患者・シリーズのものか（一覧を見出しでまとめるための印）。不明なら未設定。 */
+export interface RowOwner {
+  patientKey?: string;
+  seriesUid?: string;
+}
+
+export interface ShapeRoiRow extends RowOwner {
   rowKind: "shape";
   key: string;
   uid: string;
@@ -46,7 +67,7 @@ export interface ShapeRoiRow {
   scope: string;
 }
 
-export interface PaintedRoiRow {
+export interface PaintedRoiRow extends RowOwner {
   rowKind: "painted";
   /** segment ごとに一意。統計ダイアログの uid にもそのまま使う。 */
   key: string;
@@ -60,7 +81,7 @@ export interface PaintedRoiRow {
   visible: boolean;
 }
 
-export interface SphereRoiRow {
+export interface SphereRoiRow extends RowOwner {
   rowKind: "sphere";
   key: string;
   id: string;
@@ -68,7 +89,7 @@ export interface SphereRoiRow {
 
 export type RoiRow = ShapeRoiRow | PaintedRoiRow | SphereRoiRow;
 
-export interface MeasureRow {
+export interface MeasureRow extends RowOwner {
   key: string;
   uid: string;
   tool: string;
@@ -99,6 +120,19 @@ export function paintedRowName(
   return named || `${meta?.label || fallbackLabel} #${segIndex}`;
 }
 
+/**
+ * ROI をこの一覧に出すか。`env.shown` があれば「表示中のシリーズに属するか」、無ければ従来どおり
+ * 「フォーカス患者のものか」。患者が未紐付けのものは常に出す（取りこぼして消えるより、出す方が安全）。
+ * シリーズが不明な ROI は、患者が表示中なら出す。
+ */
+export function isShown(env: Pick<RoiRowEnv, "patientKey" | "shown">, pk: string | undefined, seriesUid?: string): boolean {
+  if (!pk) return true;
+  if (!env.shown) return pk === env.patientKey;
+  const mine = env.shown.filter((s) => s.patientKey === pk);
+  if (mine.length === 0) return false;
+  return !seriesUid || mine.some((s) => s.seriesUid === seriesUid);
+}
+
 export function buildRoiPanelModel(
   annotations: ReadonlyArray<unknown>,
   segmentations: ReadonlyArray<SegmentationInput>,
@@ -106,27 +140,31 @@ export function buildRoiPanelModel(
   env: RoiRowEnv,
   segmentsOf: (maskId: string) => number[],
 ): RoiPanelModel {
-  const mine = (pk: string | undefined) => !pk || pk === env.patientKey;
+  const mine = (pk: string | undefined, seriesUid?: string) => isShown(env, pk, seriesUid);
   const shapes: ShapeRoiRow[] = [];
   const measures: MeasureRow[] = [];
   for (const a of annotations) {
     const ann = a as { annotationUID?: string; metadata?: { toolName?: string } } | null;
     const uid = ann?.annotationUID;
-    if (!uid || !mine(env.metaOf(uid)?.patientKey)) continue;
+    const am = env.metaOf(uid ?? "");
+    const owner: RowOwner = { patientKey: am?.patientKey, seriesUid: am?.scope?.seriesUid };
+    if (!uid || !mine(owner.patientKey, owner.seriesUid)) continue;
     const kind = annotationRoiKind(ann);
     const tool = ann?.metadata?.toolName ?? "ROI";
-    const common = { key: uid, uid, tool, visible: env.isAnnotationVisible(uid), locked: env.isLocked(uid), scope: env.scopeText(uid) };
+    const common = { key: uid, uid, tool, ...owner, visible: env.isAnnotationVisible(uid), locked: env.isLocked(uid), scope: env.scopeText(uid) };
     if (kind && isRoiKind(kind)) shapes.push({ rowKind: "shape", kind: kind as ShapeRoiRow["kind"], ...common });
     else measures.push({ kind, ...common });
   }
   const painted: PaintedRoiRow[] = [];
   for (const s of segmentations) {
     const meta = env.metaOf(s.segmentationId);
-    if (!mine(meta?.patientKey)) continue;
+    const owner: RowOwner = { patientKey: meta?.patientKey, seriesUid: meta?.scope?.seriesUid };
+    if (!mine(owner.patientKey, owner.seriesUid)) continue;
     const segs = segmentsOf(s.segmentationId);
     for (const segIndex of segs) {
       painted.push({
         rowKind: "painted",
+        ...owner,
         key: paintedRowKey(s.segmentationId, segIndex),
         maskId: s.segmentationId,
         segIndex,
@@ -138,8 +176,8 @@ export function buildRoiPanelModel(
     }
   }
   const sphereRows: SphereRoiRow[] = spheres
-    .filter((s) => mine(s.patientKey))
-    .map((s) => ({ rowKind: "sphere", key: s.id, id: s.id }));
+    .filter((s) => mine(s.patientKey, s.seriesUid))
+    .map((s) => ({ rowKind: "sphere", key: s.id, id: s.id, patientKey: s.patientKey, seriesUid: s.seriesUid }));
   return { rois: [...shapes, ...painted, ...sphereRows], measures };
 }
 

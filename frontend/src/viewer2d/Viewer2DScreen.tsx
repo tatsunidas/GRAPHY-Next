@@ -1343,6 +1343,21 @@ function TileGrid({
   const [focusedTileId, setFocusedTileId] = useState<string | null>(null);
   const focusedTile = patient.tiles.find((tl) => tl.id === focusedTileId) ?? null;
   const focusedPatientKey = focusedTile ? derivePatientKey(focusedTile.study) : null;
+  // ROI マネージャに出すシリーズ。画面に出ているタイルのシリーズ（連結タイルは構成するシリーズ全部）。
+  const shownRoiSeries = useMemo(
+    () =>
+      patient.tiles.flatMap((tl) =>
+        (tl.concat ? tl.concat.parts.map((pt, i) => ({ study: pt.study, series: pt.series, label: tl.concat?.labels[i] })) : [{ study: tl.study, series: tl.series, label: undefined }]).map(
+          (x) => ({
+            patientKey: derivePatientKey(x.study),
+            patientName: x.study.patientName || x.study.patientId || "",
+            seriesUid: x.series.seriesInstanceUid,
+            label: x.label ?? `#${x.series.seriesNumber ?? "?"} ${x.series.modality ?? ""} ${x.series.seriesDescription ?? ""}`.trim(),
+          }),
+        ),
+      ),
+    [patient.tiles],
+  );
   // 凡例のチップを押したとき、その患者のタイルを短く強調する。
   const [flashKey, setFlashKey] = useState<string | null>(null);
   const flashTimer = useRef<number | null>(null);
@@ -2018,7 +2033,8 @@ function TileGrid({
         }
       },
       convertMeasureToRoi: (measureUid) => {
-        const target = resolveRoiEditTarget();
+        // 全患者表示では、操作中のタイルと計測の持ち主のタイルが違いうる。持ち主を優先する。
+        const target = roiOwnerTile(measureUid) ?? resolveRoiEditTarget();
         if (!target) { notify(t("roi.paste.noTile")); return; }
         queryViewerCommand(target, (c) => c.convertMeasureToRoi(measureUid));
       },
@@ -2661,6 +2677,7 @@ function TileGrid({
       )}
       {showRoiMgr && (
         <RoiManagerPanel
+          shownSeries={shownRoiSeries}
           activePatientKey={
             global ? (focusedPatientKey ?? (patient.tiles[0] ? derivePatientKey(patient.tiles[0].study) : "")) : patient.patientKey
           }
