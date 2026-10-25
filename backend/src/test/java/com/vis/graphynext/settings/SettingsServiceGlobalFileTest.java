@@ -122,6 +122,17 @@ class SettingsServiceGlobalFileTest {
     }
 
     @Test
+    void 自動削除の条件はDBごと_共通ファイルには入れない(@TempDir Path dir) throws IOException {
+        Path file = dir.resolve("settings.json");
+        Db a = new Db(Map.of());
+        a.service(file).putAll(Map.of("ui.theme", "dark", "retention.days", "30"));
+        assertEquals("30", a.rows.get("retention.days"), "条件は DB に置く");
+        assertFalse(Files.readString(file).contains("retention"), "共通ファイルには入れない");
+        Db b = new Db(Map.of());   // 別の DB フォルダ
+        assertNull(b.service(file).getAll().get("retention.days"), "別の DB の検査に条件が効かない");
+    }
+
+    @Test
     void 校正の一括削除はDBの校正だけを消す(@TempDir Path dir) {
         Path file = dir.resolve("settings.json");
         Db db = new Db(Map.of(CALIB, "0.3", SettingsService.XA_CALIBRATION_PREFIX + "9", "1"));

@@ -172,6 +172,74 @@ public interface DicomInstanceRepository extends JpaRepository<DicomInstance, St
     /** NumberOfFrames を保存する前に取り込んだ行（起動時の埋め直し用）。 */
     List<DicomInstance> findByNumberOfFramesIsNull();
 
+    /** 受信日時を保存する前に取り込んだ行（起動時の埋め直し用）。 */
+    List<DicomInstance> findByReceivedAtIsNull();
+
+    /** 自動削除の判定用: 検査ごとの集計（受信日時・容量・枚数）。 */
+    @Query("""
+            select i.studyInstanceUid as studyInstanceUid,
+                   max(i.patientId) as patientId,
+                   max(i.patientName) as patientName,
+                   max(i.studyDate) as studyDate,
+                   max(i.modality) as modality,
+                   count(i) as instanceCount,
+                   sum(i.sizeBytes) as sizeBytes,
+                   max(i.receivedAt) as lastReceivedAt,
+                   sum(case when i.receivedAt is null then 1L else 0L end) as unknownReceived
+            from DicomInstance i
+            group by i.studyInstanceUid
+            """)
+    List<StudyRetentionRow> studyRetentionRows();
+
+    /** 自動削除の保護: その SOP を含む検査。 */
+    @Query("select distinct i.studyInstanceUid from DicomInstance i where i.sopInstanceUid in :sops")
+    List<String> studiesOfSops(@Param("sops") java.util.Collection<String> sops);
+
+    /** 自動削除の保護: そのシリーズを含む検査。 */
+    @Query("select distinct i.studyInstanceUid from DicomInstance i where i.seriesInstanceUid in :series")
+    List<String> studiesOfSeries(@Param("series") java.util.Collection<String> series);
+
+    /** 自動削除の保護: その SOP クラスの画像を含む検査。 */
+    @Query("select distinct i.studyInstanceUid from DicomInstance i where i.sopClassUid in :classes")
+    List<String> studiesWithSopClasses(@Param("classes") java.util.Collection<String> classes);
+
+    /** 受信量の実測（UTC の 1 日ごと）。受信日時が記録された行だけ。 */
+    @Query("""
+            select i.receivedAt / 86400000 as day, sum(i.sizeBytes) as bytes
+            from DicomInstance i
+            where i.receivedAt is not null
+            group by i.receivedAt / 86400000
+            """)
+    List<DailyIntake> dailyIntake();
+
+    /** studyRetentionRows の射影。 */
+    interface StudyRetentionRow {
+        String getStudyInstanceUid();
+
+        String getPatientId();
+
+        String getPatientName();
+
+        String getStudyDate();
+
+        String getModality();
+
+        long getInstanceCount();
+
+        Long getSizeBytes();
+
+        Long getLastReceivedAt();
+
+        long getUnknownReceived();
+    }
+
+    /** dailyIntake の射影。 */
+    interface DailyIntake {
+        Long getDay();
+
+        Long getBytes();
+    }
+
     List<DicomInstance> findByStudyInstanceUid(String studyUid);
 
     /** スタディ単位のローカル保存インスタンス数（QR の保存済み判定）。 */
