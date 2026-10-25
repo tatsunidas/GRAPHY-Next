@@ -1453,8 +1453,6 @@ function TileGrid({
     setTagTarget({ tile, sop: imageId ? sopFromImageId(imageId) : null });
     return true;
   };
-  // ROI をコピーしたタイルの患者（貼り付け先が別の患者でないかの確認用）。
-  const roiClipboardPatient = useRef<string | null>(null);
   const lastAmbiguousToast = useRef(0);
   const resolveTargets = useCallback(() => {
     if (selectedIds.size > 0) return [...selectedIds];
@@ -2031,22 +2029,12 @@ function TileGrid({
         const uid = roiUid ?? selectedAnnotations()[0]?.annotationUID;
         if (!uid) { notify(t("roi.copy.none")); return; }
         const ok = queryViewerCommand(target, (c) => c.copyRoi(uid as string));
-        if (ok) {
-          const src = tilesRef.current.find((tl) => tl.id === target);
-          roiClipboardPatient.current = src ? derivePatientKey(src.study) : null;
-        }
         notify(t(ok ? "roi.copy.done" : "roi.copy.failed"));
       },
       pasteRoi: () => {
         if (!hasClipboardRoi()) { notify(t("roi.paste.empty")); return; }
         const target = resolveRoiEditTarget();
         if (!target) { notify(t("roi.paste.noTile")); return; }
-        // 別の患者のタイルへは貼らない（全患者モードで、コピー元と違う患者のタイルが宛先になりうる）。
-        const dst = tilesRef.current.find((tl) => tl.id === target);
-        if (dst && roiClipboardPatient.current && derivePatientKey(dst.study) !== roiClipboardPatient.current) {
-          notify(t("roi.paste.otherPatient"));
-          return;
-        }
         // 失敗の理由が ThickSlab のときは Viewer2D 側がトーストを出すので、ここでは重ねない。
         if (!queryViewerCommand(target, (c) => c.pasteRoi())) return;
       },

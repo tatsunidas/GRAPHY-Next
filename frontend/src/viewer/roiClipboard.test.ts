@@ -3,7 +3,7 @@
  * Author: Tatsuaki Kobayashi
  */
 import { describe, expect, it } from "vitest";
-import { entryToSavedRoi, type RoiClipboardEntry } from "./roiClipboard";
+import { carryOver, entryToSavedRoi, retargetEntry, type ImageGrid, type RoiClipboardEntry } from "./roiClipboard";
 import { buildAnnotationData } from "./roiPersistence";
 import type { PointPx } from "./roiRead";
 
@@ -89,5 +89,54 @@ describe("entryToSavedRoi", () => {
 
   it("頂点が 1 つも無ければ null", () => {
     expect(entryToSavedRoi(entry({ pointsPx: [], polylinePx: [] }), target, toWorld)).toBeNull();
+  });
+});
+
+const grid = (cols: number, rows: number, sp: number): ImageGrid => ({ cols, rows, colSpacing: sp, rowSpacing: sp });
+const mm = (e: RoiClipboardEntry, sp: number) => (e.pointsPx[1][0] - e.pointsPx[0][0]) * sp;
+
+describe("retargetEntry（別の画像へ貼るとき実寸を保つ）", () => {
+  const src = grid(512, 512, 0.7);
+  const e = entry({ source: src });
+
+  it("同じ寸法・同じ間隔（同じシリーズ）は恒等", () => {
+    expect(retargetEntry(e, grid(512, 512, 0.7))).toBe(e);
+  });
+
+  it("画素間隔が違う画像へ貼っても幅(mm)が保たれる", () => {
+    const out = retargetEntry(e, grid(256, 256, 1.4))!;
+    expect(mm(out, 1.4)).toBeCloseTo(mm(e, 0.7), 9);
+    // 旧方式（画素のまま）なら 2 倍になる＝この検査が落ちる負例
+    expect(mm(e, 1.4)).not.toBeCloseTo(mm(e, 0.7), 3);
+  });
+
+  it("重心は画像内の同じ相対位置に置く", () => {
+    const out = retargetEntry(e, grid(256, 256, 1.4))!;
+    const cx = out.pointsPx.reduce((a, p) => a + p[0], 0) / 4;
+    expect(cx / 256).toBeCloseTo(15 / 512, 9);
+  });
+
+  it("画像の外へ出るなら null", () => {
+    const edge = entry({ source: src, pointsPx: [[500, 500], [510, 500], [510, 510], [500, 510]] });
+    expect(retargetEntry(edge, grid(64, 64, 0.1))).toBeNull();
+  });
+
+  it("間隔か寸法が不明なら画素のまま", () => {
+    const unknown: ImageGrid = { cols: 512, rows: 512, colSpacing: null, rowSpacing: null };
+    expect(retargetEntry(e, unknown)).toBe(e);
+    expect(retargetEntry({ ...e, source: unknown }, grid(256, 256, 1.4))).toEqual({ ...e, source: unknown });
+  });
+});
+
+describe("carryOver（別の患者へは説明と custom を持ち越さない）", () => {
+  const e = entry({ label: "L", description: "所見", custom: { a: "1" }, sourcePatientKey: "P1" });
+  it("別の患者: ラベルだけ残す", () => {
+    const o = carryOver(e, "P2");
+    expect(o.label).toBe("L");
+    expect(o.description).toBeUndefined();
+    expect(o.custom).toBeUndefined();
+  });
+  it("同じ患者: すべて引き継ぐ", () => {
+    expect(carryOver(e, "P1")).toBe(e);
   });
 });

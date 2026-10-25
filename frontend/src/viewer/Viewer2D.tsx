@@ -2474,7 +2474,7 @@ export function Viewer2D({
   const copyRoi = (roiUid?: string): boolean => {
     const uid = roiUid ?? csAnnotation.selection.getAnnotationsSelected()?.[0];
     if (!uid) return false;
-    return copyRoiToClipboard(uid);
+    return copyRoiToClipboard(uid, roiContextRef.current?.patientKey);
   };
 
   /** 貼り付け/複製で共通の宛先情報。現在表示中のスライスへ置く。 */
@@ -2537,26 +2537,26 @@ export function Viewer2D({
     if (!hasClipboardRoi()) return null;
     if (roiEditBlocked()) return null; // 理由は roiEditBlocked が出す
     const ctx = pasteContext();
-    const uid = ctx ? pasteRoiInto(ctx) : null;
-    if (!uid || !ctx) {
-      emitToast(t("roi.paste.failed"));
+    const res = ctx ? pasteRoiInto(ctx) : null;
+    if (!res?.uid || !ctx) {
+      emitToast(t(res?.reason === "outOfImage" ? "roi.paste.outOfImage" : "roi.paste.failed"));
       return null;
     }
-    afterPaste(uid, ctx.imageId);
-    return uid;
+    afterPaste(res.uid, ctx.imageId);
+    return res.uid;
   };
 
   /** ROI をその場で複製する（クリップボードの中身を壊さない）。 */
   const duplicateRoi = (roiUid: string): string | null => {
     if (roiEditBlocked()) return null;
     const ctx = pasteContext();
-    const uid = ctx ? duplicateRoiEntry(roiUid, ctx) : null;
-    if (!uid || !ctx) {
-      emitToast(t("roi.paste.failed"));
+    const res = ctx ? duplicateRoiEntry(roiUid, ctx) : null;
+    if (!res?.uid || !ctx) {
+      emitToast(t(res?.reason === "outOfImage" ? "roi.paste.outOfImage" : "roi.paste.failed"));
       return null;
     }
-    afterPaste(uid, ctx.imageId);
-    return uid;
+    afterPaste(res.uid, ctx.imageId);
+    return res.uid;
   };
 
   /**

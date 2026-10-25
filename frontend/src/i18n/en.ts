@@ -850,7 +850,7 @@ export const en: Record<string, string> = {
   "viewer2d.legend.target": "Target",
   "viewer2d.fusion.crossPatient": "Images of another patient cannot be overlaid (prevents mixing up patients)",
   "viewer2d.scope.ambiguous": "Several patients are shown. Click an image once to choose which patient the operation applies to",
-  "roi.paste.otherPatient": "Cannot paste into another patient's tile (choose a tile of the same patient as the copy)",
+  "roi.paste.outOfImage": "Could not paste: at the same physical size (mm) the ROI would extend outside the target image.",
   "viewer2d.searchPrompt": "Enter patient ID or name to search.",
   "viewer2d.layout": "Layout",
   "viewer2d.layout.auto": "Auto",
