@@ -31,7 +31,7 @@ function oneLine(s, max) {
 
 /**
  * backend の /api/plugins の本文からツール一覧を作る。名前がモデル向けの規則に収まらない・合計の上限を超えるものは捨てる。
- * @returns {{name: string, pluginId: string, pluginName: string, tool: string, description: string, parameters: object}[]}
+ * @returns {{name: string, pluginId: string, pluginName: string, tool: string, effect: string, description: string, parameters: object}[]}
  */
 function buildEntries(plugins) {
   const out = [];
@@ -41,12 +41,12 @@ function buildEntries(plugins) {
     const pluginName = oneLine(p.name || p.id, 60);
     for (const t of p.aiTools) {
       if (!t || typeof t.name !== "string" || !t.parameters || typeof t.parameters !== "object") continue;
-      if (t.effect !== "read" && t.effect !== "display") continue;
+      if (t.effect !== "read" && t.effect !== "display" && t.effect !== "write") continue;
       const name = `${PREFIX}${p.id}__${t.name}`;
       if (!NAME_RE.test(name)) continue;
       // 名乗りは main が付ける（プラグインの説明文が別のプラグイン・本体を名乗れない）
-      const description = `[plugin: ${pluginName}] ${oneLine(t.description, MAX_DESCRIPTION)}`;
-      out.push({ name, pluginId: p.id, pluginName, tool: t.name, description, parameters: t.parameters });
+      const description = `[plugin: ${pluginName}] ${t.effect === "write" ? "(writes data) " : ""}${oneLine(t.description, MAX_DESCRIPTION)}`;
+      out.push({ name, pluginId: p.id, pluginName, tool: t.name, effect: t.effect, description, parameters: t.parameters });
       if (out.length >= MAX_TOTAL_TOOLS) return out;
     }
   }

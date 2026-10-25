@@ -17,7 +17,8 @@ import java.util.regex.Pattern;
  *
  * <p>宣言は信頼できない入力。{@link #sanitize} が**作り直した**値だけを配信する（元の Map をそのまま渡さない）。
  * 通らないツールは黙って捨てず、理由をログに残して捨てる。この段階で許すのは読み取り・表示のツールだけ
- * （{@code effect} は {@code read} / {@code display}）。データを書くツールは宣言されても出さない。
+ * （{@code effect} は {@code read} / {@code display} / {@code write}）。{@code write} は本体が実行のたびに
+ * 利用者の確認を取る（宣言であって、host API の呼び出しを絞る仕組みではない。署名と導入時の同意が防御）。
  *
  * <p>引数の型は 2D 窓の {@code registry.ts} の {@code ParamSpec} と同じ閉じた集合
  * （number / integer / string / enum。境界必須・ネスト無し）。
@@ -36,7 +37,7 @@ public record AiToolSpec(String name, String description, String effect, Map<Str
     private static final int MAX_ENUM_VALUE_LENGTH = 40;
     private static final Pattern TOOL_NAME = Pattern.compile("^[a-z][a-z0-9_]{0,39}$");
     private static final Pattern PARAM_NAME = Pattern.compile("^[a-z][A-Za-z0-9_]{0,39}$");
-    private static final List<String> EFFECTS = List.of("read", "display");
+    private static final List<String> EFFECTS = List.of("read", "display", "write");
 
     /**
      * 宣言を検査して配信形に作り直す。{@code permissions} に {@value #PERMISSION} が無ければ空。
@@ -80,7 +81,7 @@ public record AiToolSpec(String name, String description, String effect, Map<Str
         if (already.stream().anyMatch(a -> a.name().equals(name))) throw new IllegalArgumentException("duplicate name " + name);
         String effect = str(t.get("effect"));
         if (effect == null || !EFFECTS.contains(effect)) {
-            throw new IllegalArgumentException(name + ": effect must be read or display (got " + effect + ")");
+            throw new IllegalArgumentException(name + ": effect must be read, display or write (got " + effect + ")");
         }
         String desc = str(t.get("description"));
         if (desc == null || desc.isBlank() || desc.length() > MAX_DESCRIPTION) {

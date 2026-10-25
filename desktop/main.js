@@ -1361,6 +1361,21 @@ ipcMain.handle("graphy:assistant-viewer-cmd", (e, sessionId, cmd) => {
         });
         return r.response === 0;
       },
+      // 書き込み（effect:"write"）のツールは、実行のたびに承認を取る。既定は「取り消す」。文面の主語は main が決める。
+      // ツールの説明はプラグインが書いた信用できない文字列なので、そう示して引用する。
+      confirmWrite: async (entry, argsPreview) => {
+        if (!win || win.isDestroyed()) return false;
+        const r = await dialog.showMessageBox(win, {
+          type: "warning",
+          buttons: ["実行する", "取り消す"],
+          defaultId: 1,
+          cancelId: 1,
+          title: "アシスタントの操作の確認",
+          message: `プラグイン「${entry.pluginName}」のツール「${entry.tool}」が、データを変更します。`,
+          detail: `ツールの説明（プラグインの記述）: ${entry.description.replace(/^\[plugin: [^\]]*\] (\(writes data\) )?/, "")}\n引数: ${argsPreview}\n\n元に戻せない場合があります。実行しますか？`,
+        });
+        return r.response === 0;
+      },
     },
     // ROI の計測値: 外部宛てのときは、返す前に承認を取る（セッションに 1 回）。宛先がローカルと判定できたときだけ省く。
     measurements: {

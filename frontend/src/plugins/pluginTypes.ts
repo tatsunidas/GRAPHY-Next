@@ -219,7 +219,7 @@ export interface PluginManifest {
   category?: PluginCategory;
   /**
    * AI アシスタントに渡すツール（`plugin.json` の `aiTools`。backend が検査・組み直した後の形）。
-   * `permissions` に `ai-tools` が無い、または `effect` が `read` / `display` 以外のものは backend が落とすので、ここには来ない。
+   * `permissions` に `ai-tools` が無い、または `effect` が `read` / `display` / `write` 以外のものは backend が落とすので、ここには来ない。
    */
   aiTools?: PluginAiToolSpec[];
 }
@@ -228,7 +228,7 @@ export interface PluginManifest {
 export interface PluginAiToolSpec {
   name: string;
   description: string;
-  effect: "read" | "display";
+  effect: "read" | "display" | "write";
   parameters: Record<string, unknown>;
 }
 

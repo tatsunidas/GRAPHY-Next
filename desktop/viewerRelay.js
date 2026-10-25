@@ -11,7 +11,7 @@
 const crypto = require("node:crypto");
 const fs = require("node:fs");
 const path = require("node:path");
-const { sanitizeResult } = require("./assistantPluginTools");
+const { oneLine, sanitizeResult } = require("./assistantPluginTools");
 
 /**
  * 応答待ちの上限。2D 窓の実行は同期的で数十 ms のはずなので、数秒で十分という見立ての**暫定値**。
@@ -22,6 +22,8 @@ const DEFAULT_TIMEOUT_MS = 5000;
 /** プラグインのツールの実行は、プラグインのコード（外部由来）が動くので表示操作より長く待つ。暫定値。 */
 const PLUGIN_TOOL_TIMEOUT_MS = 30000;
 const MAX_PLUGIN_ARGS_BYTES = 2000;
+/** 書き込みの確認ダイアログに出す引数の長さ。 */
+const MAX_WRITE_ARGS_PREVIEW = 300;
 
 const KINDS = new Set(["action", "getState", "getMeasurements", "captureView", "pluginTool"]);
 
@@ -156,7 +158,9 @@ function createRelay({ resolveTarget, journal = () => {}, timeoutMs = DEFAULT_TI
    * プラグインのツール。**pluginId / tool はレンダラが名乗った値を使わない**: 名前を main の一覧（opts.pluginTools.lookup。
    * 無効・未許可なら null）で引き直した組だけを 2D 窓へ送る。結果は切り詰めて `untrusted` を付け、
    * 送信先が外部なら返す前に利用者の承認を取る。
-   * @param {{pluginTools?: {lookup: (name: string) => ({pluginId: string, tool: string}|null), external: boolean, confirmSend: (entry: object, preview: string) => Promise<boolean>}}} opts
+   * 書き込み（`effect: "write"`）のツールは、**2D 窓へ送る前**に実行のたびに利用者の承認を取る（`confirmWrite`。セッション記憶なし）。
+   * 承認の関門は main のダイアログで、`approved` は承認後にだけ main が付ける（レンダラが付けた値は使わない）。
+   * @param {{pluginTools?: {lookup: (name: string) => ({pluginId: string, tool: string, effect?: string}|null), external: boolean, confirmSend: (entry: object, preview: string) => Promise<boolean>, confirmWrite?: (entry: object, argsPreview: string) => Promise<boolean>}}} opts
    */
   async function relayPluginTool(sessionId, cmd, opts) {
     const sid = String(sessionId || "").slice(0, 64);
@@ -178,7 +182,20 @@ function createRelay({ resolveTarget, journal = () => {}, timeoutMs = DEFAULT_TI
       journal({ sessionId: sid, kind: "pluginTool", id, ok: false, error: "bad-command" });
       return { ok: false, error: "bad-command" };
     }
-    const res = await relayInner(sid, { kind: "pluginTool", pluginId: entry.pluginId, tool: entry.tool, params }, false, PLUGIN_TOOL_TIMEOUT_MS);
+    const isWrite = entry.effect === "write";
+    if (isWrite) {
+      let ok = false;
+      try {
+        ok = typeof pt.confirmWrite === "function" && (await pt.confirmWrite(entry, oneLine(JSON.stringify(params), MAX_WRITE_ARGS_PREVIEW))) === true;
+      } catch {
+        ok = false;
+      }
+      if (!ok) {
+        journal({ sessionId: sid, kind: "pluginTool", id, effect: "write", ok: false, error: "declined" });
+        return { ok: false, error: "declined" };
+      }
+    }
+    const res = await relayInner(sid, { kind: "pluginTool", pluginId: entry.pluginId, tool: entry.tool, params }, isWrite, PLUGIN_TOOL_TIMEOUT_MS);
     if (!res || res.ok !== true) return { ok: false, error: typeof (res && res.error) === "string" ? res.error.slice(0, 80) : "plugin-error" };
     const r = sanitizeResult(res.data);
     if (pt.external) {
@@ -297,7 +314,7 @@ function createRelay({ resolveTarget, journal = () => {}, timeoutMs = DEFAULT_TI
       try {
         const payload =
           cmd.kind === "pluginTool"
-            ? { reqId, kind: cmd.kind, pluginId: cmd.pluginId, tool: cmd.tool, params: cmd.params }
+            ? { reqId, kind: cmd.kind, pluginId: cmd.pluginId, tool: cmd.tool, params: cmd.params, approved: approved === true }
             : { reqId, kind: cmd.kind, id: cmd.id, params: cmd.params, includeLabels: cmd.includeLabels === true, withRoi: cmd.withRoi === true, approved: approved === true };
         target.send("graphy:viewer-cmd", payload);
       } catch {

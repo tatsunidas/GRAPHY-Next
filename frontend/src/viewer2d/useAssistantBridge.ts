@@ -70,7 +70,7 @@ export function useAssistantBridge(input: AssistantBridgeInput): void {
     return d.onViewerCmd((cmd) => {
       if (cmd.kind === "pluginTool") {
         // プラグインのコードは非同期。結果は命令を送った窓（main）へだけ返る。
-        void executePluginTool(pluginToolDeps, cmd).then((r) => d.viewerCmdResult?.(cmd.reqId, r));
+        void executePluginTool(pluginToolDeps, { pluginId: cmd.pluginId, tool: cmd.tool, params: cmd.params, approved: cmd.approved === true }).then((r) => d.viewerCmdResult?.(cmd.reqId, r));
         return;
       }
       if (cmd.kind === "captureView") {

@@ -35,9 +35,15 @@
       "parameters": { "type": "object", "properties": {}, "required": [] }
     },
     {
-      "name": "write_probe",
-      "description": "Declares a write effect; the app must drop it.",
+      "name": "tag_roi",
+      "description": "Writes a small tag on the first ROI of the current tile (verification of the write path).",
       "effect": "write",
+      "parameters": { "type": "object", "properties": { "tag": { "type": "string", "maxLength": 20, "description": "Tag text." } }, "required": ["tag"] }
+    },
+    {
+      "name": "read_tag",
+      "description": "Reads back the tag of the first ROI (verification of the write path).",
+      "effect": "read",
       "parameters": { "type": "object", "properties": {}, "required": [] }
     }
   ]
