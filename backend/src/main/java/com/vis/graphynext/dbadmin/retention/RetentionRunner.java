@@ -224,7 +224,7 @@ public class RetentionRunner {
                     : plan.items().stream().filter(i -> first.contains(i.studyUid())).toList();
             if (items.isEmpty() && plan.satisfied() && !manual) {
                 if (!first.isEmpty()) {
-                    service.clearFirstRun();
+                    service.resolveFirstRun(plan.protectedUids()); // 保護中の対象は、見せた検査として残す
                 }
                 return null; // 何も消さず、警告も無い実行は記録しない
             }
@@ -293,7 +293,8 @@ public class RetentionRunner {
         }
         boolean satisfied = plan.satisfied() && partial + failed == 0 && !aborted;
         if (firstRun) {
-            service.clearFirstRun(); // 1 回目は（失敗があっても）これで終わり。2 回目からは条件どおりに自動
+            // 削除を試みた検査は（失敗があっても）これで終わり。保護で外れた対象だけ残し、見せていない検査は消さない
+            service.resolveFirstRun(plan.protectedUids());
         }
         RetentionRun run = runs.save(new RetentionRun(runId, Instant.now(clock), trigger, items.size(), deleted, partial,
                 failed, skipped, freed, satisfied, String.join(",", warnings)));

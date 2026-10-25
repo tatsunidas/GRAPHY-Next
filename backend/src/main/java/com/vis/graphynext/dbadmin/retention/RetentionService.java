@@ -193,6 +193,12 @@ public class RetentionService {
         firstRun.deleteAll();
     }
 
+    /** 最初の 1 回の対象のうち、扱いが決着した検査を外す。保護で外れたまま残っている検査は、次の実行まで残す。 */
+    @Transactional
+    public void resolveFirstRun(Set<String> stillProtected) {
+        firstRun.deleteAll(firstRun.findAll().stream().filter(f -> !stillProtected.contains(f.getStudyInstanceUid())).toList());
+    }
+
     /** まだ見ていない、知らせる価値のある実行（無ければ null）。 */
     public RetentionRun notice() {
         List<RetentionRun> latest = runs.findAllByOrderByAtDesc(PageRequest.of(0, 1));

@@ -4,8 +4,10 @@
  */
 package com.vis.graphynext.dbadmin.retention;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * 自動削除の計画（試算の結果）。計画を立てるだけで、何も消さない。
@@ -15,9 +17,10 @@ import java.util.Map;
  * @param protectedSkips 条件に当たったが保護で除外された検査の数（理由別・1 検査が複数の理由に数えられうる）
  * @param satisfied      条件を満たせたか（条件が 1 つも無ければ true）
  * @param warnings       満たせなかった理由など
+ * @param protectedUids  保護で除外された検査の UID（内部用。API には出さない）
  */
 public record RetentionPlan(List<Item> items, long totalBytes, Map<String, Integer> protectedSkips, boolean satisfied,
-                            List<String> warnings) {
+                            List<String> warnings, @JsonIgnore Set<String> protectedUids) {
 
     /** 消す検査 1 件。reason は {@code days} / {@code size} / {@code free}（最初に当たった条件）。 */
     public record Item(String studyUid, String patientId, String patientName, String studyDate, String modality, long instances,
