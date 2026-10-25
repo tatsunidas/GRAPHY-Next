@@ -45,3 +45,84 @@ describe("StudyList の接続待ち", () => {
     expect(html).not.toContain("接続中…");
   });
 });
+
+// ── 足したタグ列 ──
+const listColumnsState = vi.hoisted(() => ({ cols: [] as import("./mainscreen/listColumns").ListColumn[] }));
+vi.mock("./mainscreen/listColumns", async () => {
+  const actual = await vi.importActual<typeof import("./mainscreen/listColumns")>("./mainscreen/listColumns");
+  return { ...actual, useListColumns: () => listColumnsState.cols };
+});
+const useStudyColumnCells = vi.hoisted(() => vi.fn());
+vi.mock("./hooks/useListColumnCells", () => ({
+  useStudyColumnCells: (...a: unknown[]) => useStudyColumnCells(...a) ?? { cells: null, error: null },
+  useSeriesColumnCells: () => ({ cells: null, error: null }),
+}));
+
+describe("StudyList added tag columns", () => {
+  const studies = [
+    { studyInstanceUid: "ST1", patientId: "P1", patientName: "N1", studyDate: "20261001", studyDescription: "D1", modality: "CT", numberOfInstances: 10 },
+    { studyInstanceUid: "ST2", patientId: "P2", patientName: "N2", studyDate: "20261002", studyDescription: "D2", modality: "MR", numberOfInstances: 5 },
+    { studyInstanceUid: "ST3", patientId: "P3", patientName: "N3", studyDate: "20261003", studyDescription: "D3", modality: "CT", numberOfInstances: 7 },
+  ];
+  const columns = [
+    { id: "col1", segments: [{ tag: "00181030" }], label: "ProtocolName", where: "both" as const },
+    { id: "col2", segments: [{ tag: "00181030" }], label: "SeriesOnly", where: "series" as const },
+  ];
+
+  beforeEach(() => {
+    useStudies.mockReset();
+    useStudyColumnCells.mockReset();
+    useStudies.mockImplementation(() => ({ studies, reportCounts: {}, error: null }));
+  });
+
+  function html(): string {
+    return renderToStaticMarkup(
+      createElement(I18nProvider, null, createElement(StudyList, { filters, mode: "standalone" })),
+    );
+  }
+
+  it("adds no column and fetches nothing when no column is set", () => {
+    listColumnsState.cols = [];
+    useStudyColumnCells.mockReturnValue({ cells: null, error: null });
+    const out = html();
+    expect(out).not.toContain("list-col-head-");
+    expect(useStudyColumnCells.mock.calls[0][1]).toEqual([]);
+  });
+
+  it("adds only the study-level columns (series-only ones are left out) and passes the studies on the page", () => {
+    listColumnsState.cols = columns;
+    useStudyColumnCells.mockReturnValue({ cells: null, error: null });
+    const out = html();
+    expect(out).toContain('data-testid="list-col-head-col1"');
+    expect(out).not.toContain("list-col-head-col2");
+    const [uids, cols] = useStudyColumnCells.mock.calls[0] as [string[], { id: string }[]];
+    expect(uids).toEqual(["ST1", "ST2", "ST3"]);
+    expect(cols.map((c) => c.id)).toEqual(["col1"]);
+  });
+
+  it("shows value / absent / loading per row", () => {
+    listColumnsState.cols = columns;
+    useStudyColumnCells.mockReturnValue({
+      cells: {
+        ST1: { col1: { values: ["Chest 1.0", "WB PET"], state: "OK", incomplete: false } },
+        ST2: { col1: { values: [], state: "ABSENT", incomplete: false } },
+        // ST3 has not arrived yet
+      },
+      error: null,
+    });
+    const out = html();
+    const kinds = [...out.matchAll(/data-testid="list-col-col1" data-kind="([a-zA-Z]+)"/g)].map((m) => m[1]);
+    expect(kinds).toEqual(["value", "absent", "loading"]);
+    expect(out).toContain("Chest 1.0 / WB PET");
+  });
+
+  it("the heading of an added column has no sort handle and carries the reason as a tooltip", () => {
+    listColumnsState.cols = columns;
+    useStudyColumnCells.mockReturnValue({ cells: null, error: null });
+    const out = html();
+    const th = /<th[^>]*data-testid="list-col-head-col1"[^>]*>/.exec(out)![0];
+    expect(th).toContain("title=");
+    expect(th).toContain("並び替えできません");
+    expect(th).not.toContain("cursor:pointer");
+  });
+});
