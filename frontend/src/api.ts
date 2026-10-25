@@ -856,6 +856,35 @@ export const extractCsv = async (req: ExtractRequest): Promise<{ blob: Blob; fil
   return { blob, filename };
 };
 
+// ── 一覧に足したタグ列（スタディ一覧・シリーズ一覧。読むだけ） ──
+
+/** セルの状態。OK=タグがある（値は空でもよい）、ABSENT=タグが無い、NOT_LOCAL=Drive にだけある、UNREADABLE=読めない、NOT_RETURNED=PACS が返さない。 */
+export type ColumnCellState = "OK" | "ABSENT" | "NOT_LOCAL" | "UNREADABLE" | "NOT_RETURNED";
+
+export interface ColumnCell {
+  /** 重複を除いた空でない値（スタディの行ではシリーズごとの値）。 */
+  values: string[];
+  state: ColumnCellState;
+  /** 一部のシリーズだけ読めなかった。 */
+  incomplete: boolean;
+}
+
+/** 行の UID（スタディ一覧ではスタディ、シリーズ一覧ではシリーズ）→ 列 id → セル。 */
+export type ColumnCells = Record<string, Record<string, ColumnCell>>;
+
+export interface ColumnRequest {
+  id: string;
+  segments: TagPathSegment[];
+}
+
+/** 表示中のスタディのぶんのセル（POST /api/studies/columns）。 */
+export const fetchStudyColumns = (studyUids: string[], columns: ColumnRequest[]) =>
+  httpSend<ColumnCells>("/api/studies/columns", "POST", { studyUids, columns });
+
+/** 1 スタディのシリーズごとのセル（POST /api/studies/{uid}/series/columns）。 */
+export const fetchSeriesColumns = (studyUid: string, columns: ColumnRequest[]) =>
+  httpSend<ColumnCells>(`/api/studies/${encodeURIComponent(studyUid)}/series/columns`, "POST", { columns });
+
 // ── Export（DICOM 交換メディア ZIP） ──────────────────────────
 
 /** 1 スタディと、その中で Export 対象に選択されたシリーズ。 */

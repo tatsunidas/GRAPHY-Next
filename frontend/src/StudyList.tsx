@@ -26,6 +26,10 @@ import { classifySeriesRenderability, type SeriesRenderability } from "./viewer/
 import { VideoViewer } from "./viewer/VideoViewer";
 import { type ViewerMode } from "./viewer/imageId";
 import { useTableSort, applySort, sortIndicator, type SortState, type Accessor } from "./tableSort";
+import { useStudyColumnCells, useSeriesColumnCells } from "./hooks/useListColumnCells";
+import { ListColumnsDialog } from "./mainscreen/ListColumnsDialog";
+import { cellView, seriesColumns, studyColumns, useListColumns, type ListColumn } from "./mainscreen/listColumns";
+import type { ColumnCell } from "./api";
 
 const PAGE_SIZE = 50;
 
@@ -81,6 +85,10 @@ export function StudyList({
   const { studies, reportCounts, error } = useStudies(connecting ? null : filters, { reloadKey, withReportCounts: true });
   const [selectedStudy, setSelectedStudy] = useState<Study | null>(null);
   const [page, setPage] = useState(0);
+  // 利用者が足したタグ列（PC・ブラウザごとの設定）。値は表示中のページのスタディのぶんだけ取り寄せる。
+  const listColumns = useListColumns();
+  const stColumns = studyColumns(listColumns);
+  const [columnsOpen, setColumnsOpen] = useState(false);
   const { sort, toggleSort } = useTableSort();
   // ソート変更時は先頭ページへ（並び替え後の上位が見えるように）。
   const onSort = (key: string) => {
@@ -110,6 +118,7 @@ export function StudyList({
   const pageStudies = studies ? sortedStudies.slice(current * PAGE_SIZE, current * PAGE_SIZE + PAGE_SIZE) : [];
   // ツリー: 選んだ検査の行の直下にシリーズを開く。選んだ検査が別のページにあるときは行が無いので、末尾に出す。
   const treeOpen = isTreeOpen(layout ?? "table", selectedStudy?.studyInstanceUid, pageStudies.map((s) => s.studyInstanceUid));
+  const { cells: colCells } = useStudyColumnCells(pageStudies.map((s) => s.studyInstanceUid), stColumns, reloadKey);
 
   return (
     <section style={{ marginTop: 28 }}>
@@ -139,6 +148,9 @@ export function StudyList({
             </div>
           )}
           {studies && <span style={{ fontSize: 13, color: "#5a6672" }}>{t("study.list.total", { n: total })}</span>}
+          <button type="button" data-testid="list-columns-button" style={pageBtn} onClick={() => setColumnsOpen(true)}>
+            {t("listCol.button")}
+          </button>
         </div>
       </div>
 
@@ -159,6 +171,9 @@ export function StudyList({
               <Th sortKey="modality" sort={sort} onSort={onSort}>{t("field.modality")}</Th>
               <Th sortKey="numberOfInstances" sort={sort} onSort={onSort}>{t("field.instanceCount")}</Th>
               <Th>{t("field.report")}</Th>
+              {stColumns.map((c) => (
+                <Th key={c.id} title={t("listCol.noSort")} testId={`list-col-head-${c.id}`}>{c.label || c.id}</Th>
+              ))}
             </tr>
           </thead>
           <tbody>
@@ -182,10 +197,13 @@ export function StudyList({
                   <Td>{studyModalities(s) || "—"}</Td>
                   <Td>{imageCount(s)}</Td>
                   <Td><ReportBadge count={reportCounts[s.studyInstanceUid]} /></Td>
+                  {stColumns.map((c) => (
+                    <ColumnTd key={c.id} column={c} cell={colCells?.[s.studyInstanceUid]?.[c.id]} />
+                  ))}
                 </tr>
                 {selected && treeOpen && (
                   <tr data-testid="series-tree-row">
-                    <td colSpan={7} style={{ padding: 0 }}>
+                    <td colSpan={7 + stColumns.length} style={{ padding: 0 }}>
                       <SeriesNavigator
                         key={s.studyInstanceUid}
                         study={s}
@@ -227,6 +245,8 @@ export function StudyList({
           </button>
         </div>
       )}
+
+      <ListColumnsDialog open={columnsOpen} onClose={() => setColumnsOpen(false)} />
 
       {selectedStudy && !treeOpen && (
         <SeriesNavigator
@@ -275,6 +295,8 @@ function SeriesNavigator({
   const { t } = useI18n();
   const { series, error } = useSeries(study.studyInstanceUid);
   const [selectedSeries, setSelectedSeries] = useState<Series | null>(null);
+  const seColumns = seriesColumns(useListColumns());
+  const { cells: seCells } = useSeriesColumnCells(study.studyInstanceUid, seColumns);
 
   const headingName = seriesHeadingName(selectedSeries);
 
@@ -323,6 +345,9 @@ function SeriesNavigator({
               <Th>{t("field.modality")}</Th>
               <Th>{t("field.description")}</Th>
               <Th>{t("field.instanceCount")}</Th>
+              {seColumns.map((c) => (
+                <Th key={c.id} title={t("listCol.noSort")}>{c.label || c.id}</Th>
+              ))}
             </tr>
           </thead>
           <tbody>
@@ -343,6 +368,9 @@ function SeriesNavigator({
                   <Td>{se.modality || "—"}</Td>
                   <Td>{se.seriesDescription || "—"}</Td>
                   <Td>{imageCount(se)}</Td>
+                  {seColumns.map((c) => (
+                    <ColumnTd key={c.id} column={c} cell={seCells?.[se.seriesInstanceUid]?.[c.id]} />
+                  ))}
                 </tr>
               );
             })}
@@ -533,15 +561,22 @@ function Th({
   sortKey,
   sort,
   onSort,
+  title,
+  testId,
 }: {
   children?: React.ReactNode;
   sortKey?: string;
   sort?: SortState | null;
   onSort?: (key: string) => void;
+  /** 吹き出し。並び替えできない列で、押しても何も起きない理由を伝える。 */
+  title?: string;
+  testId?: string;
 }) {
   const clickable = !!sortKey && !!onSort;
   return (
     <th
+      title={title}
+      data-testid={testId}
       onClick={clickable ? () => onSort!(sortKey!) : undefined}
       style={{
         padding: "6px 10px",
@@ -560,4 +595,24 @@ function Th({
 
 function Td({ children }: { children: React.ReactNode }) {
   return <td style={{ padding: "6px 10px" }}>{children}</td>;
+}
+
+/**
+ * 足したタグ列のセル。タグが無い（—）と値が空（空欄）を区別し、読めないときは理由の印（☁ / ⚠）と吹き出し。
+ * 長い値は省略記号で切り、全文は吹き出し。
+ */
+function ColumnTd({ column, cell }: { column: ListColumn; cell: ColumnCell | undefined }) {
+  const { t } = useI18n();
+  const v = cellView(cell);
+  const title = v.titleKey ? t(v.titleKey) : v.kind === "value" ? v.text : undefined;
+  return (
+    <td
+      data-testid={`list-col-${column.id}`}
+      data-kind={v.kind}
+      title={title}
+      style={{ padding: "6px 10px", maxWidth: 260, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+    >
+      {v.text}
+    </td>
+  );
 }
