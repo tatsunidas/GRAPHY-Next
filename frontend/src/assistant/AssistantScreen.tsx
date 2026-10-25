@@ -66,6 +66,10 @@ export function AssistantScreen() {
   const [state, dispatch] = useReducer(chatReducer, initialChatState);
   const [input, setInput] = useState("");
   const [images, setImages] = useState<UiImage[]>([]);
+  const [withRoi, setWithRoi] = useState(true);
+  const [capturing, setCapturing] = useState(false);
+  /** 表示中のタイルから取った画像の数（焼き込み文字の注意を出す）。 */
+  const [viewShots, setViewShots] = useState(0);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [ingesting, setIngesting] = useState(0);
   const [askConfirm, setAskConfirm] = useState(false);
@@ -137,6 +141,30 @@ export function AssistantScreen() {
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight });
   }, [state.messages]);
 
+  /** 2D ビューアで表示中のタイルの画像を添付する。外部宛ての確認は main が出す。 */
+  const attachView = useCallback(async () => {
+    setNote(null);
+    if (images.length >= MAX_IMAGES) {
+      setNote(t("assistant.tooManyImages", { n: MAX_IMAGES }));
+      return;
+    }
+    setCapturing(true);
+    try {
+      const r = await bridge?.assistantViewerCmd?.(sessionId, { kind: "captureView", withRoi });
+      if (!r || !("ok" in r) || r.ok !== true || !("image" in r) || !r.image?.base64) {
+        const code = r && "error" in r && typeof r.error === "string" ? r.error : "failed";
+        const known = ["no-viewer", "no-tile", "image-model-not-set", "declined", "timeout", "capture-failed"];
+        setNote(t(`assistant.viewImage.err.${known.includes(code) ? code : "failed"}`));
+        return;
+      }
+      const { base64, mimeType } = r.image;
+      setImages((cur) => (cur.length >= MAX_IMAGES ? cur : [...cur, { base64, mimeType, url: `data:${mimeType};base64,${base64}` }]));
+      setViewShots((n) => n + 1);
+    } finally {
+      setCapturing(false);
+    }
+  }, [bridge, sessionId, withRoi, images.length, t]);
+
   const addFiles = useCallback(
     async (files: File[]) => {
       setNote(null);
@@ -206,6 +234,7 @@ export function AssistantScreen() {
     dispatch({ type: "send", text: shown, images: allImages, sources: hits.map((h) => ({ file: h.file, heading: h.heading })) });
     setInput("");
     setImages([]);
+    setViewShots(0);
     setAttachments([]);
     setNote(composed.truncated ? t("assistant.attach.truncated") : null);
     abortedRef.current = false;
@@ -389,12 +418,17 @@ export function AssistantScreen() {
           {ingesting > 0 && <span style={S.dim}>{t("assistant.attach.reading")}</span>}
         </div>
       )}
+      {images.length > 0 && viewShots > 0 && (
+        <div style={S.warn} data-testid="assistant-viewimage-warn">
+          ⚠ {t("assistant.viewImage.burnedIn")}
+        </div>
+      )}
       {images.length > 0 && (
         <div style={S.thumbs}>
           {images.map((im, i) => (
             <span key={i} style={S.thumb}>
               <img src={im.url} alt="" style={S.thumbImg} />
-              <button style={S.x} onClick={() => setImages((cur) => cur.filter((_, j) => j !== i))} aria-label={t("assistant.removeImage")}>
+              <button style={S.x} onClick={() => { setImages((cur) => { const next = cur.filter((_, j) => j !== i); if (next.length === 0) setViewShots(0); return next; }); }} aria-label={t("assistant.removeImage")}>
                 ×
               </button>
             </span>
@@ -475,6 +509,12 @@ export function AssistantScreen() {
           <button style={S.btn} disabled={notReady || busy} onClick={() => fileRef.current?.click()} data-testid="assistant-attach">
             {t("assistant.attach")}
           </button>
+          <button style={S.btn} disabled={notReady || busy || capturing} onClick={() => void attachView()} title={t("assistant.viewImage.help")} data-testid="assistant-attach-view">
+            {t("assistant.viewImage.button")}
+          </button>
+          <label style={S.dim} title={t("assistant.viewImage.roiHelp")}>
+            <input type="checkbox" checked={withRoi} onChange={(e) => setWithRoi(e.target.checked)} data-testid="assistant-attach-view-roi" /> {t("assistant.viewImage.roi")}
+          </label>
           {voice.available ? (
             <button
               style={S.btn}

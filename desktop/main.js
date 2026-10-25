@@ -1379,6 +1379,32 @@ ipcMain.handle("graphy:assistant-viewer-cmd", (e, sessionId, cmd) => {
         return r.response === 0;
       },
     },
+    // 表示中のタイルの画像（焼き込み文字に患者情報がありうる）: 画像を返す前に毎回承認を取る。宛先がローカルと判定できたときだけ省く。
+    // 会話は text-to-text の提供元が image-to-text のモデルを持つときだけ画像を送るので、同じ提供元のときだけ「対応」とする。
+    capture: {
+      external: !(dest && dest.ok && dest.local === true),
+      imageModelOk: (() => {
+        const img = aiGateway.resolveCapability("image-to-text");
+        return !!(dest && dest.ok && img && img.ok && img.providerId === dest.providerId);
+      })(),
+      confirmSend: async (image) => {
+        if (!win || win.isDestroyed()) return false;
+        const thumb = nativeImage.createFromBuffer(Buffer.from(image.base64, "base64"));
+        if (thumb.isEmpty()) return false;
+        const img = aiGateway.resolveCapability("image-to-text");
+        const r = await dialog.showMessageBox(win, {
+          type: "warning",
+          icon: thumb.resize({ width: 160 }),
+          buttons: ["添付する", "取り消す"],
+          defaultId: 1,
+          cancelId: 1,
+          title: "アシスタントの操作の確認",
+          message: `2D ビューアの表示中の画像を、外部の AI（${dest && dest.label ? dest.label : "不明"}）へ送る質問に添付します。`,
+          detail: `送り先: ${dest && dest.endpointHost ? dest.endpointHost : "不明"}${img && img.model ? `（モデル: ${img.model}）` : ""}\n\n画像に患者の氏名・ID などの文字が焼き込まれていないか確認してください。添付しますか？`,
+        });
+        return r.response === 0;
+      },
+    },
     // 🔴 データを変える操作は、実行のたびにここ（main の描くダイアログ）で承認を取る。文面は main が持つ（レンダラの値は使わない）。
     confirm: async (id) => {
       const text = WRITE_CONFIRM_TEXT[id];
