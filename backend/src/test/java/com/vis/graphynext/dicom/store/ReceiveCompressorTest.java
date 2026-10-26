@@ -221,6 +221,23 @@ class ReceiveCompressorTest {
         assertEquals(0, rc.status().failed());
     }
 
+    @Test
+    void 複数フレームは対象外_そのまま(@TempDir Path dir) throws Exception {
+        Attributes ds = dataset(UID.CTImageStorage, 16, true, "MONOCHROME2", 1);
+        ds.setInt(Tag.NumberOfFrames, VR.IS, 2);
+        byte[] one = ds.getBytes(Tag.PixelData);
+        byte[] two = java.util.Arrays.copyOf(one, one.length * 2);
+        System.arraycopy(one, 0, two, one.length, one.length);
+        ds.setBytes(Tag.PixelData, VR.OW, two);
+        Path f = dir.resolve("mf");
+        write(f, ds, UID.ExplicitVRLittleEndian);
+        byte[] bytes = Files.readAllBytes(f);
+        assertEquals(f, rc.process(f));
+        assertArrayEquals(bytes, Files.readAllBytes(f));
+        assertEquals(1, rc.status().skipped().get("multi-frame"));
+        assertEquals(0, rc.status().compressed());
+    }
+
     // ---- 部品 ----
 
     private Attributes dataset(String cuid, int bits, boolean signed, String photometric, int seed) {

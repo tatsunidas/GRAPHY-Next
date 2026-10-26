@@ -57,7 +57,7 @@ public class ReceiveCompressor {
     /** 画素の上限。これを超える画像は（全バイト比較のためのメモリを避けて）圧縮しない。 */
     static final long MAX_PIXEL_BYTES = 256L << 20;
 
-    /** 読み手の対応が済むまでは、単純な単色の通常画像だけを対象にする（Enhanced・XA・US・カラー・SEG・SR などは対象外）。 */
+    /** 読み手の対応が済んでいる範囲＝単純な単色の単一フレーム画像だけを対象にする（複数フレーム・Enhanced・XA・US・カラー・SEG・SR などは対象外）。 */
     static final Set<String> TARGET_SOP_CLASSES = Set.of(
             UID.CTImageStorage,
             UID.MRImageStorage,
@@ -215,6 +215,9 @@ public class ReceiveCompressor {
         String pi = ds.getString(Tag.PhotometricInterpretation, "");
         if (!"MONOCHROME1".equals(pi) && !"MONOCHROME2".equals(pi)) {
             return "not-monochrome";
+        }
+        if (ds.getInt(Tag.NumberOfFrames, 1) > 1) {
+            return "multi-frame"; // フレーム抽出などの読み手が圧縮に未対応
         }
         int bits = ds.getInt(Tag.BitsAllocated, 0);
         if (bits != 8 && bits != 16) {
