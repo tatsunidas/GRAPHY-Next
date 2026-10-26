@@ -9,6 +9,7 @@
  *   3. usage を返さない（ストリーム）応答は usage が null（0 ではない）。ツール呼び出しは名前だけ
  *   4. 失敗（429、本文に目印）も 1 行で、結果はコード。本文は入らない
  *   5. summary / clear は #assistant 窓だけ。メイン窓からは forbidden で、ファイルに触れない
+ *   6. 画面（実在のアシスタント窓の［記録］）: 件数・モデル別の表の数値・「不明」・本文が出ないこと・消去の 2 段階
  * 偽サーバーが確かめるのは「取り出しと書き出し」。各社の実応答の usage 形式は確かめない（未達）。
  */
 import fs from "node:fs";
@@ -172,12 +173,57 @@ async function main(): Promise<void> {
     check(cl.ok === true && rows().length === 0, "#assistant 窓の clear で空になる", cl);
     const s2 = await page.evaluate(() => (window as unknown as { graphyDesktop: Bridge }).graphyDesktop.assistantRequestLogSummary());
     check(s2.ok === true && s2.count === 0, "clear 後の summary は 0 件", s2);
+
+    // --- 6. 画面（実在のアシスタント窓） ---
+    console.log("\n[6] 画面");
+    await page.evaluate((h) => { window.location.hash = h; }, origHash);
+    await page.waitForFunction((h) => window.location.hash === h, origHash);
+    const win = await driver.waitForNewPage(async () => {
+      await page.getByTestId("mainscreen-menu-system").click();
+      await page.getByTestId("menu-item-assistant").click();
+    }, (u) => u.includes("#assistant"));
+    await win.getByTestId("assistant-root").waitFor({ state: "visible", timeout: 20_000 });
+    await win.setViewportSize({ width: 640, height: 820 });
+    const chat = (req: unknown) => win.evaluate((r) => (window as unknown as { graphyDesktop: Bridge }).graphyDesktop.aiChat(r), req);
+    await chat({ sessionId: "s-ui-1", messages: [{ role: "user", text: `患者 ${MARK} のこと` }] });
+    await chat({ sessionId: "s-ui-2", stream: true, messages: [{ role: "user", text: "ツール" }], tools: [{ name: "fit", description: "d", parameters: { type: "object", properties: {} } }] });
+    check(rows().length === 2, "前提: 記録が 2 行ある（画面で見るものが実在する）", rows().length);
+    await win.getByTestId("assistant-requestlog-toggle").click();
+    const panel = win.getByTestId("assistant-requestlog-panel");
+    await panel.waitFor({ state: "visible", timeout: 10_000 });
+    await win.getByTestId("assistant-requestlog-count").waitFor({ state: "visible", timeout: 10_000 });
+    const countText = (await win.getByTestId("assistant-requestlog-count").textContent()) ?? "";
+    check(/2/.test(countText), "件数が 2 件と出る", countText);
+    const modelRowsText = await win.getByTestId("assistant-requestlog-model-row").allTextContents();
+    check(modelRowsText.length === 2, "モデル別の行が 2 つ（応答側の版が違う）", modelRowsText);
+    const withUsage = modelRowsText.find((x) => x.includes("fake-2026-10-26")) ?? "";
+    check(/77/.test(withUsage) && /11/.test(withUsage), "🔴 トークン数（77 / 11）が表に出る", withUsage);
+    const noUsage = modelRowsText.find((x) => x.includes("fake-stream")) ?? "";
+    check(/(不明|unknown)/i.test(noUsage) && !/\b0\b.*\b0\b.*\b0\b/.test(noUsage.replace(/fake-stream|local/g, "")), "🔴 usage の無いモデルはトークンが「不明」で、0 と書かない", noUsage);
+    check(await win.getByTestId("assistant-requestlog-partial").isVisible(), "合計は取れた分だけ、の注記が出る");
+    const recentText = (await win.getByTestId("assistant-requestlog-recent").textContent()) ?? "";
+    check(/fit/.test(recentText) && /(ローカル|local)/.test(recentText), "直近の記録にツール名 fit と宛先が出る", recentText);
+    const panelText = (await panel.textContent()) ?? "";
+    check(!panelText.includes(MARK) && !panelText.includes("のこと"), "🔴 画面にも質問の本文は 0 件");
+    await win.screenshot({ path: path.join(OUT_DIR, "panel.png") });
+    // 消去は 2 段階
+    await win.getByTestId("assistant-requestlog-clear").click();
+    await win.getByTestId("assistant-requestlog-clear-yes").waitFor({ state: "visible", timeout: 5_000 });
+    check(rows().length === 2, "🔴 最初のクリックでは消えない（確認が出る）");
+    await win.getByTestId("assistant-requestlog-clear-no").click();
+    check(rows().length === 2 && (await win.getByTestId("assistant-requestlog-clear").isVisible()), "「やめる」で何も消えず、元のボタンに戻る");
+    await win.getByTestId("assistant-requestlog-clear").click();
+    await win.getByTestId("assistant-requestlog-clear-yes").click();
+    await win.getByTestId("assistant-requestlog-count").getByText(/\b0\b/).waitFor({ state: "visible", timeout: 10_000 });
+    check(rows().length === 0, "確認して「消す」とファイルが空になる", rows().length);
+    check((await win.getByTestId("assistant-requestlog-model-row").count()) === 0, "画面の表も空になる");
+    await win.screenshot({ path: path.join(OUT_DIR, "panel-cleared.png") });
   } finally {
     fake.server.close();
     await driver.stop();
   }
   const failed = summary();
-  console.log("  [未達] 実クラウド（Gemini / OpenAI）の実応答での usage 形式の一致／モデルが黙って更新されたときの検出（段 3・実運用）／画面（段 2）");
+  console.log("  [未達] 実クラウド（Gemini / OpenAI）の実応答での usage 形式の一致／モデルが黙って更新されたときの検出（段 3・実運用）");
   fs.writeFileSync(path.join(OUT_DIR, "result.json"), JSON.stringify({ failed, unreached: 3 }, null, 2));
   process.exitCode = failed === 0 ? 0 : 1;
 }

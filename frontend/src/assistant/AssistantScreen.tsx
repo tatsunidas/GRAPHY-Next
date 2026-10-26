@@ -17,6 +17,7 @@ import { RobotPanel, type RobotPlan } from "./robot/RobotPanel";
 import { buildRobotTools } from "./robot/planModel";
 import { MacroPanel, type MacroApi } from "./macros/MacroPanel";
 import { PluginToolPanel } from "./PluginToolPanel";
+import { RequestLogPanel, type RequestLogApi } from "./RequestLogPanel";
 import { planEligible, toToolDef, type PluginToolEntry, type PluginToolResult } from "./pluginTools";
 import { candidatesFromActions } from "./macros/macroModel";
 import { DOC_CHUNKS } from "./docsBundle";
@@ -79,6 +80,7 @@ export function AssistantScreen() {
   const [macroOpen, setMacroOpen] = useState(false);
   const [robot, setRobot] = useState(false);
   const [pluginToolOpen, setPluginToolOpen] = useState(false);
+  const [requestLogOpen, setRequestLogOpen] = useState(false);
   const [pluginTools, setPluginTools] = useState<PluginToolEntry[]>([]);
   const [plan, setPlan] = useState<RobotPlan | null>(null);
   const [resolved, setResolved] = useState<AiResolveResult | null>(null);
@@ -311,6 +313,10 @@ export function AssistantScreen() {
         : null,
     [bridge, sessionId, enabledPluginTools],
   );
+  const requestLogApi = useMemo<RequestLogApi | null>(
+    () => (bridge?.assistantRequestLogSummary && bridge.assistantRequestLogClear ? { summary: bridge.assistantRequestLogSummary, clear: bridge.assistantRequestLogClear } : null),
+    [bridge],
+  );
   const macroCandidates = useMemo(() => candidatesFromActions(state.messages.flatMap((m) => m.actions ?? [])), [state.messages]);
 
   const onPaste = (e: ClipboardEvent) => {
@@ -353,6 +359,11 @@ export function AssistantScreen() {
             {t("assistant.plugintools.button")}
           </button>
         )}
+        {requestLogApi && (
+          <button style={S.linkBtn} onClick={() => setRequestLogOpen((v) => !v)} data-testid="assistant-requestlog-toggle">
+            {t("assistant.requestlog.button")}
+          </button>
+        )}
         {macroApi && (
           <button style={S.linkBtn} onClick={() => setMacroOpen((v) => !v)} data-testid="assistant-macro-toggle">
             {t("assistant.macro.button")}
@@ -378,6 +389,7 @@ export function AssistantScreen() {
       {robot && resolved?.ok && resolved.toolMode === "none" && <div style={S.note}>{t("assistant.robot.noTools")}</div>}
       {robot && robotApi && <RobotPanel plan={plan} api={robotApi} t={t} onDiscard={() => setPlan(null)} />}
       {pluginToolOpen && <PluginToolPanel tools={pluginTools} onToggle={(id, on) => void togglePlugin(id, on)} busy={busy} t={t} />}
+      {requestLogOpen && requestLogApi && <RequestLogPanel api={requestLogApi} busy={busy} t={t} />}
       {macroOpen && macroApi && <MacroPanel api={macroApi} candidates={macroCandidates} busy={busy} t={t} />}
       {note && <div style={S.note}>{note}</div>}
       {attachments.length > 0 && !(resolved?.ok && resolved.local) && (
