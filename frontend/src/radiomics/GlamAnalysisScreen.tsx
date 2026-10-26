@@ -15,6 +15,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { NumberField } from "../hooks/NumberField";
 import { useI18n } from "../i18n/i18n";
+import { useDateFormat, formatDateTime } from "../i18n/dateFormat";
 import {
   analyzeGlam,
   deleteGlamAnalysis,
@@ -49,6 +50,7 @@ export const GLAM_CTX_KEY = "graphy-glam-ctx";
 
 export function GlamAnalysisScreen() {
   const { t } = useI18n();
+  useDateFormat(); // 書式の設定が変わったら再描画する
 
   const ctx = useMemo<GlamContext | null>(() => {
     try {
@@ -197,7 +199,7 @@ export function GlamAnalysisScreen() {
         studyInstanceUid: studyUid,
         sourceSeriesUid,
         maskSeriesUid,
-        label: saveLabel.trim() || `GLAM ${new Date().toLocaleString()}`,
+        label: saveLabel.trim() || `GLAM ${formatDateTime(new Date())}`,
         analysis,
       });
       setSaveLabel("");

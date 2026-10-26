@@ -5,6 +5,7 @@
 import { useEffect, useState } from "react";
 import { createReport, deleteReport, listReportsByStudy, type ReportSummary, type Study } from "../api";
 import { useI18n } from "../i18n/i18n";
+import { useDateFormat, formatDateTime as formatAppDateTime } from "../i18n/dateFormat";
 import { resolveDefaultReportType } from "./reportDefaults";
 
 /**
@@ -28,6 +29,7 @@ export function ReportManagerDialog({
   onChanged?: () => void;
 }) {
   const { t } = useI18n();
+  useDateFormat(); // 書式の設定が変わったら再描画する
   const [reports, setReports] = useState<ReportSummary[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -159,9 +161,7 @@ export function ReportManagerDialog({
 }
 
 function formatDateTime(iso: string): string {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
-  return d.toLocaleString();
+  return formatAppDateTime(iso);
 }
 
 function Th({ children }: { children?: React.ReactNode }) {

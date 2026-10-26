@@ -10,6 +10,7 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import { desktop } from "../desktopBridge";
 import { useI18n } from "../i18n/i18n";
+import { useDateFormat, formatClockTime } from "../i18n/dateFormat";
 import { fetchImportWatchStatus, scanImportWatchNow } from "./importWatchApi";
 import {
   canSave,
@@ -26,6 +27,7 @@ const STATUS_POLL_MS = 2000;
 
 export function ImportWatchPanel() {
   const { t } = useI18n();
+  useDateFormat(); // 書式の設定が変わったら再描画する
   const d = desktop();
   const [status, setStatus] = useState<ImportWatchStatus | null>(null);
   const [unavailable, setUnavailable] = useState(false);
@@ -199,7 +201,7 @@ export function ImportWatchPanel() {
         <span>
           {t("importWatch.lastScan")}:{" "}
           <b data-testid="import-watch-last">
-            {status.lastScanAt ? new Date(status.lastScanAt).toLocaleTimeString() : t("importWatch.never")}
+            {status.lastScanAt ? formatClockTime(status.lastScanAt, { seconds: true }) : t("importWatch.never")}
           </b>
         </span>
         <span>
