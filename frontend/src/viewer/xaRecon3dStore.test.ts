@@ -111,6 +111,30 @@ describe("xaRecon3dStore", () => {
     expect(b.listQcaRuns()).toHaveLength(3);
   });
 
+  it("アンカーを足して登録し直すと、他ウィンドウも新しいアンカーを持つ（`at` が進むとき）", async () => {
+    const [a, b] = await twoWindows();
+    b.ensureQcaRunChannel();
+    const run = makeRun(a, "img#1", [10, 10], [60, 60], 1);
+    a.registerQcaRun(run);
+    await settle();
+    expect(b.listQcaRuns()[0].anchors).toBeUndefined();
+    a.registerQcaRun({ ...run, anchors: [{ x: 30, y: 30, confirmed: true }], at: 2 });
+    await settle();
+    expect(b.listQcaRuns()).toHaveLength(1);
+    expect(b.listQcaRuns()[0].anchors).toEqual([{ x: 30, y: 30, confirmed: true }]);
+  });
+
+  it("★負例: `at` が進まない登録し直しは他ウィンドウに採られない（呼び出し側が進める約束）", async () => {
+    const [a, b] = await twoWindows();
+    b.ensureQcaRunChannel();
+    const run = makeRun(a, "img#1", [10, 10], [60, 60], 1);
+    a.registerQcaRun(run);
+    await settle();
+    a.registerQcaRun({ ...run, anchors: [{ x: 30, y: 30, confirmed: true }], at: 1 });
+    await settle();
+    expect(b.listQcaRuns()[0].anchors).toBeUndefined();
+  });
+
   it("後から開いたウィンドウは問い合わせで過去の登録を拾える", async () => {
     const [a, b] = await twoWindows();
     a.registerQcaRun(makeRun(a, "img#1", [10, 10], [60, 60]));

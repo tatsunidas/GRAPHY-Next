@@ -51,6 +51,11 @@ export interface SavedQcaAnalysis {
   trim: { from: number; to: number } | null;
   reference: QcaReferenceMode;
   /**
+   * アンカー（3D QCA の目印）。任意項目（古い保存には無い）。画像 px・血管に沿った順。
+   * 中心線が変わっていれば復元時に付け直し、遠ければ捨てる（`qcaAnchors.resnapAnchors`）。
+   */
+  anchors?: { x: number; y: number; confirmed: boolean }[];
+  /**
    * この解析から書いた SR。**上書き保存の対象**を指す。
    * 消えていることもある（利用者が保管庫から消した）ので、使う前に存在を確かめる。
    */
@@ -127,6 +132,17 @@ function sanitizePoints(v: unknown): [number, number][] {
   return out;
 }
 
+function sanitizeAnchors(v: unknown): { x: number; y: number; confirmed: boolean }[] | undefined {
+  if (!Array.isArray(v)) return undefined;
+  const out: { x: number; y: number; confirmed: boolean }[] = [];
+  for (const a of v as unknown[]) {
+    const o = a as { x?: unknown; y?: unknown; confirmed?: unknown } | null;
+    if (!o || !isFiniteNumber(o.x) || !isFiniteNumber(o.y)) continue;
+    out.push({ x: o.x, y: o.y, confirmed: o.confirmed === true });
+  }
+  return out;
+}
+
 /**
  * 保存ファイルの 1 件を読む。**壊れていれば null**（1 件の破損で全部を失わない）。
  */
@@ -169,6 +185,7 @@ export function sanitizeAnalysis(v: unknown): SavedQcaAnalysis | null {
         ? { from: (a.trim as { from: number }).from, to: (a.trim as { to: number }).to }
         : null,
     reference,
+    ...(sanitizeAnchors(a.anchors) ? { anchors: sanitizeAnchors(a.anchors) } : {}),
     sr,
     savedAt: typeof a.savedAt === "string" ? a.savedAt : "",
   };

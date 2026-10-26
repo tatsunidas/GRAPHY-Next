@@ -81,6 +81,29 @@ export interface SavedRoi {
 }
 
 /**
+ * 保存する 3D 球 ROI 1 件（`sphere3dStore`）。中心＋半径のパラメータだけで、ラスタ化結果は持たない。
+ * 🔴 `sphere3dStore` の `id` はセッション連番で別ウィンドウ・別セッションと衝突するので、
+ * 鍵は保存用の安定 ID `uid`（墓標の `roiUid` にもこれを入れる。UUID なので ROI の UID と衝突しない）。
+ */
+export interface SavedSphere {
+  uid: string;
+  studyUid: string;
+  seriesUid: string;
+  /** 作成スライスの SOP Instance UID。復元時に imageId へ解決する鍵（imageId はセッション固有なので保存しない）。 */
+  refSopInstanceUid: string;
+  /** 中心（患者座標 LPS mm）。 */
+  center: [number, number, number];
+  radiusMm: number;
+  c: DimScope;
+  t: DimScope;
+  label?: string;
+  color: string;
+  visible: boolean;
+  groupId?: string;
+  groupName?: string;
+}
+
+/**
  * 削除の記録（墓標）。
  *
  * <p><b>なぜ必要か</b>: 同じ患者を別ウィンドウ（＝別レンダラ＝別 annotation state）で開いていると、
@@ -114,6 +137,11 @@ export interface RoiSaveFile {
    * 形に留めてある。古いアプリが上書き保存すると解析状態だけは失われるが、ROI は無傷。
    */
   analyses?: SavedQcaAnalysis[];
+  /**
+   * 3D 球 ROI。🔴 **これを足すために `schema` を上げていない**（`analyses` と同じ理由）。
+   * 古いアプリは無視して読む（ROI は無傷）。古いアプリが上書き保存すると球だけは失われる。
+   */
+  spheres?: SavedSphere[];
 }
 
 /** 読み込み結果。 */
@@ -122,6 +150,8 @@ export interface ParsedRoiFile {
   deleted: RoiTombstone[];
   /** 解析状態（無ければ空配列）。 */
   analyses: SavedQcaAnalysis[];
+  /** 3D 球 ROI（無ければ空配列）。 */
+  spheres: SavedSphere[];
 }
 
 /**
@@ -240,13 +270,23 @@ export function buildSaveFile(
   deleted: RoiTombstone[] = [],
   writer?: string,
   analyses: SavedQcaAnalysis[] = [],
+  spheres: SavedSphere[] = [],
 ): RoiSaveFile {
   const trimmed = [...deleted]
     .sort((a, b) => (a.at < b.at ? 1 : a.at > b.at ? -1 : 0))
     .slice(0, MAX_TOMBSTONES);
   // 元の計測が消えた解析は道連れにする（残しても復元先が無い）。
   const buried = new Set(trimmed.map((t) => t.roiUid));
-  return { schema: ROI_SCHEMA_VERSION, writer, rois, deleted: trimmed, analyses: dropAnalysesFor(analyses, buried) };
+  const liveSpheres = spheres.filter((sp) => !buried.has(sp.uid));
+  return {
+    schema: ROI_SCHEMA_VERSION,
+    writer,
+    rois,
+    deleted: trimmed,
+    analyses: dropAnalysesFor(analyses, buried),
+    // 球が無いときはキー自体を出さない（球を使わない患者の保存内容を変えない）。
+    ...(liveSpheres.length ? { spheres: liveSpheres } : {}),
+  };
 }
 
 /**
@@ -254,7 +294,7 @@ export function buildSaveFile(
  * （1 件の破損で患者の全 ROI を失わないため）。読めなければ空配列。
  */
 export function parseSaveFile(json: string | null | undefined): ParsedRoiFile {
-  const empty: ParsedRoiFile = { rois: [], deleted: [], analyses: [] };
+  const empty: ParsedRoiFile = { rois: [], deleted: [], analyses: [], spheres: [] };
   if (!json) return empty;
   let root: unknown;
   try {
@@ -322,7 +362,46 @@ export function parseSaveFile(json: string | null | undefined): ParsedRoiFile {
       if (parsed && !buried.has(parsed.pickUid)) analyses.push(parsed);
     }
   }
-  return { rois: out, deleted, analyses };
+  const spheres: SavedSphere[] = [];
+  if (Array.isArray((file as { spheres?: unknown }).spheres)) {
+    const seen = new Set<string>();
+    for (const sp of (file as { spheres: unknown[] }).spheres) {
+      const parsed = sanitizeSphere(sp);
+      if (!parsed || buried.has(parsed.uid) || seen.has(parsed.uid)) continue;
+      seen.add(parsed.uid);
+      spheres.push(parsed);
+    }
+  }
+  return { rois: out, deleted, analyses, spheres };
+}
+
+/** 球 1 件の検証。必須項目が欠ける・数値が壊れているものは null（復元できないので落とす）。 */
+function sanitizeSphere(raw: unknown): SavedSphere | null {
+  const s = raw as Partial<SavedSphere> | null;
+  if (!s || typeof s !== "object") return null;
+  if (typeof s.uid !== "string" || !s.uid) return null;
+  if (typeof s.seriesUid !== "string" || !s.seriesUid) return null;
+  if (typeof s.refSopInstanceUid !== "string" || !s.refSopInstanceUid) return null;
+  if (!Array.isArray(s.center) || s.center.length !== 3 || !s.center.every((v) => typeof v === "number" && Number.isFinite(v))) return null;
+  if (typeof s.radiusMm !== "number" || !Number.isFinite(s.radiusMm) || s.radiusMm <= 0) return null;
+  const out: SavedSphere = {
+    uid: s.uid,
+    studyUid: typeof s.studyUid === "string" ? s.studyUid : "",
+    seriesUid: s.seriesUid,
+    refSopInstanceUid: s.refSopInstanceUid,
+    center: [s.center[0], s.center[1], s.center[2]],
+    radiusMm: s.radiusMm,
+    c: dim(s.c) ?? "all",
+    t: dim(s.t) ?? "all",
+    color: typeof s.color === "string" && s.color ? s.color : "#00e5ff",
+    visible: s.visible !== false,
+  };
+  if (typeof s.label === "string") out.label = s.label;
+  if (typeof s.groupId === "string" && s.groupId) {
+    out.groupId = s.groupId;
+    if (typeof s.groupName === "string") out.groupName = s.groupName;
+  }
+  return out;
 }
 
 const dim = (v: unknown): DimScope | undefined => {
@@ -472,10 +551,16 @@ export function mergeSaveFiles(remote: ParsedRoiFile, local: ParsedRoiFile): Par
   // 🔴 解析状態は**和集合ではなく新しい方**を採る（同じ計測の解析は上書きしていくもの）。
   //    元の計測が墓標に載っていれば道連れに落とす。
   const analyses = dropAnalysesFor(mergeAnalyses(remote.analyses, local.analyses), tombs.keys());
+  // 球も `uid` で和集合（同じ uid はローカル）。墓標に載った球は落とす。
+  const sphereByUid = new Map<string, SavedSphere>();
+  for (const sp of remote.spheres) sphereByUid.set(sp.uid, sp);
+  for (const sp of local.spheres) sphereByUid.set(sp.uid, sp);
+  for (const uid of tombs.keys()) sphereByUid.delete(uid);
   return {
     rois: [...byUid.values()].sort((a, b) => cmp(a.roiUid, b.roiUid)),
     deleted: [...tombs.values()].sort((a, b) => cmp(a.roiUid, b.roiUid)),
     analyses,
+    spheres: [...sphereByUid.values()].sort((a, b) => cmp(a.uid, b.uid)),
   };
 }
 

@@ -31,6 +31,7 @@ const secretStore = require("./secretStore");
 const aiGateway = require("./aiGateway");
 const { isAssistantSender } = require("./assistantSender");
 const { createRelay, createJournal, readJournal } = require("./viewerRelay");
+const { createRequestLog, createEvalStore } = require("./aiRequestLog");
 const { createStore: createMacroStore } = require("./assistantMacros");
 const assistantPluginTools = require("./assistantPluginTools");
 const { createGate: createAiEgressGate } = require("./aiEgressGate");
@@ -1487,6 +1488,14 @@ ipcMain.handle("graphy:assistant-plugin-tools-set", async (e, pluginId, on) => {
 });
 // マクロ（表示操作の並び）の保存。形と大きさだけ main が見る（assistantMacros.js）。再生時の検証は 2D 窓が毎回行う。
 const macroStore = createMacroStore({ file: path.join(app.getPath("userData"), "assistant-macros.json") });
+// AI への要求の記録（本文なし。aiRequestLog.js）。会話の完了ごとに gateway が 1 件書く。読み取りと消去はアシスタント窓だけ。
+const aiRequestLog = createRequestLog({ file: path.join(app.getPath("userData"), "ai-requests.jsonl") });
+aiGateway.setRequestLogHook((record) => aiRequestLog.append(record));
+ipcMain.handle("graphy:assistant-requestlog-summary", (e) => (isAssistantSender(e) ? aiRequestLog.summary() : { ok: false, error: "forbidden" }));
+const aiEvalStore = createEvalStore({ file: path.join(app.getPath("userData"), "ai-eval.jsonl") });
+ipcMain.handle("graphy:assistant-eval-append", (e, run) => (isAssistantSender(e) ? aiEvalStore.append(run) : { ok: false, error: "forbidden" }));
+ipcMain.handle("graphy:assistant-eval-list", (e) => (isAssistantSender(e) ? aiEvalStore.list() : { ok: false, error: "forbidden" }));
+ipcMain.handle("graphy:assistant-requestlog-clear", (e) => (isAssistantSender(e) ? aiRequestLog.clear() : { ok: false, error: "forbidden" }));
 ipcMain.handle("graphy:assistant-journal-list", (e) =>
   isAssistantSender(e) ? readJournal({ file: path.join(app.getPath("userData"), "assistant-journal.jsonl") }) : { ok: false, error: "forbidden" },
 );

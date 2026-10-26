@@ -12,6 +12,7 @@
  *
  * 画面の見た目はスクリーンショットで目視する（DOM の有無だけで判定しない）。
  */
+import { execFileSync } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -47,6 +48,50 @@ function installPlugin(): void {
   fs.rmSync(dst, { recursive: true, force: true });
   fs.mkdirSync(dst, { recursive: true });
   for (const f of ["plugin.json", "ui.js"]) fs.copyFileSync(path.join(src, f), path.join(dst, f));
+}
+
+/** 予後の解析（R1）用の合成データ。f_signal だけが生存に効く（係数 +1.2）。決定的な乱数で作る。 */
+function synthR1(n: number): { feat: string; clin: string } {
+  let a = 12345;
+  const rnd = () => { a = (Math.imul(a, 1664525) + 1013904223) >>> 0; return a / 4294967296; };
+  const feat = ["CaseLabel,f_signal,f_n1,f_n2,f_n3,f_n4"], clin = ["CaseLabel,time,event,age"];
+  for (let i = 0; i < n; i++) {
+    const sig = rnd() * 2 - 1;
+    const t = (-Math.log(1 - rnd()) / Math.exp(1.2 * sig)) * 10, c = -Math.log(1 - rnd()) * 14;
+    const time = Math.max(0.1, Math.round(Math.min(t, c) * 10) / 10), ev = t <= c ? 1 : 0;
+    feat.push([`S${i}`, sig.toFixed(5), ...[0, 1, 2, 3].map(() => (rnd() * 4).toFixed(4))].join(","));
+    clin.push(`S${i},${time},${ev},${40 + Math.floor(rnd() * 40)}`);
+  }
+  return { feat: feat.join("\r\n") + "\r\n", clin: clin.join("\r\n") + "\r\n" };
+}
+
+/** 判別（R2）用の合成データ。f_a は強く、f_b は中くらいに結果ラベルと関係し、f_n1〜f_n3 は無関係。決定的な乱数で作る。 */
+function synthR2(n: number): { feat: string; clin: string } {
+  let a = 777;
+  const rnd = () => { a = (Math.imul(a, 1664525) + 1013904223) >>> 0; return a / 4294967296; };
+  const norm = () => { let s = 0; for (let k = 0; k < 6; k++) s += rnd(); return s - 3; };
+  const feat = ["CaseLabel,f_a,f_b,f_n1,f_n2,f_n3"], clin = ["CaseLabel,outcome,age"];
+  for (let i = 0; i < n; i++) {
+    const g = rnd() < 0.45 ? 1 : 0;
+    feat.push([`D${i}`, (norm() + 1.6 * g).toFixed(4), (norm() + 0.8 * g).toFixed(4), norm().toFixed(4), norm().toFixed(4), norm().toFixed(4)].join(","));
+    clin.push(`D${i},${g === 1 ? "resp" : "no"},${40 + (i % 30)}`);
+  }
+  return { feat: feat.join("\r\n") + "\r\n", clin: clin.join("\r\n") + "\r\n" };
+}
+
+/** 再現性（R3）用の 3 条件の合成データ。f_same は全条件で同じ、f_noisy は条件ごとに大きなばらつき、f_shift は条件 C が +5 ずれる、f_rand は無関係な乱数。 */
+function synthR3(n: number): { files: string[]; missing2: string } {
+  let a = 31337;
+  const rnd = () => { a = (Math.imul(a, 1664525) + 1013904223) >>> 0; return a / 4294967296; };
+  const base = Array.from({ length: n }, () => rnd() * 10);
+  const files = [0, 1, 2].map((c) => {
+    const lines = ["CaseLabel,f_same,f_noisy,f_shift,f_rand,f_text"];
+    base.forEach((b, i) => lines.push([`R${i}`, b.toFixed(5), (b + (rnd() - 0.5) * 8).toFixed(5), (b + (c === 2 ? 5 : 0) + (rnd() - 0.5) * 0.4).toFixed(5), (rnd() * 10).toFixed(5), i === 0 ? "x" : "1"].join(",")));
+    return lines.join("\r\n") + "\r\n";
+  });
+  // 条件 B から 2 行（R2・R3）を除いたもの（全条件に揃わない行の一覧を確かめる）
+  const m2 = files[1].split("\r\n").filter((l, i) => !(i === 3 || i === 4)).join("\r\n");
+  return { files, missing2: m2 };
 }
 
 async function main(): Promise<void> {
@@ -173,6 +218,246 @@ async function main(): Promise<void> {
     await page.getByTestId("rs-run").click();
     await page.getByTestId("rs-joined").waitFor({ state: "visible" });
     check((await page.getByTestId("rs-joined").innerText()).includes("2 人"), "正しい臨床の表に戻すと、また結合できる");
+
+    console.log("\n[5] 予後との関係（R1）: 別実装（statsmodels）との突き合わせ");
+    const r1 = synthR1(100);
+    const r1Feat = write("r1_feat.csv", r1.feat), r1Clin = write("r1_clin.csv", r1.clin);
+    const refPath = path.join(OUT_DIR, "r1_reference.json");
+    execFileSync("python3", ["-I", path.join(AUTOMATOR_ROOT, "src", "spike", "researchStatsR1Reference.py"), r1Feat, r1Clin, refPath]);
+    const ref = JSON.parse(fs.readFileSync(refPath, "utf8")) as { rows: Record<string, { n_low: number; n_high: number; p: number; q: number; hr_group: number; hr_sd: number }>; selected: string[]; model?: { terms: string[]; hr: number[]; p: number[]; cindex: number; added_chi2: number; added_p: number } };
+    check(ref.selected.includes("f_signal"), "参照側でも f_signal が基準を満たす（合成データの効果が出ている）", ref.selected);
+    await page.getByTestId("rs-file-features").setInputFiles([r1Feat]);
+    await page.getByTestId("rs-file-clinical").setInputFiles(r1Clin);
+    await page.waitForFunction(() => !(document.querySelector('[data-testid="rs-run"]') as HTMLButtonElement | null)?.disabled, null, { timeout: 15_000 });
+    check((await page.getByTestId("rs-time").inputValue()) === "time" && (await page.getByTestId("rs-clinical-id").inputValue()) === "CaseLabel", "列の割り当ての候補が入る（R1 の入力）");
+    await page.getByTestId("rs-recipe").selectOption("r1-prognosis");
+    await page.getByTestId("rs-covariates").locator("label", { hasText: "age" }).locator("input").check();
+    await page.getByTestId("rs-bootstrap").fill("30");
+    await page.getByTestId("rs-bootstrap").dispatchEvent("change");
+    await page.getByTestId("rs-run").click();
+    await page.getByTestId("rs-r1").waitFor({ state: "visible", timeout: 60_000 });
+    const tableRows = await page.getByTestId("rs-r1-row").evaluateAll((rs) => rs.map((r) => ({ f: (r as HTMLElement).dataset.feature ?? "", cells: Array.from(r.querySelectorAll("td")).map((c) => c.textContent ?? "") })));
+    check(tableRows.length === 5, "5 つの特徴量が表に出る", tableRows.map((r) => r.f));
+    // 表の p は 0.001 未満を「<0.001」と丸めて出す。その場合は「参照が 0.001 未満」で照合する
+    const pMatches = (shown: string, ref: number) => (shown.startsWith("<") ? ref < 0.001 : Math.abs(Number(shown) - ref) <= 6e-4);
+    check(tableRows[0].f === "f_signal", "p の小さい順で、先頭は f_signal", tableRows.map((r) => r.f));
+    check(tableRows.every((r) => pMatches(r.cells[4], ref.rows[r.f].p)), "表の p が statsmodels の log-rank と一致（表示は小数 3 桁、0.001 未満は「<0.001」）", tableRows.map((r) => [r.cells[4], ref.rows[r.f].p]));
+    check(tableRows.every((r) => r.cells[2] === `${ref.rows[r.f].n_low}/${ref.rows[r.f].n_high}`), "群の人数が参照と一致（中央値より大きい値が高群）", tableRows.map((r) => r.cells[2]));
+    check(pMatches(tableRows[0].cells[5], ref.rows.f_signal.q), "BH 補正の q が scipy と一致（表示の丸めの範囲で）", { shown: tableRows[0].cells[5], ref: ref.rows.f_signal.q });
+    const n5 = await count();
+    await page.getByTestId("rs-save-results").click();
+    const resCsv = await downloaded("research-stats-r1-results.csv", n5);
+    const lines = resCsv.trim().split("\r\n").map((l) => l.split(","));
+    const col = (name: string) => lines[0].indexOf(name);
+    const exact = lines.slice(1).map((l) => ({ f: l[col("feature")], p: Number(l[col("p_used")]), q: Number(l[col("q_bh")]), hg: Number(l[col("hr_group")]), hs: Number(l[col("hr_per_sd")]) }));
+    const rel = (x: number, y: number) => Math.abs(x - y) / Math.abs(y);
+    check(exact.every((e) => rel(e.p, ref.rows[e.f].p) < 1e-6 && rel(e.q, ref.rows[e.f].q) < 1e-6), "書き出した CSV の p・q が statsmodels・scipy と相対誤差 1e-6 以内", exact.map((e) => [e.f, rel(e.p, ref.rows[e.f].p)]));
+    check(exact.every((e) => rel(e.hg, ref.rows[e.f].hr_group) < 1e-5 && rel(e.hs, ref.rows[e.f].hr_sd) < 1e-5), "群の HR・SD あたりの HR が PHReg（Efron）と一致（相対 1e-5）");
+    // 多変量
+    const terms = await page.getByTestId("rs-model-table").locator("tbody tr").evaluateAll((rs) => rs.map((r) => Array.from(r.querySelectorAll("td")).map((c) => c.textContent ?? "")));
+    check(ref.model !== undefined && terms.map((x) => x[0]).join() === ref.model.terms.join(), "多変量モデルの項が参照と同じ（選ばれた特徴量 + age）", terms.map((x) => x[0]));
+    if (ref.model) {
+      const hrOk = terms.every((x, i) => Math.abs(Number(x[1].split(" ")[0]) - ref.model!.hr[i]) <= 0.006);
+      check(hrOk, "多変量の HR が PHReg と一致（小数 2 桁）", { shown: terms.map((x) => x[1]), ref: ref.model.hr });
+      const ci = Number((await page.getByTestId("rs-cindex").innerText()).split(":")[1]);
+      check(Math.abs(ci - ref.model.cindex) <= 6e-4, "C-index（見かけ）が総当たりの定義と一致", { shown: ci, ref: ref.model.cindex });
+      const added = await page.getByTestId("rs-added").innerText();
+      check(added.includes(`χ² = ${ref.model.added_chi2.toFixed(2)}`), "臨床因子に足した効果の χ²（−2LL の差）が参照と一致", { shown: added, ref: ref.model.added_chi2 });
+      const corr = Number((await page.getByTestId("rs-cindex-corrected").innerText()).match(/補正\）: ([0-9.]+)/)?.[1]);
+      check(corr < ci && corr > 0.5, "補正 C-index は見かけより小さく、0.5 より大きい", { corr, ci });
+    }
+    check((await page.getByTestId("rs-r1-notice").allInnerTexts()).some((x) => x.includes("比例ハザードの仮定は検査していません")), "「比例ハザードは検査していない」の表示が常に出る");
+    // 図
+    const legend = await page.getByTestId("rs-km-legend").evaluateAll((es) => es.map((e) => e.textContent ?? "")); // SVG の text は innerText が空
+    const risk0 = await page.getByTestId("rs-km-risk").evaluateAll((es) => es.slice(0, 1).map((e) => e.textContent));
+    check(legend.length === 2 && legend[0].includes(`n=${ref.rows.f_signal.n_low}`) && legend[1].includes(`n=${ref.rows.f_signal.n_high}`), "KM 図の凡例の人数が参照と一致", legend);
+    check(risk0[0] === String(ref.rows.f_signal.n_low), "リスク表の時間 0 の人数 = 低群の人数", risk0);
+    await page.getByTestId("rs-r1").screenshot({ path: path.join(OUT_DIR, "03-r1.png") });
+    await page.getByTestId("rs-km-svg").screenshot({ path: path.join(OUT_DIR, "04-km.png") });
+    const n6 = await count();
+    await page.getByTestId("rs-save-km").click();
+    const kmCsv = await downloaded("research-stats-km-points.csv", n6);
+    check(kmCsv.split("\r\n")[0] === "feature,group,label,time,at_risk,events,censored,survival,se,lower,upper" && kmCsv.split("\r\n").length > 50, "KM の点列 CSV が出る", kmCsv.slice(0, 120));
+
+    console.log("\n[6] 最適しきい値: 進み具合・取り消し・補正 p、補正なしの表示");
+    await page.getByTestId("rs-group-mode").selectOption("optimal");
+    await page.getByTestId("rs-permutations").fill("20000");
+    await page.getByTestId("rs-permutations").dispatchEvent("change");
+    check(/特徴量 5 個 × 並べ替え 20000 回/.test(await page.getByTestId("rs-heavy").innerText()), "重い実行の前に、特徴量数×並べ替え回数が出る");
+    await page.getByTestId("rs-run").click();
+    await page.getByTestId("rs-progress").waitFor({ state: "visible", timeout: 15_000 });
+    await page.waitForTimeout(1500);
+    const mid = await page.getByTestId("rs-progress").innerText();
+    check(/実行中: .*（\d+%）/.test(mid) && await page.getByTestId("rs-run").isDisabled(), "実行中は進み具合が出て、もう一度は押せない", mid);
+    await page.getByTestId("rs-root").screenshot({ path: path.join(OUT_DIR, "05-running.png") });
+    // 実行中は描画が忙しく「安定」の判定が通らないことがあるので、位置を確かめて実座標でクリックする
+    const box = await page.getByTestId("rs-cancel").boundingBox();
+    check(box !== null && box.width > 0, "取り消すボタンが見える位置にある", box);
+    await page.mouse.click(box!.x + box!.width / 2, box!.y + box!.height / 2);
+    await page.getByTestId("rs-errors").waitFor({ state: "visible", timeout: 30_000 });
+    check(/取り消されました/.test(await page.getByTestId("rs-errors").innerText()) && (await page.getByTestId("rs-r1").count()) === 0, "取り消すと、その旨が出て、途中の結果は表に出さない");
+    await page.getByTestId("rs-permutations").fill("199");
+    await page.getByTestId("rs-permutations").dispatchEvent("change");
+    await page.getByTestId("rs-run").click();
+    await page.getByTestId("rs-r1").waitFor({ state: "visible", timeout: 120_000 });
+    const optRows = await page.getByTestId("rs-r1-row").evaluateAll((rs) => rs.map((r) => ({ f: (r as HTMLElement).dataset.feature ?? "", cells: Array.from(r.querySelectorAll("td")).map((c) => c.textContent ?? "") })));
+    const head = await page.getByTestId("rs-r1-table").locator("thead th").allInnerTexts();
+    check(head.includes("補正 p") && head.includes("raw p"), "表に「補正 p」と「raw p」の列が出る", head);
+    const sig = optRows.find((r) => r.f === "f_signal")!;
+    const rawIdx = head.indexOf("raw p"), corrIdx = head.indexOf("補正 p");
+    check(Number(sig.cells[rawIdx].replace("<", "")) <= Number(sig.cells[corrIdx].replace("<", "")), "素の最小 p ≦ 補正 p（探索のぶんを補正している）", { raw: sig.cells[rawIdx], corrected: sig.cells[corrIdx] });
+    check((await page.getByTestId("rs-r1-notice").allInnerTexts()).some((x) => x.includes("探索的")), "最適しきい値では「探索的」の表示が出る");
+    await page.getByTestId("rs-r1").screenshot({ path: path.join(OUT_DIR, "06-optimal.png") });
+    await page.getByTestId("rs-multiplicity").selectOption("none");
+    await page.getByTestId("rs-run").click();
+    await page.getByTestId("rs-r1").waitFor({ state: "visible", timeout: 120_000 });
+    check((await page.getByTestId("rs-r1-notice").allInnerTexts()).some((x) => x.includes("多重比較の補正をしていません")) && (await page.getByTestId("rs-r1-q").count()) === 0, "補正なしを選ぶと、その旨が出て q の列は無い");
+
+    console.log("\n[7] 2 群の判別（R2）: 別実装（scikit-learn・statsmodels・scipy・総当たり）との突き合わせ");
+    const r2 = synthR2(100);
+    const r2Feat = write("r2_feat.csv", r2.feat), r2Clin = write("r2_clin.csv", r2.clin);
+    const r2RefPath = path.join(OUT_DIR, "r2_reference.json");
+    execFileSync("python3", ["-I", path.join(AUTOMATOR_ROOT, "src", "spike", "researchStatsR2Reference.py"), r2Feat, r2Clin, r2RefPath]);
+    type R2Row = { direction: string; auc: number; se: number; p: number; q: number; cut: { cut: number; tp: number; fp: number; tn: number; fn: number } };
+    const r2ref = JSON.parse(fs.readFileSync(r2RefPath, "utf8")) as { rows: Record<string, R2Row>; meets: string[]; combo?: { features: string[]; apparent_auc: number; loo_auc: number; loo_cm: { tp: number; fp: number; tn: number; fn: number } }; tree: { depth: number; n: number; pos: number; feature: string | null; direction: string | null; cut: number | null; label: number }[] };
+    check(r2ref.meets.includes("f_a") && !!r2ref.combo && r2ref.tree.length > 1, "参照側でも f_a が基準を満たし、組み合わせと木ができる（合成データの効果が出ている）", r2ref.meets);
+    await page.getByTestId("rs-file-features").setInputFiles([r2Feat]);
+    await page.getByTestId("rs-file-clinical").setInputFiles(r2Clin);
+    await page.waitForFunction(() => !(document.querySelector('[data-testid="rs-run"]') as HTMLButtonElement | null)?.disabled, null, { timeout: 15_000 });
+    await page.getByTestId("rs-recipe").selectOption("r2-discrimination");
+    await page.getByTestId("rs-multiplicity").selectOption("bh"); // [6] で「補正なし」にした設定が残っているので戻す
+    check((await page.getByTestId("rs-positive").inputValue()) === "", "陽性とするラベルの既定は決めていない（選ぶまで空）");
+    const labelsOffered = await page.getByTestId("rs-positive").locator("option").allInnerTexts();
+    check(labelsOffered.includes("resp") && labelsOffered.includes("no"), "結果ラベルの値が選択肢に出る", labelsOffered);
+    await page.getByTestId("rs-run").click();
+    await page.getByTestId("rs-errors").waitFor({ state: "visible", timeout: 20_000 });
+    check(/陽性とするラベルを選んでください/.test(await page.getByTestId("rs-errors").innerText()) && (await page.getByTestId("rs-r2").count()) === 0, "陽性ラベルを選ばずに実行すると、理由を出して止まる（負例）");
+    await page.getByTestId("rs-positive").selectOption("resp");
+    await page.getByTestId("rs-tree-on").check();
+    await page.getByTestId("rs-mc").fill("300");
+    await page.getByTestId("rs-mc").dispatchEvent("change");
+    await page.getByTestId("rs-run").click();
+    await page.getByTestId("rs-r2").waitFor({ state: "visible", timeout: 120_000 });
+    const r2Rows = await page.getByTestId("rs-r2-row").evaluateAll((rs) => rs.map((r) => ({ f: (r as HTMLElement).dataset.feature ?? "", cells: Array.from(r.querySelectorAll("td")).map((c) => c.textContent ?? "") })));
+    check(r2Rows.length === 5 && r2Rows[0].f === "f_a", "5 つの特徴量が p の小さい順に出る（先頭は f_a）", r2Rows.map((r) => r.f));
+    const aucOk = r2Rows.every((r) => Math.abs(Number(r.cells[3].split(" ")[0]) - r2ref.rows[r.f].auc) <= 6e-4);
+    check(aucOk, "表の AUC が scikit-learn と一致（表示は小数 3 桁）", r2Rows.map((r) => [r.cells[3], r2ref.rows[r.f].auc]));
+    const n7 = await count();
+    await page.getByTestId("rs-save-r2-results").click();
+    const r2Csv = await downloaded("research-stats-r2-results.csv", n7);
+    const L2 = r2Csv.trim().split("\r\n").map((l) => l.split(","));
+    const c2 = (name: string) => L2[0].indexOf(name);
+    const e2 = L2.slice(1).map((l) => ({ f: l[c2("feature")], auc: Number(l[c2("auc")]), lo: Number(l[c2("auc_lower")]), p: Number(l[c2("mannwhitney_p")]), q: Number(l[c2("q_bh")]), cut: Number(l[c2("cut")]), tp: Number(l[c2("tp")]), fp: Number(l[c2("fp")]), tn: Number(l[c2("tn")]), fn: Number(l[c2("fn")]), dir: l[c2("direction")] }));
+    const r = (x: number, y2: number) => Math.abs(x - y2) / Math.abs(y2);
+    check(e2.every((e) => r(e.auc, r2ref.rows[e.f].auc) < 1e-9 && r(e.p, r2ref.rows[e.f].p) < 1e-6 && r(e.q, r2ref.rows[e.f].q) < 1e-6), "書き出した CSV の AUC・p・q が参照と一致（相対 1e-6 以内）");
+    check(e2.every((e) => Math.abs(e.cut - r2ref.rows[e.f].cut.cut) < 1e-9 && e.tp === r2ref.rows[e.f].cut.tp && e.fp === r2ref.rows[e.f].cut.fp && e.tn === r2ref.rows[e.f].cut.tn && e.fn === r2ref.rows[e.f].cut.fn && e.dir === r2ref.rows[e.f].direction), "しきい値と混同行列（精度最大）・向きが総当たりの参照と一致");
+    const se0 = e2.find((e) => e.f === "f_a")!;
+    check(Math.abs((se0.auc - se0.lo) - 1.959964 * r2ref.rows.f_a.se) < 1e-4, "AUC の信頼区間の幅が、定義どおりの DeLong の標準誤差と一致", { half: se0.auc - se0.lo, ref: 1.959964 * r2ref.rows.f_a.se });
+    const cmFeat = await page.getByTestId("rs-cm-feature").locator("td").allInnerTexts();
+    check(r2Rows[0].f === "f_a" && cmFeat.join() === [r2ref.rows.f_a.cut.tp, r2ref.rows.f_a.cut.fn, r2ref.rows.f_a.cut.fp, r2ref.rows.f_a.cut.tn].join(), "混同行列の表示（f_a）が参照と一致", cmFeat);
+    // 組み合わせ・LOO
+    check((await page.getByTestId("rs-combo-table").locator("tbody tr td:first-child").allInnerTexts()).join() === r2ref.combo!.features.join(), "組み合わせの特徴量が参照と同じ", r2ref.combo!.features);
+    const apparent = Number((await page.getByTestId("rs-auc-apparent").innerText()).match(/: ([0-9.]+)/)?.[1]);
+    const looAuc = Number((await page.getByTestId("rs-auc-loo").innerText()).match(/: ([0-9.]+)/)?.[1]);
+    check(Math.abs(apparent - r2ref.combo!.apparent_auc) <= 6e-4, "組み合わせの AUC（見かけ）が一致", { shown: apparent, ref: r2ref.combo!.apparent_auc });
+    check(Math.abs(looAuc - r2ref.combo!.loo_auc) <= 6e-4, "LOO の AUC（選択を各折の内側でやり直す）が statsmodels で別に回した値と一致", { shown: looAuc, ref: r2ref.combo!.loo_auc });
+    check(looAuc <= apparent + 0.02, "LOO の AUC は見かけの AUC を（ほぼ）超えない", { looAuc, apparent });
+    const cmLoo = await page.getByTestId("rs-cm-loo").locator("td").allInnerTexts();
+    check(cmLoo.join() === [r2ref.combo!.loo_cm.tp, r2ref.combo!.loo_cm.fn, r2ref.combo!.loo_cm.fp, r2ref.combo!.loo_cm.tn].join(), "LOO の混同行列（予測確率 0.5）が参照と一致", cmLoo);
+    check((await page.getByTestId("rs-r2-notice").innerText()).includes("見かけ"), "「性能は見かけ。検証したのは LOO だけ」の表示が常に出る");
+    // 決定木
+    const n8 = await count();
+    await page.getByTestId("rs-save-tree").click();
+    const treeCsvText = await downloaded("research-stats-r2-tree.csv", n8);
+    const TL = treeCsvText.trim().split("\r\n").map((l) => l.split(","));
+    const tc = (name: string) => TL[0].indexOf(name);
+    const treeRows = TL.slice(1).map((l) => ({ depth: Number(l[tc("depth")]), n: Number(l[tc("n")]), pos: Number(l[tc("positives")]), feature: l[tc("feature")] || null, direction: l[tc("direction")] || null, cut: l[tc("cut")] === "" ? null : Number(l[tc("cut")]), label: Number(l[tc("label")]) }));
+    const treeSame = treeRows.length === r2ref.tree.length && treeRows.every((t2, i) => {
+      const g = r2ref.tree[i];
+      return t2.depth === g.depth && t2.n === g.n && t2.pos === g.pos && t2.feature === g.feature && t2.direction === g.direction && t2.label === g.label && (g.cut === null ? t2.cut === null : Math.abs((t2.cut as number) - g.cut) < 1e-9);
+    });
+    check(treeSame, "決定木の全節点（特徴量・向き・しきい値・症例数・判定）が独立に書いた木と一致", { ui: treeRows.length, ref: r2ref.tree.length });
+    check((await page.getByTestId("rs-tree-mc").innerText()).includes("300 回") && (await page.getByTestId("rs-tree-perf").innerText()).includes("検証していません"), "木の性能は「検証していません」と明記され、モンテカルロ 300 回の区間が出る");
+    await page.getByTestId("rs-r2").screenshot({ path: path.join(OUT_DIR, "07-r2.png") });
+    await page.getByTestId("rs-roc-svg").screenshot({ path: path.join(OUT_DIR, "08-roc.png") });
+    await page.getByTestId("rs-cal-svg").screenshot({ path: path.join(OUT_DIR, "09-calibration.png") });
+    await page.getByTestId("rs-dca-svg").screenshot({ path: path.join(OUT_DIR, "10-dca.png") });
+    const legends = await page.getByTestId("rs-roc-svg-legend").evaluateAll((es) => es.map((e) => e.textContent ?? ""));
+    check(legends.length === 3, "ROC 図の凡例は 3 系列（選んだ特徴量・組み合わせの見かけと LOO）", legends);
+
+    console.log("\n[8] 再現性（R3）: pingouin（別実装）との突き合わせ・臨床 CSV なしで実行");
+    const r3 = synthR3(40);
+    const r3Files = r3.files.map((txt, i) => write(`cond${"ABC"[i]}.csv`, txt));
+    const r3Missing = write("condB_missing.csv", r3.missing2);
+    const refPy = process.env.RESEARCH_STATS_REF_PYTHON ?? "python3";
+    const r3RefPath = path.join(OUT_DIR, "r3_reference.json");
+    execFileSync(refPy, ["-I", path.join(AUTOMATOR_ROOT, "src", "spike", "researchStatsR3Reference.py"), ...r3Files, r3RefPath]);
+    type R3Ref = { n: number; icc: number; lower: number | null; upper: number | null; icc_t: number; lower_t: number | null; upper_t: number | null; category: string | null };
+    const r3ref = JSON.parse(fs.readFileSync(r3RefPath, "utf8")) as { ids: number; features: Record<string, R3Ref>; ba: { n: number; bias: number; bias_ci: number[]; sd: number; lo: number; hi: number } };
+    check(Math.abs(r3ref.features.f_same.icc - 1) < 1e-9 && r3ref.features.f_rand.category === "poor" && r3ref.features.f_shift.icc < r3ref.features.f_same.icc - 0.05, "参照側でも、f_same は ICC=1（区間は NaN）・f_rand は poor・f_shift は定数のずれで ICC が下がる", Object.fromEntries(Object.entries(r3ref.features).map(([k, v]) => [k, v.category])));
+    await page.getByTestId("rs-recipe").selectOption("r3-reproducibility");
+    check((await page.getByTestId("rs-file-clinical").count()) === 0, "再現性のレシピでは臨床 CSV の選択が出ない");
+    await page.getByTestId("rs-file-features").setInputFiles([r3Files[0]]);
+    await page.getByTestId("rs-loaded").first().waitFor({ state: "attached", timeout: 15_000 });
+    check(await page.getByTestId("rs-run").isDisabled(), "条件が 1 つのときは実行できない（負例）");
+    await page.getByTestId("rs-file-features").setInputFiles(r3Files);
+    await page.waitForFunction(() => !(document.querySelector('[data-testid="rs-run"]') as HTMLButtonElement | null)?.disabled, null, { timeout: 15_000 });
+    await page.getByTestId("rs-run").click();
+    await page.getByTestId("rs-r3").waitFor({ state: "visible", timeout: 60_000 });
+    check(/3 条件.*全条件に揃った行 40 行.*共通の数値の列 4 個/.test(await page.getByTestId("rs-r3-conditions").innerText()), "条件数・揃った行数・共通の列数が出る（f_text は数でない値で除く）", await page.getByTestId("rs-r3-conditions").innerText());
+    const excluded = (await page.getByTestId("rs-r3-excluded").textContent()) ?? "";
+    check(excluded.includes("f_text") && excluded.includes("数でない値"), "使えなかった列とその理由が一覧に出る", excluded);
+    const r3Rows = await page.getByTestId("rs-r3-row").evaluateAll((rs) => rs.map((r) => ({ f: (r as HTMLElement).dataset.feature ?? "", cells: Array.from(r.querySelectorAll("td")).map((c) => c.textContent ?? "") })));
+    check(r3Rows.length === 4, "4 つの特徴量が表に出る", r3Rows.map((r) => r.f));
+    const iccShown = r3Rows.every((r) => { const m = r.cells[3].match(/^([0-9.]+) \(([0-9.]+)–([0-9.]+)\)$/); const e = r3ref.features[r.f];
+      if (e.lower_t === null) return !!m && Number(m[1]) >= 0.999 && r.cells[4] === "excellent"; // 参照の区間が NaN の特徴量（全条件で同じ値）は、ICC≈1・excellent だけを確かめる
+      return !!m && Math.abs(Number(m[1]) - e.icc_t) <= 6e-4 && Math.abs(Number(m[2]) - (e.lower_t as number)) <= 6e-4 && Math.abs(Number(m[3]) - (e.upper_t as number)) <= 6e-4 && r.cells[4] === e.category; });
+    check(iccShown, "表の ICC・信頼区間・区分が pingouin と一致（表示は小数 3 桁）", r3Rows.map((r) => [r.f, r.cells[3], r.cells[4], r3ref.features[r.f].category]));
+    const n9 = await count();
+    await page.getByTestId("rs-save-r3-results").click();
+    const r3Csv = await downloaded("research-stats-r3-icc.csv", n9);
+    const L3 = r3Csv.trim().split("\r\n").map((l) => l.split(","));
+    const c3 = (name: string) => L3[0].indexOf(name);
+    const e3 = L3.slice(1).map((l) => ({ f: l[c3("feature")], icc: Number(l[c3("icc")]), lo: Number(l[c3("icc_lower")]), hi: Number(l[c3("icc_upper")]), cat: l[c3("category")], n: Number(l[c3("n")]) }));
+    const rr = (x: number, y2: number) => Math.abs(x - y2) / Math.max(Math.abs(y2), 1e-9);
+    check(e3.every((e) => { const g = r3ref.features[e.f]; return rr(e.icc, g.icc) < 1e-8 && e.n === g.n && (g.lower === null || (Math.abs(e.lo - g.lower) < 1e-6 && Math.abs(e.hi - (g.upper as number)) < 1e-6)); }), "書き出した CSV の ICC と信頼区間（切る前）が pingouin と一致（点推定 1e-8、区間 1e-6。参照の区間が NaN の特徴量は点推定だけ）");
+    check(!(await page.getByTestId("rs-save-exclusion").count()), "除外の基準を選ばないと、除外候補のボタンは出ない（基準は既定で決めない）");
+    // Bland–Altman
+    await page.getByTestId("rs-ba-feature").selectOption("f_shift");
+    await page.getByTestId("rs-ba-a").selectOption("0");
+    await page.getByTestId("rs-ba-b").selectOption("2");
+    await page.getByTestId("rs-ba-svg").waitFor({ state: "visible" });
+    const baBias = (await page.getByTestId("rs-ba-bias").innerText()).match(/バイアス (-?[0-9.]+)（95% CI (-?[0-9.]+)～(-?[0-9.]+)）/);
+    check(!!baBias && Math.abs(Number(baBias[1]) - r3ref.ba.bias) <= 6e-4 && Math.abs(Number(baBias[2]) - r3ref.ba.bias_ci[0]) <= 6e-4 && Math.abs(Number(baBias[3]) - r3ref.ba.bias_ci[1]) <= 6e-4, "Bland–Altman のバイアスと信頼区間が numpy・scipy と一致（条件 C は +5 ずれている）", { shown: baBias?.slice(1), ref: r3ref.ba });
+    const baLoa = (await page.getByTestId("rs-ba-loa").innerText()).match(/一致限界 (-?[0-9.]+)（.*）～ (-?[0-9.]+)（.*）、SD ([0-9.]+)、n = (\d+)/);
+    check(!!baLoa && Math.abs(Number(baLoa[1]) - r3ref.ba.lo) <= 6e-4 && Math.abs(Number(baLoa[2]) - r3ref.ba.hi) <= 6e-4 && Math.abs(Number(baLoa[3]) - r3ref.ba.sd) <= 6e-4 && Number(baLoa[4]) === r3ref.ba.n, "一致限界・SD・症例数が一致", { shown: baLoa?.slice(1), ref: r3ref.ba });
+    await page.getByTestId("rs-ba-b").selectOption("0");
+    check((await page.getByTestId("rs-ba-b").inputValue()) !== "0" || (await page.getByTestId("rs-ba-error").count()) > 0, "同じ条件どうしは選べない（A と同じにすると別の条件に切り替わる）");
+    await page.getByTestId("rs-ba-b").selectOption("2");
+    await page.getByTestId("rs-r3").screenshot({ path: path.join(OUT_DIR, "11-r3.png") });
+    await page.getByTestId("rs-icc-svg").screenshot({ path: path.join(OUT_DIR, "12-icc.png") });
+    await page.getByTestId("rs-ba-svg").screenshot({ path: path.join(OUT_DIR, "13-ba.png") });
+    // 全条件に揃わない行、除外の基準
+    await page.getByTestId("rs-file-features").setInputFiles([r3Files[0], r3Missing, r3Files[2]]);
+    await page.getByTestId("rs-min-category").selectOption("good");
+    await page.getByTestId("rs-run").click();
+    await page.getByTestId("rs-r3").waitFor({ state: "visible", timeout: 60_000 });
+    const unm = (await page.getByTestId("rs-r3-unmatched").textContent()) ?? "";
+    check(unm.includes("R2") && unm.includes("R3") && !/R1（|R0（/.test(unm) && /全条件に揃った行 38 行/.test(await page.getByTestId("rs-r3-conditions").innerText()), "全条件に揃わない行（R2・R3 だけ）が一覧に出て、38 行で解析する", unm);
+    const n10 = await count();
+    await page.getByTestId("rs-save-exclusion").click();
+    const exCsv = await downloaded("research-stats-r3-exclusion-candidates.csv", n10);
+    const refAfter = execFileSync(refPy, ["-I", path.join(AUTOMATOR_ROOT, "src", "spike", "researchStatsR3Reference.py"), r3Files[0], r3Missing, r3Files[2], path.join(OUT_DIR, "r3_reference2.json")]);
+    void refAfter;
+    const ref2 = JSON.parse(fs.readFileSync(path.join(OUT_DIR, "r3_reference2.json"), "utf8")) as { features: Record<string, R3Ref> };
+    const rank = (c: string) => ["poor", "moderate", "good", "excellent"].indexOf(c);
+    const expectEx = Object.entries(ref2.features).filter(([, v]) => v.category !== null && rank(v.category) < rank("good")).map(([k]) => k).sort();
+    const gotEx = exCsv.trim().split("\r\n").slice(1).map((l) => l.split(",")[0]).sort();
+    check(JSON.stringify(gotEx) === JSON.stringify(expectEx) && expectEx.includes("f_rand") && !expectEx.includes("f_same"), "除外候補（good より低い区分）が、pingouin の区分から求めた一覧と一致", { gotEx, expectEx });
+    const n11 = await count();
+    await page.getByTestId("rs-save-method").click();
+    const m3 = await downloaded("research-stats-method.txt", n11);
+    check(m3.includes("absolute agreement") && m3.includes("good より低い"), "「方法」の文に、ICC の種類と除外の基準が書かれる", m3.slice(0, 200));
   } finally {
     await driver.stop();
     fs.rmSync(path.join(PLUGINS_DIR, PLUGIN_ID), { recursive: true, force: true });

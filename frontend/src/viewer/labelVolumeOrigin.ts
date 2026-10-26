@@ -18,3 +18,8 @@ export function isLabelVolumeOf(segmentationId: string, pluginId: string): boole
 export function forgetLabelVolume(segmentationId: string): void {
   origins.delete(segmentationId);
 }
+
+/** どれかのプラグインが出した Mask か（保存の対象外にする。プラグインの出力は、プラグインが作り直すもの）。 */
+export function isPluginLabelVolume(segmentationId: string): boolean {
+  return origins.has(segmentationId);
+}

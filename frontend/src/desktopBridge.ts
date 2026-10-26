@@ -302,6 +302,8 @@ export type AiChatResult =
       droppedImages?: number;
       degraded?: boolean;
       provenance: AiProvenance;
+      /** 応答側が名乗ったモデルの版（あれば）。 */
+      modelVersion?: string;
     }
   | { ok: false; error: string; status?: number; kind?: string };
 
@@ -528,6 +530,26 @@ export interface GraphyDesktop {
   assistantJournalList?: () => Promise<{
     ok: boolean;
     entries?: { ts: string; id: string; params?: Record<string, unknown>; ok: boolean; error?: string }[];
+    error?: string;
+  }>;
+  /** AI への要求の記録（本文なし）。件数・モデル別の合計・直近の記録。取れなかった値は null（0 で埋めない）。アシスタント窓だけ。 */
+  assistantRequestLogSummary?: () => Promise<{
+    ok: boolean;
+    count?: number;
+    byModel?: { provider: string | null; model: string | null; requests: number; tokensIn: number; tokensOut: number; unknownUsage: number }[];
+    recent?: Record<string, unknown>[];
+    error?: string;
+  }>;
+  assistantRequestLogClear?: () => Promise<{ ok: boolean; error?: string }>;
+  /** 回帰評価の結果の保存と一覧（質問 id と一致/不一致だけ。本文は保存しない）。アシスタント窓だけ。 */
+  assistantEvalAppend?: (run: {
+    suiteVersion: number;
+    meta: { provider: string | null; modelId: string | null; modelVersion: string | null };
+    cases: { id: string; pass: boolean }[];
+  }) => Promise<{ ok: boolean; error?: string }>;
+  assistantEvalList?: () => Promise<{
+    ok: boolean;
+    runs?: { ts: string; suiteVersion: number; provider: string | null; modelId: string | null; modelVersion: string | null; total: number; passed: number; cases: { id: string; pass: boolean }[] }[];
     error?: string;
   }>;
   assistantMacrosList?: () => Promise<{ ok: boolean; macros?: import("./assistant/macros/macroModel").Macro[]; error?: string }>;

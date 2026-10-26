@@ -946,7 +946,7 @@ export function RoiManagerPanel({
 
   // ── ROI グループ ──
   // メンバーは、形の ROI・計測＝注釈 uid（`a:`）、塗り ROI＝マスク（`m:`。同じマスクの segment は同じグループ）、球＝球 id（`s:`）。
-  // 🔴 保存されるのは形の ROI・計測の所属だけ。塗り ROI・球は ROI の保存ファイルに載らないので、再読み込みで外れる。
+  // 所属は各メンバーが持つ（形の ROI・計測・球は `/api/rois`、塗り ROI は `/api/roi-masks` のメタ）。患者が分からない塗り ROI は保存されず、再読み込みで外れる。
   const annUids = new Set([...model.rois.flatMap((r) => (r.rowKind === "shape" ? [r.uid] : [])), ...model.measures.map((m) => m.uid)]);
   const selectedAnnUids = [...selUids].filter((u) => annUids.has(u));
   const selectedPaintedMasks = [...new Set(model.rois.flatMap((r) => (r.rowKind === "painted" && selected.has(r.key) ? [r.maskId] : [])))];
@@ -1031,6 +1031,7 @@ export function RoiManagerPanel({
     const uids = groupAnnUids(gid);
     const allLocked = uids.length > 0 && uids.every(isRoiLocked);
     const anyVisible = g.rois.some(roiVisible) || g.measures.some((m) => m.visible);
+    // 塗り ROI・球はロックの対象ではない。グループ全体がロック中でも、これらを含むグループは削除できる。
     const tempOnly = g.rois.some((r) => r.rowKind !== "shape");
     const sec = groupSec(gid);
     return (
@@ -1044,7 +1045,6 @@ export function RoiManagerPanel({
           data-testid="roi-group-name"
         />
         <span style={countBadge}>{g.rois.length + g.measures.length}</span>
-        {tempOnly && <span style={countBadge} title={t("roiMgr.group.sessionOnly")} data-testid="roi-group-temp">{t("roiMgr.group.sessionBadge")}</span>}
         <button onClick={() => setRowsVisible(g.rois, g.measures, !anyVisible)} style={eyeBtn} title={t("roiMgr.sectionEye")} data-testid="roi-group-visible">
           {anyVisible ? "👁" : "🚫"}
         </button>
@@ -1240,6 +1240,7 @@ export function RoiManagerPanel({
               ? [...model.rois, ...model.measures].find((r) => r.groupId === statsOpen.section!.slice(2))?.groupName ?? ""
               : undefined
           }
+          skippedSpheres={model.rois.filter((r) => r.rowKind === "sphere" && (!statsOpen.section || inSection(r, statsOpen.section))).length}
           onClose={() => setStatsOpen(null)}
         />
       )}

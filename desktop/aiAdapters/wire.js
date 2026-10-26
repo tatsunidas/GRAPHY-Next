@@ -81,4 +81,20 @@ function messageText(m) {
   return typeof m.text === "string" ? m.text : "";
 }
 
-module.exports = { authHeaders, pathFor, mergeHeaders, parseToolArgs, messageText };
+/**
+ * 応答のトークン数。数えられた整数（0 以上）だけを通す。**無い・数でない・負・非有限は null（不明）。0 で埋めない。**
+ * どちらも不明なら undefined（`usage` を付けない）。
+ */
+function usageOf(inTokens, outTokens) {
+  const n = (v) => (typeof v === "number" && Number.isInteger(v) && v >= 0 ? v : null);
+  const i = n(inTokens);
+  const o = n(outTokens);
+  return i === null && o === null ? undefined : { in: i, out: o };
+}
+
+/** 応答側が名乗ったモデルの版。短い文字列だけ（長い・制御文字入りは捨てる）。 */
+function modelVersionOf(v) {
+  return typeof v === "string" && v.length > 0 && v.length <= 120 && /^[A-Za-z0-9._\-\/:]+$/.test(v) ? v : undefined;
+}
+
+module.exports = { authHeaders, pathFor, mergeHeaders, parseToolArgs, messageText, usageOf, modelVersionOf };

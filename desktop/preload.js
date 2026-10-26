@@ -89,6 +89,12 @@ contextBridge.exposeInMainWorld("graphyDesktop", {
   assistantViewerCmd: (sessionId, cmd) => ipcRenderer.invoke("graphy:assistant-viewer-cmd", sessionId, cmd),
   // マクロの保存（アシスタント窓以外は main が forbidden）。
   assistantJournalList: () => ipcRenderer.invoke("graphy:assistant-journal-list"),
+  // AI への要求の記録（本文なし）。アシスタント窓以外は main が forbidden。
+  assistantRequestLogSummary: () => ipcRenderer.invoke("graphy:assistant-requestlog-summary"),
+  assistantRequestLogClear: () => ipcRenderer.invoke("graphy:assistant-requestlog-clear"),
+  // 回帰評価（固定質問セット）の結果の保存と一覧。アシスタント窓以外は main が forbidden。
+  assistantEvalAppend: (run) => ipcRenderer.invoke("graphy:assistant-eval-append", run),
+  assistantEvalList: () => ipcRenderer.invoke("graphy:assistant-eval-list"),
   assistantPluginToolsList: () => ipcRenderer.invoke("graphy:assistant-plugin-tools-list"),
   assistantPluginToolsSet: (pluginId, on) => ipcRenderer.invoke("graphy:assistant-plugin-tools-set", pluginId, on),
   assistantMacrosList: () => ipcRenderer.invoke("graphy:assistant-macros-list"),

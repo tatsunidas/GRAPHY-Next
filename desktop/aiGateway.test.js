@@ -1240,3 +1240,95 @@ test("文字起こしの接続テスト: 送るのは無音の WAV だけ（利�
     assert.ok(wav.subarray(44).every((b) => b === 0), "無音");
   } finally { g.restore(); }
 });
+
+// ── 要求の記録（本文なし）。設計: roadmap AS-QA-001 ───────────────────────────
+const SECRET_MARK = "PATIENT-YAMADA-TARO-MRN-998877";
+
+test("記録: 成功 1 件。提供元・モデル・版・トークン数・ツール名・添付の大きさが揃い、本文・引数・画像は入らない", async () => {
+  const g = chatGateway(
+    { providers: [CHAT_CLOUD], defaults: { "text-to-text": "cloud" } },
+    { post: () => ({ statusCode: 200, text: "", json: { model: "cloud-m-2026-10-01", usage: { prompt_tokens: 321, completion_tokens: 45 },
+        choices: [{ finish_reason: "tool_calls", message: { content: `返答に ${SECRET_MARK}`, tool_calls: [{ id: "t1", function: { name: "setWindow", arguments: `{"memo":"${SECRET_MARK}"}` } }] } }] } }) },
+    { cloud: "KEY-SECRET-ZZZ" },
+  );
+  const rows = [];
+  g.aiGateway.setRequestLogHook((r) => rows.push(r));
+  try {
+    const r = await g.aiGateway.chat({
+      sessionId: "s-1", temperature: 0.2,
+      messages: [{ role: "user", text: `患者 ${SECRET_MARK} を見て`, images: [{ base64: "A".repeat(400), mimeType: "image/png" }] }],
+      tools: [{ name: "setWindow", parameters: { type: "object" } }, { name: "zoom", parameters: { type: "object" } }],
+    });
+    assert.equal(r.ok, true);
+    assert.equal(rows.length, 1, "1 ターン 1 件（先に記録が実在する）");
+    const { buildRecord } = require("./aiRequestLog");
+    const rec = buildRecord(rows[0]);
+    assert.deepEqual(
+      { provider: rec.provider, kind: rec.kind, modelId: rec.modelId, modelVersion: rec.modelVersion, destination: rec.destination, usage: rec.usage, outcome: rec.outcome,
+        toolsOffered: rec.toolsOffered, toolCalls: rec.toolCalls, attachments: rec.attachments, params: rec.params, sessionId: rec.sessionId },
+      { provider: "cloud", kind: "openai", modelId: "cloud-vl" /* 画像つきの要求は画像用のモデルで送る */, modelVersion: "cloud-m-2026-10-01", destination: "external", usage: { in: 321, out: 45 }, outcome: "ok",
+        toolsOffered: 2, toolCalls: ["setWindow"], attachments: { images: { count: 1, bytes: 300 } }, params: { temperature: 0.2 }, sessionId: "s-1" },
+    );
+    assert.ok(Number.isInteger(rec.latencyMs) && rec.latencyMs >= 0);
+    const text = JSON.stringify(rows);
+    for (const leak of [SECRET_MARK, "KEY-SECRET-ZZZ", "AAAA", "こんにちは", "患者"]) assert.equal(text.includes(leak), false, `記録に ${leak} が入らない`);
+  } finally { g.restore(); g.aiGateway.setRequestLogHook(null); }
+});
+
+test("記録: usage が返らない提供元は usage が無い（0 にしない）。ローカルは destination=local", async () => {
+  const g = chatGateway({ providers: [CHAT_LOCAL], defaults: { "text-to-text": "local" } }, { post: () => OK_JSON("hi") });
+  const rows = [];
+  g.aiGateway.setRequestLogHook((r) => rows.push(r));
+  try {
+    await g.aiGateway.chat({ sessionId: "s", messages: MSGS });
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].usage, undefined);
+    assert.equal(rows[0].destination, "local");
+    assert.equal(require("./aiRequestLog").buildRecord(rows[0]).usage, null);
+  } finally { g.restore(); g.aiGateway.setRequestLogHook(null); }
+});
+
+test("記録: 失敗も 1 件（結果はコード）。busy・入力不正・鍵なしは要求が出ていないので記録しない（負例）", async () => {
+  const g = chatGateway({ providers: [CHAT_CLOUD], defaults: { "text-to-text": "cloud" } }, { post: () => ({ statusCode: 429, json: { error: { message: `rate ${SECRET_MARK}` } }, text: "no" }) }, { cloud: "K" });
+  const rows = [];
+  g.aiGateway.setRequestLogHook((r) => rows.push(r));
+  try {
+    const r = await g.aiGateway.chat({ sessionId: "s", messages: MSGS });
+    assert.equal(r.ok, false);
+    assert.equal(rows.length, 1);
+    const rec = require("./aiRequestLog").buildRecord(rows[0]);
+    assert.match(rec.outcome, /^[a-z0-9-]{1,40}$/);
+    assert.equal(JSON.stringify(rows).includes(SECRET_MARK), false, "エラーの本文は記録に入らない");
+    const before = rows.length;
+    assert.equal((await g.aiGateway.chat({ sessionId: "bad id!", messages: MSGS })).error, "invalid-session");
+    assert.equal((await g.aiGateway.chat({ sessionId: "s2", messages: [] })).error, "empty-messages");
+    assert.equal(rows.length, before, "入力不正は記録しない");
+  } finally { g.restore(); g.aiGateway.setRequestLogHook(null); }
+  const nokey = chatGateway({ providers: [CHAT_CLOUD], defaults: { "text-to-text": "cloud" } }, { post: () => OK_JSON("x") });
+  const rows2 = [];
+  nokey.aiGateway.setRequestLogHook((r) => rows2.push(r));
+  try {
+    assert.equal((await nokey.aiGateway.chat({ sessionId: "s", messages: MSGS })).error, "no-api-key");
+    assert.equal(nokey.calls.length, 0);
+    assert.equal(rows2.length, 1, "鍵なしでも試行した事実は 1 件（送信 0 バイト）");
+    assert.equal(rows2[0].outcome, "no-api-key");
+  } finally { nokey.restore(); nokey.aiGateway.setRequestLogHook(null); }
+});
+
+test("記録: フォールバックは最終の宛先 1 件で fallbackFrom が付く。フックが例外でも会話は成功し、フック無しでも動く", async () => {
+  const g = chatGateway(FALLBACK_CONFIG, { post: (t) => (t.hostname === "127.0.0.1" ? OK_JSON("ローカル") : { statusCode: 503, json: null, text: "x" }) }, { cloud: "K" });
+  const rows = [];
+  g.aiGateway.setRequestLogHook((r) => rows.push(r));
+  try {
+    const r = await g.aiGateway.chat({ sessionId: "s", messages: MSGS });
+    assert.equal(r.ok, true);
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].provider, "local");
+    assert.equal(rows[0].fallbackFrom, "cloud");
+    assert.equal(rows[0].destination, "local");
+    g.aiGateway.setRequestLogHook(() => { throw new Error("hook broke"); });
+    assert.equal((await g.aiGateway.chat({ sessionId: "s", messages: MSGS })).ok, true, "フックの例外で会話を止めない");
+    g.aiGateway.setRequestLogHook(null);
+    assert.equal((await g.aiGateway.chat({ sessionId: "s", messages: MSGS })).ok, true, "フック無しでも動く");
+  } finally { g.restore(); g.aiGateway.setRequestLogHook(null); }
+});
