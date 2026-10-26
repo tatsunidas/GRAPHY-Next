@@ -366,6 +366,8 @@ export interface QcaDebugSnapshot {
   referenceLast: number;
   unit: string;
   warnings: string[];
+  /** アンカー（画像 px・血管に沿った順）。まだ無ければ未設定。 */
+  anchors?: { x: number; y: number; confirmed: boolean }[];
   /** 拡大パネルの座標変換（画面 px = (画像 px − c0) × scale）。パネル未表示なら null。 */
   view: { cx0: number; cy0: number; cw: number; ch: number; scale: number; dw: number; dh: number } | null;
   /**

@@ -47,6 +47,27 @@ describe("analysisId", () => {
   });
 });
 
+describe("sanitizeAnalysis — アンカー（任意項目）", () => {
+  it("アンカーを保つ。古い保存（項目なし）は項目なしのまま", () => {
+    const withA = sanitizeAnalysis({ ...base, anchors: [{ x: 10, y: 20, confirmed: true }, { x: 11, y: 21, confirmed: false }] });
+    expect(withA?.anchors).toEqual([
+      { x: 10, y: 20, confirmed: true },
+      { x: 11, y: 21, confirmed: false },
+    ]);
+    expect(sanitizeAnalysis(JSON.parse(JSON.stringify(base)))?.anchors).toBeUndefined();
+  });
+  it("★負例: 壊れたアンカーは落とし、確認済みを黙って増やさない", () => {
+    const r = sanitizeAnalysis({
+      ...base,
+      anchors: [{ x: "a", y: 1, confirmed: true }, null, { x: 5, y: 6 }, { x: 7, y: 8, confirmed: "yes" }],
+    });
+    expect(r?.anchors).toEqual([
+      { x: 5, y: 6, confirmed: false },
+      { x: 7, y: 8, confirmed: false },
+    ]);
+  });
+});
+
 describe("sanitizeAnalysis", () => {
   it("往復して同じになる", () => {
     const back = sanitizeAnalysis(JSON.parse(JSON.stringify(base)));

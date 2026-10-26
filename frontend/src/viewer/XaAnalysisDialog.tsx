@@ -53,7 +53,13 @@ import { needsLogTransform } from "./dsa";
 import { readXaDsaTags } from "./dsaLoader";
 import { publishAnalysisResult } from "../report/analysisResultStore";
 import { qcaRecord } from "../report/xaAnalysisRecords";
-import { describeView, qcaRunKey, registerQcaRun, removeQcaRun } from "./xaRecon3dStore";
+import { describeView, qcaRunKey, registerQcaRun, removeQcaRun, type XaQcaRun } from "./xaRecon3dStore";
+import {
+  DEFAULT_ANCHOR_COUNT,
+  proposeAnchors,
+  resnapAnchors,
+  type QcaAnchor,
+} from "./qcaAnchors";
 import { readXaViewGeometry } from "./xaViewGeometryProvider";
 import { calibrationForImageId, loaderSpacingFor, readXaCardiacPhase, readXaInputTags } from "./xaCalibrationProvider";
 import { checkXaInput } from "./xaInputCheck";
@@ -339,6 +345,19 @@ export function XaAnalysisDialog({
   const [trim, setTrim] = useState<{ from: number; to: number } | null>(null);
   const [refMode, setRefMode] = useState<QcaReferenceMode>(defaultReference);
   const [editMode, setEditMode] = useState<QcaEditMode>("none");
+  /**
+   * アンカー（3D QCA の目印。血管に直交する線）。血管に沿った順。位置は中心線の上。
+   * 初期は中心線を等分した**仮の位置**（未確認）で、利用者が確かめるまで 3D へは渡さない。
+   */
+  const [anchors, setAnchors] = useState<QcaAnchor[]>([]);
+  /** 初期の仮の位置を置いたか（0 点へ減らしたあとの再提案を防ぐ）。 */
+  const anchorsInitRef = useRef(false);
+  const anchorsRef = useRef<QcaAnchor[]>([]);
+  anchorsRef.current = anchors;
+  /** 中心線の変更で捨てたアンカーの数（知らせる）。 */
+  const [anchorsDropped, setAnchorsDropped] = useState(0);
+  /** 3D 用に最後に登録した実行（アンカーが変わったら同じ鍵で登録し直す）。 */
+  const lastRunRef = useRef<XaQcaRun | null>(null);
   /** ブラシ半径。単位は結果と同じ（校正済み mm / 未校正 px）。 */
   const [brushRadius, setBrushRadius] = useState<number | null>(null);
   /**
@@ -399,7 +418,49 @@ export function XaAnalysisDialog({
     setEditMode("none");
     setChartMode("none");
     setHighlight(null);
+    setAnchors([]);
+    setAnchorsDropped(0);
+    anchorsInitRef.current = false;
+    lastRunRef.current = null;
   };
+
+  /** 結果が出たら（または中心線が変わったら）アンカーを置く／付け直す。 */
+  useEffect(() => {
+    if (!result) return;
+    if (!anchorsInitRef.current) {
+      anchorsInitRef.current = true;
+      // 復元されたアンカーがあれば付け直し、無ければ仮の位置を置く。
+      if (anchors.length === 0) {
+        setAnchors(proposeAnchors(result.centerline, DEFAULT_ANCHOR_COUNT));
+        return;
+      }
+    }
+    // 径 1 本ぶんより離れたものは別の場所を指しうるので捨てる。
+    const dia = result.edgeOffsets.map((o) => o.right - o.left).sort((a, b) => a - b);
+    const tol = Math.max(3, dia.length ? dia[dia.length >> 1] : 0);
+    const r = resnapAnchors(result.centerline, anchors, tol);
+    if (r.dropped > 0) setAnchorsDropped((n) => n + r.dropped);
+    const same =
+      r.anchors.length === anchors.length &&
+      r.anchors.every((a, i) => a.x === anchors[i].x && a.y === anchors[i].y && a.confirmed === anchors[i].confirmed);
+    if (!same) setAnchors(r.anchors);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [result?.centerlineToken]);
+
+  // アンカーが変わったら、3D 用の登録を同じ鍵で登録し直す（確認済みだけが使われる）。
+  useEffect(() => {
+    if (lastRunRef.current) {
+      // 他ウィンドウは `at` が新しい登録だけを採る（`xaRecon3dStore.merge`）ので、必ず進める。
+      const next: XaQcaRun = {
+        ...lastRunRef.current,
+        anchors: anchors.map((a) => ({ ...a })),
+        at: Math.max(Date.now(), lastRunRef.current.at + 1),
+      };
+      lastRunRef.current = next;
+      registerQcaRun(next);
+    }
+    publishQcaSnapshot({ anchors: anchors.map((a) => ({ ...a })) });
+  }, [anchors]);
 
   useEffect(() => {
     setResult(null);
@@ -779,7 +840,7 @@ export function XaAnalysisDialog({
     const view = readXaViewGeometry(imageId, saveContext.frameIndex);
     const inputTags = view.geometry ? readXaInputTags(imageId) : null;
     if (view.geometry) {
-      registerQcaRun({
+      const runObj: XaQcaRun = {
         imageId,
         // 🔴 鍵は imageId ではなく**imageId ＋ 解析区間**（分岐部は同じフレームから 3 本取る）。
         runKey: qcaRunKey(imageId, pick.p0, pick.p1),
@@ -809,7 +870,9 @@ export function XaAnalysisDialog({
         inputCheck: inputTags ? checkXaInput(inputTags.tags, inputTags.isXaSopClass) : undefined,
         cardiacPhase: readXaCardiacPhase(imageId, saveContext.frameIndex) ?? undefined,
         at: Date.now(),
-      });
+      };
+      lastRunRef.current = runObj;
+      registerQcaRun({ ...runObj, anchors: anchorsRef.current.map((a) => ({ ...a })) });
     }
     // 中心線が変わったらエッジ修正の宛先も変わる。UI 側の token を追随させる
     // （合わないまま持ち回ると runQca が捨てて警告を出す）。
@@ -994,6 +1057,10 @@ export function XaAnalysisDialog({
         setEdgeToken(found.edgeToken);
         setTrim(found.trim);
         setRefMode(found.reference);
+        if (found.anchors) {
+          setAnchors(found.anchors.map((a) => ({ ...a })));
+          anchorsInitRef.current = false;
+        }
         setRestoredAt(found.savedAt);
         // 入力を戻したら**そのまま解析まで走らせる**。押させると「復元したのに何も出ない」になる。
         runAnalysis({
@@ -1035,6 +1102,7 @@ export function XaAnalysisDialog({
         edgeEdits,
         trim,
         reference: refMode,
+        anchors: anchors.map((a) => ({ ...a })),
         sr: sr === undefined ? (savedAnalysis?.sr ?? null) : sr,
         savedAt: new Date().toISOString(),
       };
@@ -1047,7 +1115,7 @@ export function XaAnalysisDialog({
         if (!r.ok) setError(t("xa.analysis.stateSaveFailed", { error: r.error ?? "" }));
       });
     },
-    [saveContext.patientKey, saveContext.studyUid, analysisKey, seriesUid, edgeToken, waypoints, edgeEdits, trim, refMode, savedAnalysis],
+    [saveContext.patientKey, saveContext.studyUid, analysisKey, seriesUid, edgeToken, waypoints, edgeEdits, trim, refMode, anchors, savedAnalysis],
   );
 
   return (
@@ -1345,7 +1413,7 @@ export function XaAnalysisDialog({
               </div>
               <div style={row}>
                 <span style={{ fontSize: 11, color: "#44586a" }}>{t("xa.qca.editMode")}:</span>
-                {(["none", "waypoint", "edge", "brush", "smooth"] as const).map((m) => (
+                {(["none", "waypoint", "edge", "brush", "smooth", "anchor"] as const).map((m) => (
                   <button
                     key={m}
                     style={editMode === m ? primaryBtn : btn}
@@ -1417,6 +1485,8 @@ export function XaAnalysisDialog({
                   reanalyze({ waypoints: next, edges: null });
                 }}
                 brushRadius={brushRadius ?? defaultBrushRadius(result.unit)}
+                anchors={anchors}
+                onAnchorsChange={setAnchors}
                 showEdges={showEdges}
                 showMask={showMask}
                 showStraight={showStraight}
@@ -1433,6 +1503,11 @@ export function XaAnalysisDialog({
                   reanalyze({ edges: { token: edgeToken, byPathIndex: next } });
                 }}
               />
+              {anchorsDropped > 0 ? (
+                <div style={warn} data-testid="xa-anchor-dropped">
+                  {t("xa.anchor.dropped", { n: String(anchorsDropped) })}
+                </div>
+              ) : null}
             </div>
           )}
 
