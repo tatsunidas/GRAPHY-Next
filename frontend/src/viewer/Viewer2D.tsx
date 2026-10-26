@@ -80,6 +80,7 @@ import { buildRoiStatsCornerRows, sameCornerRows, type RoiStatsCornerRow } from 
 import { subscribeSuvStore, suvForImageId, seriesUidOf } from "./suvStore";
 import {
   getFusionProbeData,
+  getLayerProbes,
   hasFusionProbe,
   sampleFusionValue,
   subscribeFusionProbe,
@@ -625,6 +626,8 @@ export function Viewer2D({
   // `fgSample` はカーソル位置の前景値（前景が無い画素なら null）。
   const [fusionActive, setFusionActive] = useState(false);
   const [fgSample, setFgSample] = useState<FusionProbeSample | null>(null);
+  // フィルタ層（LoG の派生画像の色分け重ね）ごとのカーソル値。層が無ければ空。
+  const [layerSamples, setLayerSamples] = useState<{ label: string; value: number | null }[]>([]);
   const [markers, setMarkers] = useState<OrientationMarkers | null>(null);
   const [scaleBar, setScaleBar] = useState<ScaleBar | null>(null);
   // base 画像の表示矩形（renderOverlay 用）。zoom/pan/fit に追従して更新。
@@ -963,10 +966,16 @@ export function Viewer2D({
           ? sampleFusionValue(probe, s.fx, s.fy, infoRef.current.columns ?? 0, infoRef.current.rows ?? 0)
           : null,
       );
+      const layers = getLayerProbes(viewportId);
+      setLayerSamples(layers.length === 0 ? [] : layers.map(({ data }) => {
+        const v = s && data ? sampleFusionValue(data, s.fx, s.fy, infoRef.current?.columns ?? 0, infoRef.current?.rows ?? 0) : null;
+        return { label: data?.label ?? "", value: v ? v.value : null };
+      }));
     };
     const onLeave = () => {
       setSample(null);
       setFgSample(null);
+      setLayerSamples([]);
     };
     // フォーカス中タイルを記録（ROI マネージャの「＋新規マスク」対象）。
     const onFocusPointerDown = () => {
@@ -3164,6 +3173,13 @@ export function Viewer2D({
             </span>
           ) : (
             <StatusItem testId="status-value" label={t("viewer.status.value")} value={cursorValue} minWidth="7ch" />
+          )}
+          {layerSamples.length > 0 && (
+            <StatusItem
+              testId="status-value-layers"
+              label={t("viewer.status.valueLayers")}
+              value={layerSamples.map((l) => `${l.label} ${l.value == null ? "—" : fmtValue(l.value)}`).join(" / ")}
+            />
           )}
           <StatusItem testId="status-xy" label={t("viewer.status.xy")} value={cursorXY} minWidth="12ch" />
           </div>

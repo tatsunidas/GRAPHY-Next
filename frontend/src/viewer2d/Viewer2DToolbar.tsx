@@ -265,6 +265,8 @@ export interface ViewerActions {
   /** 対象タイルのシリーズで Texture（Radiomics 可視化マップ）ダイアログを開く。 */
   openTexture(): void;
   openFilterImage(): void;
+  /** 対象タイルに、LoG の派生シリーズを色分けで重ねるダイアログを開く。 */
+  openFilterLayers(): void;
   /** GLAM 解析（ROI 全体の記述子）を別ウィンドウで開く。 */
   openGlamAnalysis(): void;
   /** Radiomics 特徴量（ROI 全体の特徴量表）を別ウィンドウで開く。 */
