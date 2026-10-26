@@ -119,6 +119,7 @@ function replyingRelay(dryRunReply, runReply, journal = () => {}) {
 test("write 操作: 検証→確認→実行の順。承認すると approved:true で届き、承認の関数が無い・拒否・例外では実行を送らない", async () => {
   assert.ok(WRITE_ACTIONS.has("clearMeasurements"));
   assert.ok(WRITE_ACTIONS.has("createRoi"));
+  assert.ok(WRITE_ACTIONS.has("createContourRoi"));
   assert.ok(!WRITE_ACTIONS.has("removeAssistantRoi")); // 作った ROI だけを消す逆操作。確認は付けない（設計）
   // レンダラが付けてきた approved / dryRun は無視される
   const cmd = { kind: "action", id: "clearMeasurements", params: {}, approved: true, dryRun: false };

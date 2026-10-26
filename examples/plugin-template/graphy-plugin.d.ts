@@ -2115,14 +2115,26 @@ export interface Viewer2DPluginHost extends PluginHostBase {
    * 保存は本体が予約する。`removeCreatedRoi` で、**このプラグインが作った ROI だけ**を消せる
    * （本体や他プラグインの ROI は消せない）。
    *
+   * <p>**多角形・自由曲線も作れる**（`tool: "PolygonROI" | "FreehandROI"`）。頂点を `verticesLps`（LPS mm）か `verticesPx`（表示中スライスの画素座標）の
+   * **どちらか一方**で順に渡す（閉じるので始点を繰り返さない。多角形 3〜64 点、自由曲線 3〜256 点）。全頂点が表示中のスライスの面内であること。
+   * 自己交差・面積ゼロの形は `self-intersecting` / `degenerate` で拒否する。`radiiMm` / `centerLps` / `centerPx` は使わない。
+   *
    * <p>AI ツール（`effect: "write"`）の中から呼ぶ場合、その実行の前に本体が利用者の確認を出す。
    * 失敗の理由: `bad-request`（ツール・数値が不正）／`off-slice`／`too-large`（半径が画像の大きさを超える）／
-   * `no-geometry`／`no-image`／`thick-slab`（ThickSlab 表示中は作れない）／`failed`。
+   * `self-intersecting`／`degenerate`（多角形・自由曲線のみ）／`no-geometry`／`no-image`／`thick-slab`（ThickSlab 表示中は作れない）／`failed`。
    */
   createRoi: (
     tileId: string | undefined,
-    req: { tool: "EllipticalROI" | "RectangleROI"; centerLps?: [number, number, number]; centerPx?: [number, number]; radiiMm: [number, number]; label?: string },
-  ) => { ok: true; roiUid: string; centerLps: [number, number, number] } | { ok: false; reason: "bad-request" | "off-slice" | "no-geometry" | "too-large" | "no-image" | "thick-slab" | "failed" };
+    req: {
+      tool: "EllipticalROI" | "RectangleROI" | "PolygonROI" | "FreehandROI";
+      centerLps?: [number, number, number];
+      centerPx?: [number, number];
+      radiiMm?: [number, number];
+      verticesLps?: [number, number, number][];
+      verticesPx?: [number, number][];
+      label?: string;
+    },
+  ) => { ok: true; roiUid: string; centerLps: [number, number, number] } | { ok: false; reason: "bad-request" | "off-slice" | "no-geometry" | "too-large" | "no-image" | "thick-slab" | "self-intersecting" | "degenerate" | "failed" };
   /** `createRoi` で**このプラグインが作った** ROI だけを消す（ロック中・他の ROI は消えず false）。（次の版以降） */
   removeCreatedRoi: (roiUid: string) => boolean;
   /**

@@ -35,7 +35,7 @@ import { UI_ICON_FILES, ACTIVE_ICON_STYLE } from "../icons/toolIcons";
 import { emitToast } from "./toast";
 import { isRoiLocked, partitionByLock } from "./roiLock";
 import type { SavedRoi } from "./roiPersistence";
-import { buildRoiHandles, maxExtentFromImage, sliceToleranceFromStack } from "./roiCreate";
+import { buildContourVertices, buildRoiHandles, isContourCreateTool, maxExtentFromImage, sliceToleranceFromStack, type RoiCreateGeometry } from "./roiCreate";
 import { installTrueMagnification } from "./magnifier";
 import { ERASER_TOOL_ID, WAND2D_TOOL_ID, WAND3D_TOOL_ID, LEVELSET2D_TOOL_ID, SCISSORS_TOOL_ID } from "./toolIds";
 import { commitThreshold } from "./thresholdTool";
@@ -68,7 +68,7 @@ import { getOrCreateCameraSync, getOrCreateVoiSync, getOrCreatePresentationSync,
 import { registerReferenceSource, bumpReference, subscribeReference, computeReferenceSegments, type RefSegment } from "./referenceLines";
 import { registerViewerCommands, requestTool, type ViewerCommands, type ViewerDerivedSeriesRequest, type ViewerDerivedSeriesResult, type ViewerOverlay, type ViewerPixelData, type ViewerSrRequest, type ViewerSrResult, type ViewerPixelDataOptions, type ViewerAngioReportRequest, type ViewerPresentationStateRequest, type ViewerRoi, type ViewerSpatialCalibration, type ViewerTargetInfo, type ViewerViewState, type ViewerXaState, type ViewerXaCine, ViewerLabelVolume, ViewerLabelVolumeResult } from "./viewerCommands";
 import { buildPluginMeta, computeCalipers, hasShapeCalipers, pickPluginMeta, readRoiStats, roiPointsPx } from "./roiRead";
-import { CONTOUR_TOOL_NAMES } from "./roiContourTools";
+import { CONTOUR_TOOL_NAMES, SPLINE_TYPE_LINEAR } from "./roiContourTools";
 import { POINT_ROI_TOOL_NAME } from "./pointRoiTool";
 import { annotationRoiKind } from "./roiKind";
 import { convertMeasureToRoi } from "./measureToRoi";
@@ -2617,7 +2617,21 @@ export function Viewer2D({
     const maxExtent = maxExtentFromImage(plane?.rows, plane?.columns, plane?.rowPixelSpacing, plane?.columnPixelSpacing);
     if (tol === null || maxExtent === null || !cam.focalPoint || !cam.viewPlaneNormal) return { ok: false, reason: "no-geometry" };
     let creq = req;
-    if (req.centerView !== undefined) {
+    const contour = isContourCreateTool(req.tool);
+    if (contour && req.verticesView !== undefined) {
+      // 割合 → LPS（表示の見たまま）。他の頂点指定との併用は bad-request
+      const vv = req.verticesView;
+      const canvas = v.getCanvas();
+      if (req.verticesLps !== undefined || req.verticesPx !== undefined || !Array.isArray(vv) || !canvas.clientWidth || !canvas.clientHeight) return { ok: false, reason: "bad-request" };
+      const lps: [number, number, number][] = [];
+      for (const p of vv) {
+        if (!Array.isArray(p) || p.length !== 2 || !p.every((n) => typeof n === "number" && Number.isFinite(n) && n >= 0 && n <= 1)) return { ok: false, reason: "bad-request" };
+        const w = v.canvasToWorld([p[0] * canvas.clientWidth, p[1] * canvas.clientHeight] as Types.Point2);
+        if (!w || !w.every((n) => Number.isFinite(n))) return { ok: false, reason: "no-geometry" };
+        lps.push([w[0], w[1], w[2]]);
+      }
+      creq = { tool: req.tool, label: req.label, verticesLps: lps };
+    } else if (req.centerView !== undefined) {
       const cv = req.centerView;
       const canvas = v.getCanvas();
       if (req.centerLps !== undefined || req.centerPx !== undefined || !Array.isArray(cv) || cv.length !== 2 || !cv.every((n) => typeof n === "number" && Number.isFinite(n) && n >= 0 && n <= 1) || !canvas.clientWidth || !canvas.clientHeight) {
@@ -2627,7 +2641,7 @@ export function Viewer2D({
       if (!w || !w.every((n) => Number.isFinite(n))) return { ok: false, reason: "no-geometry" };
       creq = { tool: req.tool, radiiMm: req.radiiMm, label: req.label, centerLps: [w[0], w[1], w[2]] };
     }
-    const handles = buildRoiHandles(creq, {
+    const geom: RoiCreateGeometry = {
       worldToCanvas: (p) => {
         const c = v.worldToCanvas(p as Types.Point3);
         return c && Number.isFinite(c[0]) && Number.isFinite(c[1]) ? [c[0], c[1]] : null;
@@ -2641,7 +2655,8 @@ export function Viewer2D({
       pixelToWorld: makePixelToWorld(ctx.imageId),
       sliceToleranceMm: tol,
       maxExtentMm: maxExtent,
-    });
+    };
+    const handles = contour ? buildContourVertices(creq, geom) : buildRoiHandles(creq, geom);
     if (!handles.ok) return handles;
     const sop = sopFromImageId(ctx.imageId);
     if (!sop) return { ok: false, reason: "failed" };
@@ -2656,6 +2671,17 @@ export function Viewer2D({
       label,
       custom: buildPluginMeta(by.pluginId, { created: "1" }),
     };
+    // 輪郭系は本体の手描きと同じツール名・保存形にする（復元・統計・ROI マネージャが同じ経路で扱う）
+    if (req.tool === "PolygonROI") {
+      saved.tool = CONTOUR_TOOL_NAMES.polygon;
+      saved.splineType = SPLINE_TYPE_LINEAR;
+      saved.isOpenContour = false;
+    } else if (req.tool === "FreehandROI") {
+      saved.tool = CONTOUR_TOOL_NAMES.freehand;
+      saved.polyline = handles.points;
+      saved.points = [handles.points[0], handles.points[handles.points.length - 1]];
+      saved.isOpenContour = false;
+    }
     if (frame !== null) saved.frame = frame;
     if (ctx.scope) {
       saved.scope = ctx.scope;

@@ -213,6 +213,16 @@ export function executeCommand(deps: BridgeDeps, cmd: BridgeCommand): ActionResu
       inverse.push({ id: "removeAssistantRoi", params: { roiUid: r.roiUid } });
       break;
     }
+    case "createContourRoi": {
+      const r = deps.createRoi(first, {
+        tool: p.shape === "freehand" ? "FreehandROI" : "PolygonROI",
+        verticesView: p.points as [number, number][],
+      });
+      if (!r) return { ok: false, error: "no-tile" };
+      if (!r.ok) return { ok: false, error: `roi-${r.reason}` };
+      inverse.push({ id: "removeAssistantRoi", params: { roiUid: r.roiUid } });
+      break;
+    }
     case "removeAssistantRoi":
       if (!deps.removeAssistantRoi(p.roiUid as string)) return { ok: false, error: "not-removable" };
       break;

@@ -180,6 +180,7 @@ export const en: Record<string, string> = {
   "assistant.act.setWindowLevel": "Set window/level",
   "assistant.act.clearMeasurements": "Delete all measurements",
   "assistant.act.createRoi": "Add a ROI",
+  "assistant.act.createContourRoi": "Add a ROI (polygon / freehand)",
   "assistant.act.removeAssistantRoi": "Remove an assistant-made ROI",
   "assistant.robot.writeMark": "⚠ Cannot be undone · a confirmation dialog appears when it runs",
   "assistant.act.resetWindow": "Reset window to default",

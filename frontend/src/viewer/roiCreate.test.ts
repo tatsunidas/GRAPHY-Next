@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildRoiHandles, type CreateRoiRequest, type RoiCreateGeometry } from "./roiCreate";
+import { buildContourVertices, buildRoiHandles, isSelfIntersecting, type CreateRoiRequest, type RoiCreateGeometry } from "./roiCreate";
 
 /** canvas(px) → world(mm) の仮のアフィン。world = origin + cx·ex·mmPerPx + cy·ey·mmPerPx。 */
 function geom(over: Partial<{ origin: number[]; ex: number[]; ey: number[]; mmPerPx: number; focal: number[]; normal: number[]; tol: number; max: number }> = {}): RoiCreateGeometry {
@@ -178,5 +178,83 @@ describe("buildRoiHandles: centerPx", () => {
 
   it("a pixel center whose world position is off the displayed slice is still rejected", () => {
     expect(buildRoiHandles(withPx(), { ...geom(), pixelToWorld: (p) => [p[0], p[1], 99] })).toEqual({ ok: false, reason: "off-slice" });
+  });
+});
+
+// ---- 多角形・自由曲線 ----
+const poly = (verts: number[][], over: Partial<CreateRoiRequest> = {}): CreateRoiRequest => ({ tool: "PolygonROI", verticesLps: verts as [number, number, number][], ...over });
+/** 靴ひも公式（面内の x-y）。 */
+const shoelace = (p: number[][]): number => Math.abs(p.reduce((s, a, i) => { const b = p[(i + 1) % p.length]; return s + a[0] * b[1] - b[0] * a[1]; }, 0)) / 2;
+const SQUARE = [[0, 0, 5], [30, 0, 5], [30, 20, 5], [0, 20, 5]];
+const LSHAPE = [[0, 0, 5], [40, 0, 5], [40, 10, 5], [10, 10, 5], [10, 30, 5], [0, 30, 5]]; // 非凸。面積 400+200=600
+
+describe("buildContourVertices", () => {
+  it("正例: 矩形の頂点がそのまま返り、面積は解析値（30×20=600）", () => {
+    const r = buildContourVertices(poly(SQUARE), geom());
+    if (!r.ok) throw new Error(r.reason);
+    expect(r.points).toEqual(SQUARE);
+    expect(shoelace(r.points)).toBeCloseTo(600, 9);
+    expect(r.centerLps).toEqual([15, 10, 5]);
+  });
+  it("正例: 非凸（L 字）も受理し、面積 600", () => {
+    const r = buildContourVertices(poly(LSHAPE), geom());
+    if (!r.ok) throw new Error(r.reason);
+    expect(shoelace(r.points)).toBeCloseTo(600, 9);
+  });
+  it("正例: 回転・反転した表示（ey を反転）でも頂点と面積は同じ（world の値は表示に依らない）", () => {
+    const r = buildContourVertices(poly(LSHAPE), geom({ ex: [0, 1, 0], ey: [-1, 0, 0] }));
+    if (!r.ok) throw new Error(r.reason);
+    expect(shoelace(r.points)).toBeCloseTo(600, 9);
+  });
+  it("正例: 画素座標（pixelToWorld）で指定", () => {
+    const g = { ...geom(), pixelToWorld: (p: [number, number]) => [p[0] * 0.5, p[1] * 0.5, 5] };
+    const r = buildContourVertices({ tool: "FreehandROI", verticesPx: [[0, 0], [60, 0], [60, 40], [0, 40]] }, g);
+    if (!r.ok) throw new Error(r.reason);
+    expect(shoelace(r.points)).toBeCloseTo(600, 9);
+  });
+  it("正例: 自由曲線は円近似 64 点で面積 ≈ π r²", () => {
+    const circle = Array.from({ length: 64 }, (_, i) => [20 * Math.cos((2 * Math.PI * i) / 64), 20 * Math.sin((2 * Math.PI * i) / 64), 5]);
+    const r = buildContourVertices({ tool: "FreehandROI", verticesLps: circle as [number, number, number][] }, geom());
+    if (!r.ok) throw new Error(r.reason);
+    expect(Math.abs(shoelace(r.points) - Math.PI * 400) / (Math.PI * 400)).toBeLessThan(0.01);
+  });
+  it("連続する同一点と、終点＝始点の繰り返しは 1 つにする", () => {
+    const r = buildContourVertices(poly([...SQUARE.slice(0, 2), SQUARE[1], ...SQUARE.slice(2), SQUARE[0]]), geom());
+    if (!r.ok) throw new Error(r.reason);
+    expect(r.points).toHaveLength(4);
+  });
+  it("負例: 自己交差（蝶ネクタイ）は拒否。対照として同じ点の並べ替えで交差しなければ受理", () => {
+    const bow = [[0, 0, 5], [30, 20, 5], [30, 0, 5], [0, 20, 5]];
+    expect(buildContourVertices(poly(bow), geom())).toEqual({ ok: false, reason: "self-intersecting" });
+    expect(buildContourVertices(poly([bow[0], bow[2], bow[1], bow[3]]), geom()).ok).toBe(true);
+  });
+  it("負例: 共線は degenerate、重複だけで 3 点に満たなければ degenerate", () => {
+    expect(buildContourVertices(poly([[0, 0, 5], [10, 0, 5], [20, 0, 5]]), geom())).toEqual({ ok: false, reason: "degenerate" });
+    expect(buildContourVertices(poly([[0, 0, 5], [0, 0, 5], [10, 0, 5], [10, 0, 5]]), geom())).toEqual({ ok: false, reason: "degenerate" });
+  });
+  it("負例: 点数不足・超過・非配列・NaN・両指定・未指定は bad-request", () => {
+    expect(buildContourVertices(poly([[0, 0, 5], [1, 1, 5]]), geom())).toEqual({ ok: false, reason: "bad-request" });
+    const many = Array.from({ length: 65 }, (_, i) => [i, i * i % 7, 5]);
+    expect(buildContourVertices(poly(many), geom())).toEqual({ ok: false, reason: "bad-request" });
+    expect(buildContourVertices(poly([[0, 0, 5], [10, 0, 5], [NaN, 5, 5]]), geom())).toEqual({ ok: false, reason: "bad-request" });
+    expect(buildContourVertices({ tool: "PolygonROI", verticesLps: SQUARE as never, verticesPx: [[0, 0], [1, 1], [2, 0]] }, geom())).toEqual({ ok: false, reason: "bad-request" });
+    expect(buildContourVertices({ tool: "PolygonROI" }, geom())).toEqual({ ok: false, reason: "bad-request" });
+    expect(buildContourVertices({ tool: "EllipticalROI", verticesLps: SQUARE as never }, geom())).toEqual({ ok: false, reason: "bad-request" });
+  });
+  it("負例: 面外の頂点が 1 つでもあれば off-slice、大きすぎれば too-large", () => {
+    expect(buildContourVertices(poly([...SQUARE.slice(0, 3), [0, 20, 50]]), geom())).toEqual({ ok: false, reason: "off-slice" });
+    expect(buildContourVertices(poly(SQUARE), geom({ max: 20 }))).toEqual({ ok: false, reason: "too-large" });
+  });
+  it("対照: 受理される同じ形は、上の条件を外せば通る（検査が常に落ちているのではない）", () => {
+    expect(buildContourVertices(poly(SQUARE), geom({ max: 400, tol: 1.25 })).ok).toBe(true);
+  });
+});
+
+describe("isSelfIntersecting", () => {
+  it("凸・非凸は false、蝶ネクタイと端点接触は true", () => {
+    expect(isSelfIntersecting([[0, 0], [4, 0], [4, 4], [0, 4]])).toBe(false);
+    expect(isSelfIntersecting([[0, 0], [4, 0], [4, 1], [1, 1], [1, 4], [0, 4]])).toBe(false);
+    expect(isSelfIntersecting([[0, 0], [4, 4], [4, 0], [0, 4]])).toBe(true);
+    expect(isSelfIntersecting([[0, 0], [4, 0], [4, 4], [2, 0], [0, 4]])).toBe(true); // 頂点が別の辺に触れる
   });
 });

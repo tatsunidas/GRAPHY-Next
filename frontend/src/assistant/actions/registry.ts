@@ -8,11 +8,17 @@
 // 🔴 ここに載せるのは**表示だけ・元に戻せるもの**に限る。データを書く操作（保存・ROI 消去・書き出し）は
 //    載せない（載せていない id は validate が必ず落とす）。変更が要る作業は `propose_steps` で手順を出すだけ。
 
+import { isSelfIntersecting } from "../../viewer/roiCreate";
+
 export type ParamSpec =
   | { type: "number"; min: number; max: number; description: string }
   | { type: "integer"; min: number; max: number; description: string }
   | { type: "string"; maxLength: number; description: string }
-  | { type: "enum"; values: readonly string[]; description: string };
+  | { type: "enum"; values: readonly string[]; description: string }
+  /** [u, v] の組の配列（画面に見える割合 0〜1）。`minItems`〜`maxItems` 個。 */
+  | { type: "points"; minItems: number; maxItems: number; description: string };
+// points は閉じた輪郭として検査する（自己交差・面積ゼロは拒否）。割合の空間は画面への拡大縮小だけで実座標と結ばれるので、
+// 交差の有無は画面でも同じ。ここで落とすと main の事前検証（確認の前）で止まり、不正な形で利用者に確認を出さない。
 
 export interface ActionDef {
   id: ActionId;
@@ -44,11 +50,17 @@ export type ActionId =
   | "setTool"
   | "clearMeasurements"
   | "createRoi"
+  | "createContourRoi"
   | "removeAssistantRoi";
 
 /** `createRoi` で作れる形（シンボル名。実ツールへの写像は 2D 窓の実行器が持つ）。 */
 export const ROI_SHAPES = ["ellipse", "rectangle"] as const;
 export type RoiShape = (typeof ROI_SHAPES)[number];
+/** `createContourRoi` で作れる形。頂点数の範囲は viewer/roiCreate.ts と同じ値（`MAX_CONTOUR_VERTICES`）。 */
+export const CONTOUR_SHAPES = ["polygon", "freehand"] as const;
+export type ContourShape = (typeof CONTOUR_SHAPES)[number];
+export const CONTOUR_POINTS_MIN = 3;
+export const CONTOUR_POINTS_MAX = 64;
 
 export const ACTIONS: readonly ActionDef[] = [
   {
@@ -117,6 +129,17 @@ export const ACTIONS: readonly ActionDef[] = [
     effect: "write",
   },
   {
+    id: "createContourRoi",
+    description:
+      "Add one closed ROI outlined by vertices on the slice currently shown. Each vertex is [u, v] as fractions of the visible image area (u = 0 left .. 1 right, v = 0 top .. 1 bottom, as seen on screen), listed in order around the outline without repeating the first point. shape polygon joins the vertices with straight edges; freehand is a closed free-form outline (use many vertices). 3 to 64 vertices; the outline must not cross itself. The user must approve each run in a confirmation dialog. The ROI can be undone with the undo button. Use only when the user asks to outline a region.",
+    params: {
+      shape: { type: "enum", values: CONTOUR_SHAPES, description: "polygon or freehand." },
+      points: { type: "points", minItems: CONTOUR_POINTS_MIN, maxItems: CONTOUR_POINTS_MAX, description: "Vertices [u, v] around the outline." },
+    },
+    required: ["shape", "points"],
+    effect: "write",
+  },
+  {
     id: "removeAssistantRoi",
     description:
       "Remove a ROI that the assistant itself created with createRoi (by the roiUid it returned). Hand-drawn ROIs, plugin ROIs and locked ROIs are never removed. Mainly used by the undo button.",
@@ -164,6 +187,25 @@ export function validateAction(id: unknown, args: unknown): Validation {
       case "enum":
         if (typeof v !== "string" || !spec.values.includes(v)) return { ok: false, error: `bad-param:${k}` };
         break;
+      case "points": {
+        if (!Array.isArray(v)) return { ok: false, error: `bad-param:${k}` };
+        if (v.length < spec.minItems || v.length > spec.maxItems) return { ok: false, error: `out-of-range:${k}` };
+        const pts: [number, number][] = [];
+        for (const p of v) {
+          if (!Array.isArray(p) || p.length !== 2 || !p.every((n) => typeof n === "number" && Number.isFinite(n))) return { ok: false, error: `bad-param:${k}` };
+          if (p[0] < 0 || p[0] > 1 || p[1] < 0 || p[1] > 1) return { ok: false, error: `out-of-range:${k}` };
+          pts.push([p[0], p[1]]);
+        }
+        // 連続する同一点（と終点＝始点）は 1 つにしてから輪郭を検査する
+        const ring = pts.filter((q, i) => i === 0 || q[0] !== pts[i - 1][0] || q[1] !== pts[i - 1][1]);
+        if (ring.length > 1 && ring[0][0] === ring[ring.length - 1][0] && ring[0][1] === ring[ring.length - 1][1]) ring.pop();
+        if (ring.length < spec.minItems) return { ok: false, error: `degenerate:${k}` };
+        if (isSelfIntersecting(ring)) return { ok: false, error: `self-intersecting:${k}` };
+        const area2 = Math.abs(ring.reduce((a, q, i) => a + q[0] * ring[(i + 1) % ring.length][1] - ring[(i + 1) % ring.length][0] * q[1], 0));
+        if (!(area2 > 1e-12)) return { ok: false, error: `degenerate:${k}` };
+        out[k] = pts; // 余計な要素を持ち込ませないよう、検証した値で作り直す
+        continue;
+      }
     }
     out[k] = v;
   }
@@ -181,6 +223,14 @@ function schemaOf(def: ActionDef): Record<string, unknown> {
   const properties: Record<string, unknown> = {};
   for (const [k, p] of Object.entries(def.params)) {
     if (p.type === "enum") properties[k] = { type: "string", enum: [...p.values], description: p.description };
+    else if (p.type === "points")
+      properties[k] = {
+        type: "array",
+        minItems: p.minItems,
+        maxItems: p.maxItems,
+        items: { type: "array", minItems: 2, maxItems: 2, items: { type: "number", minimum: 0, maximum: 1 } },
+        description: p.description,
+      };
     else if (p.type === "string") properties[k] = { type: "string", maxLength: p.maxLength, description: p.description };
     else properties[k] = { type: p.type, minimum: p.min, maximum: p.max, description: p.description };
   }

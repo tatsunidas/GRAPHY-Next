@@ -213,3 +213,17 @@ describe("ロボットの計画 × プラグインのツール", () => {
     expect(toolTexts.some((t) => t.includes("not-allowed-in-robot-mode") || t.includes("unknown-tool"))).toBe(true);
   });
 });
+
+describe("ロボットの計画 × createContourRoi", () => {
+  const L = [[0.1, 0.1], [0.9, 0.1], [0.9, 0.4], [0.3, 0.4], [0.3, 0.9], [0.1, 0.9]];
+  it("正例: 頂点つきの計画が通り、step id の enum と説明に載る", () => {
+    const r = validatePlan({ title: "囲む", steps: [{ id: "createContourRoi", params: { shape: "polygon", points: L } }] });
+    expect(r.ok && r.steps[0].params).toEqual({ shape: "polygon", points: L });
+    const plan = buildRobotTools().find((t) => t.name === PLAN_TOOL)!;
+    expect(JSON.stringify(plan.parameters)).toContain("createContourRoi");
+  });
+  it("負例: 自己交差の頂点を含む計画は、他の step が正しくても計画ごと不受理", () => {
+    const bow = [[0.2, 0.2], [0.8, 0.8], [0.8, 0.2], [0.2, 0.8]];
+    expect(validatePlan({ title: "x", steps: [{ id: "flipH" }, { id: "createContourRoi", params: { shape: "polygon", points: bow } }] })).toEqual({ ok: false, error: "step-2:self-intersecting:points" });
+  });
+});
