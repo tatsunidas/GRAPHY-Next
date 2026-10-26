@@ -64,6 +64,7 @@ import { markLabelVolume } from "../viewer/labelVolumeOrigin";
 import { getLoadedRois, getLoadedSpheres, registerRoiCollector, scheduleRoiSave } from "../viewer/roiSaveStore";
 import { collectSpheresForPatient } from "../viewer/sphereRestore";
 import { subscribeSphere3D } from "../viewer/sphere3dStore";
+import { startMaskPersistence } from "../viewer/maskSaveStore";
 import { collectRoisForPatient, sopOfImageId } from "../viewer/roiRestore";
 import { emitRoiReveal } from "../viewer/roiReveal";
 import { installRoiRevealReceiver } from "../viewer/roiRevealBridge";
@@ -1196,7 +1197,10 @@ function TileGrid({
     const unsubMeta = subscribeRoiMaskStore(onChange);
     // 球の追加・変更・削除も保存対象。
     const unsubSphere = subscribeSphere3D(onChange);
+    // 塗り ROI（マスク）は別テーブルへ、変更があったものだけを保存する。
+    const stopMasks = startMaskPersistence();
     return () => {
+      stopMasks();
       for (const name of names) eventTarget.removeEventListener(name, onChange);
       unsubMeta();
       unsubSphere();
