@@ -5,6 +5,7 @@
 // 「要求の記録」パネル（アシスタント窓）。AI への要求ごとの本文なしの記録（モデル・版・トークン数・ツール名）を見て、消す。
 // 読み取りと消去は main の IPC だけ（記録ファイルを直接読まない）。消去は利用者が押したときだけで、画面内の 2 段階（ダイアログは使わない）。
 import { useCallback, useEffect, useState, type CSSProperties } from "react";
+import { EvalSection, type EvalApi } from "./EvalSection";
 import { modelRows, recentRows, shortText, tokenText, totalIsPartial, type RequestLogSummary } from "./requestLogView";
 
 type T = (k: string, v?: Record<string, string | number>) => string;
@@ -14,7 +15,7 @@ export interface RequestLogApi {
   clear: () => Promise<{ ok: boolean; error?: string } | undefined>;
 }
 
-export function RequestLogPanel({ api, busy, t }: { api: RequestLogApi; busy: boolean; t: T }) {
+export function RequestLogPanel({ api, evalApi, busy, t }: { api: RequestLogApi; evalApi?: EvalApi | null; busy: boolean; t: T }) {
   const [data, setData] = useState<RequestLogSummary | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [confirming, setConfirming] = useState(false);
@@ -96,6 +97,7 @@ export function RequestLogPanel({ api, busy, t }: { api: RequestLogApi; busy: bo
           )}
         </>
       )}
+      {evalApi && <EvalSection api={evalApi} busy={busy} t={t} onRan={() => void load()} />}
       <div style={S.row}>
         <button style={S.btn} disabled={busy} onClick={() => void load()} data-testid="assistant-requestlog-refresh">{t("assistant.requestlog.refresh")}</button>
         {!confirming ? (
@@ -113,7 +115,7 @@ export function RequestLogPanel({ api, busy, t }: { api: RequestLogApi; busy: bo
 }
 
 const S: Record<string, CSSProperties> = {
-  panel: { padding: "8px 12px", borderTop: "1px solid #3a3b3f", fontSize: 12, display: "flex", flexDirection: "column", gap: 6, maxHeight: 260, overflowY: "auto" },
+  panel: { padding: "8px 12px", borderTop: "1px solid #3a3b3f", fontSize: 12, display: "flex", flexDirection: "column", gap: 6, maxHeight: 420, overflowY: "auto" },
   title: { fontWeight: 700 },
   dim: { color: "#9aa0a6" },
   err: { color: "#f28b82" },

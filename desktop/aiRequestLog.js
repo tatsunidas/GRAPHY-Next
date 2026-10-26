@@ -121,4 +121,89 @@ function createRequestLog({ file, maxBytes = DEFAULT_MAX_BYTES, now = Date.now }
   return { append, summary, clear };
 }
 
-module.exports = { buildRecord, createRequestLog, DEFAULT_MAX_BYTES };
+// ── 回帰評価の結果（固定質問セットの実行結果）。形を許可リストで検査して保存する。 ──
+const EVAL_MAX_BYTES = 512 * 1024;
+const EVAL_ID_RE = /^[a-z0-9-]{1,24}$/;
+const MAX_EVAL_CASES = 200;
+
+/**
+ * レンダラから届いた評価結果を保存できる形に整える（許可リスト）。形が違えば null。
+ * 質問の本文・ツールの引数・返答は保存しない（質問 id と一致/不一致だけ）。
+ */
+function buildEvalRecord(o) {
+  if (!o || typeof o !== "object" || !Array.isArray(o.cases) || o.cases.length === 0 || o.cases.length > MAX_EVAL_CASES) return null;
+  const cases = [];
+  for (const c of o.cases) {
+    if (!c || typeof c.id !== "string" || !EVAL_ID_RE.test(c.id) || typeof c.pass !== "boolean") return null;
+    cases.push({ id: c.id, pass: c.pass });
+  }
+  const passed = cases.filter((c) => c.pass).length;
+  const suiteVersion = natural(o.suiteVersion);
+  if (suiteVersion === null || suiteVersion < 1) return null;
+  const meta = o.meta && typeof o.meta === "object" ? o.meta : {};
+  return {
+    suiteVersion,
+    provider: word(meta.provider, NAME_RE) ?? null,
+    modelId: word(meta.modelId, ID_RE) ?? null,
+    modelVersion: word(meta.modelVersion, ID_RE) ?? null,
+    total: cases.length,
+    passed,
+    cases,
+  };
+}
+
+function createEvalStore({ file, maxBytes = EVAL_MAX_BYTES, now = Date.now }) {
+  function append(o) {
+    const rec = buildEvalRecord(o);
+    if (!rec) return { ok: false, error: "bad-eval" };
+    try {
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      try {
+        if (fs.statSync(file).size >= maxBytes) fs.renameSync(file, `${file}.1`);
+      } catch {
+        /* まだ無い */
+      }
+      fs.appendFileSync(file, JSON.stringify({ ts: new Date(now()).toISOString(), ...rec }) + "\n");
+      return { ok: true };
+    } catch {
+      return { ok: false, error: "write-failed" };
+    }
+  }
+  /** 新しい順に最大 `limit` 件。壊れた行・形の違う行は飛ばす。 */
+  function list(limit = 20) {
+    const rows = [];
+    for (const f of [`${file}.1`, file]) {
+      let text = "";
+      try {
+        text = fs.readFileSync(f, "utf8");
+      } catch {
+        continue;
+      }
+      for (const line of text.split("\n")) {
+        if (!line) continue;
+        try {
+          const e = JSON.parse(line);
+          // 保存した行は由来が平らに入っている（buildEvalRecord の入力は meta の中）
+          const rec = buildEvalRecord({ ...e, meta: { provider: e.provider, modelId: e.modelId, modelVersion: e.modelVersion } });
+          if (rec && typeof e.ts === "string") rows.push({ ts: e.ts.slice(0, 40), ...rec });
+        } catch {
+          /* 壊れた行 */
+        }
+      }
+    }
+    return { ok: true, runs: rows.slice(-limit).reverse() };
+  }
+  function clear() {
+    for (const f of [file, `${file}.1`]) {
+      try {
+        fs.rmSync(f, { force: true });
+      } catch {
+        /* 無い */
+      }
+    }
+    return { ok: true };
+  }
+  return { append, list, clear };
+}
+
+module.exports = { buildRecord, createRequestLog, buildEvalRecord, createEvalStore, DEFAULT_MAX_BYTES };
