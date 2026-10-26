@@ -27,6 +27,7 @@ const RESTART_REQUIRED_KEYS = new Set([
   "dicom.localAeTitle",
   "dicom.localAePort",
   "dicom.localAeBindAddress",
+  "dicom.scpQrEnabled",
 ]);
 
 export function SettingsDialog({

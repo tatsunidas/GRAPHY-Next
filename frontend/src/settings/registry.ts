@@ -665,6 +665,25 @@ export const SETTINGS_REGISTRY: CategoryDef[] = [
         ],
       },
       {
+        titleKey: "settings.sec.scpQr",
+        fields: [
+          {
+            key: "dicom.scpQrEnabled",
+            labelKey: "settings.field.scpQrEnabled",
+            type: "toggle",
+            default: false,
+            helpKey: "settings.field.scpQrEnabled.help",
+          },
+          {
+            key: "dicom.scpQrAllowAll",
+            labelKey: "settings.field.scpQrAllowAll",
+            type: "toggle",
+            default: false,
+            helpKey: "settings.field.scpQrAllowAll.help",
+          },
+        ],
+      },
+      {
         titleKey: "settings.sec.receiveCompress",
         fields: [
           {
