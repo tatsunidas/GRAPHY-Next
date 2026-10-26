@@ -1512,7 +1512,7 @@ export const ja: Record<string, string> = {
   "roiMgr.custom": "カスタム属性",
   "roiMgr.key": "キー",
   "roiMgr.value": "値",
-  "roiMgr.select": "演算対象に選択",
+  "roiMgr.select": "選択（演算・グループの対象）",
   "roiMgr.ops": "演算（選択した ROI）",
   "roiMgr.merge": "MERGE（OR）",
   "roiMgr.split": "分割",
