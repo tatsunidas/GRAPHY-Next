@@ -138,6 +138,23 @@ describe("buildRoiPanelModel（グループ）", () => {
     ]);
     expect(m.measures.map((r) => [r.uid, r.groupId])).toEqual([["b", "g1"]]);
   });
+
+  it("塗り ROI（マスクのメタ）と球の行にもグループの鍵と名前が載る。所属の無い行は載らない", () => {
+    const m = buildRoiPanelModel(
+      [ann("a", "RectangleROI")],
+      [{ segmentationId: "s1" }, { segmentationId: "s2" }],
+      [{ id: "sp1", groupId: "g1", groupName: "病変 A" }, { id: "sp2" }],
+      env({ a: { groupId: "g1", groupName: "病変 A" }, s1: { groupId: "g1", groupName: "病変 A" } }),
+      () => [1],
+    );
+    expect(m.rois.map((r) => [r.key, r.groupId, r.groupName])).toEqual([
+      ["a", "g1", "病変 A"],
+      ["s1#1", "g1", "病変 A"],
+      ["s2#1", undefined, undefined],
+      ["sp1", "g1", "病変 A"],
+      ["sp2", undefined, undefined],
+    ]);
+  });
 });
 
 describe("paintedRowName", () => {

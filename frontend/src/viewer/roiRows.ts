@@ -50,13 +50,15 @@ export interface SphereInput {
   id: string;
   patientKey?: string;
   seriesUid?: string;
+  groupId?: string;
+  groupName?: string;
 }
 
 /** 行がどの患者・シリーズのものか（一覧を見出しでまとめるための印）。不明なら未設定。 */
 export interface RowOwner {
   patientKey?: string;
   seriesUid?: string;
-  /** 所属する ROI グループ（形の ROI・計測のみ）。 */
+  /** 所属する ROI グループ。形の ROI・計測は保存される。塗り ROI・球はセッション内のみ。 */
   groupId?: string;
   groupName?: string;
 }
@@ -163,8 +165,8 @@ export function buildRoiPanelModel(
   const painted: PaintedRoiRow[] = [];
   for (const s of segmentations) {
     const meta = env.metaOf(s.segmentationId);
-    // 塗り ROI はグループ化しない（保存の経路が別で、グループの所属を持たせられない）。
-    const owner: RowOwner = { patientKey: meta?.patientKey, seriesUid: meta?.scope?.seriesUid };
+    // 塗り ROI の所属はセッション内のメタだけに持つ（ROI の保存ファイルには載らない）。
+    const owner: RowOwner = { patientKey: meta?.patientKey, seriesUid: meta?.scope?.seriesUid, groupId: meta?.groupId, groupName: meta?.groupName };
     if (!mine(owner.patientKey, owner.seriesUid)) continue;
     const segs = segmentsOf(s.segmentationId);
     for (const segIndex of segs) {
@@ -183,7 +185,7 @@ export function buildRoiPanelModel(
   }
   const sphereRows: SphereRoiRow[] = spheres
     .filter((s) => mine(s.patientKey, s.seriesUid))
-    .map((s) => ({ rowKind: "sphere", key: s.id, id: s.id, patientKey: s.patientKey, seriesUid: s.seriesUid }));
+    .map((s) => ({ rowKind: "sphere", key: s.id, id: s.id, patientKey: s.patientKey, seriesUid: s.seriesUid, groupId: s.groupId, groupName: s.groupName }));
   return { rois: [...shapes, ...painted, ...sphereRows], measures };
 }
 

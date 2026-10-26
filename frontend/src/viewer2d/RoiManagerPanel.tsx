@@ -35,7 +35,7 @@ import { emitSeriesRefresh } from "../viewer/viewerRefresh";
 import { emitDbChanged } from "../dbEvents";
 import { combineRois, splitMask, roiToMask, withTempMask, isAreaRoi, resolveRoiStack, type BoolOp, type RoiOperand, type SplitConnectivity } from "../viewer/roiBooleanOps";
 import { nextGroupNumber, planGroup } from "../viewer/roiGroups";
-import { buildRoiPanelModel, type MeasureRow, type PaintedRoiRow, type RoiPanelModel, type RoiRow, type RoiRowEnv, type RowOwner, type ShapeRoiRow } from "../viewer/roiRows";
+import { buildRoiPanelModel, type MeasureRow, type PaintedRoiRow, type RoiPanelModel, type RoiRow, type RoiRowEnv, type RowOwner, type ShapeRoiRow, type SphereRoiRow } from "../viewer/roiRows";
 import { sphereFromCircleRoi, createSphere3DFromCircleRoi, bakeSphere3D, splitMaskToSlices, maskVolumeStats, type MaskVolumeStats } from "../viewer/roi3d";
 import { listSpheres3D, updateSphere3D, deleteSphere3D, subscribeSphere3D, type Sphere3D } from "../viewer/sphere3dStore";
 import { annotationsToImageJDtos } from "../viewer/imagejExport";
@@ -919,6 +919,7 @@ export function RoiManagerPanel({
     return (
       <div key={s.id} style={row} data-testid="roi-row" data-kind="sphere" data-roi-key={s.id}>
         <button onClick={() => updateSphere3D(s.id, { visible: !s.visible })} style={eyeBtn} title={t("roiMgr.visible")} data-testid="roi-row-visible">{s.visible ? "👁" : "🚫"}</button>
+        <input type="checkbox" checked={selected.has(s.id)} onChange={() => toggleSelect(s.id)} title={t("roiMgr.select")} data-testid="roi-row-select" />
         <span title={t("roiMgr.iconSphere")} style={{ color: s.color }}>◍</span>
         <input type="text" style={name} defaultValue={s.label ?? "Sphere"} onChange={(e) => updateSphere3D(s.id, { label: e.target.value })} />
         <input type="color" defaultValue={s.color} onChange={(e) => updateSphere3D(s.id, { color: e.target.value })} title={t("roiMgr.color")} style={colorInput} />
@@ -943,55 +944,92 @@ export function RoiManagerPanel({
   };
 
   // ── ROI グループ ──
+  // メンバーは、形の ROI・計測＝注釈 uid（`a:`）、塗り ROI＝マスク（`m:`。同じマスクの segment は同じグループ）、球＝球 id（`s:`）。
+  // 🔴 保存されるのは形の ROI・計測の所属だけ。塗り ROI・球は ROI の保存ファイルに載らないので、再読み込みで外れる。
   const annUids = new Set([...model.rois.flatMap((r) => (r.rowKind === "shape" ? [r.uid] : [])), ...model.measures.map((m) => m.uid)]);
   const selectedAnnUids = [...selUids].filter((u) => annUids.has(u));
+  const selectedPaintedMasks = [...new Set(model.rois.flatMap((r) => (r.rowKind === "painted" && selected.has(r.key) ? [r.maskId] : [])))];
+  const selectedSphereIds = model.rois.flatMap((r) => (r.rowKind === "sphere" && selected.has(r.key) ? [r.id] : []));
+  const selectedMembers = [
+    ...selectedAnnUids.map((u) => `a:${u}`),
+    ...selectedPaintedMasks.map((m) => `m:${m}`),
+    ...selectedSphereIds.map((i) => `s:${i}`),
+  ];
+  const patientOfMember = (k: string): string | undefined =>
+    k[0] === "s" ? spheres.find((x) => x.id === k.slice(2))?.patientKey : getRoiMaskMeta(k.slice(2))?.patientKey;
+  const setMemberGroup = (k: string, patch: { groupId?: string; groupName?: string }) => {
+    if (k[0] === "s") updateSphere3D(k.slice(2), patch);
+    else setRoiMaskMeta(k.slice(2), patch);
+  };
   const groupRowsOf = (gid: string) => ({
-    rois: model.rois.filter((r): r is ShapeRoiRow => r.rowKind === "shape" && r.groupId === gid),
+    rois: model.rois.filter((r) => r.groupId === gid),
     measures: model.measures.filter((m) => m.groupId === gid),
   });
-  const groupUids = (gid: string) => {
+  const groupMembers = (gid: string): string[] => {
     const g = groupRowsOf(gid);
-    return [...g.rois.map((r) => r.uid), ...g.measures.map((m) => m.uid)];
+    return [...new Set([
+      ...g.rois.map((r) => (r.rowKind === "shape" ? `a:${r.uid}` : r.rowKind === "painted" ? `m:${r.maskId}` : `s:${r.id}`)),
+      ...g.measures.map((m) => `a:${m.uid}`),
+    ])];
   };
-  const groupNames = [...model.rois, ...model.measures].map((r) => ("groupName" in r ? r.groupName : undefined));
+  const groupAnnUids = (gid: string) => groupMembers(gid).filter((k) => k[0] === "a").map((k) => k.slice(2));
+  const groupNames = [...model.rois, ...model.measures].map((r) => r.groupName);
+  // メンバーが 2 件に満たないグループは見出しを出さない（再読み込みで塗り ROI・球が外れた残りなど）。
+  const groupSizes = new Map<string, number>();
+  for (const r of [...model.rois, ...model.measures]) if (r.groupId) groupSizes.set(r.groupId, (groupSizes.get(r.groupId) ?? 0) + 1);
+  const isRealGroup = (gid: string | undefined): gid is string => !!gid && (groupSizes.get(gid) ?? 0) >= 2;
   const makeGroup = () => {
     const prefix = t("roiMgr.groupPrefix");
     const plan = planGroup(
-      selectedAnnUids,
-      (u) => getRoiMaskMeta(u)?.patientKey,
+      selectedMembers,
+      patientOfMember,
       () => crypto.randomUUID(),
       `${prefix} ${nextGroupNumber(groupNames, prefix)}`,
     );
     if (!plan.ok) { emitToast(t(plan.reason === "crossPatient" ? "roiMgr.group.crossPatient" : "roiMgr.group.tooFew")); return; }
-    for (const u of selectedAnnUids) setRoiMaskMeta(u, { groupId: plan.groupId, groupName: plan.name });
-    emitToast(t("roiMgr.group.made", { n: selectedAnnUids.length, name: plan.name }));
+    for (const k of selectedMembers) setMemberGroup(k, { groupId: plan.groupId, groupName: plan.name });
+    emitToast(t("roiMgr.group.made", { n: selectedMembers.length, name: plan.name }));
     refresh();
   };
-  const renameGroup = (gid: string, name: string) => { for (const u of groupUids(gid)) setRoiMaskMeta(u, { groupName: name }); };
-  const ungroup = (gid: string) => { for (const u of groupUids(gid)) setRoiMaskMeta(u, { groupId: undefined, groupName: undefined }); refresh(); };
+  const renameGroup = (gid: string, name: string) => { for (const k of groupMembers(gid)) setMemberGroup(k, { groupName: name }); };
+  const ungroup = (gid: string) => { for (const k of groupMembers(gid)) setMemberGroup(k, { groupId: undefined, groupName: undefined }); refresh(); };
+  // 錠があるのは形の ROI・計測だけ（塗り ROI・球には無い）。
   const lockGroup = (gid: string) => {
-    const uids = groupUids(gid);
+    const uids = groupAnnUids(gid);
     const allLocked = uids.length > 0 && uids.every(isRoiLocked);
     for (const u of uids) setRoiLocked(u, !allLocked);
     refresh();
   };
+  const selectGroup = (gid: string) => {
+    const g = groupRowsOf(gid);
+    selectRois(groupAnnUids(gid));
+    setSelected(new Set(g.rois.filter((r) => r.rowKind !== "shape").map((r) => r.key)));
+  };
   const deleteGroup = (gid: string, name: string) => {
-    const uids = groupUids(gid).filter((u) => !isRoiLocked(u));
-    if (uids.length === 0) return;
-    if (!window.confirm(t("roiMgr.group.deleteConfirm", { name, n: uids.length }))) return;
+    const g = groupRowsOf(gid);
+    const uids = groupAnnUids(gid).filter((u) => !isRoiLocked(u));
+    const painted = g.rois.filter((r): r is PaintedRoiRow => r.rowKind === "painted");
+    const sphereRows = g.rois.filter((r): r is SphereRoiRow => r.rowKind === "sphere");
+    const n = uids.length + painted.length + sphereRows.length;
+    if (n === 0) return;
+    if (!window.confirm(t("roiMgr.group.deleteConfirm", { name, n }))) return;
     const owners = new Set(uids.map((u) => getRoiMaskMeta(u)?.patientKey || activePatientKey));
     for (const u of uids) {
       try { csAnnotation.state.removeAnnotation(u); } catch { /* ignore */ }
       deleteRoiMaskMeta(u);
     }
+    for (const r of painted) removeMaskSegment(r.maskId, r.segIndex);
+    for (const r of sphereRows) deleteSphere3D(r.id);
     for (const pk of owners) scheduleRoiSave(pk);
+    renderAll();
     refresh();
   };
   const groupHead = (gid: string, name: string) => {
     const g = groupRowsOf(gid);
-    const uids = groupUids(gid);
+    const uids = groupAnnUids(gid);
     const allLocked = uids.length > 0 && uids.every(isRoiLocked);
-    const anyVisible = g.rois.some((r) => r.visible) || g.measures.some((m) => m.visible);
+    const anyVisible = g.rois.some(roiVisible) || g.measures.some((m) => m.visible);
+    const tempOnly = g.rois.some((r) => r.rowKind !== "shape");
     const sec = groupSec(gid);
     return (
       <div key={`h:${sec}:${gid}`} style={groupHeadStyle} data-testid="roi-group-head" data-group-id={gid}>
@@ -1003,24 +1041,25 @@ export function RoiManagerPanel({
           onChange={(e) => renameGroup(gid, e.target.value)}
           data-testid="roi-group-name"
         />
-        <span style={countBadge}>{uids.length}</span>
+        <span style={countBadge}>{g.rois.length + g.measures.length}</span>
+        {tempOnly && <span style={countBadge} title={t("roiMgr.group.sessionOnly")} data-testid="roi-group-temp">{t("roiMgr.group.sessionBadge")}</span>}
         <button onClick={() => setRowsVisible(g.rois, g.measures, !anyVisible)} style={eyeBtn} title={t("roiMgr.sectionEye")} data-testid="roi-group-visible">
           {anyVisible ? "👁" : "🚫"}
         </button>
-        <button onClick={() => lockGroup(gid)} style={eyeBtn} title={t("roiMgr.group.lock")} aria-pressed={allLocked} data-testid="roi-group-lock">
+        <button onClick={() => lockGroup(gid)} disabled={uids.length === 0} style={eyeBtn} title={t("roiMgr.group.lock")} aria-pressed={allLocked} data-testid="roi-group-lock">
           {allLocked ? "🔒" : "🔓"}
         </button>
-        <button onClick={() => selectRois(uids)} style={editBtn} title={t("roiMgr.group.select")} data-testid="roi-group-select">◎</button>
+        <button onClick={() => selectGroup(gid)} style={editBtn} title={t("roiMgr.group.select")} data-testid="roi-group-select">◎</button>
         <button onClick={() => setStatsOpen({ section: sec })} style={editBtn} title={t("roiMgr.sectionStats")} data-testid="roi-group-stats">Σ</button>
         <button onClick={() => ungroup(gid)} style={editBtn} title={t("roiMgr.group.ungroup")} data-testid="roi-group-ungroup">⛓</button>
-        <button onClick={() => deleteGroup(gid, name)} disabled={allLocked} style={allLocked ? { ...delBtn, opacity: 0.35, cursor: "not-allowed" } : delBtn} title={t("roiMgr.group.delete")} data-testid="roi-group-delete">🗑</button>
+        <button onClick={() => deleteGroup(gid, name)} disabled={allLocked && !tempOnly} style={allLocked && !tempOnly ? { ...delBtn, opacity: 0.35, cursor: "not-allowed" } : delBtn} title={t("roiMgr.group.delete")} data-testid="roi-group-delete">🗑</button>
       </div>
     );
   };
 
   // ── 患者→シリーズの見出し（全患者表示）──
   // 1 患者・1 シリーズだけで、グループも無いときは見出しを出さない（従来の見た目のまま）。
-  const anyGroup = model.rois.some((r) => r.rowKind === "shape" && r.groupId) || model.measures.some((m) => m.groupId);
+  const anyGroup = [...groupSizes.keys()].some((gid) => isRealGroup(gid));
   const grouping = !!shownSeries && (new Set(shownSeries.map((x) => x.patientKey)).size > 1 || shownSeries.length > 1 || anyGroup);
   const toggleCollapsed = (k: string) =>
     setCollapsed((c) => { const n = new Set(c); if (n.has(k)) n.delete(k); else n.add(k); return n; });
@@ -1075,12 +1114,12 @@ export function RoiManagerPanel({
       out.push(sectionHead(psec, pname || pk, 0, asRois(prow), asMeasures(prow), pk === activePatientKey));
       if (collapsed.has(psec)) continue;
       // グループ: 所属 ROI はグループ見出しの下にだけ出す（シリーズ区画には重複させない）。
-      for (const gid of [...new Set(prow.filter((r) => r.groupId).map((r) => r.groupId as string))]) {
+      for (const gid of [...new Set(prow.map((r) => r.groupId).filter(isRealGroup))]) {
         const grow = prow.filter((r) => r.groupId === gid);
         out.push(groupHead(gid, grow[0].groupName ?? ""));
         if (!collapsed.has(groupSec(gid))) out.push(...grow.map(render));
       }
-      const ungrouped = prow.filter((r) => !r.groupId);
+      const ungrouped = prow.filter((r) => !isRealGroup(r.groupId));
       const seriesOf = shownSeries.filter((x) => x.patientKey === pk);
       const known = new Set(seriesOf.map((x) => x.seriesUid));
       out.push(...ungrouped.filter((r) => !r.seriesUid || !known.has(r.seriesUid)).map(render));
@@ -1155,7 +1194,7 @@ export function RoiManagerPanel({
       </div>
       <div style={{ ...row, justifyContent: "flex-start" }}>
         <button onClick={addNewPainted} disabled={busy} style={editBtn} title={t("roiMgr.newMask")} data-testid="roi-new-painted">＋{t("roiMgr.newMaskShort")}</button>
-        <button onClick={makeGroup} disabled={selectedAnnUids.length < 2} style={editBtn} title={t("roiMgr.group.make")} data-testid="roi-group-make">🗂 {t("roiMgr.groupPrefix")} ({selectedAnnUids.length})</button>
+        <button onClick={makeGroup} disabled={selectedMembers.length < 2} style={editBtn} title={t("roiMgr.group.make")} data-testid="roi-group-make">🗂 {t("roiMgr.groupPrefix")} ({selectedMembers.length})</button>
       </div>
       {model.rois.length === 0 && <div style={empty}>{t("roiMgr.empty")}</div>}
       {renderGrouped<RoiRow>(
