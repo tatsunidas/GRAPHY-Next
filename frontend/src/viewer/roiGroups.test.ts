@@ -3,7 +3,7 @@
  * Author: Tatsuaki Kobayashi
  */
 import { describe, expect, it } from "vitest";
-import { nextGroupNumber, planGroup, pooledValueStats, sumAreaMm2, unresolvedMembers } from "./roiGroups";
+import { nextGroupNumber, planGroup, pooledInputsOf, pooledValueStats, sumAreaMm2, unresolvedMembers } from "./roiGroups";
 
 describe("planGroup", () => {
   const owner: Record<string, string | undefined> = { a: "P1", b: "P1", c: "P2", d: undefined };
@@ -85,5 +85,21 @@ describe("sumAreaMm2", () => {
   it("値の無いものは足さず、件数で示す（0 で埋めない）", () => {
     expect(sumAreaMm2([10, undefined, 5.5])).toEqual({ sum: 15.5, counted: 2, missing: 1 });
     expect(sumAreaMm2([])).toEqual({ sum: 0, counted: 0, missing: 0 });
+  });
+});
+
+describe("pooledInputsOf（合算に入れる値の選び方）", () => {
+  const v = (n: number, mean: number) => ({ n, mean, sd: 1, unit: "HU" });
+  it("形とマスクの両方を拾い、画素数が足される", () => {
+    const items = pooledInputsOf([{ stats: { values: v(1634, 340) } }, { mask: { values: v(6684, 279) } }]);
+    expect(items.map((i) => i.n)).toEqual([1634, 6684]);
+    expect(pooledValueStats(items)!.n).toBe(8318);
+  });
+  it("マスクの行はマスクの値を優先する", () => {
+    expect(pooledInputsOf([{ mask: { values: v(5, 1) }, stats: { values: v(9, 2) } }])).toEqual([{ n: 5, mean: 1, sd: 1, unit: "HU" }]);
+  });
+  it("値の無い行（空のマスク・未計測）は除き、全部無ければ空", () => {
+    expect(pooledInputsOf([{ mask: {} }, { stats: {} }, {}])).toEqual([]);
+    expect(pooledInputsOf([{ mask: {} }, { stats: { values: v(3, 1) } }])).toHaveLength(1);
   });
 });
