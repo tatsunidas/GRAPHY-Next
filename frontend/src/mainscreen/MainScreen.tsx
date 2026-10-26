@@ -32,6 +32,9 @@ import { ReportEditorDialog } from "../report/ReportEditorDialog";
 import { ReportManagerDialog } from "../report/ReportManagerDialog";
 import { DoseReportDialog } from "./DoseReportDialog";
 import { TaskLauncherDialog } from "./TaskLauncherDialog";
+import { AlbumBar } from "../albums/AlbumBar";
+import { fetchAlbumStudies } from "../albums/albumApi";
+import { albumFilters, type AlbumView } from "../albums/albumView";
 
 /**
  * アプリの土台シェル（GRAPHY の MainScreen 相当）。
@@ -90,10 +93,35 @@ export function MainScreen({
   // 取り込み直後は、一覧を「いま取り込んだ検査」に絞る（既定の検索条件「今日」では過去の検査が出ないため）。
   const [importedView, setImportedView] = useState<ImportedView | null>(null);
   const searchFiltersRef = useRef<StudyFilters | null>(null);
+  // アルバムを表示中は、一覧をそのアルバムのスタディだけに絞る（検索・取り込み直後の絞り込みと排他）。
+  const [albumView, setAlbumView] = useState<AlbumView | null>(null);
+  const [albumVersion, setAlbumVersion] = useState(0);
   const onSearch = (f: StudyFilters) => {
     searchFiltersRef.current = f;
     setImportedView(null);
+    setAlbumView(null);
     setFilters(f);
+  };
+  const openAlbum = (v: AlbumView) => {
+    setImportedView(null);
+    setAlbumView(v);
+    setFilters(albumFilters(v.uids));
+  };
+  const closeAlbum = () => {
+    setAlbumView(null);
+    setFilters(searchFiltersRef.current);
+  };
+  // アルバムの中身や一覧が変わった: 一覧の選択肢を取り直し、表示中ならその所属も取り直す（消えていたら絞り込みを解く）。
+  const onAlbumChanged = () => {
+    setAlbumVersion((v) => v + 1);
+    if (!albumView) return;
+    const id = albumView.id;
+    fetchAlbumStudies(id)
+      .then((uids) => {
+        setAlbumView((cur) => (cur && cur.id === id ? { ...cur, uids } : cur));
+        setFilters(albumFilters(uids));
+      })
+      .catch(() => closeAlbum());
   };
   const [importMsg, setImportMsg] = useState<string | null>(null);
   const [selectedStudy, setSelectedStudy] = useState<Study | null>(null);
@@ -189,6 +217,7 @@ export function MainScreen({
           : base;
       setImportMsg(withDateNote);
       if (view) {
+        setAlbumView(null);
         setImportedView(view);
         setFilters(view.filters);
       }
@@ -466,6 +495,7 @@ export function MainScreen({
         <div style={centerColumn}>
         <div style={listArea(listLayout)}>
         <div style={treeArea}>
+          <AlbumBar view={albumView} version={albumVersion} onOpen={openAlbum} onClose={closeAlbum} onChanged={onAlbumChanged} />
           {importedView && (
             <div style={importedBanner} data-testid="imported-view-banner">
               <span>
@@ -495,6 +525,9 @@ export function MainScreen({
             layout={listLayout}
             onLayoutChange={changeListLayout}
             seriesHost={isPaneLayout(listLayout) ? seriesPane : undefined}
+            albumView={albumView}
+            albumVersion={albumVersion}
+            onAlbumChanged={onAlbumChanged}
           />
         </div>
         {isPaneLayout(listLayout) && (

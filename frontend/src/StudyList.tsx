@@ -31,6 +31,8 @@ import { ListColumnsDialog } from "./mainscreen/ListColumnsDialog";
 import { cellView, seriesColumns, studyColumns, useListColumns, type ListColumn } from "./mainscreen/listColumns";
 import type { ColumnCell } from "./api";
 import { DicomDate } from "./i18n/dateFormat";
+import { AlbumMissing, AlbumSelectionBar } from "./albums/AlbumSelectionBar";
+import { missingUids, type AlbumView } from "./albums/albumView";
 
 const PAGE_SIZE = 50;
 
@@ -59,6 +61,9 @@ export function StudyList({
   layout,
   onLayoutChange,
   seriesHost,
+  albumView,
+  albumVersion = 0,
+  onAlbumChanged,
 }: {
   filters?: StudyFilters | null;
   reloadKey?: number;
@@ -80,12 +85,20 @@ export function StudyList({
    * null はペインがまだ無い間で、シリーズ一覧は描かない。
    */
   seriesHost?: HTMLElement | null;
+  /** アルバムを表示中のとき。取得できなかった UID を「見つかりません」で出し、チェックしたスタディを外せる。 */
+  albumView?: AlbumView | null;
+  /** アルバムの一覧の取り直しの合図（追加・作成・削除のあとに親が増やす）。 */
+  albumVersion?: number;
+  /** アルバムの中身・一覧が変わった（追加・外した・作成）。親がアルバムの表示を取り直す。 */
+  onAlbumChanged?: () => void;
 }) {
   const { t } = useI18n();
   // 取得は hooks/useStudies に集約（モバイルシェルと共有。fw/mobile-ui-design.md §3.5）。
   const { studies, reportCounts, error } = useStudies(connecting ? null : filters, { reloadKey, withReportCounts: true });
   const [selectedStudy, setSelectedStudy] = useState<Study | null>(null);
   const [page, setPage] = useState(0);
+  // アルバムに入れるためにチェックしたスタディ（行の選択とは別。検索条件・再読込で捨てる）。
+  const [checked, setChecked] = useState<Set<string>>(new Set());
   // 利用者が足したタグ列（PC・ブラウザごとの設定）。値は表示中のページのスタディのぶんだけ取り寄せる。
   const listColumns = useListColumns();
   const stColumns = studyColumns(listColumns);
@@ -108,6 +121,7 @@ export function StudyList({
   useEffect(() => {
     setSelectedStudy(null);
     setPage(0);
+    setChecked(new Set());
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filterKey, reloadKey]);
 
@@ -120,6 +134,24 @@ export function StudyList({
   // ツリー: 選んだ検査の行の直下にシリーズを開く。選んだ検査が別のページにあるときは行が無いので、末尾に出す。
   const treeOpen = isTreeOpen(layout ?? "table", selectedStudy?.studyInstanceUid, pageStudies.map((s) => s.studyInstanceUid));
   const { cells: colCells } = useStudyColumnCells(pageStudies.map((s) => s.studyInstanceUid), stColumns, reloadKey);
+  const toggleChecked = (uid: string) =>
+    setChecked((prev) => {
+      const next = new Set(prev);
+      if (!next.delete(uid)) next.add(uid);
+      return next;
+    });
+  const pageAllChecked = pageStudies.length > 0 && pageStudies.every((s) => checked.has(s.studyInstanceUid));
+  const togglePage = () =>
+    setChecked((prev) => {
+      const next = new Set(prev);
+      for (const s of pageStudies) {
+        if (pageAllChecked) next.delete(s.studyInstanceUid);
+        else next.add(s.studyInstanceUid);
+      }
+      return next;
+    });
+  // アルバムにあるのに一覧に出てこなかった（削除された）UID。取得が済んだ一覧に対してだけ数える。
+  const missing = albumView && studies && !error ? missingUids(albumView.uids, studies) : [];
 
   return (
     <section style={{ marginTop: 28 }}>
@@ -161,10 +193,29 @@ export function StudyList({
       {!connecting && filters != null && !error && !studies && <div>{t("common.loading")}</div>}
       {studies && studies.length === 0 && <div style={{ color: "#666" }}>{t("study.empty")}</div>}
 
+      <AlbumSelectionBar
+        selected={Array.from(checked)}
+        view={albumView ?? null}
+        version={albumVersion}
+        onChanged={() => {
+          setChecked(new Set());
+          onAlbumChanged?.();
+        }}
+      />
+
       {studies && studies.length > 0 && (
         <table style={{ borderCollapse: "collapse", width: "100%", fontSize: 13 }}>
           <thead>
             <tr style={{ textAlign: "left", borderBottom: "2px solid #ddd" }}>
+              <th style={{ padding: "6px 10px", width: 28 }}>
+                <input
+                  type="checkbox"
+                  data-testid="study-check-all"
+                  aria-label={t("album.col.select")}
+                  checked={pageAllChecked}
+                  onChange={togglePage}
+                />
+              </th>
               <Th sortKey="patientId" sort={sort} onSort={onSort}>{t("field.patientId")}</Th>
               <Th sortKey="patientName" sort={sort} onSort={onSort}>{t("field.patientName")}</Th>
               <Th sortKey="studyDate" sort={sort} onSort={onSort}>{t("field.studyDate")}</Th>
@@ -191,6 +242,15 @@ export function StudyList({
                     background: selected ? "#eaf3fb" : "transparent",
                   }}
                 >
+                  <td style={{ padding: "6px 10px" }} onClick={(e) => e.stopPropagation()}>
+                    <input
+                      type="checkbox"
+                      data-testid={`study-check-${s.studyInstanceUid}`}
+                      aria-label={t("album.col.select")}
+                      checked={checked.has(s.studyInstanceUid)}
+                      onChange={() => toggleChecked(s.studyInstanceUid)}
+                    />
+                  </td>
                   <Td>{s.patientId || "—"}</Td>
                   <Td>{s.patientName || "—"}</Td>
                   <Td>{s.studyDate ? <DicomDate value={s.studyDate} /> : "—"}</Td>
@@ -204,7 +264,7 @@ export function StudyList({
                 </tr>
                 {selected && treeOpen && (
                   <tr data-testid="series-tree-row">
-                    <td colSpan={7 + stColumns.length} style={{ padding: 0 }}>
+                    <td colSpan={8 + stColumns.length} style={{ padding: 0 }}>
                       <SeriesNavigator
                         key={s.studyInstanceUid}
                         study={s}
@@ -246,6 +306,8 @@ export function StudyList({
           </button>
         </div>
       )}
+
+      {albumView && <AlbumMissing view={albumView} missing={missing} onChanged={() => onAlbumChanged?.()} />}
 
       <ListColumnsDialog open={columnsOpen} onClose={() => setColumnsOpen(false)} />
 
