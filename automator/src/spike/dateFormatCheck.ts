@@ -90,6 +90,8 @@ async function main(): Promise<void> {
     console.log("\n[1] 既定（今の表示と同じ）");
     check((await row.innerText()).includes("2026-01-03"), "一覧は既定で「2026-01-03」", await row.innerText());
     await shot(page, "01-default-list");
+    const clock0 = await page.getByTestId("statusbar-clock").innerText();
+    check(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(clock0), "ステータスバーの時計は既定で「YYYY-MM-DD HH:mm:ss」", clock0);
     await page.locator(`[data-testid="study-row-${s3.studyUid}"]`).click();
     await page.locator(`[data-testid="series-row-${s3.seriesUid}"]`).click();
     const viewer = await driver.waitForNewPage(() => page.getByTestId("viewer2d-toolbar-button").click(), (u) => u.includes("2dviewer"));
@@ -103,6 +105,14 @@ async function main(): Promise<void> {
     await setFormat(page, "general.dateFormat", "DD/MM/YYYY");
     await setFormat(page, "general.timeFormat", "12h");
     check((await row.innerText()).includes("03/01/2026") && !(await row.innerText()).includes("01/03/2026"), "一覧が「03/01/2026」（日/月/年）に切り替わった", await row.innerText());
+    // アプリの日時（Date 由来）: ステータスバーの時計。今日の日付を実行側の Date から組み立てて突き合わせる。
+    const clockOk = await page.waitForFunction(() => /^\d{2}\/\d{2}\/\d{4} \d{1,2}:\d{2}:\d{2} (AM|PM)$/.test(document.querySelector('[data-testid="statusbar-clock"]')?.textContent ?? ""), null, { timeout: 5_000 }).then(() => true, () => false);
+    const clock1 = await page.getByTestId("statusbar-clock").innerText();
+    const now = new Date();
+    const p2 = (n: number) => String(n).padStart(2, "0");
+    const todayDmy = `${p2(now.getDate())}/${p2(now.getMonth() + 1)}/${now.getFullYear()}`;
+    check(clockOk && clock1.startsWith(todayDmy), `ステータスバーの時計が「DD/MM/YYYY h:mm:ss AM|PM」（今日 ${todayDmy}）に切り替わった`, clock1);
+    await shot(page, "03b-changed-clock");
     await viewer.waitForFunction(() => /03\/01\/2026/.test(document.querySelector('[data-testid="corner-text-tl"]')?.textContent ?? ""), null, { timeout: 10_000 }).catch(() => undefined);
     const tl2 = await viewer.getByTestId("corner-text-tl").first().innerText();
     check(tl2.includes("03/01/2026") && tl2.includes("9:00:00 AM"), "開いている 2D ビューア（別ウィンドウ）の 4 隅も「03/01/2026」「9:00:00 AM」", tl2);

@@ -2,6 +2,7 @@
  * Copyright (c) Visionary Imaging Services, Inc. All rights reserved.
  * Author: Tatsuaki Kobayashi
  */
+import { formatDateTime } from "../i18n/dateFormat";
 // 環境設定 ＞ 自動削除の表示用の純関数（画面から切り離してテストする）。
 
 /** 条件。null は「その条件を使わない」。値の既定は無い（利用者が決める）。 */
@@ -193,10 +194,7 @@ export function formatBytes(n: number): string {
 
 export function formatTime(v: string | number | null | undefined): string {
   if (v == null) return "";
-  const d = new Date(v);
-  if (Number.isNaN(d.getTime())) return String(v);
-  const p = (x: number) => String(x).padStart(2, "0");
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+  return formatDateTime(v);
 }
 
 export function reasonKey(code: string | null | undefined): string {

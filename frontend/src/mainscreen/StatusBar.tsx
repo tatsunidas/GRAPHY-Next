@@ -5,6 +5,7 @@
 import { useEffect, useState } from "react";
 import { type AppStatus } from "../api";
 import { useI18n } from "../i18n/i18n";
+import { useDateFormat, formatDateTime } from "../i18n/dateFormat";
 import { errorKey, type WatchBarView } from "../settings/importWatchView";
 import type { ReceiveAnonBar } from "../settings/receiveAnonView";
 import type { JobCounts } from "../computejobs/computeJobsView";
@@ -35,6 +36,7 @@ export function StatusBar({
   onReloadList?: () => void;
 }) {
   const { t } = useI18n();
+  useDateFormat(); // 書式の設定が変わったら再描画する
   const [now, setNow] = useState(() => new Date());
 
   useEffect(() => {
@@ -112,14 +114,13 @@ export function StatusBar({
           </span>
         )}
       </div>
-      <div style={{ fontVariantNumeric: "tabular-nums", color: "#445" }}>{formatClock(now)}</div>
+      <div data-testid="statusbar-clock" style={{ fontVariantNumeric: "tabular-nums", color: "#445" }}>{formatClock(now)}</div>
     </div>
   );
 }
 
 function formatClock(d: Date): string {
-  const p = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+  return formatDateTime(d, { seconds: true });
 }
 
 const bar: React.CSSProperties = {

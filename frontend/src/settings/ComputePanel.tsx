@@ -16,6 +16,7 @@
  */
 import React, { useCallback, useEffect, useState } from "react";
 import { useI18n, type TFn } from "../i18n/i18n";
+import { useDateFormat, formatClockTime } from "../i18n/dateFormat";
 import { LocalComputeSection } from "./LocalComputeSection";
 import {
   desktop,
@@ -31,6 +32,7 @@ const EMPTY: ComputeEndpointInput = { id: "", label: "", url: "" };
 
 export function ComputePanel() {
   const { t } = useI18n();
+  useDateFormat(); // 書式の設定が変わったら再描画する
   const d = desktop();
   const [config, setConfig] = useState<ComputeEndpointsConfig | null>(null);
   const [busy, setBusy] = useState(false);
@@ -372,7 +374,7 @@ export function ComputePanel() {
                   <span style={label}>{t("settings.compute.colab.runtime")}</span>
                   <span style={{ fontSize: 11, color: e.runtime?.allocated ? "#1b7a3a" : "#6b7785" }}>
                     {e.runtime?.allocated
-                      ? t("settings.compute.colab.runtime.on", { until: new Date(e.runtime.expireTime ?? "").toLocaleTimeString() })
+                      ? t("settings.compute.colab.runtime.on", { until: formatClockTime(e.runtime.expireTime ?? "", { seconds: true }) })
                       : t("settings.compute.colab.runtime.off")}
                   </span>
                   {e.runtime?.allocated ? (

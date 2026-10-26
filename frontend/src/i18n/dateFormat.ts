@@ -114,6 +114,33 @@ export function sampleTime(fmt: TimeFormat, now: Date = new Date()): string {
   return formatDicomTime(`${p(now.getHours())}${p(now.getMinutes())}${p(now.getSeconds())}`, fmt);
 }
 
+/** アプリが出す時刻（Date 由来）を設定の書式で返す。読めない値は元の文字列のまま。 */
+export function formatClockTime(
+  v: Date | string | number,
+  opts: { seconds?: boolean } = {},
+  fmt: TimeFormat = getTimeFormat(),
+): string {
+  const d = v instanceof Date ? v : new Date(v);
+  if (Number.isNaN(d.getTime())) return v instanceof Date ? "" : String(v); // "Invalid Date" とは書かない
+  const p = (n: number) => String(n).padStart(2, "0");
+  const tm = `${p(d.getHours())}${p(d.getMinutes())}${opts.seconds ? p(d.getSeconds()) : ""}`;
+  return formatDicomTime(tm, fmt);
+}
+
+/** アプリが出す日時（Date 由来）を「日付 時刻」で返す。読めない値は元の文字列のまま。 */
+export function formatDateTime(
+  v: Date | string | number,
+  opts: { seconds?: boolean } = {},
+  dateFmt: DateFormat = getDateFormat(),
+  timeFmt: TimeFormat = getTimeFormat(),
+): string {
+  const d = v instanceof Date ? v : new Date(v);
+  if (Number.isNaN(d.getTime())) return v instanceof Date ? "" : String(v); // "Invalid Date" とは書かない
+  const p = (n: number) => String(n).padStart(2, "0");
+  const date = formatDicomDate(`${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}`, dateFmt);
+  return `${date} ${formatClockTime(d, opts, timeFmt)}`;
+}
+
 function subscribe(cb: () => void): () => void {
   const handler = () => cb();
   window.addEventListener(EVENT, handler);
