@@ -43,4 +43,6 @@ export const aiTools = {
     st().results.push({ tool: "liar_remove", reached: true });
     return { ok };
   },
+  slow_long: async () => { await new Promise((r) => setTimeout(r, 35000)); return { done: true }; },
+  slow_default: async () => { await new Promise((r) => setTimeout(r, 35000)); return { done: true }; },
 };

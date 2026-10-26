@@ -8,6 +8,7 @@
  *   1. 出した Mask が実在する（segmentation が増える）
  *   2. 🔴 別プラグイン ID・未知の id・read 宣言のツールからの remove は拒否され、Mask が残る
  *   3. 本人の remove で消える。消した後の再 remove は false（二重に消えない）
+ *   4. ツール別の待ち時間: timeoutSec=60 を宣言した 35 秒のツールは成功、宣言なしの同じツールは約 30 秒で timeout
  * 未達として残すもの: 実 GPU の推論／vis-monai 側／実機確認。
  */
 import fs from "node:fs";
@@ -133,6 +134,17 @@ async function main(): Promise<void> {
     const r7 = await cmd(`${P}show_mask`);
     const id2 = await mine();
     check(r7.ok === true && !!id2 && id2 !== id1 && (await segIds()).includes(id2!), "消したあと、もう一度出せる（別の id）", r7);
+
+    // --- 5. ツール別の待ち時間（aiTools[].timeoutSec） ---
+    console.log("\n[5] ツール別の待ち時間（35 秒かかるツール）");
+    const t0 = Date.now();
+    const r8 = await cmd(`${P}slow_long`);
+    const s8 = Math.round((Date.now() - t0) / 1000);
+    check(r8.ok === true && (r8.data as { done?: boolean } | undefined)?.done === true && s8 >= 34, "timeoutSec=60 を宣言したツールは 35 秒かかっても成功する", { r8, s8 });
+    const t1 = Date.now();
+    const r9 = await cmd(`${P}slow_default`);
+    const s9 = Math.round((Date.now() - t1) / 1000);
+    check(r9.ok === false && r9.error === "timeout" && s9 >= 29 && s9 <= 36, "🔴 宣言なしの同じツールは従来どおり約 30 秒で timeout（待ちが全体に延びていない）", { r9, s9 });
   } finally {
     await driver.app
       .evaluate(({ dialog }) => {

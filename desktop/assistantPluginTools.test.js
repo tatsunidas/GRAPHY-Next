@@ -67,3 +67,10 @@ test("buildEntries: write は effect つきで出る。read・display の対照�
   const e = buildEntries([plugin("a", [tool("w", { effect: "write" }), tool("r"), tool("d", { effect: "display" })])]);
   assert.deepStrictEqual(e.map((x) => [x.tool, x.effect]), [["w", "write"], ["r", "read"], ["d", "display"]]);
 });
+
+test("buildEntries: timeoutSec は 5..900 の整数だけ timeoutMs になる。範囲外・小数・文字列・無しは持たない（負例）", () => {
+  const e = buildEntries([plugin("a", [tool("ok", { timeoutSec: 900 }), tool("lo", { timeoutSec: 4 }), tool("hi", { timeoutSec: 901 }), tool("fr", { timeoutSec: 60.5 }), tool("st", { timeoutSec: "60" }), tool("no")])]);
+  const by = Object.fromEntries(e.map((x) => [x.tool, x.timeoutMs]));
+  assert.strictEqual(by.ok, 900000);
+  for (const k of ["lo", "hi", "fr", "st", "no"]) assert.strictEqual(by[k], undefined, k);
+});

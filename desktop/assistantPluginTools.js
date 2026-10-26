@@ -46,7 +46,9 @@ function buildEntries(plugins) {
       if (!NAME_RE.test(name)) continue;
       // 名乗りは main が付ける（プラグインの説明文が別のプラグイン・本体を名乗れない）
       const description = `[plugin: ${pluginName}] ${t.effect === "write" ? "(writes data) " : ""}${oneLine(t.description, MAX_DESCRIPTION)}`;
-      out.push({ name, pluginId: p.id, pluginName, tool: t.name, effect: t.effect, description, parameters: t.parameters });
+      // 待ち時間は backend が範囲を検査した値。ここでも整数・範囲だけを通す（無ければ既定のまま）
+      const timeoutMs = Number.isInteger(t.timeoutSec) && t.timeoutSec >= 5 && t.timeoutSec <= 900 ? t.timeoutSec * 1000 : undefined;
+      out.push({ name, pluginId: p.id, pluginName, tool: t.name, effect: t.effect, description, parameters: t.parameters, ...(timeoutMs ? { timeoutMs } : {}) });
       if (out.length >= MAX_TOTAL_TOOLS) return out;
     }
   }

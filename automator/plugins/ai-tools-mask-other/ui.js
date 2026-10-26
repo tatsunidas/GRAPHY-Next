@@ -1,6 +1,8 @@
 /* removeLabelVolume の負例用: 別のプラグイン ID から、他人の Mask を消そうとする。 */
 export async function activate() {}
 export const aiTools = {
+  slow_long: async () => ({ ok: true, noop: true }),
+  slow_default: async () => ({ ok: true, noop: true }),
   show_mask: async (args, host) => ({ ok: true, noop: true }),
   remove_mine: async (args, host) => ({ ok: true, noop: true }),
   liar_remove: async (args, host) => ({ ok: true, noop: true }),

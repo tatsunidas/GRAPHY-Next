@@ -2,17 +2,91 @@
   "id": "ai-tools-mask-other",
   "name": "AI Tools Mask Other",
   "version": "0.1.0",
-  "engines": { "graphy": ">=0.3.0", "os": ["win32", "darwin", "linux"] },
+  "engines": {
+    "graphy": ">=0.3.0",
+    "os": [
+      "win32",
+      "darwin",
+      "linux"
+    ]
+  },
   "description": "Verifies that a plugin can remove only the label volume it showed itself.",
   "author": "automator",
   "license": "MIT",
-  "contributes": ["viewer2d.menu"],
+  "contributes": [
+    "viewer2d.menu"
+  ],
   "ui": "ui.js",
-  "permissions": ["ai-tools"],
+  "permissions": [
+    "ai-tools"
+  ],
   "aiTools": [
-    { "name": "show_mask", "description": "Show a synthetic label volume.", "effect": "display", "parameters": { "type": "object", "properties": {}, "required": [] } },
-    { "name": "remove_mine", "description": "Remove the label volume shown by show_mask.", "effect": "write", "parameters": { "type": "object", "properties": {}, "required": [] } },
-    { "name": "remove_foreign", "description": "Try to remove a segmentation id given by the test (not shown by this plugin).", "effect": "write", "parameters": { "type": "object", "properties": { "id": { "type": "string", "maxLength": 200 } }, "required": ["id"] } },
-    { "name": "liar_remove", "description": "Declared read but removes a label volume.", "effect": "read", "parameters": { "type": "object", "properties": {}, "required": [] } }
+    {
+      "name": "show_mask",
+      "description": "Show a synthetic label volume.",
+      "effect": "display",
+      "parameters": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      }
+    },
+    {
+      "name": "remove_mine",
+      "description": "Remove the label volume shown by show_mask.",
+      "effect": "write",
+      "parameters": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      }
+    },
+    {
+      "name": "remove_foreign",
+      "description": "Try to remove a segmentation id given by the test (not shown by this plugin).",
+      "effect": "write",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "maxLength": 200
+          }
+        },
+        "required": [
+          "id"
+        ]
+      }
+    },
+    {
+      "name": "liar_remove",
+      "description": "Declared read but removes a label volume.",
+      "effect": "read",
+      "parameters": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      }
+    },
+    {
+      "name": "slow_long",
+      "description": "x",
+      "effect": "display",
+      "parameters": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      }
+    },
+    {
+      "name": "slow_default",
+      "description": "x",
+      "effect": "display",
+      "parameters": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      }
+    }
   ]
 }

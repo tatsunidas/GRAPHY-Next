@@ -45,6 +45,22 @@ class AiToolSpecTest {
     }
 
     @Test
+    void timeoutSecIsKeptWithinRangeAndOtherValuesDropTheTool() throws Exception {
+        List<String> why = new ArrayList<>();
+        var ok = run("[{\"name\":\"a\",\"description\":\"d\",\"effect\":\"write\",\"timeoutSec\":900}]", OK, why);
+        assertEquals(1, ok.size());
+        assertEquals(900, ok.get(0).timeoutSec());
+        var none = run("[{\"name\":\"a\",\"description\":\"d\",\"effect\":\"read\"}]", OK, why);
+        assertEquals(null, none.get(0).timeoutSec());
+        for (String bad : List.of("4", "901", "60.5", "\"60\"", "null", "true")) {
+            List<String> w = new ArrayList<>();
+            var out = run("[{\"name\":\"a\",\"description\":\"d\",\"effect\":\"read\",\"timeoutSec\":" + bad + "}]", OK, w);
+            assertEquals(0, out.size(), "timeoutSec=" + bad);
+            assertEquals(1, w.size(), "reason logged for " + bad);
+        }
+    }
+
+    @Test
     void withoutPermissionNothingIsExposed() throws Exception {
         List<String> why = new ArrayList<>();
         String t = "[{\"name\":\"a\",\"description\":\"d\",\"effect\":\"read\"}]";
