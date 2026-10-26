@@ -238,6 +238,17 @@ describe("executeCaptureView", () => {
     expect(calls).toEqual([["tileB", true], ["tileB", false], ["tileB", false]]);
   });
 
+  it("crop: passes crop=true only for a boolean true; a refusal string becomes the error and no image is returned", async () => {
+    const seen: boolean[] = [];
+    const { deps } = mk({ captureTile: async (_id, _w, crop) => { seen.push(crop); return crop ? "no-selected-roi" : img; } });
+    expect(await executeCaptureView(deps, { kind: "captureView", crop: true })).toEqual({ ok: false, error: "no-selected-roi" });
+    expect(await executeCaptureView(deps, { kind: "captureView" })).toEqual({ ok: true, image: img });
+    expect(await executeCaptureView(deps, { kind: "captureView", crop: "yes" as unknown as boolean })).toEqual({ ok: true, image: img });
+    expect(seen).toEqual([true, false, false]);
+    const off = mk({ captureTile: async () => "roi-not-visible" });
+    expect(await executeCaptureView(off.deps, { kind: "captureView", crop: true })).toEqual({ ok: false, error: "roi-not-visible" });
+  });
+
   it("falls back to the first tile when nothing is selected", async () => {
     const { deps, calls } = mk({ targets: () => [] });
     await executeCaptureView(deps, { kind: "captureView" });

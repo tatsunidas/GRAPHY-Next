@@ -9,7 +9,7 @@ import { queryViewerCommand, runViewerCommand } from "../viewer/viewerCommands";
 import { runSeriesCommand } from "../viewer/seriesCommands";
 import { TOOL_IDS } from "../viewer/toolIds";
 import type { DisplayTool } from "../assistant/actions/registry";
-import { executeCaptureView, executeCommand, type BridgeDeps, type CapturedImage, type WlPresetLite } from "./assistantBridge";
+import { executeCaptureView, executeCommand, type BridgeDeps, type CapturedImage, type CaptureRefusal, type WlPresetLite } from "./assistantBridge";
 import { executePluginTool, type PluginToolDeps } from "./pluginToolBridge";
 import { loadPluginAiTool, loadPluginManifests } from "../plugins/pluginRegistry";
 import { getPluginToolHostSeed } from "../plugins/pluginToolHost";
@@ -43,7 +43,7 @@ export interface AssistantBridgeInput {
   setTool: (toolId: string) => void;
   setLayoutCols: (n: number) => void;
   presets: WlPresetLite[];
-  captureTile: (tileId: string, withRoi: boolean) => Promise<CapturedImage | null>;
+  captureTile: (tileId: string, withRoi: boolean, crop: boolean) => Promise<CapturedImage | CaptureRefusal | null>;
 }
 
 /** 最新の入力を ref で持ち、購読は 1 回だけ張る（命令のたびに外れて取りこぼさない）。 */
@@ -60,7 +60,7 @@ export function useAssistantBridge(input: AssistantBridgeInput): void {
       readView: (id) => queryViewerCommand(id, (c) => c.getViewState()),
       readRois: () =>
         ref.current.tileIds.flatMap((id, tileIndex) => (queryViewerCommand(id, (c) => c.getRois()) ?? []).map((r) => ({ ...r, tileIndex }))),
-      captureTile: (id, withRoi) => ref.current.captureTile(id, withRoi),
+      captureTile: (id, withRoi, crop) => ref.current.captureTile(id, withRoi, crop),
       run: (ids, fn) => runViewerCommand(ids, fn),
       runSeries: (ids, fn) => runSeriesCommand(ids, fn),
       activeTool: () => ref.current.activeTool,
@@ -79,7 +79,7 @@ export function useAssistantBridge(input: AssistantBridgeInput): void {
         return;
       }
       if (cmd.kind === "captureView") {
-        void executeCaptureView(deps, { kind: "captureView", withRoi: cmd.withRoi === true })
+        void executeCaptureView(deps, { kind: "captureView", withRoi: cmd.withRoi === true, crop: cmd.crop === true })
           .catch(() => ({ ok: false as const, error: "capture-failed" }))
           .then((r) => d.viewerCmdResult?.(cmd.reqId, r));
         return;
