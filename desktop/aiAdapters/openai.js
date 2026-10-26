@@ -358,6 +358,11 @@ function normalizeChat(json) {
   const reason = typeof choice.finish_reason === "string" ? choice.finish_reason : null;
   if (reason) out.finishReason = reason;
   if (!out.text && !out.toolCalls && reason && reason !== "stop") out.blockReason = reason;
+  const u = asRecord(root.usage);
+  const usage = wire.usageOf(u && u.prompt_tokens, u && u.completion_tokens);
+  if (usage) out.usage = usage;
+  const mv = wire.modelVersionOf(root.model);
+  if (mv) out.modelVersion = mv;
   return out;
 }
 
@@ -370,6 +375,8 @@ function normalizeChat(json) {
 function createStreamParser() {
   let text = "";
   let finishReason = null;
+  let usage = null;
+  let model = null;
   const calls = new Map();
   return {
     push(data) {
@@ -380,6 +387,9 @@ function createStreamParser() {
       } catch {
         return [];
       }
+      // 使用量は choices が空の最終チャンクで届く（要求に include_usage を足していないので、届かない提供元もある＝不明）
+      if (asRecord(json && json.usage)) usage = json.usage;
+      if (json && typeof json.model === "string") model = json.model;
       const choice = asRecord(Array.isArray(json && json.choices) ? json.choices[0] : null);
       if (!choice) return [];
       const events = [];
@@ -408,6 +418,8 @@ function createStreamParser() {
         .map(([, c]) => ({ id: c.id, function: { name: c.name, arguments: c.arguments } }));
       return normalizeChat({
         choices: [{ message: { content: text, tool_calls }, finish_reason: finishReason }],
+        ...(usage ? { usage } : {}),
+        ...(model ? { model } : {}),
       });
     },
   };

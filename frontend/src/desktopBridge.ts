@@ -530,6 +530,15 @@ export interface GraphyDesktop {
     entries?: { ts: string; id: string; params?: Record<string, unknown>; ok: boolean; error?: string }[];
     error?: string;
   }>;
+  /** AI への要求の記録（本文なし）。件数・モデル別の合計・直近の記録。取れなかった値は null（0 で埋めない）。アシスタント窓だけ。 */
+  assistantRequestLogSummary?: () => Promise<{
+    ok: boolean;
+    count?: number;
+    byModel?: { provider: string | null; model: string | null; requests: number; tokensIn: number; tokensOut: number; unknownUsage: number }[];
+    recent?: Record<string, unknown>[];
+    error?: string;
+  }>;
+  assistantRequestLogClear?: () => Promise<{ ok: boolean; error?: string }>;
   assistantMacrosList?: () => Promise<{ ok: boolean; macros?: import("./assistant/macros/macroModel").Macro[]; error?: string }>;
   assistantMacrosSave?: (macro: {
     name: string;

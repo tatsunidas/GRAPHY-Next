@@ -354,7 +354,10 @@ function readChatParts(json, makeId) {
   const blocked = asRecord(root && root.promptFeedback) && typeof root.promptFeedback.blockReason === "string"
     ? root.promptFeedback.blockReason
     : null;
-  return { texts, toolCalls, reason, blocked };
+  const um = asRecord(root && root.usageMetadata);
+  const usage = wire.usageOf(um && um.promptTokenCount, um && um.candidatesTokenCount);
+  const modelVersion = wire.modelVersionOf(root && root.modelVersion);
+  return { texts, toolCalls, reason, blocked, usage, modelVersion };
 }
 
 let idCounter = 0;
@@ -365,8 +368,10 @@ function defaultMakeId() {
 
 /** 会話の応答（非ストリーミング）→ 提供元非依存の形。 */
 function normalizeChat(json, opts) {
-  const { texts, toolCalls, reason, blocked } = readChatParts(json, (opts && opts.makeId) || defaultMakeId);
+  const { texts, toolCalls, reason, blocked, usage, modelVersion } = readChatParts(json, (opts && opts.makeId) || defaultMakeId);
   const out = {};
+  if (usage) out.usage = usage;
+  if (modelVersion) out.modelVersion = modelVersion;
   const text = texts.join("").trim();
   if (text) out.text = text;
   if (toolCalls.length > 0) out.toolCalls = toolCalls;
@@ -385,6 +390,8 @@ function createStreamParser(opts) {
   const toolCalls = [];
   let reason = null;
   let blocked = null;
+  let usage;
+  let modelVersion;
   return {
     push(data) {
       let json;
@@ -397,6 +404,8 @@ function createStreamParser(opts) {
       toolCalls.push(...r.toolCalls);
       if (r.reason) reason = r.reason;
       if (r.blocked) blocked = r.blocked;
+      if (r.usage) usage = r.usage; // 各チャンクが累計を持つので、最後の値を使う
+      if (r.modelVersion) modelVersion = r.modelVersion;
       const chunk = r.texts.join("");
       if (!chunk) return [];
       text += chunk;
@@ -404,6 +413,8 @@ function createStreamParser(opts) {
     },
     result() {
       const out = {};
+      if (usage) out.usage = usage;
+      if (modelVersion) out.modelVersion = modelVersion;
       const t = text.trim();
       if (t) out.text = t;
       if (toolCalls.length > 0) out.toolCalls = toolCalls;
