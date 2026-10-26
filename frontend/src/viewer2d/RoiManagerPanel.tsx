@@ -45,6 +45,7 @@ import { saveRoiNow, scheduleRoiSave, subscribeRoiSave } from "../viewer/roiSave
 import { RoiMetaEditDialog } from "./RoiMetaEditDialog";
 import { RoiStatsDialog, type RoiStatsTarget } from "./RoiStatsDialog";
 import { useI18n } from "../i18n/i18n";
+import { useDateFormat, formatClockTime } from "../i18n/dateFormat";
 import { useFusionMeasure } from "../viewer/fusionMeasureContext";
 import { NumField } from "./WandDialog";
 import { formatNumber, valueUnitLabel } from "../viewer/roiStatsText";
@@ -125,6 +126,7 @@ export function RoiManagerPanel({
   onClose: () => void;
 }) {
   const { t } = useI18n();
+  useDateFormat(); // 書式の設定が変わったら再描画する
   const fusionMeasure = useFusionMeasure();
   const [model, setModel] = useState<RoiPanelModel>({ rois: [], measures: [] });
   const [editId, setEditId] = useState<string | null>(null);
@@ -207,7 +209,7 @@ export function RoiManagerPanel({
     if (!shownPatients.includes(pk)) return;
     setLastSave({
       ok: r.ok,
-      at: new Date().toLocaleTimeString(),
+      at: formatClockTime(new Date(), { seconds: true }),
       count: r.roiCount,
       error: r.error,
     });

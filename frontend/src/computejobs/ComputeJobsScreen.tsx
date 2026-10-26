@@ -8,6 +8,7 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "rea
 import { fetchStudies } from "../api";
 import { desktop, type ComputeEndpointEntry } from "../desktopBridge";
 import { useI18n, type TFn } from "../i18n/i18n";
+import { useDateFormat, formatClockTime } from "../i18n/dateFormat";
 import {
   cancelComputeBatch,
   cancelComputeJob,
@@ -523,6 +524,7 @@ export function ComputeJobsScreen() {
 }
 
 function JobDetail({ job, t, patient, attempts }: { job: ComputeJobView; t: TFn; patient: string; attempts: ComputeJobView[] }) {
+  useDateFormat(); // 書式の設定が変わったら再描画する
   const [log, setLog] = useState<{ kind: ComputeLogKind; text: string | null } | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -544,7 +546,7 @@ function JobDetail({ job, t, patient, attempts }: { job: ComputeJobView; t: TFn;
 
   const fmt = (v: string | number | null) => {
     const ms = toMillis(v);
-    return ms == null ? null : new Date(ms).toLocaleTimeString();
+    return ms == null ? null : formatClockTime(ms, { seconds: true });
   };
   const dur =
     toMillis(job.startedAt) != null

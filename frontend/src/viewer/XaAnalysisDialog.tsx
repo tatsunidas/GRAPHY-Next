@@ -21,6 +21,7 @@ import {
   type AngioPresentationRequest,
 } from "../api";
 import { useI18n } from "../i18n/i18n";
+import { useDateFormat, formatDateTime } from "../i18n/dateFormat";
 import { publishQcaSnapshot } from "./debugApi";
 import { readModalitySlice } from "./pixelCalibration";
 import { QcaEditor, type QcaEditMode } from "./QcaEditor";
@@ -250,10 +251,7 @@ function collectLengthPicks(
 
 /** 保存時刻を画面用に短くする。読めない ISO をそのまま出さない。 */
 function formatSavedAt(iso: string): string {
-  const d = new Date(iso);
-  if (!Number.isFinite(d.getTime())) return iso;
-  const p = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+  return formatDateTime(iso);
 }
 
 /** 保存（GSPS / SR）に必要な、表示中フレームの素性。SeriesViewer から渡す。 */
@@ -291,6 +289,7 @@ export function XaAnalysisDialog({
 }) {
   const defaultReference: QcaReferenceMode = { kind: "auto" };
   const { t } = useI18n();
+  useDateFormat(); // 書式の設定が変わったら再描画する
   // 校正を確定/解除したら自分の表示も更新する（imageId は変わらないので版番号で回す）。
   const [calibVersion, setCalibVersion] = useState(0);
   const calib = useMemo(

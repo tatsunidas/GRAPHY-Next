@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DATE_FORMATS, formatDicomDate, formatDicomTime, isAmbiguousDateFormat, sampleDate, sampleTime } from "./dateFormat";
+import { DATE_FORMATS, formatClockTime, formatDateTime, formatDicomDate, formatDicomTime, isAmbiguousDateFormat, sampleDate, sampleTime } from "./dateFormat";
 
 describe("formatDicomDate", () => {
   it("5 書式で 20261018 を整える", () => {
@@ -53,5 +53,30 @@ describe("見本・曖昧な書式", () => {
   });
   it("DD/MM と MM/DD だけが曖昧", () => {
     expect(DATE_FORMATS.filter((f) => isAmbiguousDateFormat(f))).toEqual(["DD/MM/YYYY", "MM/DD/YYYY"]);
+  });
+});
+
+describe("formatDateTime / formatClockTime（アプリの日時）", () => {
+  const d = new Date(2026, 9, 18, 14, 30, 5); // ローカル時刻 2026-10-18 14:30:05
+  it("既定は YYYY-MM-DD HH:mm（秒は指定したときだけ）", () => {
+    expect(formatDateTime(d, {}, "YYYY-MM-DD", "24h")).toBe("2026-10-18 14:30");
+    expect(formatDateTime(d, { seconds: true }, "YYYY-MM-DD", "24h")).toBe("2026-10-18 14:30:05");
+  });
+  it("5 書式 × 12 時間", () => {
+    const want = ["2026-10-18", "2026/10/18", "18/10/2026", "10/18/2026", "18-Oct-2026"];
+    DATE_FORMATS.forEach((f, i) => expect(formatDateTime(d, { seconds: true }, f, "12h")).toBe(`${want[i]} 2:30:05 PM`));
+  });
+  it("0 時は 12 AM、12 時は 12 PM", () => {
+    expect(formatClockTime(new Date(2026, 0, 1, 0, 0, 0), { seconds: true }, "12h")).toBe("12:00:00 AM");
+    expect(formatClockTime(new Date(2026, 0, 1, 12, 0, 0), { seconds: true }, "12h")).toBe("12:00:00 PM");
+  });
+  it("ISO 文字列・ミリ秒の数値も受ける", () => {
+    expect(formatDateTime(d.toISOString(), {}, "DD/MM/YYYY", "24h")).toBe("18/10/2026 14:30");
+    expect(formatClockTime(d.getTime(), { seconds: true }, "24h")).toBe("14:30:05");
+  });
+  it("負例: 読めない値は元の文字列のまま（Invalid Date と書かない）", () => {
+    expect(formatDateTime("not-a-date")).toBe("not-a-date");
+    expect(formatDateTime(new Date(NaN))).not.toContain("Invalid");
+    expect(formatClockTime("")).toBe("");
   });
 });

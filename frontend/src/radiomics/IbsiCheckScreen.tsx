@@ -13,6 +13,7 @@ import { useEffect, useMemo, useState } from "react";
 import { fetchIbsiCheck, fetchIbsiRecords } from "../api";
 import { HttpError } from "../http";
 import { useI18n } from "../i18n/i18n";
+import { useDateFormat, formatDateTime } from "../i18n/dateFormat";
 import {
   filterRows, ibsiFileBase, ibsiResultJson, passedOf, summarize,
   type IbsiCheckResult, type IbsiFilter, type IbsiReport, type IbsiRow, type IbsiVerdict,
@@ -32,14 +33,12 @@ function download(text: string, filename: string, type: string) {
 const num = (v: number | null): string => (v == null ? "—" : String(Number(v.toPrecision(6))));
 
 function formatRanAt(iso: string): string {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
-  const p = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+  return formatDateTime(iso);
 }
 
 export function IbsiCheckScreen() {
   const { t } = useI18n();
+  useDateFormat(); // 書式の設定が変わったら再描画する
   const [result, setResult] = useState<IbsiCheckResult | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);

@@ -148,7 +148,7 @@ import { desktop } from "../desktopBridge";
 import { studyUidsOfTiles, useStudyInUse } from "../retention/useStudyInUse";
 import { closeAllPluginWindows } from "../plugins/pluginWindowApi";
 import { mountSeriesPanel, closeAllSeriesPanels, PluginSeriesPanels } from "../plugins/pluginSeriesPanelApi";
-import { formatDicomDate, useDateFormat } from "../i18n/dateFormat";
+import { formatDateTime, formatDicomDate, useDateFormat } from "../i18n/dateFormat";
 
 // ── 型定義 ────────────────────────────────────────────────────
 
@@ -2917,6 +2917,7 @@ function TileCell({
   onDrop: (targetTileId: string, zone: "before" | "after" | "center" | "none") => void;
 }) {
   const { t } = useI18n();
+  useDateFormat(); // 書式の設定が変わったら再描画する
   // 動画タイル（表示の操作だけを受けるタイル）。同期（🔗）の対象外
   const isVideoTile = useIsDisplayOnlyTile(commandKey);
   // ドラッグオーバー中のゾーン（ビジュアルオーバーレイ制御用）
@@ -3478,13 +3479,13 @@ function TileCell({
         <div style={restoreState.kind === "stale" ? restoreStaleBar : restoreBar}>
           {restoreState.kind === "restored" ? (
             <span>
-              {t("registration.restored", { at: new Date(restoreState.savedAt).toLocaleString() })}
+              {t("registration.restored", { at: formatDateTime(restoreState.savedAt) })}
               {/* 承認済みの記録は、そうと分かるようにする。データに印だけ残して
                   画面に出さないと、利用者からは普通の復元と区別がつかない。 */}
               {restoreState.accepted && (
                 <span style={{ marginLeft: 6, opacity: 0.85 }}>
                   {t("registration.acceptedNote", {
-                    at: new Date(restoreState.accepted.at).toLocaleString(),
+                    at: formatDateTime(restoreState.accepted.at),
                   })}
                 </span>
               )}

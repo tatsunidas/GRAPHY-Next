@@ -5,11 +5,13 @@
 /** 削除の記録（新しい順）。自動削除の設定とメイン画面の知らせから開く。 */
 import { useEffect, useState, type CSSProperties } from "react";
 import { useI18n } from "../i18n/i18n";
+import { useDateFormat } from "../i18n/dateFormat";
 import { fetchRetentionEvents } from "./retentionApi";
 import { formatBytes, formatTime, reasonKey, resultColor, resultKey, type RetentionEvent } from "./retentionView";
 
 export function RetentionLogDialog({ onClose }: { onClose: () => void }) {
   const { t } = useI18n();
+  useDateFormat(); // 書式の設定が変わったら再描画する
   const [events, setEvents] = useState<RetentionEvent[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
