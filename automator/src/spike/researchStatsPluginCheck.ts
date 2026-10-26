@@ -65,6 +65,20 @@ function synthR1(n: number): { feat: string; clin: string } {
   return { feat: feat.join("\r\n") + "\r\n", clin: clin.join("\r\n") + "\r\n" };
 }
 
+/** 判別（R2）用の合成データ。f_a は強く、f_b は中くらいに結果ラベルと関係し、f_n1〜f_n3 は無関係。決定的な乱数で作る。 */
+function synthR2(n: number): { feat: string; clin: string } {
+  let a = 777;
+  const rnd = () => { a = (Math.imul(a, 1664525) + 1013904223) >>> 0; return a / 4294967296; };
+  const norm = () => { let s = 0; for (let k = 0; k < 6; k++) s += rnd(); return s - 3; };
+  const feat = ["CaseLabel,f_a,f_b,f_n1,f_n2,f_n3"], clin = ["CaseLabel,outcome,age"];
+  for (let i = 0; i < n; i++) {
+    const g = rnd() < 0.45 ? 1 : 0;
+    feat.push([`D${i}`, (norm() + 1.6 * g).toFixed(4), (norm() + 0.8 * g).toFixed(4), norm().toFixed(4), norm().toFixed(4), norm().toFixed(4)].join(","));
+    clin.push(`D${i},${g === 1 ? "resp" : "no"},${40 + (i % 30)}`);
+  }
+  return { feat: feat.join("\r\n") + "\r\n", clin: clin.join("\r\n") + "\r\n" };
+}
+
 async function main(): Promise<void> {
   fs.rmSync(OUT_DIR, { recursive: true, force: true });
   fs.mkdirSync(OUT_DIR, { recursive: true });
@@ -283,6 +297,78 @@ async function main(): Promise<void> {
     await page.getByTestId("rs-run").click();
     await page.getByTestId("rs-r1").waitFor({ state: "visible", timeout: 120_000 });
     check((await page.getByTestId("rs-r1-notice").allInnerTexts()).some((x) => x.includes("多重比較の補正をしていません")) && (await page.getByTestId("rs-r1-q").count()) === 0, "補正なしを選ぶと、その旨が出て q の列は無い");
+
+    console.log("\n[7] 2 群の判別（R2）: 別実装（scikit-learn・statsmodels・scipy・総当たり）との突き合わせ");
+    const r2 = synthR2(100);
+    const r2Feat = write("r2_feat.csv", r2.feat), r2Clin = write("r2_clin.csv", r2.clin);
+    const r2RefPath = path.join(OUT_DIR, "r2_reference.json");
+    execFileSync("python3", ["-I", path.join(AUTOMATOR_ROOT, "src", "spike", "researchStatsR2Reference.py"), r2Feat, r2Clin, r2RefPath]);
+    type R2Row = { direction: string; auc: number; se: number; p: number; q: number; cut: { cut: number; tp: number; fp: number; tn: number; fn: number } };
+    const r2ref = JSON.parse(fs.readFileSync(r2RefPath, "utf8")) as { rows: Record<string, R2Row>; meets: string[]; combo?: { features: string[]; apparent_auc: number; loo_auc: number; loo_cm: { tp: number; fp: number; tn: number; fn: number } }; tree: { depth: number; n: number; pos: number; feature: string | null; direction: string | null; cut: number | null; label: number }[] };
+    check(r2ref.meets.includes("f_a") && !!r2ref.combo && r2ref.tree.length > 1, "参照側でも f_a が基準を満たし、組み合わせと木ができる（合成データの効果が出ている）", r2ref.meets);
+    await page.getByTestId("rs-file-features").setInputFiles([r2Feat]);
+    await page.getByTestId("rs-file-clinical").setInputFiles(r2Clin);
+    await page.waitForFunction(() => !(document.querySelector('[data-testid="rs-run"]') as HTMLButtonElement | null)?.disabled, null, { timeout: 15_000 });
+    await page.getByTestId("rs-recipe").selectOption("r2-discrimination");
+    await page.getByTestId("rs-multiplicity").selectOption("bh"); // [6] で「補正なし」にした設定が残っているので戻す
+    check((await page.getByTestId("rs-positive").inputValue()) === "", "陽性とするラベルの既定は決めていない（選ぶまで空）");
+    const labelsOffered = await page.getByTestId("rs-positive").locator("option").allInnerTexts();
+    check(labelsOffered.includes("resp") && labelsOffered.includes("no"), "結果ラベルの値が選択肢に出る", labelsOffered);
+    await page.getByTestId("rs-run").click();
+    await page.getByTestId("rs-errors").waitFor({ state: "visible", timeout: 20_000 });
+    check(/陽性とするラベルを選んでください/.test(await page.getByTestId("rs-errors").innerText()) && (await page.getByTestId("rs-r2").count()) === 0, "陽性ラベルを選ばずに実行すると、理由を出して止まる（負例）");
+    await page.getByTestId("rs-positive").selectOption("resp");
+    await page.getByTestId("rs-tree-on").check();
+    await page.getByTestId("rs-mc").fill("300");
+    await page.getByTestId("rs-mc").dispatchEvent("change");
+    await page.getByTestId("rs-run").click();
+    await page.getByTestId("rs-r2").waitFor({ state: "visible", timeout: 120_000 });
+    const r2Rows = await page.getByTestId("rs-r2-row").evaluateAll((rs) => rs.map((r) => ({ f: (r as HTMLElement).dataset.feature ?? "", cells: Array.from(r.querySelectorAll("td")).map((c) => c.textContent ?? "") })));
+    check(r2Rows.length === 5 && r2Rows[0].f === "f_a", "5 つの特徴量が p の小さい順に出る（先頭は f_a）", r2Rows.map((r) => r.f));
+    const aucOk = r2Rows.every((r) => Math.abs(Number(r.cells[3].split(" ")[0]) - r2ref.rows[r.f].auc) <= 6e-4);
+    check(aucOk, "表の AUC が scikit-learn と一致（表示は小数 3 桁）", r2Rows.map((r) => [r.cells[3], r2ref.rows[r.f].auc]));
+    const n7 = await count();
+    await page.getByTestId("rs-save-r2-results").click();
+    const r2Csv = await downloaded("research-stats-r2-results.csv", n7);
+    const L2 = r2Csv.trim().split("\r\n").map((l) => l.split(","));
+    const c2 = (name: string) => L2[0].indexOf(name);
+    const e2 = L2.slice(1).map((l) => ({ f: l[c2("feature")], auc: Number(l[c2("auc")]), lo: Number(l[c2("auc_lower")]), p: Number(l[c2("mannwhitney_p")]), q: Number(l[c2("q_bh")]), cut: Number(l[c2("cut")]), tp: Number(l[c2("tp")]), fp: Number(l[c2("fp")]), tn: Number(l[c2("tn")]), fn: Number(l[c2("fn")]), dir: l[c2("direction")] }));
+    const r = (x: number, y2: number) => Math.abs(x - y2) / Math.abs(y2);
+    check(e2.every((e) => r(e.auc, r2ref.rows[e.f].auc) < 1e-9 && r(e.p, r2ref.rows[e.f].p) < 1e-6 && r(e.q, r2ref.rows[e.f].q) < 1e-6), "書き出した CSV の AUC・p・q が参照と一致（相対 1e-6 以内）");
+    check(e2.every((e) => Math.abs(e.cut - r2ref.rows[e.f].cut.cut) < 1e-9 && e.tp === r2ref.rows[e.f].cut.tp && e.fp === r2ref.rows[e.f].cut.fp && e.tn === r2ref.rows[e.f].cut.tn && e.fn === r2ref.rows[e.f].cut.fn && e.dir === r2ref.rows[e.f].direction), "しきい値と混同行列（精度最大）・向きが総当たりの参照と一致");
+    const se0 = e2.find((e) => e.f === "f_a")!;
+    check(Math.abs((se0.auc - se0.lo) - 1.959964 * r2ref.rows.f_a.se) < 1e-4, "AUC の信頼区間の幅が、定義どおりの DeLong の標準誤差と一致", { half: se0.auc - se0.lo, ref: 1.959964 * r2ref.rows.f_a.se });
+    const cmFeat = await page.getByTestId("rs-cm-feature").locator("td").allInnerTexts();
+    check(r2Rows[0].f === "f_a" && cmFeat.join() === [r2ref.rows.f_a.cut.tp, r2ref.rows.f_a.cut.fn, r2ref.rows.f_a.cut.fp, r2ref.rows.f_a.cut.tn].join(), "混同行列の表示（f_a）が参照と一致", cmFeat);
+    // 組み合わせ・LOO
+    check((await page.getByTestId("rs-combo-table").locator("tbody tr td:first-child").allInnerTexts()).join() === r2ref.combo!.features.join(), "組み合わせの特徴量が参照と同じ", r2ref.combo!.features);
+    const apparent = Number((await page.getByTestId("rs-auc-apparent").innerText()).match(/: ([0-9.]+)/)?.[1]);
+    const looAuc = Number((await page.getByTestId("rs-auc-loo").innerText()).match(/: ([0-9.]+)/)?.[1]);
+    check(Math.abs(apparent - r2ref.combo!.apparent_auc) <= 6e-4, "組み合わせの AUC（見かけ）が一致", { shown: apparent, ref: r2ref.combo!.apparent_auc });
+    check(Math.abs(looAuc - r2ref.combo!.loo_auc) <= 6e-4, "LOO の AUC（選択を各折の内側でやり直す）が statsmodels で別に回した値と一致", { shown: looAuc, ref: r2ref.combo!.loo_auc });
+    check(looAuc <= apparent + 0.02, "LOO の AUC は見かけの AUC を（ほぼ）超えない", { looAuc, apparent });
+    const cmLoo = await page.getByTestId("rs-cm-loo").locator("td").allInnerTexts();
+    check(cmLoo.join() === [r2ref.combo!.loo_cm.tp, r2ref.combo!.loo_cm.fn, r2ref.combo!.loo_cm.fp, r2ref.combo!.loo_cm.tn].join(), "LOO の混同行列（予測確率 0.5）が参照と一致", cmLoo);
+    check((await page.getByTestId("rs-r2-notice").innerText()).includes("見かけ"), "「性能は見かけ。検証したのは LOO だけ」の表示が常に出る");
+    // 決定木
+    const n8 = await count();
+    await page.getByTestId("rs-save-tree").click();
+    const treeCsvText = await downloaded("research-stats-r2-tree.csv", n8);
+    const TL = treeCsvText.trim().split("\r\n").map((l) => l.split(","));
+    const tc = (name: string) => TL[0].indexOf(name);
+    const treeRows = TL.slice(1).map((l) => ({ depth: Number(l[tc("depth")]), n: Number(l[tc("n")]), pos: Number(l[tc("positives")]), feature: l[tc("feature")] || null, direction: l[tc("direction")] || null, cut: l[tc("cut")] === "" ? null : Number(l[tc("cut")]), label: Number(l[tc("label")]) }));
+    const treeSame = treeRows.length === r2ref.tree.length && treeRows.every((t2, i) => {
+      const g = r2ref.tree[i];
+      return t2.depth === g.depth && t2.n === g.n && t2.pos === g.pos && t2.feature === g.feature && t2.direction === g.direction && t2.label === g.label && (g.cut === null ? t2.cut === null : Math.abs((t2.cut as number) - g.cut) < 1e-9);
+    });
+    check(treeSame, "決定木の全節点（特徴量・向き・しきい値・症例数・判定）が独立に書いた木と一致", { ui: treeRows.length, ref: r2ref.tree.length });
+    check((await page.getByTestId("rs-tree-mc").innerText()).includes("300 回") && (await page.getByTestId("rs-tree-perf").innerText()).includes("検証していません"), "木の性能は「検証していません」と明記され、モンテカルロ 300 回の区間が出る");
+    await page.getByTestId("rs-r2").screenshot({ path: path.join(OUT_DIR, "07-r2.png") });
+    await page.getByTestId("rs-roc-svg").screenshot({ path: path.join(OUT_DIR, "08-roc.png") });
+    await page.getByTestId("rs-cal-svg").screenshot({ path: path.join(OUT_DIR, "09-calibration.png") });
+    await page.getByTestId("rs-dca-svg").screenshot({ path: path.join(OUT_DIR, "10-dca.png") });
+    const legends = await page.getByTestId("rs-roc-svg-legend").evaluateAll((es) => es.map((e) => e.textContent ?? ""));
+    check(legends.length === 3, "ROC 図の凡例は 3 系列（選んだ特徴量・組み合わせの見かけと LOO）", legends);
   } finally {
     await driver.stop();
     fs.rmSync(path.join(PLUGINS_DIR, PLUGIN_ID), { recursive: true, force: true });
