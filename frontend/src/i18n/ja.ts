@@ -3248,6 +3248,11 @@ export const ja: Record<string, string> = {
   "settings.field.localAePort.help": "ローカル DIMSE リスナー（C-STORE/C-ECHO 受信）が待ち受けるポート。反映にはアプリの再起動が必要。",
   "settings.field.localAeBindAddress": "SCP バインドアドレス",
   "settings.field.localAeBindAddress.help": "ローカル DIMSE リスナーがバインドするネットワークインタフェース（0.0.0.0=全 NIC）。反映にはアプリの再起動が必要。",
+  "settings.sec.receiveCompress": "受信時の画像圧縮",
+  "settings.field.receiveCompress": "受信した画像を保管庫で圧縮する",
+  "settings.field.receiveCompress.help": "オンにすると、受信（C-STORE・C-GET）した非圧縮の CT・MR・CR・DX・MG・PT の画像を、保管庫に入れる前に可逆圧縮（JPEG-LS）します。復号した画素が元と 1 バイトでも違えば、圧縮せず元のまま保存します。保管容量は減りますが、受信に時間がかかります。すでに圧縮されている画像と、それ以外の種類（SR・SEG・動画・カラーなど）は変えません。圧縮に対応していない外部ツールで保管庫を直接読む場合はオフのままにしてください。次の受信から効きます。",
+  "settings.opt.receiveCompress.off": "オフ（そのまま保存）",
+  "settings.opt.receiveCompress.jpegls": "可逆圧縮する（JPEG-LS）",
   "settings.sec.pacs": "PACS 連携（web）",
   "settings.field.pacsUiUrl": "PACS 管理 UI の URL",
   "settings.field.pacsUiUrl.help":

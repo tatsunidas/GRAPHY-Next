@@ -3257,6 +3257,11 @@ export const en: Record<string, string> = {
   "settings.field.localAePort.help": "Port the local DIMSE listener (C-STORE/C-ECHO receiver) binds to. Requires an app restart to take effect.",
   "settings.field.localAeBindAddress": "SCP bind address",
   "settings.field.localAeBindAddress.help": "Network interface the local DIMSE listener binds to (0.0.0.0 = all interfaces). Requires an app restart to take effect.",
+  "settings.sec.receiveCompress": "Compression on receive",
+  "settings.field.receiveCompress": "Compress received images in the archive",
+  "settings.field.receiveCompress.help": "When on, uncompressed CT, MR, CR, DX, MG and PT images received over C-STORE or C-GET are losslessly compressed (JPEG-LS) before they enter the archive. If the decoded pixels differ from the original by even one byte, the image is stored as received. Saves space but receiving takes longer. Images that are already compressed, and other kinds (SR, SEG, video, colour, ...), are never changed. Leave off if external tools read the archive directly and cannot handle compressed files. Takes effect from the next receive.",
+  "settings.opt.receiveCompress.off": "Off (store as received)",
+  "settings.opt.receiveCompress.jpegls": "Lossless compression (JPEG-LS)",
   "settings.sec.pacs": "PACS Integration (web)",
   "settings.field.pacsUiUrl": "PACS admin UI URL",
   "settings.field.pacsUiUrl.help":
