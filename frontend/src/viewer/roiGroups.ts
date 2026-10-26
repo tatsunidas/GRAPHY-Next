@@ -36,6 +36,14 @@ export function planGroup(
   return { ok: true, groupId: newId(), name: defaultName };
 }
 
+/**
+ * 患者を特定できない塗り ROI・球のキー。形・計測（`a:`）は旧データで患者が空のことがあるので除く。
+ * 塗り・球は患者不明のまま別患者のものと混ざり得るので、グループにしない。
+ */
+export function unresolvedMembers(keys: readonly string[], patientOf: (key: string) => string | undefined): string[] {
+  return keys.filter((k) => k[0] !== "a" && !patientOf(k));
+}
+
 /** 既定名「<prefix> <n>」の次の番号（既存の同形式の最大 + 1。無ければ 1）。 */
 export function nextGroupNumber(existingNames: ReadonlyArray<string | undefined>, prefix: string): number {
   const escaped = prefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
