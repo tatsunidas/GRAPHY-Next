@@ -85,7 +85,7 @@ export interface StudyFilters {
 
 export const fetchStatus = () => httpGet<AppStatus>("/api/status");
 
-export const fetchStudies = (filters?: StudyFilters) => {
+const fetchStudiesOnce = (filters?: StudyFilters) => {
   const params = new URLSearchParams();
   if (filters) {
     for (const [k, v] of Object.entries(filters)) {
@@ -94,6 +94,22 @@ export const fetchStudies = (filters?: StudyFilters) => {
   }
   const qs = params.toString();
   return httpGet<Study[]>(`/api/studies${qs ? `?${qs}` : ""}`);
+};
+
+/**
+ * `studyInstanceUid`（カンマ区切り）が URL に収まらない長さなら、`urlChunk.ts` で分けて取り、
+ * 重複を除いて結合する（アルバムや取り込み直後の一覧）。**1 本に収まるときは今までと同じ 1 リクエスト**。
+ * 1 つでも失敗したら全体を失敗にする（一部だけ出して「残りは無い」と読ませない）。
+ */
+export const fetchStudies = async (filters?: StudyFilters): Promise<Study[]> => {
+  const uids = filters?.studyInstanceUid?.split(",").filter((u) => u);
+  const chunks = uids ? chunkForQuery(uids) : [];
+  if (!filters || chunks.length <= 1) return fetchStudiesOnce(filters);
+  const parts = await Promise.all(
+    chunks.map((c) => fetchStudiesOnce({ ...filters, studyInstanceUid: c.join(",") })),
+  );
+  const seen = new Set<string>();
+  return parts.flat().filter((s) => !seen.has(s.studyInstanceUid) && !!seen.add(s.studyInstanceUid));
 };
 
 export const fetchSeries = (studyUid: string) =>
