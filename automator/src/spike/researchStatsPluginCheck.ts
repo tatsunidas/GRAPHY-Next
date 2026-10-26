@@ -79,6 +79,21 @@ function synthR2(n: number): { feat: string; clin: string } {
   return { feat: feat.join("\r\n") + "\r\n", clin: clin.join("\r\n") + "\r\n" };
 }
 
+/** 再現性（R3）用の 3 条件の合成データ。f_same は全条件で同じ、f_noisy は条件ごとに大きなばらつき、f_shift は条件 C が +5 ずれる、f_rand は無関係な乱数。 */
+function synthR3(n: number): { files: string[]; missing2: string } {
+  let a = 31337;
+  const rnd = () => { a = (Math.imul(a, 1664525) + 1013904223) >>> 0; return a / 4294967296; };
+  const base = Array.from({ length: n }, () => rnd() * 10);
+  const files = [0, 1, 2].map((c) => {
+    const lines = ["CaseLabel,f_same,f_noisy,f_shift,f_rand,f_text"];
+    base.forEach((b, i) => lines.push([`R${i}`, b.toFixed(5), (b + (rnd() - 0.5) * 8).toFixed(5), (b + (c === 2 ? 5 : 0) + (rnd() - 0.5) * 0.4).toFixed(5), (rnd() * 10).toFixed(5), i === 0 ? "x" : "1"].join(",")));
+    return lines.join("\r\n") + "\r\n";
+  });
+  // 条件 B から 2 行（R2・R3）を除いたもの（全条件に揃わない行の一覧を確かめる）
+  const m2 = files[1].split("\r\n").filter((l, i) => !(i === 3 || i === 4)).join("\r\n");
+  return { files, missing2: m2 };
+}
+
 async function main(): Promise<void> {
   fs.rmSync(OUT_DIR, { recursive: true, force: true });
   fs.mkdirSync(OUT_DIR, { recursive: true });
@@ -369,6 +384,80 @@ async function main(): Promise<void> {
     await page.getByTestId("rs-dca-svg").screenshot({ path: path.join(OUT_DIR, "10-dca.png") });
     const legends = await page.getByTestId("rs-roc-svg-legend").evaluateAll((es) => es.map((e) => e.textContent ?? ""));
     check(legends.length === 3, "ROC 図の凡例は 3 系列（選んだ特徴量・組み合わせの見かけと LOO）", legends);
+
+    console.log("\n[8] 再現性（R3）: pingouin（別実装）との突き合わせ・臨床 CSV なしで実行");
+    const r3 = synthR3(40);
+    const r3Files = r3.files.map((txt, i) => write(`cond${"ABC"[i]}.csv`, txt));
+    const r3Missing = write("condB_missing.csv", r3.missing2);
+    const refPy = process.env.RESEARCH_STATS_REF_PYTHON ?? "python3";
+    const r3RefPath = path.join(OUT_DIR, "r3_reference.json");
+    execFileSync(refPy, ["-I", path.join(AUTOMATOR_ROOT, "src", "spike", "researchStatsR3Reference.py"), ...r3Files, r3RefPath]);
+    type R3Ref = { n: number; icc: number; lower: number | null; upper: number | null; icc_t: number; lower_t: number | null; upper_t: number | null; category: string | null };
+    const r3ref = JSON.parse(fs.readFileSync(r3RefPath, "utf8")) as { ids: number; features: Record<string, R3Ref>; ba: { n: number; bias: number; bias_ci: number[]; sd: number; lo: number; hi: number } };
+    check(Math.abs(r3ref.features.f_same.icc - 1) < 1e-9 && r3ref.features.f_rand.category === "poor" && r3ref.features.f_shift.icc < r3ref.features.f_same.icc - 0.05, "参照側でも、f_same は ICC=1（区間は NaN）・f_rand は poor・f_shift は定数のずれで ICC が下がる", Object.fromEntries(Object.entries(r3ref.features).map(([k, v]) => [k, v.category])));
+    await page.getByTestId("rs-recipe").selectOption("r3-reproducibility");
+    check((await page.getByTestId("rs-file-clinical").count()) === 0, "再現性のレシピでは臨床 CSV の選択が出ない");
+    await page.getByTestId("rs-file-features").setInputFiles([r3Files[0]]);
+    await page.getByTestId("rs-loaded").first().waitFor({ state: "attached", timeout: 15_000 });
+    check(await page.getByTestId("rs-run").isDisabled(), "条件が 1 つのときは実行できない（負例）");
+    await page.getByTestId("rs-file-features").setInputFiles(r3Files);
+    await page.waitForFunction(() => !(document.querySelector('[data-testid="rs-run"]') as HTMLButtonElement | null)?.disabled, null, { timeout: 15_000 });
+    await page.getByTestId("rs-run").click();
+    await page.getByTestId("rs-r3").waitFor({ state: "visible", timeout: 60_000 });
+    check(/3 条件.*全条件に揃った行 40 行.*共通の数値の列 4 個/.test(await page.getByTestId("rs-r3-conditions").innerText()), "条件数・揃った行数・共通の列数が出る（f_text は数でない値で除く）", await page.getByTestId("rs-r3-conditions").innerText());
+    const excluded = (await page.getByTestId("rs-r3-excluded").textContent()) ?? "";
+    check(excluded.includes("f_text") && excluded.includes("数でない値"), "使えなかった列とその理由が一覧に出る", excluded);
+    const r3Rows = await page.getByTestId("rs-r3-row").evaluateAll((rs) => rs.map((r) => ({ f: (r as HTMLElement).dataset.feature ?? "", cells: Array.from(r.querySelectorAll("td")).map((c) => c.textContent ?? "") })));
+    check(r3Rows.length === 4, "4 つの特徴量が表に出る", r3Rows.map((r) => r.f));
+    const iccShown = r3Rows.every((r) => { const m = r.cells[3].match(/^([0-9.]+) \(([0-9.]+)–([0-9.]+)\)$/); const e = r3ref.features[r.f];
+      if (e.lower_t === null) return !!m && Number(m[1]) >= 0.999 && r.cells[4] === "excellent"; // 参照の区間が NaN の特徴量（全条件で同じ値）は、ICC≈1・excellent だけを確かめる
+      return !!m && Math.abs(Number(m[1]) - e.icc_t) <= 6e-4 && Math.abs(Number(m[2]) - (e.lower_t as number)) <= 6e-4 && Math.abs(Number(m[3]) - (e.upper_t as number)) <= 6e-4 && r.cells[4] === e.category; });
+    check(iccShown, "表の ICC・信頼区間・区分が pingouin と一致（表示は小数 3 桁）", r3Rows.map((r) => [r.f, r.cells[3], r.cells[4], r3ref.features[r.f].category]));
+    const n9 = await count();
+    await page.getByTestId("rs-save-r3-results").click();
+    const r3Csv = await downloaded("research-stats-r3-icc.csv", n9);
+    const L3 = r3Csv.trim().split("\r\n").map((l) => l.split(","));
+    const c3 = (name: string) => L3[0].indexOf(name);
+    const e3 = L3.slice(1).map((l) => ({ f: l[c3("feature")], icc: Number(l[c3("icc")]), lo: Number(l[c3("icc_lower")]), hi: Number(l[c3("icc_upper")]), cat: l[c3("category")], n: Number(l[c3("n")]) }));
+    const rr = (x: number, y2: number) => Math.abs(x - y2) / Math.max(Math.abs(y2), 1e-9);
+    check(e3.every((e) => { const g = r3ref.features[e.f]; return rr(e.icc, g.icc) < 1e-8 && e.n === g.n && (g.lower === null || (Math.abs(e.lo - g.lower) < 1e-6 && Math.abs(e.hi - (g.upper as number)) < 1e-6)); }), "書き出した CSV の ICC と信頼区間（切る前）が pingouin と一致（点推定 1e-8、区間 1e-6。参照の区間が NaN の特徴量は点推定だけ）");
+    check(!(await page.getByTestId("rs-save-exclusion").count()), "除外の基準を選ばないと、除外候補のボタンは出ない（基準は既定で決めない）");
+    // Bland–Altman
+    await page.getByTestId("rs-ba-feature").selectOption("f_shift");
+    await page.getByTestId("rs-ba-a").selectOption("0");
+    await page.getByTestId("rs-ba-b").selectOption("2");
+    await page.getByTestId("rs-ba-svg").waitFor({ state: "visible" });
+    const baBias = (await page.getByTestId("rs-ba-bias").innerText()).match(/バイアス (-?[0-9.]+)（95% CI (-?[0-9.]+)～(-?[0-9.]+)）/);
+    check(!!baBias && Math.abs(Number(baBias[1]) - r3ref.ba.bias) <= 6e-4 && Math.abs(Number(baBias[2]) - r3ref.ba.bias_ci[0]) <= 6e-4 && Math.abs(Number(baBias[3]) - r3ref.ba.bias_ci[1]) <= 6e-4, "Bland–Altman のバイアスと信頼区間が numpy・scipy と一致（条件 C は +5 ずれている）", { shown: baBias?.slice(1), ref: r3ref.ba });
+    const baLoa = (await page.getByTestId("rs-ba-loa").innerText()).match(/一致限界 (-?[0-9.]+)（.*）～ (-?[0-9.]+)（.*）、SD ([0-9.]+)、n = (\d+)/);
+    check(!!baLoa && Math.abs(Number(baLoa[1]) - r3ref.ba.lo) <= 6e-4 && Math.abs(Number(baLoa[2]) - r3ref.ba.hi) <= 6e-4 && Math.abs(Number(baLoa[3]) - r3ref.ba.sd) <= 6e-4 && Number(baLoa[4]) === r3ref.ba.n, "一致限界・SD・症例数が一致", { shown: baLoa?.slice(1), ref: r3ref.ba });
+    await page.getByTestId("rs-ba-b").selectOption("0");
+    check((await page.getByTestId("rs-ba-b").inputValue()) !== "0" || (await page.getByTestId("rs-ba-error").count()) > 0, "同じ条件どうしは選べない（A と同じにすると別の条件に切り替わる）");
+    await page.getByTestId("rs-ba-b").selectOption("2");
+    await page.getByTestId("rs-r3").screenshot({ path: path.join(OUT_DIR, "11-r3.png") });
+    await page.getByTestId("rs-icc-svg").screenshot({ path: path.join(OUT_DIR, "12-icc.png") });
+    await page.getByTestId("rs-ba-svg").screenshot({ path: path.join(OUT_DIR, "13-ba.png") });
+    // 全条件に揃わない行、除外の基準
+    await page.getByTestId("rs-file-features").setInputFiles([r3Files[0], r3Missing, r3Files[2]]);
+    await page.getByTestId("rs-min-category").selectOption("good");
+    await page.getByTestId("rs-run").click();
+    await page.getByTestId("rs-r3").waitFor({ state: "visible", timeout: 60_000 });
+    const unm = (await page.getByTestId("rs-r3-unmatched").textContent()) ?? "";
+    check(unm.includes("R2") && unm.includes("R3") && !/R1（|R0（/.test(unm) && /全条件に揃った行 38 行/.test(await page.getByTestId("rs-r3-conditions").innerText()), "全条件に揃わない行（R2・R3 だけ）が一覧に出て、38 行で解析する", unm);
+    const n10 = await count();
+    await page.getByTestId("rs-save-exclusion").click();
+    const exCsv = await downloaded("research-stats-r3-exclusion-candidates.csv", n10);
+    const refAfter = execFileSync(refPy, ["-I", path.join(AUTOMATOR_ROOT, "src", "spike", "researchStatsR3Reference.py"), r3Files[0], r3Missing, r3Files[2], path.join(OUT_DIR, "r3_reference2.json")]);
+    void refAfter;
+    const ref2 = JSON.parse(fs.readFileSync(path.join(OUT_DIR, "r3_reference2.json"), "utf8")) as { features: Record<string, R3Ref> };
+    const rank = (c: string) => ["poor", "moderate", "good", "excellent"].indexOf(c);
+    const expectEx = Object.entries(ref2.features).filter(([, v]) => v.category !== null && rank(v.category) < rank("good")).map(([k]) => k).sort();
+    const gotEx = exCsv.trim().split("\r\n").slice(1).map((l) => l.split(",")[0]).sort();
+    check(JSON.stringify(gotEx) === JSON.stringify(expectEx) && expectEx.includes("f_rand") && !expectEx.includes("f_same"), "除外候補（good より低い区分）が、pingouin の区分から求めた一覧と一致", { gotEx, expectEx });
+    const n11 = await count();
+    await page.getByTestId("rs-save-method").click();
+    const m3 = await downloaded("research-stats-method.txt", n11);
+    check(m3.includes("absolute agreement") && m3.includes("good より低い"), "「方法」の文に、ICC の種類と除外の基準が書かれる", m3.slice(0, 200));
   } finally {
     await driver.stop();
     fs.rmSync(path.join(PLUGINS_DIR, PLUGIN_ID), { recursive: true, force: true });
