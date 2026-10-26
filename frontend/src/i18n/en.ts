@@ -1347,6 +1347,7 @@ export const en: Record<string, string> = {
   "roiStats.unit.raw": " (uncalibrated)",
   "roiStats.title": "ROI measurements",
   "roiStats.empty": "No measurement ROIs.",
+  "roiStats.skippedSpheres": "{{n}} sphere(s) are not measured (a sphere holds only a center and radius, no pixels). Use \"Paint it\" to turn it into a painted ROI and measure it.",
   "roiStats.recompute": "Recompute (after changing calibration or slice)",
   "roiStats.copyCsv": "Copy CSV to clipboard",
   "roiStats.saveCsv": "Save as CSV file",

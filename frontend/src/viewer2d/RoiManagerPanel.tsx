@@ -1242,6 +1242,7 @@ export function RoiManagerPanel({
               ? [...model.rois, ...model.measures].find((r) => r.groupId === statsOpen.section!.slice(2))?.groupName ?? ""
               : undefined
           }
+          skippedSpheres={model.rois.filter((r) => r.rowKind === "sphere" && (!statsOpen.section || inSection(r, statsOpen.section))).length}
           onClose={() => setStatsOpen(null)}
         />
       )}
