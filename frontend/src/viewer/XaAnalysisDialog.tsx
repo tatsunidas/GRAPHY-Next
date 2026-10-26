@@ -59,6 +59,7 @@ import { checkXaInput } from "./xaInputCheck";
 import { persistXaUserCalibration } from "./xaCalibrationPersistence";
 import { clearedBy, deriveQcaSteps, type ManualInputKey } from "./xaTasks";
 import { viewerOverlayProps } from "./viewerOverlay";
+import { proposeBranches, type BranchProposal } from "./xaBranchProposal";
 
 /** [x,y] の並びを GSPS 用のフラットな配列にする。 */
 function flatten(points: readonly (readonly [number, number])[]): number[] {
@@ -298,10 +299,23 @@ export function XaAnalysisDialog({
     [imageId, calibVersion],
   );
   // world → 画像ピクセルの換算は**ローダの spacing**で行う（校正値ではない）。
-  const picks = useMemo(() => {
+  const annotationPicks = useMemo(() => {
     const sp = loaderSpacingFor(imageId);
     return collectLengthPicks(imageId, sp.row, sp.col);
   }, [imageId, calibVersion]);
+  /** 側枝の候補（P2.5d）から利用者が「解析区間に追加」したもの。注釈ではない仮想の線（フリーライン）。 */
+  const [adopted, setAdopted] = useState<{ imageId: string; picks: LengthPick[] }>({ imageId, picks: [] });
+  const adoptedPicks = useMemo(() => (adopted.imageId === imageId ? adopted.picks : []), [adopted, imageId]);
+  const picks = useMemo(() => [...annotationPicks, ...adoptedPicks], [annotationPicks, adoptedPicks]);
+  /** 側枝の候補。どの中心線に対する候補かを token で持ち、中心線が変わったら出さない。 */
+  const [proposals, setProposals] = useState<{
+    imageId: string;
+    /** 探したときの主枝（解析区間の uid）と、その中心線の token。 */
+    mainUid: string;
+    token: string;
+    status: string;
+    items: BranchProposal[];
+  } | null>(null);
   const [selected, setSelected] = useState(0);
   /**
    * 🔴 **空間校正の選択は解析区間と別に持つ**（`fw/angio-design.md` §8.7）。
@@ -456,6 +470,53 @@ export function XaAnalysisDialog({
       /* 光らせられなくても解析は続けられる */
     }
   }, []);
+
+  /** 解析済みの中心線を主枝として、側枝の候補を探す（自動では走らせない。採否は人が決める）。 */
+  const findBranches = () => {
+    const slice = sliceRef.current;
+    if (!slice || !result) return;
+    const c = calibrationForImageId(imageId);
+    const row = c?.mmPerPxRow ?? null;
+    const col = c?.mmPerPxCol ?? null;
+    // 縦横の画素間隔が違うと「径 1 本ぶん」が円でなくなるので、等しいときだけ探す。
+    const mm = row && col && Math.abs(row - col) <= 1e-6 * Math.max(row, col) ? col : null;
+    const r = proposeBranches(slice.values, slice.width, slice.height, {
+      vesselIsDark: !isSubtracted,
+      mmPerPx: mm,
+      mainPath: result.centerline,
+    });
+    setProposals({ imageId, mainUid: pick?.uid ?? "", token: result.centerlineToken, status: r.status, items: r.proposals });
+  };
+
+  /**
+   * 候補を出してよいか。別の線を選んで `result` が空になっても、候補は主枝に対するものとして残す
+   * （1 本追加して解析した後に、残りの候補も追加できるように）。**主枝を解析し直して中心線が変わったとき**
+   * だけ、古い候補として隠す。
+   */
+  const proposalsVisible =
+    !!proposals &&
+    proposals.imageId === imageId &&
+    !(!!result && !!pick && pick.uid === proposals.mainUid && result.centerlineToken !== proposals.token);
+
+  const proposalUid = (p: BranchProposal): string => {
+    const end = p.pointsPx[p.pointsPx.length - 1];
+    return `proposal:${imageId}:${p.originMainIndex}:${Math.round(end[0])}:${Math.round(end[1])}`;
+  };
+
+  const adoptProposal = (i: number) => {
+    const p = proposals?.items[i];
+    if (!p) return;
+    const pts = p.pointsPx;
+    const uid = proposalUid(p);
+    const existing = picks.findIndex((x) => x.uid === uid);
+    if (existing >= 0) {
+      setSelected(existing);
+      return;
+    }
+    const lp: LengthPick = { uid, kind: "freeline", points: pts, p0: pts[0], p1: pts[pts.length - 1], lengthPx: pathLengthPx(pts) };
+    setAdopted({ imageId, picks: [...adoptedPicks, lp] });
+    setSelected(picks.length);
+  };
 
   const applyCalibration = (mm: number, method: "catheter" | "ruler", note: string) => {
     // 🔴 校正は**直線のみ**（`calibPicks`）。曲線の経路長を既知長と突き合わせると、
@@ -1043,6 +1104,11 @@ export function XaAnalysisDialog({
               <PickPreview
                 imageId={imageId}
                 picks={picks}
+                proposals={
+                  proposals && proposalsVisible
+                    ? proposals.items.map((p, i) => ({ label: String.fromCharCode(65 + i), points: p.pointsPx }))
+                    : []
+                }
                 selectedIndex={selected}
                 onSelect={(i) => {
                   setSelected(i);
@@ -1222,6 +1288,53 @@ export function XaAnalysisDialog({
             )}
             <span style={hint}>{t("xa.analysis.researchOnly")}</span>
           </div>
+
+          {/* 側枝の候補（P2.5d）。主枝の中心線から画像のコントラストだけで探す推測で、採否は人が決める。 */}
+          <div style={row}>
+            <button style={btn} data-testid="xa-branch-find" onClick={findBranches} disabled={!result || busy}>
+              {t("xa.branch.find")}
+            </button>
+            {!result && <span style={hint}>{t("xa.branch.need")}</span>}
+          </div>
+          {proposals && proposalsVisible && (
+            <div data-testid="xa-branch-proposals">
+              <div style={hint}>{t("xa.branch.caution")}</div>
+              {proposals.status === "noScale" && (
+                <div style={warn} data-testid="xa-branch-noscale">
+                  {t("xa.branch.noScale")}
+                </div>
+              )}
+              {proposals.status === "badMain" && (
+                <div style={warn} data-testid="xa-branch-badmain">
+                  {t("xa.branch.badMain")}
+                </div>
+              )}
+              {proposals.status === "ok" && proposals.items.length === 0 && (
+                <div style={hint} data-testid="xa-branch-none">
+                  {t("xa.branch.none")}
+                </div>
+              )}
+              {proposals.items.map((p, i) => {
+                const added = picks.some((x) => x.uid === proposalUid(p));
+                return (
+                  <div style={row} key={proposalUid(p)} data-testid="xa-branch-item">
+                    <span style={{ fontSize: 12 }}>
+                      {t("xa.branch.item", {
+                        label: String.fromCharCode(65 + i),
+                        length: p.lengthMm.toFixed(1),
+                        dia: p.diameterMm.toFixed(1),
+                        ratio: Math.round(p.contrastRatio * 100),
+                        stop: t(`xa.branch.stop.${p.stopReason}`),
+                      })}
+                    </span>
+                    <button style={btn} data-testid="xa-branch-add" disabled={added} onClick={() => adoptProposal(i)}>
+                      {added ? t("xa.branch.added") : t("xa.branch.add")}
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          )}
 
           {result && sliceRef.current && (
             /* 中心線とエッジはどちらもこのパネルで直すので、両方の段がここを指す。 */
@@ -1852,11 +1965,14 @@ const td: React.CSSProperties = { textAlign: "right", padding: "2px 16px 2px 0",
 function PickPreview({
   imageId,
   picks,
+  proposals,
   selectedIndex,
   onSelect,
 }: {
   imageId: string;
   picks: readonly LengthPick[];
+  /** 側枝の候補（破線で描く。クリックでは選べない）。 */
+  proposals: readonly { label: string; points: readonly (readonly [number, number])[] }[];
   selectedIndex: number;
   onSelect: (index: number) => void;
 }) {
@@ -1938,7 +2054,30 @@ function PickPreview({
       ctx.fillStyle = on ? "#ffb59b" : "#cfe0ef";
       ctx.fillText(`#${i + 1}`, tx, ty);
     });
-  }, [slice, view, picks, selectedIndex]);
+
+    // 側枝の候補は破線＋英字。一覧の番号付きの線（実線）と見分ける。
+    proposals.forEach((p) => {
+      if (p.points.length < 2) return;
+      ctx.save();
+      ctx.setLineDash([5, 4]);
+      ctx.strokeStyle = "#3fa66b";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      p.points.forEach(([x, y], k) => {
+        if (k === 0) ctx.moveTo(x * view.scale, y * view.scale);
+        else ctx.lineTo(x * view.scale, y * view.scale);
+      });
+      ctx.stroke();
+      ctx.restore();
+      const [ex, ey] = p.points[p.points.length - 1];
+      ctx.font = "bold 13px sans-serif";
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = "rgba(0,0,0,0.75)";
+      ctx.strokeText(p.label, ex * view.scale + 4, ey * view.scale - 4);
+      ctx.fillStyle = "#9fe3b8";
+      ctx.fillText(p.label, ex * view.scale + 4, ey * view.scale - 4);
+    });
+  }, [slice, view, picks, proposals, selectedIndex]);
 
   if (!slice || !view) return null;
   return (

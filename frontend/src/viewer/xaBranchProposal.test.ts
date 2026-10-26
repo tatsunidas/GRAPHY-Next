@@ -81,6 +81,15 @@ describe("proposeBranches", () => {
     }
   });
 
+  it("負例: 引いた区間の外へ続く主枝（区間が血管の途中で終わる）を、側枝として提案しない", () => {
+    const half: Seg = [[20, 130], [130, 130]];
+    for (const noiseSd of [0, 4, 16]) {
+      const r = run(render([{ s: MAIN, diam: 3 }], noiseSd), { mainPath: mainPath(half) });
+      expect(r.status).toBe("ok");
+      expect(r.proposals).toHaveLength(0);
+    }
+  });
+
   it("負例: 画素間隔が無いときは提案しない", () => {
     const r = run(render(TREE, 4), { mmPerPx: null });
     expect(r.status).toBe("noScale");

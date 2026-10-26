@@ -15,8 +15,7 @@
  * <ul>
  *   <li>{@link CONTRAST_FRACTION}: 主枝の 25% 未満のコントラストの線は側枝としない。暫定の運用基準で、
  *       動かして結果が変わらない範囲をテストで示す。最大化では選ばない。</li>
- *   <li>円周の半径は主枝の径の 1.5 倍（主枝の縁から径 1 本ぶん外）。主枝を除く角度は、中心線から径 1 本ぶん以内
- *       （asin(d/R)）。</li>
+ *   <li>円周の半径は主枝の径の 1.5 倍（主枝の縁から径 1 本ぶん外）。主枝を除く範囲は、接線の前後 ±asin(d/R)（引いた区間の外へ続く主枝）と、中心線のどこかから径 1 本ぶん以内（急な曲がり・自己交差）。</li>
  *   <li>径の範囲は冠動脈の生理的範囲 {@link VESSEL_DIAMETER_RANGE_MM}。</li>
  * </ul>
  * 画素間隔が無ければ提案しない。カテーテル・ワイヤ・骨は区別しない（実画像は未検証）。
@@ -71,18 +70,18 @@ export interface XaBranchProposalOptions {
 
 type P = [number, number];
 
-const median = (v: number[]): number => {
-  if (!v.length) return NaN;
-  const s = v.slice().sort((a, b) => a - b);
-  const m = s.length >> 1;
-  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
-};
-
 const wrapPi = (a: number): number => {
   let x = a % (2 * Math.PI);
   if (x > Math.PI) x -= 2 * Math.PI;
   if (x < -Math.PI) x += 2 * Math.PI;
   return x;
+};
+
+const median = (v: number[]): number => {
+  if (!v.length) return NaN;
+  const s = v.slice().sort((a, b) => a - b);
+  const m = s.length >> 1;
+  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
 };
 
 export function proposeBranches(
@@ -174,9 +173,11 @@ export function proposeBranches(
     const ok: boolean[] = [];
     for (let a = 0; a < nAng; a++) {
       const th = (2 * Math.PI * a) / nAng;
-      const ex = Math.abs(wrapPi(th - phi)) < alpha || Math.abs(wrapPi(th - phi - Math.PI)) < alpha;
       const x = main[i][0] + R * Math.cos(th), y = main[i][1] + R * Math.sin(th);
-      ok.push(!ex && inside(x, y));
+      // 主枝自身を除く。(1) 接線の前後 ±asin(d/R)＝利用者が引いた区間の外へ続く主枝。
+      // (2) 中心線のどこかから径 1 本ぶん以内＝急な曲がりや自己交差で円周を横切る主枝。
+      const onTangent = Math.abs(wrapPi(th - phi)) < alpha || Math.abs(wrapPi(th - phi - Math.PI)) < alpha;
+      ok.push(inside(x, y) && !onTangent && distToMain([x, y]) >= d);
       vals.push(ok[a] ? S(x, y) : NaN);
     }
     const bg = median(vals.filter(Number.isFinite));
