@@ -110,6 +110,10 @@ import { buildPluginAnalysisRecord } from "../report/analysisResults";
 import { publishAnalysisResult } from "../report/analysisResultStore";
 import { TextureDialog } from "../viewer/TextureDialog";
 import { FilterImageDialog } from "../viewer/FilterImageDialog";
+import { FilterLayerBar, FilterLayerDialog } from "../viewer/FilterLayerDialog";
+import { useFilterLayers } from "../viewer/filterLayerStore";
+import { layerWindow, singleColorLut } from "../viewer/filterLayers";
+import { layerProbeKey } from "../viewer/fusionProbe";
 import { WwWlAdjustDialog, type WlTarget } from "./WwWlAdjustDialog";
 import { WlPresetDialog } from "./WlPresetDialog";
 import { fetchSettings } from "../settings/settingsApi";
@@ -1217,6 +1221,7 @@ function TileGrid({
   const [maxSectionTarget, setMaxSectionTarget] = useState<Tile | null>(null);
   const [textureTarget, setTextureTarget] = useState<Tile | null>(null);
   const [filterImageTarget, setFilterImageTarget] = useState<Tile | null>(null);
+  const [filterLayerTarget, setFilterLayerTarget] = useState<Tile | null>(null);
   // コントラスト調整（W/L）ダイアログの対象（開いている時のみ non-null）。
   const [wlAdjust, setWlAdjust] = useState<WlTarget | null>(null);
 
@@ -2270,6 +2275,14 @@ function TileGrid({
         if (isConcatTile(tile)) { notify(t("series.concat.disabled")); return; }
         setFilterImageTarget(tile);
       },
+      // フィルタ層: 対象タイルに、LoG の派生シリーズを色分けで重ねる。
+      openFilterLayers: () => {
+        const tid = resolveTargets()[0];
+        const tile = patient.tiles.find((tl) => tl.id === tid);
+        if (!tile) { comingSoon(t("filterLayer.menu")); return; }
+        if (isConcatTile(tile)) { notify(t("series.concat.disabled")); return; }
+        setFilterLayerTarget(tile);
+      },
       // GLAM 解析: 別ウィンドウ（#glam）で開く。対象は localStorage 経由で渡す
       // （ウィンドウを跨ぐため。2D ビューアの graphy-viewer-ctx とは別キーにして取り合わない）。
       openGlamAnalysis: () => {
@@ -2841,6 +2854,15 @@ function TileGrid({
           onClose={() => setTextureTarget(null)}
         />
       )}
+      {filterLayerTarget && (
+        <FilterLayerDialog
+          key={filterLayerTarget.id}
+          tileId={filterLayerTarget.id}
+          study={filterLayerTarget.study}
+          series={filterLayerTarget.series}
+          onClose={() => setFilterLayerTarget(null)}
+        />
+      )}
       {filterImageTarget && (
         <FilterImageDialog
           key={filterImageTarget.id}
@@ -3192,6 +3214,8 @@ function TileCell({
     [fusionRegistration],
   );
 
+  const filterLayers = useFilterLayers(tile.id);
+
   const renderFusionOverlay = useMemo<RenderOverlay | undefined>(() => {
     if (!tile.fusion) return undefined;
     const fusion = tile.fusion;
@@ -3223,6 +3247,44 @@ function TileCell({
     );
   }, [tile.fusion, mode, fusionC, fusionT, fusionLut, fusionWL, isolineOn, isolineLevel, fusionAdjust,
       registrationTransform, handleFusionAutoWL]);
+
+  // フィルタ層（LoG の派生画像の色分け重ね）。前景の Fusion とは独立に、層の数だけ同じ部品を並べる。
+  // しきい値＝窓の下限（それ以下は透明）。層どうしはスクリーン合成で重なる。
+  const renderOverlayAll = useMemo<RenderOverlay | undefined>(() => {
+    if (filterLayers.length === 0) return renderFusionOverlay;
+    return (ctx) => (
+      <>
+        {renderFusionOverlay?.(ctx)}
+        {filterLayers.map((l, i) => {
+          if (!l.visible) return null;
+          const w = layerWindow(l.side, l.threshold, l.maxAbs);
+          return (
+            <FusionImageViewer
+              key={l.id}
+              rect={ctx.rect}
+              baseImageId={ctx.imageId}
+              baseIndex={ctx.index}
+              baseCount={ctx.count}
+              viewportId={layerProbeKey(ctx.viewportId, i)}
+              instances={l.instances}
+              mode={mode}
+              studyUid={l.study.studyInstanceUid}
+              seriesUid={l.series.seriesInstanceUid}
+              overlayC={0}
+              overlayT={0}
+              lut={singleColorLut(l.color)}
+              opacity={l.opacity}
+              mixBlendMode="screen"
+              windowCenter={w.center}
+              windowWidth={w.width}
+              invertValues={w.invert}
+              probeLabel={`r${l.rMm}`}
+            />
+          );
+        })}
+      </>
+    );
+  }, [filterLayers, renderFusionOverlay, mode]);
 
   // ── タイルヘッダー DnD（タイル並び替え） ──
 
@@ -3446,7 +3508,7 @@ function TileCell({
           patientKey={patientKey}
           seriesLabel={seriesLabel}
           onDimChange={(c, tIdx, z) => { bgDimsRef.current = { c, t: tIdx }; onDimChange(c, tIdx, z); }}
-          renderFusionOverlay={renderFusionOverlay}
+          renderFusionOverlay={renderOverlayAll}
           // タスク・ランチャー（A13-2）の依頼を引き受けるのは**このタイルだけ**
           // （StudyList のプレビューに取られないようにする）。
           acceptsTaskLaunch
@@ -3502,6 +3564,8 @@ function TileCell({
       )}
 
       {/* 保存済みの位置合わせの状態。★ stale は「当てていない」ことを必ず見せる。 */}
+      {panelOpen && <FilterLayerBar tileId={tile.id} />}
+
       {panelOpen && tile.fusion && restoreState.kind !== "none" && (
         <div style={restoreState.kind === "stale" ? restoreStaleBar : restoreBar}>
           {restoreState.kind === "restored" ? (

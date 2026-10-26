@@ -30,6 +30,8 @@ export interface FusionProbeData {
   scale: number;
   /** SUV 空間の値か。臨床慣習に合わせて 2 桁固定で出すかの判定に使う。 */
   suv: boolean;
+  /** 名前（フィルタ層の `r2` など）。層ごとの値を状態バーに並べるときの見出し。 */
+  label?: string;
 }
 
 /** カーソル位置で読み出した前景の値。 */
@@ -38,6 +40,7 @@ export interface FusionProbeSample {
   value: number;
   unit: string;
   suv: boolean;
+  label?: string;
 }
 
 const store = new Map<string, FusionProbeData | null>();
@@ -93,6 +96,19 @@ export function setFusionProbeData(viewportId: string, data: FusionProbeData | n
   if (!known) notify();
 }
 
+/** フィルタ層のプローブのキー（ビューポート ID ごと・層ごと）。base の前景のキーとは別。 */
+export const layerProbeKey = (viewportId: string, index: number) => `${viewportId}::layer::${index}`;
+
+/** そのビューポートのフィルタ層のプローブを、層の番号の順に返す。 */
+export function getLayerProbes(viewportId: string, max = 3): { index: number; data: FusionProbeData | null }[] {
+  const out: { index: number; data: FusionProbeData | null }[] = [];
+  for (let i = 0; i < max; i++) {
+    const k = layerProbeKey(viewportId, i);
+    if (store.has(k)) out.push({ index: i, data: store.get(k) ?? null });
+  }
+  return out;
+}
+
 /** 現在の前景の値配列（未登録・前景なしは null）。 */
 export function getFusionProbeData(viewportId: string): FusionProbeData | null {
   return store.get(viewportId) ?? null;
@@ -127,7 +143,7 @@ export function sampleFusionValue(
   if (i < 0 || j < 0 || i >= data.cols || j >= data.rows) return null;
   const v = data.values[j * data.cols + i];
   if (v === undefined || !Number.isFinite(v)) return null;
-  return { value: v * data.scale, unit: data.unit, suv: data.suv };
+  return { value: v * data.scale, unit: data.unit, suv: data.suv, ...(data.label ? { label: data.label } : {}) };
 }
 
 /** テスト用。モジュールレベルの状態を捨てる。 */
