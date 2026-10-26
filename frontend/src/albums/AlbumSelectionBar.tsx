@@ -42,7 +42,17 @@ export function AlbumSelectionBar({
     };
   }, [version]);
 
-  const addAll = async (id: number, name: string) => {
+  // 操作の結果は数秒で消す。表示するアルバムを切り替えたときも消す（前の操作の結果が残らないように）。
+  useEffect(() => {
+    if (!msg) return;
+    const id = setTimeout(() => setMsg(null), 8000);
+    return () => clearTimeout(id);
+  }, [msg]);
+  useEffect(() => {
+    setMsg(null);
+  }, [view?.id]);
+
+  const addAll =async (id: number, name: string) => {
     let added = 0;
     let already = 0;
     try {
