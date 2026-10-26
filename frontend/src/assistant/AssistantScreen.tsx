@@ -67,6 +67,7 @@ export function AssistantScreen() {
   const [input, setInput] = useState("");
   const [images, setImages] = useState<UiImage[]>([]);
   const [withRoi, setWithRoi] = useState(true);
+  const [cropRoi, setCropRoi] = useState(false);
   const [capturing, setCapturing] = useState(false);
   /** 表示中のタイルから取った画像の数（焼き込み文字の注意を出す）。 */
   const [viewShots, setViewShots] = useState(0);
@@ -150,10 +151,10 @@ export function AssistantScreen() {
     }
     setCapturing(true);
     try {
-      const r = await bridge?.assistantViewerCmd?.(sessionId, { kind: "captureView", withRoi });
+      const r = await bridge?.assistantViewerCmd?.(sessionId, { kind: "captureView", withRoi, crop: cropRoi });
       if (!r || !("ok" in r) || r.ok !== true || !("image" in r) || !r.image?.base64) {
         const code = r && "error" in r && typeof r.error === "string" ? r.error : "failed";
-        const known = ["no-viewer", "no-tile", "image-model-not-set", "declined", "timeout", "capture-failed"];
+        const known = ["no-viewer", "no-tile", "image-model-not-set", "declined", "timeout", "capture-failed", "no-selected-roi", "roi-not-visible"];
         setNote(t(`assistant.viewImage.err.${known.includes(code) ? code : "failed"}`));
         return;
       }
@@ -163,7 +164,7 @@ export function AssistantScreen() {
     } finally {
       setCapturing(false);
     }
-  }, [bridge, sessionId, withRoi, images.length, t]);
+  }, [bridge, sessionId, withRoi, cropRoi, images.length, t]);
 
   const addFiles = useCallback(
     async (files: File[]) => {
@@ -517,6 +518,9 @@ export function AssistantScreen() {
           </button>
           <label style={S.dim} title={t("assistant.viewImage.roiHelp")}>
             <input type="checkbox" checked={withRoi} onChange={(e) => setWithRoi(e.target.checked)} data-testid="assistant-attach-view-roi" /> {t("assistant.viewImage.roi")}
+          </label>
+          <label style={S.dim} title={t("assistant.viewImage.cropHelp")}>
+            <input type="checkbox" checked={cropRoi} onChange={(e) => setCropRoi(e.target.checked)} data-testid="assistant-attach-view-crop" /> {t("assistant.viewImage.crop")}
           </label>
           {voice.available ? (
             <button

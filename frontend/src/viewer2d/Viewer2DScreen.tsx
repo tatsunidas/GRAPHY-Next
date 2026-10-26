@@ -85,7 +85,7 @@ import { useAssistantBridge } from "./useAssistantBridge";
 import { useWlPresets } from "./wlPresetStore";
 import { presetLabel } from "./wlPresets";
 import { emitToast, subscribeToast } from "../viewer/toast";
-import { composeTileWithAnnotations, downscaleDataUrl, visibleRoiCount } from "../viewer/tileCapture";
+import { composeTileWithAnnotations, cropDataUrl, cropRect, downscaleDataUrl, roiBoundsFromCanvasPoints, visibleRoiCount } from "../viewer/tileCapture";
 import { askCopyWithRoi, CopyImageAskHost } from "./CopyImageAsk";
 import { classifySeriesRenderability } from "../viewer/seriesRenderable";
 import { subscribeSeriesRefresh } from "../viewer/viewerRefresh";
@@ -322,6 +322,22 @@ function tileVisibleRoiCount(tileId: string): number {
     vp?.getCurrentImageId?.(),
     (uid) => csAnnotation.visibility.isAnnotationVisible(uid) ?? true,
   );
+}
+
+/**
+ * 表示中の画像に属し、可視で、**選択中**の ROI の点列（handles.points と輪郭の polyline）を canvas 座標（CSS px）で返す。
+ * アシスタントの添付を ROI の外接矩形で切り出すのに使う（読み取りだけ。選択・表示は変えない）。
+ */
+function selectedRoiCanvasPoints(tileId: string): number[][][] {
+  const element = tileViewportElement(tileId);
+  const vp = element ? (getEnabledElement(element)?.viewport as unknown as { getCurrentImageId?: () => string; worldToCanvas?: (p: number[]) => number[] } | undefined) : undefined;
+  const cur = vp?.getCurrentImageId?.();
+  if (!vp || !cur || !vp.worldToCanvas) return [];
+  const selected = new Set<string>(csAnnotation.selection.getAnnotationsSelected() ?? []);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return (csAnnotation.state.getAllAnnotations() as any[])
+    .filter((a) => selected.has(String(a?.annotationUID)) && a?.metadata?.referencedImageId === cur && a?.isVisible !== false && (csAnnotation.visibility.isAnnotationVisible(String(a?.annotationUID)) ?? true))
+    .map((a) => [...((a?.data?.handles?.points ?? []) as number[][]), ...((a?.data?.contour?.polyline ?? []) as number[][])].map((w) => Array.from(vp.worldToCanvas!(w))));
 }
 
 /** 指定タイルの画像（PNG の dataURL）。withRoi なら ROI の線と計測の文字を重ねる（四隅の文字は含まない）。コピーとアシスタントの添付が共用する。 */
@@ -2358,8 +2374,19 @@ function TileGrid({
     setTool: actions.setTool,
     setLayoutCols: (c) => onSetGrid(patient.patientKey, 0, c),
     presets: wlPresets.map((p) => ({ key: p.key, label: presetLabel(p, t), center: p.center, width: p.width })),
-    captureTile: async (tileId, withRoi) => {
-      const url = await captureTileImage(tileId, withRoi);
+    captureTile: async (tileId, withRoi, crop) => {
+      let rect = null;
+      if (crop) {
+        const groups = selectedRoiCanvasPoints(tileId);
+        const bounds = roiBoundsFromCanvasPoints(groups);
+        if (!bounds) return "no-selected-roi";
+        const canvas = tileViewportElement(tileId)?.querySelector("canvas") as HTMLCanvasElement | null;
+        if (!canvas || !canvas.clientWidth || !canvas.clientHeight) return null;
+        rect = cropRect(bounds, canvas.clientWidth, canvas.clientHeight, canvas.width / canvas.clientWidth);
+        if (!rect) return "roi-not-visible";
+      }
+      let url = await captureTileImage(tileId, withRoi);
+      if (url && rect) url = await cropDataUrl(url, rect);
       return url ? downscaleDataUrl(url, ASSISTANT_IMAGE_MAX_EDGE) : null;
     },
   });

@@ -274,7 +274,7 @@ function createRelay({ resolveTarget, journal = () => {}, timeoutMs = DEFAULT_TI
     };
     const c = opts.capture;
     if (!c || c.imageModelOk !== true) return fail("image-model-not-set");
-    const res = await relayInner(sid, { kind: "captureView", withRoi: cmd.withRoi === true }, false, CAPTURE_TIMEOUT_MS);
+    const res = await relayInner(sid, { kind: "captureView", withRoi: cmd.withRoi === true, crop: cmd.crop === true }, false, CAPTURE_TIMEOUT_MS);
     if (!res || res.ok !== true) return fail(typeof (res && res.error) === "string" ? res.error.slice(0, 80) : "no-viewer");
     const image = sanitizeCapturedImage(res.image);
     if (!image) return fail("bad-result");
@@ -323,7 +323,7 @@ function createRelay({ resolveTarget, journal = () => {}, timeoutMs = DEFAULT_TI
         const payload =
           cmd.kind === "pluginTool"
             ? { reqId, kind: cmd.kind, pluginId: cmd.pluginId, tool: cmd.tool, params: cmd.params, approved: approved === true }
-            : { reqId, kind: cmd.kind, id: cmd.id, params: cmd.params, includeLabels: cmd.includeLabels === true, withRoi: cmd.withRoi === true, approved: approved === true, ...(dryRun ? { dryRun: true } : {}) };
+            : { reqId, kind: cmd.kind, id: cmd.id, params: cmd.params, includeLabels: cmd.includeLabels === true, withRoi: cmd.withRoi === true, ...(cmd.crop === true ? { crop: true } : {}), approved: approved === true, ...(dryRun ? { dryRun: true } : {}) };
         target.send("graphy:viewer-cmd", payload);
       } catch {
         pending.delete(reqId);

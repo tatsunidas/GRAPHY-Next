@@ -326,6 +326,15 @@ test("captureView: withRoi はブール値だけ(文字列などは false)", asy
   assert.strictEqual(sent[0][1].withRoi, false);
 });
 
+test("captureView: crop もブール値だけ 2D 窓へ届く(文字列などは false)。選択なしの拒否は理由つきで返り画像は返らない", async () => {
+  const a = await capture({ ok: true, image: { dataUrl: pngUrl } }, okOpts(), { kind: "captureView", withRoi: true, crop: true });
+  assert.strictEqual(a.sent[0][1].crop, true);
+  const b = await capture({ ok: true, image: { dataUrl: pngUrl } }, okOpts(), { kind: "captureView", crop: "true" });
+  assert.notStrictEqual(b.sent[0][1].crop, true);
+  const c = await capture({ ok: false, error: "no-selected-roi" }, okOpts(), { kind: "captureView", crop: true });
+  assert.deepStrictEqual(c.res, { ok: false, error: "no-selected-roi" });
+});
+
 test("captureView: jpeg も通る。宣言と中身が合わない・svg/html・非 base64・空・上限超過・形違いは bad-result", async () => {
   const jpeg = await capture({ ok: true, image: { dataUrl: `data:image/jpeg;base64,${JPG_B64}`, w: 10, h: 20 } }, okOpts());
   assert.deepStrictEqual(jpeg.res, { ok: true, image: { base64: JPG_B64, mimeType: "image/jpeg", w: 10, h: 20 } });

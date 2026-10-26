@@ -11,6 +11,8 @@
  *   4. 🔴 外部宛て(非ループバック): 画像ごとに確認が出て（icon つき）、取り消すと添付されない
  *   5. 🔴 image-to-text が無い提供元では image-model-not-set（黙って落とさない）
  *   6. 🔴 読み取りだけ（ROI の件数が変わらない）。メイン窓からの中継は forbidden
+ *   7. 🔴 選択中の ROI の外接矩形で切り出し: 画像の大きさが ROI の画面上の寸法＋余白に一致し（期待値は ROI のハンドルから別に計算）、別の ROI でも追従。
+ *      選択が無ければ no-selected-roi（添付されず確認も出ない）。切り出しは読み取りだけ（ROI の件数・選択が不変）。外部宛てでは切り出し後の画像に確認が出る
  * 未達として残すもの: 実 OS のネイティブ確認ダイアログの見た目／実クラウド提供元への実送信と応答品質。
  */
 import fs from "node:fs";
@@ -122,8 +124,47 @@ async function main(): Promise<void> {
     await win.getByTestId("assistant-root").waitFor({ state: "visible", timeout: 20_000 });
     await win.setViewportSize({ width: 560, height: 820 });
     await sleep(600);
-    const cmd = (withRoi: boolean) =>
-      win.evaluate((w) => (window as unknown as { graphyDesktop: { assistantViewerCmd: (s: string, c: unknown) => Promise<Res> } }).graphyDesktop.assistantViewerCmd("cap", { kind: "captureView", withRoi: w }), withRoi);
+    const cmd = (withRoi: boolean, crop = false) =>
+      win.evaluate(([w, c]) => (window as unknown as { graphyDesktop: { assistantViewerCmd: (s: string, c: unknown) => Promise<Res> } }).graphyDesktop.assistantViewerCmd("cap", { kind: "captureView", withRoi: w, ...(c ? { crop: true } : {}) }), [withRoi, crop] as [boolean, boolean]);
+    const selectedUids = () => viewer.evaluate(`(function(){ return window.__graphyDebug.getSelectedAnnotations(); })()`) as Promise<string[]>;
+    const roiPoints = () => viewer.evaluate(`(function(){ return window.__graphyDebug.getAnnotationCanvasPoints(); })()`) as Promise<{ uid: string; tool: string; points: number[][] }[]>;
+    const canvasInfo = () => viewer.evaluate(`(function(){ var c=document.querySelector('[data-testid="series-viewer-root"] canvas'); return { cw: c.clientWidth, ch: c.clientHeight, scale: c.width / c.clientWidth }; })()`) as Promise<{ cw: number; ch: number; scale: number }>;
+    const pickEllipse = async () => {
+      const btn = viewer.getByRole("button", { name: /(楕円 ROI|Ellipse ROI)$/ }).first(); // 選択済みだと先頭に「✓ 」が付く
+      if (!(await btn.isVisible().catch(() => false))) await viewer.getByTestId("viewer2d-menu-roi").click();
+      await btn.waitFor({ state: "visible", timeout: 5000 }).catch(async () => {
+        await viewer.screenshot({ path: path.join(OUT_DIR, "debug-menu.png") });
+        throw new Error("楕円 ROI のボタンが見えない（debug-menu.png）");
+      });
+      await btn.click();
+    };
+    const drawEllipse = async (fx0: number, fy0: number, fx1: number, fy1: number) => {
+      await pickEllipse();
+      await viewer.waitForTimeout(250);
+      const b = await viewer.getByTestId("series-viewer-root").first().boundingBox();
+      if (!b) throw new Error("viewer box");
+      await viewer.mouse.move(b.x + b.width * fx0, b.y + b.height * fy0);
+      await viewer.mouse.down();
+      await viewer.mouse.move(b.x + b.width * fx1, b.y + b.height * fy1, { steps: 10 });
+      await viewer.mouse.up();
+      await viewer.waitForTimeout(1500);
+    };
+    /** ROI のハンドル（CSS px）から期待する切り出しの画素寸法（余白 10%・最小 8 px・最小辺 64 px・画像内に収める → 長辺 1024 に縮小）。 */
+    const expectedCrop = (pts: number[][], ci: { cw: number; ch: number; scale: number }) => {
+      const xs = pts.map((p) => p[0]);
+      const ys = pts.map((p) => p[1]);
+      const edge = (lo: number, hi: number, max: number) => {
+        const m = Math.max(8, (hi - lo) * 0.1);
+        let l = lo - m;
+        let r = hi + m;
+        if (r - l < 64) { const g = 64 - (r - l); l -= g / 2; r += g / 2; }
+        return Math.min(max, r) - Math.max(0, l);
+      };
+      const w = edge(Math.min(...xs), Math.max(...xs), ci.cw) * ci.scale;
+      const h = edge(Math.min(...ys), Math.max(...ys), ci.ch) * ci.scale;
+      const k = Math.min(1, 1024 / Math.max(w, h));
+      return { w: w * k, h: h * k };
+    };
     const annCount = () => viewer.evaluate(`(function(){ return window.__graphyDebug.getAnnotationCanvasPoints().length; })()`) as Promise<number>;
     /** 2 枚の画像の画素の違い（異なる画素の数）と大きさ。アシスタント窓で復号する。 */
     const diff = (a: Img, b: Img) =>
@@ -192,6 +233,65 @@ async function main(): Promise<void> {
       fs.writeFileSync(path.join(OUT_DIR, "2-no-roi.png"), Buffer.from(noRoi.image.base64, "base64"));
     }
 
+    // --- 7（先に実施）. 選択中の ROI で切り出す ---
+    console.log("\n[2b] 選択中の ROI の外接矩形で切り出す");
+    const sel1 = await selectedUids();
+    const rois1 = await roiPoints();
+    check(sel1.length === 1 && rois1.length === 1 && sel1[0] === rois1[0].uid, "前提: 描いた ROI が選択されている", { sel1, n: rois1.length });
+    const ci = await canvasInfo();
+    const full = await cmd(false);
+    const crop1 = await cmd(false, true);
+    const exp1 = expectedCrop(rois1[0].points, ci);
+    console.log(`  期待 ${exp1.w.toFixed(1)}×${exp1.h.toFixed(1)}  実際 ${crop1.image?.w}×${crop1.image?.h}（全体 ${full.image?.w}×${full.image?.h}）`);
+    check(crop1.ok === true && !!crop1.image, "切り出しの画像が返る", crop1);
+    check(!!crop1.image && Math.abs(crop1.image.w - exp1.w) <= 2 && Math.abs(crop1.image.h - exp1.h) <= 2, "🔴 画像の大きさが ROI の画面上の寸法＋余白に一致（期待値は ROI のハンドルから別に計算）", { exp1, got: [crop1.image?.w, crop1.image?.h] });
+    check(!!crop1.image && !!full.image && crop1.image.w * crop1.image.h < full.image.w * full.image.h, "全体より小さい（対照: 切り出さなければ全体の大きさ）", [crop1.image?.w, full.image?.w]);
+    const cropRoi = await cmd(true, true);
+    if (crop1.image && cropRoi.image) {
+      const df = await diff(crop1.image, cropRoi.image);
+      check(df.sameSize && df.diff > 20, "🔴 切り出しでも ROI を含める／含めないで画素が異なる（ROI の線が切り出しに写っている）", df);
+      fs.writeFileSync(path.join(OUT_DIR, "2b-crop-roi.png"), Buffer.from(cropRoi.image.base64, "base64"));
+    }
+    // 別の位置・別の大きさの ROI（描くと選択が移る）
+    await drawEllipse(0.6, 0.55, 0.85, 0.85);
+    const sel2 = await selectedUids();
+    const rois2 = await roiPoints();
+    const second = rois2.find((r) => r.uid !== rois1[0].uid);
+    check(rois2.length === 2 && !!second && sel2.length === 1 && sel2[0] === second.uid, "前提: 2 つ目の ROI が選択に移った", { sel2, n: rois2.length });
+    const crop2 = await cmd(false, true);
+    const exp2 = second ? expectedCrop(second.points, ci) : { w: NaN, h: NaN };
+    console.log(`  2 つ目: 期待 ${exp2.w.toFixed(1)}×${exp2.h.toFixed(1)}  実際 ${crop2.image?.w}×${crop2.image?.h}`);
+    check(!!crop2.image && Math.abs(crop2.image.w - exp2.w) <= 2 && Math.abs(crop2.image.h - exp2.h) <= 2, "🔴 別の ROI でも寸法が追従する（定数でない）", { exp2, got: [crop2.image?.w, crop2.image?.h] });
+    check(!!crop1.image && !!crop2.image && (crop1.image.w !== crop2.image.w || crop1.image.h !== crop2.image.h), "2 つの切り出しは大きさが異なる", [crop1.image?.w, crop2.image?.w]);
+    await viewer.screenshot({ path: path.join(OUT_DIR, "2b-two-rois.png") });
+    // 読み取りだけ: ROI の件数・選択が不変
+    check((await roiPoints()).length === 2 && JSON.stringify(await selectedUids()) === JSON.stringify(sel2), "🔴 切り出しの前後で ROI の件数・選択が変わらない（対象は実在する）");
+    // 選択なし: 空きの場所をクリックして選択を外す
+    const dlgBefore = (await dlg()).n;
+    await viewer.keyboard.press("Escape");
+    await pickEllipse();
+    const bx = await viewer.getByTestId("series-viewer-root").first().boundingBox();
+    if (bx) {
+      await viewer.mouse.click(bx.x + bx.width * 0.05, bx.y + bx.height * 0.95);
+      await viewer.waitForTimeout(500);
+    }
+    const sel3 = await selectedUids();
+    const noSel = await cmd(false, true);
+    console.log(`  選択なし: selected=${JSON.stringify(sel3)} → ${JSON.stringify({ ok: noSel.ok, error: noSel.error })}`);
+    check(sel3.length === 0, "前提: 選択が外れた", sel3);
+    check(noSel.ok === false && noSel.error === "no-selected-roi" && !noSel.image, "🔴 選択が無ければ no-selected-roi（全体画像にフォールバックしない）", noSel);
+    check((await dlg()).n === dlgBefore, "確認ダイアログも出ない", (await dlg()).n - dlgBefore);
+    check(!!(await cmd(false)).image, "対照: 切り出さなければ同じ状態でも画像は取れる");
+    // 画面: チェックを入れて押す → サムネイル、選択なしなら注意文
+    await reopen();
+    await win.getByTestId("assistant-attach-view-crop").check();
+    await win.getByTestId("assistant-attach-view").click();
+    await sleep(900);
+    check(/選択されていません|No ROI is selected/.test((await win.locator("body").innerText())), "画面に「ROI が選択されていません」の注意が出る");
+    await win.screenshot({ path: path.join(OUT_DIR, "2b-no-selection.png") });
+    // 取り消しの対照: 以降のセクションは ROI 1 件前提なので 2 つ目を消す
+    // （ROI を消す操作は 2D 窓のメニュー／キーに依存するため、件数 n1 は 2 つ目を含めて更新する）
+
     // --- 3. 画面: ボタン→サムネイル→送信で画像が届く ---
     console.log("\n[3] 画面から添付して送る");
     await reopen();
@@ -243,7 +343,7 @@ async function main(): Promise<void> {
 
     // --- 6. 読み取りだけ・他の窓 ---
     console.log("\n[6] 読み取りだけ／他の窓");
-    check((await annCount()) === n1, "🔴 ROI の件数が変わらない(対象は実在する)", { before: n1, after: await annCount() });
+    check((await annCount()) === n1 + 1, "🔴 ROI の件数が変わらない(対象は実在する。[2b] で描いた 1 件を足した数)", { before: n1 + 1, after: await annCount() });
     const r6 = await main.evaluate(() => (window as unknown as { graphyDesktop: { assistantViewerCmd: (s: string, c: unknown) => Promise<Res> } }).graphyDesktop.assistantViewerCmd("x", { kind: "captureView", withRoi: false }));
     check(r6.ok === false && r6.error === "forbidden", "🔴 メイン窓からの中継は forbidden", r6);
   } finally {
