@@ -32,6 +32,7 @@ import {
   addAnchor,
   anchorColor,
   anchorLine,
+  anchorStripColumn,
   confirmAnchor,
   insertAnchorAt,
   localRadiusPx,
@@ -213,6 +214,7 @@ export function QcaEditor({
   const [stripDrag, setStripDrag] = useState<
     | { kind: "waypoint"; index: number }
     | { kind: "edge" | "brush" | "smooth"; pathIndex: number; side: "left" | "right"; centerIndex: number }
+    | { kind: "anchor" }
     | null
   >(null);
   const [drag, setDrag] = useState<
@@ -698,7 +700,44 @@ export function QcaEditor({
         ctx.stroke();
       }
     }
-  }, [straight, stripView, result, waypoints, highlightIndex, maxDiameterIndex, mode, brushRadius, showEdges, showMask]);
+
+    // アンカー（3D QCA の目印）。帯の上では**縦の線**（中心線上の位置＝1 つの列）で、全高にわたる。
+    // 本画面・拡大窓と同じ番号・色・破線（確認前）・選択の縁取りにそろえる。
+    if (anchors && anchors.length) {
+      anchors.forEach((a, k) => {
+        const col = anchorStripColumn(result.centerline, straight.indexToCol, a);
+        if (col === null) return;
+        const x = sxOf(col);
+        const color = anchorColor(k);
+        ctx.save();
+        if (mode === "anchor" && k === selAnchor) {
+          ctx.strokeStyle = "#ffffff";
+          ctx.lineWidth = 4;
+          ctx.beginPath();
+          ctx.moveTo(x, 0);
+          ctx.lineTo(x, stripView.dh);
+          ctx.stroke();
+        }
+        ctx.strokeStyle = color;
+        ctx.globalAlpha = a.confirmed ? 1 : 0.75;
+        ctx.lineWidth = 2;
+        ctx.setLineDash(a.confirmed ? [] : [4, 3]);
+        ctx.beginPath();
+        ctx.moveTo(x, 0);
+        ctx.lineTo(x, stripView.dh);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.globalAlpha = 1;
+        ctx.font = "bold 12px sans-serif";
+        ctx.lineWidth = 3;
+        ctx.strokeStyle = "rgba(0,0,0,0.8)";
+        ctx.strokeText(String(k + 1), x + 3, 12);
+        ctx.fillStyle = color;
+        ctx.fillText(String(k + 1), x + 3, 12);
+        ctx.restore();
+      });
+    }
+  }, [straight, stripView, result, waypoints, highlightIndex, maxDiameterIndex, mode, brushRadius, showEdges, showMask, anchors, selAnchor]);
 
   // ── アンカー（拡大窓・操作）──────────────────────────────
   const anchorList = anchors ?? [];
@@ -1080,6 +1119,30 @@ export function QcaEditor({
     const hit = toStrip(ev);
     if (!hit || mode === "none") return;
     ev.currentTarget.setPointerCapture(ev.pointerId);
+    if (mode === "anchor") {
+      // 帯のアンカーは縦線。横方向の近さだけで掴む（縦は全高なので見ない）。
+      if (!onAnchorsChange || !straight || !stripView) return;
+      let near = -1;
+      let bd = GRAB_PX / stripView.scale;
+      anchorList.forEach((a, k) => {
+        const col = anchorStripColumn(result.centerline, straight.indexToCol, a);
+        if (col === null) return;
+        const d = Math.abs(col - hit.col);
+        if (d < bd) {
+          bd = d;
+          near = k;
+        }
+      });
+      if (near < 0) return;
+      if (ev.button === 2 || ev.altKey) {
+        onAnchorsChange(removeAnchor(anchorList, near));
+        setSelAnchor(null);
+        return;
+      }
+      setSelAnchor(near);
+      setStripDrag({ kind: "anchor" });
+      return;
+    }
     if (mode === "waypoint") {
       // 帯で「上下に動かす」＝中心線をその場所で法線方向へ寄せる、という意味になる。
       const near = nearestWaypointOnStrip(hit.col);
@@ -1109,6 +1172,14 @@ export function QcaEditor({
     if (!stripDrag) return;
     const hit = toStrip(ev);
     if (!hit) return;
+    if (stripDrag.kind === "anchor") {
+      // 帯の列 → 中心線上の位置 → 同じ移動（本画面・拡大窓と同じ `moveAnchorTo`）。
+      if (!straight || selAnchor == null || !onAnchorsChange) return;
+      const fi = straight.colToIndex[Math.round(hit.col)] ?? 0;
+      const p = pointAtFractionalIndex(result.centerline, result.normals, fi);
+      onAnchorsChange(moveAnchorTo(result.centerline, anchorsRef.current, selAnchor, [p.x, p.y]));
+      return;
+    }
     if (stripDrag.kind === "waypoint") {
       const p = stripToImage(hit.col, hit.offset);
       if (!p) return;

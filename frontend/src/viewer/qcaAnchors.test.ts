@@ -4,6 +4,7 @@ import {
   MIN_ANCHOR_GAP_PX,
   addAnchor,
   anchorLine,
+  anchorStripColumn,
   confirmAnchor,
   insertAnchorAt,
   cumulativeArcs,
@@ -221,6 +222,35 @@ describe("orderAnchors / pairAnchors", () => {
     const r = pairAnchors(a, b);
     expect(r.pairs).toHaveLength(2);
     expect(r.mismatch).toBe(true);
+  });
+});
+
+describe("anchorStripColumn（ストレート像の列）", () => {
+  // 曲線（1/4 円弧）。列は弧長に比例（`qcaStraighten` の indexToCol と同じ作り）。
+  const c = arc(60);
+  const arcs = cumulativeArcs(c);
+  const step = 0.5;
+  const indexToCol = Float32Array.from(arcs.map((s) => s / step));
+  it("列は弧長 ÷ 刻みに一致し、アンカーを動かすと単調に動く", () => {
+    const total = arcs[arcs.length - 1];
+    let prev = -Infinity;
+    for (const f of [0.1, 0.3, 0.5, 0.7, 0.9]) {
+      const at = pointAtArc(c, total * f)!;
+      const col = anchorStripColumn(c, indexToCol, { x: at.point[0], y: at.point[1], confirmed: true })!;
+      expect(col).toBeCloseTo((total * f) / step, 1);
+      expect(col).toBeGreaterThan(prev);
+      prev = col;
+    }
+  });
+  it("中心線の外の点は直下の列に付く（線の外へ出ても列は連続）", () => {
+    const at = pointAtArc(c, 40)!;
+    const on = anchorStripColumn(c, indexToCol, { x: at.point[0], y: at.point[1], confirmed: true })!;
+    const off = anchorStripColumn(c, indexToCol, { x: at.point[0] + at.tangent[1] * 3, y: at.point[1] - at.tangent[0] * 3, confirmed: true })!;
+    expect(Math.abs(on - off)).toBeLessThan(0.3);
+  });
+  it("★負例: 中心線が 2 点未満・列のデータが足りなければ null（0 列に黙って置かない）", () => {
+    expect(anchorStripColumn([[0, 0]], indexToCol, { x: 0, y: 0, confirmed: true })).toBeNull();
+    expect(anchorStripColumn(c, new Float32Array(1), { x: 5, y: 5, confirmed: true })).toBeNull();
   });
 });
 

@@ -2201,6 +2201,7 @@ export const ja: Record<string, string> = {
   "xa3d.anchorCount": "アンカー {{n}} 点（端点 2 点を含む）",
   "xa3d.runAnchors": "2D QCA 画面のアンカー: 確認済みの組 {{n}}（方向 A {{a}} 点・方向 B {{b}} 点）",
   "xa3d.runAnchorsMismatch": "番号の数が 2 方向で違うので、少ないほうに合わせています。",
+  "xa3d.runAnchorsLegend": "線図の色つきの線＝2D QCA 画面のアンカー（実線＝確認済み・破線＝未確認。番号と色が 2 方向の対応）。茶色の点＝この画面で選んだアンカー。",
   "xa3d.clearAnchors": "追加したアンカーを消す",
   "xa3d.recon": "再構成",
   "xa3d.run": "再構成する",
