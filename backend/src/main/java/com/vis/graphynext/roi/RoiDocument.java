@@ -25,8 +25,8 @@ import java.time.Instant;
  * ここでの目的は「同じ UID で往復できること」なので、フロントの表現をそのまま JSON で持つ。
  * 標準形式（DICOM RTSTRUCT / SR / ImageJ ROI）への書き出しは別機能として既存のまま残る。
  *
- * <p><b>マスク（labelmap）は対象外</b>。マスクは DICOM SEG の往復が既に実装済みで、
- * 画素データを JSON に入れるのは筋が悪い。
+ * <p><b>マスク（labelmap）は対象外</b>。画素データを JSON に入れるのは筋が悪い。
+ * 塗り ROI は 1 件 1 行の別テーブル {@link RoiMaskDocument}（{@code roi_mask_document}）が持つ。
  */
 @Entity
 @Table(name = "roi_document")
