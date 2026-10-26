@@ -3,7 +3,7 @@
  * Author: Tatsuaki Kobayashi
  */
 import { describe, expect, it } from "vitest";
-import { nextGroupNumber, planGroup, pooledValueStats, sumAreaMm2 } from "./roiGroups";
+import { nextGroupNumber, planGroup, pooledValueStats, sumAreaMm2, unresolvedMembers } from "./roiGroups";
 
 describe("planGroup", () => {
   const owner: Record<string, string | undefined> = { a: "P1", b: "P1", c: "P2", d: undefined };
@@ -21,6 +21,20 @@ describe("planGroup", () => {
   });
   it("患者不明は数えない", () => {
     expect(planGroup(["a", "d"], of, id, "G").ok).toBe(true);
+  });
+});
+
+describe("unresolvedMembers", () => {
+  const owner: Record<string, string | undefined> = { "a:1": undefined, "m:2": "P1", "m:3": undefined, "s:4": undefined, "s:5": "P1" };
+  const of = (k: string) => owner[k];
+  it("塗り・球で患者不明のものだけ返す", () => {
+    expect(unresolvedMembers(["a:1", "m:2", "m:3", "s:4", "s:5"], of)).toEqual(["m:3", "s:4"]);
+  });
+  it("形・計測の患者不明は返さない（旧データを弾かない）", () => {
+    expect(unresolvedMembers(["a:1", "m:2"], of)).toEqual([]);
+  });
+  it("全部解決済みなら空", () => {
+    expect(unresolvedMembers(["m:2", "s:5"], of)).toEqual([]);
   });
 });
 

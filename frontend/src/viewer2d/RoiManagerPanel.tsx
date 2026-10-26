@@ -34,7 +34,7 @@ import { isRoiLocked, setRoiLocked } from "../viewer/roiLock";
 import { emitSeriesRefresh } from "../viewer/viewerRefresh";
 import { emitDbChanged } from "../dbEvents";
 import { combineRois, splitMask, roiToMask, withTempMask, isAreaRoi, resolveRoiStack, type BoolOp, type RoiOperand, type SplitConnectivity } from "../viewer/roiBooleanOps";
-import { nextGroupNumber, planGroup } from "../viewer/roiGroups";
+import { nextGroupNumber, planGroup, unresolvedMembers } from "../viewer/roiGroups";
 import { buildRoiPanelModel, type MeasureRow, type PaintedRoiRow, type RoiPanelModel, type RoiRow, type RoiRowEnv, type RowOwner, type ShapeRoiRow, type SphereRoiRow } from "../viewer/roiRows";
 import { sphereFromCircleRoi, createSphere3DFromCircleRoi, bakeSphere3D, splitMaskToSlices, maskVolumeStats, type MaskVolumeStats } from "../viewer/roi3d";
 import { listSpheres3D, updateSphere3D, deleteSphere3D, subscribeSphere3D, type Sphere3D } from "../viewer/sphere3dStore";
@@ -979,6 +979,7 @@ export function RoiManagerPanel({
   for (const r of [...model.rois, ...model.measures]) if (r.groupId) groupSizes.set(r.groupId, (groupSizes.get(r.groupId) ?? 0) + 1);
   const isRealGroup = (gid: string | undefined): gid is string => !!gid && (groupSizes.get(gid) ?? 0) >= 2;
   const makeGroup = () => {
+    if (unresolvedMembers(selectedMembers, patientOfMember).length > 0) { emitToast(t("roiMgr.group.unknownPatient")); return; }
     const prefix = t("roiMgr.groupPrefix");
     const plan = planGroup(
       selectedMembers,
