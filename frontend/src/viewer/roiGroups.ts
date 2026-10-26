@@ -97,6 +97,19 @@ export function pooledValueStats(items: readonly PooledInput[]): PooledStats | n
   return { n: total, mean, sd: Math.sqrt(ss / total), unit };
 }
 
+/**
+ * グループ合算に渡す値の選び方。行ごとに、マスク（塗り ROI・球）の値があればそれ、無ければ形・計測の値。
+ * 値の無い行（空のマスクなど）は 0 で埋めず除く。表の行（RoiStatsDialog）と同じ優先順位。
+ */
+export function pooledInputsOf(
+  rows: ReadonlyArray<{ mask?: { values?: PooledInput }; stats?: { values?: PooledInput } }>,
+): PooledInput[] {
+  return rows.flatMap((r) => {
+    const v = r.mask ? r.mask.values : r.stats?.values;
+    return v ? [{ n: v.n, mean: v.mean, sd: v.sd, unit: v.unit }] : [];
+  });
+}
+
 /** 面積の合計。値が無い（画素間隔不明）ものは足さず、件数を返す（0 で埋めない）。 */
 export function sumAreaMm2(areas: ReadonlyArray<number | undefined>): { sum: number; counted: number; missing: number } {
   let sum = 0;

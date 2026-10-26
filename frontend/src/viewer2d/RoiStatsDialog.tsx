@@ -34,7 +34,7 @@ import type { HistogramData } from "../viewer/histogram";
 import { LoadingSpinner } from "../viewer/LoadingSpinner";
 import { fusionMeasureForSeries, useFusionMeasure, type FusionMeasureInfo } from "../viewer/fusionMeasureContext";
 import { seriesUidOf } from "../viewer/suvStore";
-import { pooledValueStats, sumAreaMm2 } from "../viewer/roiGroups";
+import { pooledInputsOf, pooledValueStats, sumAreaMm2 } from "../viewer/roiGroups";
 
 const CHART_W = 520;
 const CHART_H = 150;
@@ -294,8 +294,8 @@ export function RoiStatsDialog({
 function GroupSummary({ title, rows }: { title: string; rows: RoiStatsCsvRow[] }) {
   const { t } = useI18n();
   const area = sumAreaMm2(rows.map((r) => r.stats?.geometry.areaMm2));
-  const withValues = rows.flatMap((r) => (r.stats?.values ? [r.stats.values] : []));
-  const pooled = pooledValueStats(withValues.map((v) => ({ n: v.n, mean: v.mean, sd: v.sd, unit: v.unit })));
+  const withValues = pooledInputsOf(rows);
+  const pooled = pooledValueStats(withValues);
   return (
     <div style={detailBox} data-testid="roi-group-summary">
       <div style={{ ...detailLine, fontWeight: 600 }}>{t("roiStats.group.title")}: {title}</div>
