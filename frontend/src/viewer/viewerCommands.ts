@@ -760,6 +760,8 @@ export interface ViewerCommands {
    * 消せたら true。
    */
   removeCreatedRoi(roiUid: string, pluginId: string): boolean;
+  /** そのプラグインが `showLabelVolume` で出した Mask だけを消す（他の Mask・ロック中は消えず false）。 */
+  removeLabelVolume(segmentationId: string, pluginId: string): boolean;
   undo(): void;
   redo(): void;
 }

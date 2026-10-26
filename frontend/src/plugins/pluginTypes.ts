@@ -909,6 +909,8 @@ export interface Viewer2DPluginHost extends PluginHostBase {
   ) => { ok: true; roiUid: string; centerLps: [number, number, number] } | { ok: false; reason: import("../viewer/roiCreate").CreateRoiFailure };
   /** `createRoi` で**このプラグインが作った** ROI だけを消す（本体や他プラグインの ROI・ロック中は消えず false）。 */
   removeCreatedRoi: (roiUid: string) => boolean;
+  /** `showLabelVolume` で**このプラグインが出した** Mask（返った `segmentationId`）だけを消す（本体・他プラグイン・利用者の Mask、ロック中は消えず false）。 */
+  removeLabelVolume: (segmentationId: string) => boolean;
   /**
    * **表示位置を移動する**（H14）。結果の一覧から「その ROI のスライス」へ飛ぶ用途。
    *

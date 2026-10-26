@@ -22,6 +22,7 @@ import {
   PlanarFreehandROITool,
   BrushTool,
   annotation as csAnnotation,
+  segmentation as csSeg,
   utilities as csToolsUtilities,
   Enums as csToolsEnums,
 } from "@cornerstonejs/tools";
@@ -34,6 +35,7 @@ import { ToolIcon } from "../icons/ToolIcon";
 import { UI_ICON_FILES, ACTIVE_ICON_STYLE } from "../icons/toolIcons";
 import { emitToast } from "./toast";
 import { isRoiLocked, partitionByLock } from "./roiLock";
+import { forgetLabelVolume, isLabelVolumeOf } from "./labelVolumeOrigin";
 import type { SavedRoi } from "./roiPersistence";
 import { buildContourVertices, buildRoiHandles, isContourCreateTool, maxExtentFromImage, sliceToleranceFromStack, type RoiCreateGeometry } from "./roiCreate";
 import { installTrueMagnification } from "./magnifier";
@@ -2724,6 +2726,21 @@ export function Viewer2D({
     return true;
   };
 
+  /** そのプラグインが `showLabelVolume` で出した Mask だけを消す（出自が違う・ロック中は false）。 */
+  const removeLabelVolume: ViewerCommands["removeLabelVolume"] = (segmentationId, pluginId) => {
+    if (typeof segmentationId !== "string" || !isLabelVolumeOf(segmentationId, pluginId)) return false;
+    if (isRoiLocked(segmentationId)) return false;
+    try {
+      csSeg.removeSegmentation(segmentationId);
+    } catch {
+      return false;
+    }
+    deleteRoiMaskMeta(segmentationId);
+    forgetLabelVolume(segmentationId);
+    vp()?.render();
+    return true;
+  };
+
   // 注釈を種別ごとに全消去する（ROI だけ / 計測だけ）。ロック中は残す。
   // 種別不明（矢印など）は ROI 側で消える——全消去で残り続けるものを作らない。
   const clearAnnotations = (scope: "roi" | "measure") => {
@@ -2789,7 +2806,7 @@ export function Viewer2D({
     publishAnalysisResult: publishPluginAnalysis,
     setActiveTool, setBrushSize, setWandTolerance,
     getRois, getRoiMeta, setRoiMeta, clearAnnotations, selectRoi,
-    copyRoi, copyRois, ownsRoi, pasteRoi, duplicateRoi, convertMeasureToRoi: convertMeasureToRoiCmd, createRoi, removeCreatedRoi,
+    copyRoi, copyRois, ownsRoi, pasteRoi, duplicateRoi, convertMeasureToRoi: convertMeasureToRoiCmd, createRoi, removeCreatedRoi, removeLabelVolume,
     undo, redo,
   });
   commandsRef.current = {
@@ -2803,7 +2820,7 @@ export function Viewer2D({
     publishAnalysisResult: publishPluginAnalysis,
     setActiveTool, setBrushSize, setWandTolerance,
     getRois, getRoiMeta, setRoiMeta, clearAnnotations, selectRoi,
-    copyRoi, copyRois, ownsRoi, pasteRoi, duplicateRoi, convertMeasureToRoi: convertMeasureToRoiCmd, createRoi, removeCreatedRoi,
+    copyRoi, copyRois, ownsRoi, pasteRoi, duplicateRoi, convertMeasureToRoi: convertMeasureToRoiCmd, createRoi, removeCreatedRoi, removeLabelVolume,
     undo, redo,
   };
   useEffect(() => {
@@ -2855,6 +2872,7 @@ export function Viewer2D({
       duplicateRoi: (u) => commandsRef.current.duplicateRoi(u),
       createRoi: (r, b) => commandsRef.current.createRoi(r, b),
       removeCreatedRoi: (u, p) => commandsRef.current.removeCreatedRoi(u, p),
+      removeLabelVolume: (s, p) => commandsRef.current.removeLabelVolume(s, p),
       undo: () => commandsRef.current.undo(),
       redo: () => commandsRef.current.redo(),
     });

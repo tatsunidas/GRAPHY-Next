@@ -64,6 +64,7 @@ export const HOST_EFFECTS: Record<HostKey, ToolEffect> = {
   setRoiMeta: "write",
   createRoi: "write",
   removeCreatedRoi: "write",
+  removeLabelVolume: "write",
   putVesselAnalysis: "write",
   saveDerivedSeries: "write",
   saveStructuredReport: "write",

@@ -111,6 +111,7 @@ export interface ViewerActions {
   createRoi(tileId: string | undefined, by: { pluginId: string; pluginName: string }, req: import("../viewer/roiCreate").CreateRoiRequest): { ok: true; roiUid: string; centerLps: [number, number, number] } | { ok: false; reason: import("../viewer/roiCreate").CreateRoiFailure };
   /** そのプラグインが作った ROI だけを消す（出自の印が一致するときだけ）。 */
   removeCreatedRoi(roiUid: string, pluginId: string): boolean;
+  removeLabelVolume(segmentationId: string, pluginId: string): boolean;
   /**
    * ROI の追加・変更・削除を購読する（H5）。返り値で解除。
    * 通知はまとめられる（**何が変わったかは渡さない**ので、受け取ったら `getRois()` を読み直す）。
@@ -121,7 +122,7 @@ export interface ViewerActions {
   /** プラグインオーバーレイを消す。tileId 省略時は対象タイル全部。 */
   clearOverlay(tileId?: string): void;
   /** ラベルの volume を対象タイルの Mask として読み込む（H65）。tileId 省略時は対象の先頭。 */
-  showLabelVolume(tileId: string | undefined, req: ViewerLabelVolume, producer: { name: string }): Promise<ViewerLabelVolumeResult>;
+  showLabelVolume(tileId: string | undefined, req: ViewerLabelVolume, producer: { id: string; name: string }): Promise<ViewerLabelVolumeResult>;
   /**
    * プラグインの出力を派生シリーズとして保存する（H4b）。**確認ダイアログを必ず挟む**
    * （抑止不可。ユーザーが拒否したら `cancelled: true`）。

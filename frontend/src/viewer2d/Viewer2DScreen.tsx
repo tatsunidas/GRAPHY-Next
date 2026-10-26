@@ -60,6 +60,7 @@ import {
   toggleSplineFit,
 } from "../viewer/roiContourTools";
 import { getRoiMaskMeta, subscribeRoiMaskStore } from "../viewer/roiMaskStore";
+import { markLabelVolume } from "../viewer/labelVolumeOrigin";
 import { getLoadedRois, registerRoiCollector, scheduleRoiSave } from "../viewer/roiSaveStore";
 import { collectRoisForPatient, sopOfImageId } from "../viewer/roiRestore";
 import { emitRoiReveal } from "../viewer/roiReveal";
@@ -1793,7 +1794,15 @@ function TileGrid({
         const id = tileId ?? resolveTargets()[0];
         if (!id) return { ok: false, error: "no target tile" };
         const label = (req.label?.trim() || producer.name).slice(0, 64);
-        return (await queryViewerCommand(id, (c) => c.importLabelVolume(req, label))) ?? { ok: false, error: "tile is not available" };
+        const r = (await queryViewerCommand(id, (c) => c.importLabelVolume(req, label))) ?? { ok: false as const, error: "tile is not available" };
+        if (r.ok) markLabelVolume(r.segmentationId, producer.id);
+        return r;
+      },
+      removeLabelVolume: (segmentationId, pluginId) => {
+        for (const id of resolveTargets()) {
+          if (queryViewerCommand(id, (c) => c.removeLabelVolume(segmentationId, pluginId))) return true;
+        }
+        return false;
       },
       // H4b: プラグインの出力を派生シリーズとして保存する。**必ず確認ダイアログを挟む**
       // （抑止不可）。ここで同意が取れてからタイル側の保存コマンドを呼ぶ。
