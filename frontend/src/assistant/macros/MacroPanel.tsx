@@ -20,7 +20,7 @@ export interface MacroApi {
 }
 
 export function stepLabel(t: T, s: MacroStep, pluginTools?: readonly PluginToolEntry[]): string {
-  const p = Object.entries(s.params).map(([k, v]) => `${k}=${String(v)}`).join(" ");
+  const p = Object.entries(s.params).map(([k, v]) => `${k}=${Array.isArray(v) ? `[${v.length}]` : String(v)}`).join(" ");
   const plugin = isPluginToolName(s.id) ? pluginTools?.find((e) => e.name === s.id) : undefined;
   const name = isPluginToolName(s.id) ? (plugin ? `${plugin.pluginName}: ${plugin.tool}` : s.id) : t(`assistant.act.${s.id}`);
   return `${name}${p ? ` ${p}` : ""}`;

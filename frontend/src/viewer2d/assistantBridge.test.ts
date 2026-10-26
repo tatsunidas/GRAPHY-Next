@@ -317,3 +317,51 @@ describe("dryRun（main が確認の前に送る検証だけの往復）", () =>
     expect(calls).toEqual([]);
   });
 });
+
+describe("createContourRoi（多角形・自由曲線）", () => {
+  const sq = [[0.2, 0.2], [0.8, 0.2], [0.8, 0.8], [0.2, 0.8]];
+  const ok = { shape: "polygon", points: sq };
+  it("未承認は実行しない。承認つきで 1 回作り、割合の頂点をそのまま渡して inverse を返す", () => {
+    const { deps, calls } = makeDeps();
+    expect(executeCommand(deps, { kind: "action", id: "createContourRoi", params: ok })).toEqual({ ok: false, error: "approval-required" });
+    expect(calls.filter((c) => c.startsWith("createRoi"))).toEqual([]);
+    const r = executeCommand(deps, { kind: "action", id: "createContourRoi", params: ok, approved: true });
+    expect(r).toEqual({ ok: true, inverse: [{ id: "removeAssistantRoi", params: { roiUid: "uid-1" } }] });
+    expect(calls.filter((c) => c.startsWith("createRoi"))).toEqual([
+      'createRoi(t1,{"tool":"PolygonROI","verticesView":[[0.2,0.2],[0.8,0.2],[0.8,0.8],[0.2,0.8]]})',
+    ]);
+    executeCommand(deps, { kind: "action", id: "createContourRoi", params: { ...ok, shape: "freehand" }, approved: true });
+    expect(calls[calls.length - 1]).toContain('"tool":"FreehandROI"');
+  });
+  it("負例: 蝶ネクタイ・共線・点数不足/超過・範囲外・非配列・要素数違い・未知キーは検証で落ち、deps を呼ばない", () => {
+    const { deps, calls } = makeDeps();
+    const many = Array.from({ length: 65 }, (_, i) => [0.1 + (i % 8) * 0.1, 0.1 + Math.floor(i / 8) * 0.1]);
+    const cases: [unknown, string][] = [
+      [{ ...ok, points: [[0.2, 0.2], [0.8, 0.8], [0.8, 0.2], [0.2, 0.8]] }, "self-intersecting:points"],
+      [{ ...ok, points: [[0.1, 0.1], [0.5, 0.5], [0.9, 0.9]] }, "degenerate:points"],
+      [{ ...ok, points: [[0.1, 0.1], [0.1, 0.1], [0.5, 0.5], [0.5, 0.5]] }, "degenerate:points"],
+      [{ ...ok, points: [[0.1, 0.1], [0.9, 0.9]] }, "out-of-range:points"],
+      [{ ...ok, points: many }, "out-of-range:points"],
+      [{ ...ok, points: [[0.1, 0.1], [1.1, 0.5], [0.5, 0.9]] }, "out-of-range:points"],
+      [{ ...ok, points: [[0.1, 0.1], [NaN, 0.5], [0.5, 0.9]] }, "bad-param:points"],
+      [{ ...ok, points: [[0.1, 0.1, 0.2], [0.9, 0.5], [0.5, 0.9]] }, "bad-param:points"],
+      [{ ...ok, points: "0.1,0.1" }, "bad-param:points"],
+      [{ ...ok, shape: "ellipse" }, "bad-param:shape"],
+      [{ ...ok, radiusXmm: 5 }, "unknown-param:radiusXmm"],
+      [{ shape: "polygon" }, "missing-param:points"],
+    ];
+    for (const [p, err] of cases) expect(executeCommand(deps, { kind: "action", id: "createContourRoi", params: p, approved: true }), err).toEqual({ ok: false, error: err });
+    expect(calls.filter((c) => c.startsWith("createRoi"))).toEqual([]);
+  });
+  it("対照: 非凸の L 字は通る（検査が常に落ちているのではない）。dryRun は実行せず ok、不正は同じ理由", () => {
+    const { deps, calls } = makeDeps();
+    const L = [[0.1, 0.1], [0.9, 0.1], [0.9, 0.4], [0.3, 0.4], [0.3, 0.9], [0.1, 0.9]];
+    expect(executeCommand(deps, { kind: "action", id: "createContourRoi", params: { shape: "polygon", points: L }, dryRun: true })).toEqual({ ok: true });
+    expect(executeCommand(deps, { kind: "action", id: "createContourRoi", params: { shape: "polygon", points: [[0.2, 0.2], [0.8, 0.8], [0.8, 0.2], [0.2, 0.8]] }, dryRun: true })).toEqual({ ok: false, error: "self-intersecting:points" });
+    expect(calls).toEqual([]);
+  });
+  it("作成の失敗理由をそのまま返す", () => {
+    const { deps } = makeDeps({ createRoi: () => ({ ok: false, reason: "off-slice" }) });
+    expect(executeCommand(deps, { kind: "action", id: "createContourRoi", params: ok, approved: true })).toEqual({ ok: false, error: "roi-off-slice" });
+  });
+});

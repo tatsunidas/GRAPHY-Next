@@ -1331,6 +1331,10 @@ const WRITE_CONFIRM_TEXT = {
     message: "2D ビューアの表示中のスライスに、ROI（楕円または矩形）を 1 つ追加します。",
     detail: "アシスタントの「元に戻す」で、この ROI だけを消せます。追加しますか？",
   },
+  createContourRoi: {
+    message: "2D ビューアの表示中のスライスに、ROI（多角形または自由曲線）を 1 つ追加します。",
+    detail: "アシスタントの「元に戻す」で、この ROI だけを消せます。追加しますか？",
+  },
 };
 const viewerRelay = createRelay({
   resolveTarget: () => {

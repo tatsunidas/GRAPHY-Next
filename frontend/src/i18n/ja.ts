@@ -180,6 +180,7 @@ export const ja: Record<string, string> = {
   "assistant.act.setWindowLevel": "ウィンドウ幅/レベルを設定",
   "assistant.act.clearMeasurements": "計測線をすべて消す",
   "assistant.act.createRoi": "ROI を追加",
+  "assistant.act.createContourRoi": "ROI を追加（多角形・自由曲線）",
   "assistant.act.removeAssistantRoi": "ROI を消す（アシスタントが作ったもの）",
   "assistant.robot.writeMark": "⚠ 元に戻せません・実行時に確認ダイアログが出ます",
   "assistant.act.resetWindow": "ウィンドウを既定に戻す",

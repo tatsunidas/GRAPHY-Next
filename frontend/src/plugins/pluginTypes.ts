@@ -899,6 +899,9 @@ export interface Viewer2DPluginHost extends PluginHostBase {
    * LPS の中心は表示中のスライスの面内であること（面外は `off-slice` で拒否。別のスライスへは作らない）。成功すると、作った ROI の中心（LPS）も返る。
    * 半径（矩形は半幅）は**表示の水平・垂直方向**の mm。作った ROI には本体が出自の印（このプラグイン）とラベルを付け、
    * ROI マネージャで見分けられる。保存は本体が予約する。AI ツール（`effect: "write"`）から呼ぶときは、その実行前に本体が利用者の確認を出す。
+   * **多角形・自由曲線も作れる**（`tool: "PolygonROI" | "FreehandROI"`）。頂点を `verticesLps`（LPS mm）か `verticesPx`（表示中スライスの画素座標）の
+   * **どちらか一方**で順に渡す（閉じるので始点を繰り返さない。多角形 3〜64 点、自由曲線 3〜256 点）。全頂点が表示中のスライスの面内であること。
+   * 自己交差・面積ゼロの形は `self-intersecting` / `degenerate` で拒否する。`radiiMm` / `centerLps` / `centerPx` は使わない。
    */
   createRoi: (
     tileId: string | undefined,
