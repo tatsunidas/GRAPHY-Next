@@ -43,7 +43,7 @@ import {
   type GeometryRefinement,
 } from "./xaRecon3d";
 import { type XaQcaRun, useQcaRuns } from "./xaRecon3dStore";
-import { pairAnchors } from "./qcaAnchors";
+import { anchorColor, anchorLine, pairAnchors, type QcaAnchor } from "./qcaAnchors";
 import { TaskStepRail } from "./TaskStepRail";
 import { deriveQca3dSteps } from "./xaTasks";
 import { viewerOverlayProps } from "./viewerOverlay";
@@ -538,6 +538,7 @@ export function Xa3dQcaDialog({ onClose }: { onClose: () => void }) {
                       testId="xa3d-curve-a"
                       highlighted={pendingA}
                       anchors={anchors.map((a) => a.ia)}
+                      runAnchors={runA.anchors}
                       onPick={(i) => setPendingA(i)}
                     />
                     <CenterlineCanvas
@@ -545,6 +546,7 @@ export function Xa3dQcaDialog({ onClose }: { onClose: () => void }) {
                       testId="xa3d-curve-b"
                       highlighted={null}
                       anchors={anchors.map((a) => a.ib)}
+                      runAnchors={runB.anchors}
                       onPick={(i) => {
                         if (pendingA == null) return;
                         setAnchors((prev) => [...prev, { ia: pendingA, ib: i }]);
@@ -557,6 +559,7 @@ export function Xa3dQcaDialog({ onClose }: { onClose: () => void }) {
                     <div style={hint} data-testid="xa3d-run-anchors">
                       {t("xa3d.runAnchors", { n: String(runAnchorInfo.pairs), a: String(runAnchorInfo.a), b: String(runAnchorInfo.b) })}
                       {runAnchorInfo.mismatch ? <span style={warn}> {t("xa3d.runAnchorsMismatch")}</span> : null}
+                      <div>{t("xa3d.runAnchorsLegend")}</div>
                     </div>
                   ) : null}
                   <div style={row}>
@@ -918,12 +921,15 @@ function CenterlineCanvas({
   testId,
   highlighted,
   anchors,
+  runAnchors,
   onPick,
 }: {
   run: XaQcaRun;
   testId: string;
   highlighted: number | null;
   anchors: number[];
+  /** 2D QCA 画面で置いたアンカー（血管に沿った順。番号・色は 2D 画面と同じ）。 */
+  runAnchors?: readonly QcaAnchor[];
   onPick: (index: number) => void;
 }) {
   const pts = run.centerline;
@@ -987,6 +993,32 @@ function CenterlineCanvas({
           </g>
         );
       })}
+      {/* 2D QCA 画面のアンカー。中心線に直交する短い線と番号（確認前は破線）。
+          クリックの判定は線図そのものに任せる（これは見せるだけ）。 */}
+      <g pointerEvents="none" data-testid={`${testId}-run-anchors`}>
+        {(runAnchors ?? []).map((a, k) => {
+          const l = anchorLine(pts, a, 7 / box.scale);
+          if (!l) return null;
+          const p0 = toScreen(l.p0);
+          const p1 = toScreen(l.p1);
+          return (
+            <g key={`ra-${k}`} opacity={a.confirmed ? 1 : 0.75}>
+              <line
+                x1={p0[0]}
+                y1={p0[1]}
+                x2={p1[0]}
+                y2={p1[1]}
+                stroke={anchorColor(k)}
+                strokeWidth={2.2}
+                strokeDasharray={a.confirmed ? undefined : "3 2"}
+              />
+              <text x={p1[0] + 3} y={p1[1] + 4} fontSize={11} fontWeight={700} fill={anchorColor(k)} stroke="#e9eef3" strokeWidth={2.5} paintOrder="stroke">
+                {k + 1}
+              </text>
+            </g>
+          );
+        })}
+      </g>
       {anchors.map((i, k) => {
         const s = toScreen(pts[i] ?? pts[0]);
         return (

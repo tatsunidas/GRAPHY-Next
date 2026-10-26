@@ -268,6 +268,26 @@ export function anchorLine(
   };
 }
 
+/**
+ * アンカーが、ストレート像（横＝中心線に沿った距離）のどの列に当たるか（小数）。
+ * `indexToCol` は中心線の各点の列（`qcaStraighten` の結果）。点の間は線形補間する。
+ * 中心線が 2 点未満なら null。
+ */
+export function anchorStripColumn(c: readonly Pt[], indexToCol: ArrayLike<number>, a: QcaAnchor): number | null {
+  if (c.length < 2) return null;
+  const sn = snapToCenterline(c, [a.x, a.y]);
+  if (!sn) return null;
+  const arcs = cumulativeArcs(c);
+  let i = 0;
+  while (i + 2 < c.length && arcs[i + 1] < sn.s) i++;
+  const seg = arcs[i + 1] - arcs[i];
+  const t = seg === 0 ? 0 : Math.max(0, Math.min(1, (sn.s - arcs[i]) / seg));
+  const c0 = indexToCol[i];
+  const c1 = indexToCol[i + 1];
+  if (c0 === undefined || c1 === undefined) return null;
+  return c0 + t * (c1 - c0);
+}
+
 /** 位置 s の近くの血管の半径（エッジのオフセットの最大絶対値の中央付近）。 */
 export function localRadiusPx(
   c: readonly Pt[],

@@ -2212,6 +2212,7 @@ export const en: Record<string, string> = {
   "xa3d.anchorCount": "{{n}} anchors (including the two end points)",
   "xa3d.runAnchors": "Anchors from the 2D QCA screen: {{n}} confirmed pairs (view A {{a}}, view B {{b}})",
   "xa3d.runAnchorsMismatch": "The counts differ between the two views; the smaller count is used.",
+  "xa3d.runAnchorsLegend": "Colored lines in the diagrams = anchors from the 2D QCA screen (solid = confirmed, dashed = unconfirmed; the number and color pair the two views). Brown dots = anchors picked on this screen.",
   "xa3d.clearAnchors": "Clear added anchors",
   "xa3d.recon": "Reconstruction",
   "xa3d.run": "Reconstruct",
