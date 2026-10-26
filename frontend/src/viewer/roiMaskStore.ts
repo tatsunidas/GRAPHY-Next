@@ -52,6 +52,8 @@ export interface RoiMaskMeta {
   /** このマスクを直近 SEG 書き出しした先（再書き出し時、standalone なら旧シリーズを自動削除して
    * 「更新」相当にするために使う。`segExport.ts` 参照）。 */
   lastSegExport?: { studyUid: string; seriesUid: string; sopInstanceUid: string };
+  /** 保存（`roi_mask_document`）の行の鍵。初めて保存するときに採番し、復元したマスクは保存時の値を引き継ぐ。 */
+  persistUid?: string;
 }
 
 const metaById = new Map<string, RoiMaskMeta>();
@@ -124,7 +126,30 @@ export function setRoiMaskMeta(itemId: string, patch: Partial<RoiMaskMeta>): voi
 }
 
 export function deleteRoiMaskMeta(itemId: string): void {
-  if (metaById.delete(itemId)) notify();
+  const cur = metaById.get(itemId);
+  if (!metaById.delete(itemId)) return;
+  notify();
+  for (const l of [...deletedListeners]) {
+    try {
+      l(itemId, cur);
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
+const deletedListeners = new Set<(itemId: string, meta: RoiMaskMeta | undefined) => void>();
+
+/**
+ * メタが削除されたことの購読（マスクを利用者が消した合図）。保存側が、保存済みの行を消すのに使う。
+ * 🔴 ビューポートの破棄ではメタは消えない（`deleteRoiMaskMeta` を呼ぶのは削除操作だけ）ので、
+ * タイルを閉じただけで保存済みのマスクが消えることはない。
+ */
+export function subscribeRoiMaskDeleted(l: (itemId: string, meta: RoiMaskMeta | undefined) => void): () => void {
+  deletedListeners.add(l);
+  return () => {
+    deletedListeners.delete(l);
+  };
 }
 
 /** 変更購読（マネージャ UI の再描画用）。 */

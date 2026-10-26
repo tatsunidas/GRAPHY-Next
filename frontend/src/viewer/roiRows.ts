@@ -58,7 +58,7 @@ export interface SphereInput {
 export interface RowOwner {
   patientKey?: string;
   seriesUid?: string;
-  /** 所属する ROI グループ。形の ROI・計測・球は保存される。塗り ROI はセッション内のみ。 */
+  /** 所属する ROI グループ。形の ROI・計測・球は `/api/rois`、塗り ROI は `/api/roi-masks` に保存される（患者・シリーズが分からない塗り ROI を除く）。 */
   groupId?: string;
   groupName?: string;
 }
