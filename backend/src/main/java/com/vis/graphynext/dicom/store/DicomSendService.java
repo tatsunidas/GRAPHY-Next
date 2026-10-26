@@ -28,11 +28,13 @@ public class DicomSendService {
 
     private final DicomStorageService storage;
     private final DicomTlsService tlsService;
-    private final DicomStoreScu scu = new DicomStoreScu();
+    private final DicomStoreScu scu;
 
-    public DicomSendService(DicomStorageService storage, DicomTlsService tlsService) {
+    public DicomSendService(DicomStorageService storage, DicomTlsService tlsService,
+                            com.vis.graphynext.anonymize.PixelCodec codec) {
         this.storage = storage;
         this.tlsService = tlsService;
+        this.scu = new DicomStoreScu(codec);
     }
 
     /** 送信対象（1 スタディと、その中で送る対象シリーズ。空なら当該スタディ全体）。 */
