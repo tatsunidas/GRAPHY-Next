@@ -9,6 +9,7 @@ import {
   buildSavedSearch,
   extractSavedSearches,
   resolveFilters,
+  sameFilters,
   type SavedDateMode,
 } from "./savedSearch";
 import type { StudyFilters } from "../api";
@@ -117,5 +118,29 @@ describe("保存した検索: 保存の拒否と読めない値", () => {
     };
     const { items } = extractSavedSearches(Object.fromEntries([mk("1", "b"), mk("2", "a")]));
     expect(items.map((s) => s.name)).toEqual(["a", "b"]);
+  });
+});
+
+describe("保存した検索: いまの入力欄と食い違っていないか（sameFilters）", () => {
+  it("同じ中身なら、キーの順が違っても同じ。空文字と未設定も同じ", () => {
+    expect(sameFilters({ patientId: "P1", modality: "CT" }, { modality: "CT", patientId: "P1" })).toBe(true);
+    expect(sameFilters({ patientId: "P1", patientName: "" }, { patientId: "P1" })).toBe(true);
+    expect(sameFilters({}, {})).toBe(true);
+  });
+
+  it("負例: 値が違う・項目が増減する・日付が違うと別（クリアも別）", () => {
+    expect(sameFilters({ patientId: "P1" }, { patientId: "P2" })).toBe(false);
+    expect(sameFilters({ patientId: "P1" }, {})).toBe(false); // 「クリア」したあと
+    expect(sameFilters({ patientId: "P1" }, { patientId: "P1", accessionNumber: "A" })).toBe(false);
+    expect(sameFilters({ modality: "CT" }, { modality: "CT,MR" })).toBe(false);
+    expect(sameFilters({ missingPatientInfo: true }, {})).toBe(false);
+    expect(sameFilters({ studyDateFrom: "20260101" }, { studyDateFrom: "20260102" })).toBe(false);
+  });
+
+  it("呼び出した直後の条件は、保存した検索と同じ（選んだ瞬間に選択が外れない）", () => {
+    for (const mode of ["absolute", "today", "last7", "last30"] as const) {
+      const s = roundTrip(mode, FULL);
+      expect(sameFilters(resolveFilters(s, at(2026, 10, 26)), resolveFilters(s, at(2026, 10, 26)))).toBe(true);
+    }
   });
 });

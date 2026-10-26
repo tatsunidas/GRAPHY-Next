@@ -11,6 +11,7 @@ import {
   buildSavedSearch,
   extractSavedSearches,
   resolveFilters,
+  sameFilters,
   SAVED_SEARCH_PREFIX,
   ymd,
   type SavedDateMode,
@@ -90,6 +91,14 @@ export function SearchPanel({
 
   const isEmpty = Object.keys(filters).length === 0;
   const filterKey = JSON.stringify(filters);
+  // 保存した検索を選んだまま、入力欄の条件がその内容から変わったら（「クリア」・手入力・期間ボタンなど）、
+  // 選択を「選択してください」に戻す。戻さないと、同じ項目を選び直しても値が変わらず、条件が戻らない。
+  useEffect(() => {
+    if (!savedId) return;
+    const s = savedList.find((x) => x.id === savedId);
+    if (!s || !sameFilters(filters, resolveFilters(s, new Date()))) setSavedId("");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filterKey]);
 
   // 入力を随時検知してリストを更新（デバウンス）。ただし無条件のときは自動検索しない
   //（無条件検索は明示の「検索」ボタンで確認を取ってから）。

@@ -131,6 +131,12 @@ function parse(id: string, raw: string): SavedSearch | null {
   };
 }
 
+/** 2 つの条件が同じ中身か（キーの順・未設定と空は区別しない）。保存した検索の選択が、いまの入力欄と食い違っていないかの判定に使う。 */
+export function sameFilters(a: StudyFilters, b: StudyFilters): boolean {
+  const norm = (f: StudyFilters) => JSON.stringify(Object.entries(pickFilters(f, true)).sort(([x], [y]) => (x < y ? -1 : 1)));
+  return norm(a) === norm(b);
+}
+
 /** 呼び出したときの条件にする。相対の日付は `now` を基準に作る（「今日」= 今日〜今日、直近 N 日 = 今日−(N−1)〜今日）。 */
 export function resolveFilters(saved: SavedSearch, now: Date): StudyFilters {
   const f = pickFilters(saved.filters, saved.dateMode === "absolute");
