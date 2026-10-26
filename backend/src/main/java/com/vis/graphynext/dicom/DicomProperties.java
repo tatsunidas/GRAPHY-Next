@@ -313,6 +313,33 @@ public class DicomProperties {
         }
     }
 
+    /**
+     * 他端末からの検索への応答。患者情報を返すので既定は OFF、ON でも登録済みの相手先だけに応える。
+     * 環境設定で保存した値が優先される（{@link DicomQrAccess}）。
+     */
+    public static class QueryRetrieve {
+        /** 検索を受け付けるか。SCP の起動時に読む（変更は再起動後に反映）。 */
+        private boolean enabled = false;
+        /** 登録外の相手にも応えるか。 */
+        private boolean allowAll = false;
+
+        public boolean isEnabled() {
+            return enabled;
+        }
+
+        public void setEnabled(boolean enabled) {
+            this.enabled = enabled;
+        }
+
+        public boolean isAllowAll() {
+            return allowAll;
+        }
+
+        public void setAllowAll(boolean allowAll) {
+            this.allowAll = allowAll;
+        }
+    }
+
     public static class Scp {
         /** SCP リスナーを起動するか（standalone モードで有効化する想定）。 */
         private boolean enabled = false;
@@ -320,6 +347,16 @@ public class DicomProperties {
         private int port = 11112;
         /** バインドアドレス（0.0.0.0 で全 NIC）。 */
         private String bindAddress = "0.0.0.0";
+        /** 他端末からの検索（C-FIND）への応答。 */
+        private QueryRetrieve queryRetrieve = new QueryRetrieve();
+
+        public QueryRetrieve getQueryRetrieve() {
+            return queryRetrieve;
+        }
+
+        public void setQueryRetrieve(QueryRetrieve queryRetrieve) {
+            this.queryRetrieve = queryRetrieve;
+        }
 
         public boolean isEnabled() {
             return enabled;

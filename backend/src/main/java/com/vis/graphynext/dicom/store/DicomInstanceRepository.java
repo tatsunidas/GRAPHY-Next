@@ -82,6 +82,49 @@ public interface DicomInstanceRepository extends JpaRepository<DicomInstance, St
         String getModality();
     }
 
+    /**
+     * 他端末からの検索（C-FIND）に返すスタディ単位のヘッダ（全スタディ）。
+     * 一覧用の {@link #findStudySummaries} に無い生年月日・性別・アクセッション番号・シリーズ数を含む。
+     */
+    @Query("""
+            select i.studyInstanceUid as studyInstanceUid,
+                   max(i.patientId) as patientId,
+                   max(i.patientName) as patientName,
+                   max(i.patientBirthDate) as patientBirthDate,
+                   max(i.patientSex) as patientSex,
+                   max(i.studyDate) as studyDate,
+                   max(i.studyDescription) as studyDescription,
+                   max(i.accessionNumber) as accessionNumber,
+                   count(distinct i.seriesInstanceUid) as numberOfSeries,
+                   count(i) as numberOfInstances
+            from DicomInstance i
+            group by i.studyInstanceUid
+            """)
+    List<StudyHeader> findStudyHeaders();
+
+    /** findStudyHeaders の射影。 */
+    interface StudyHeader {
+        String getStudyInstanceUid();
+
+        String getPatientId();
+
+        String getPatientName();
+
+        String getPatientBirthDate();
+
+        String getPatientSex();
+
+        String getStudyDate();
+
+        String getStudyDescription();
+
+        String getAccessionNumber();
+
+        long getNumberOfSeries();
+
+        long getNumberOfInstances();
+    }
+
     /** スタディ内のシリーズ単位の集計。 */
     @Query("""
             select i.seriesInstanceUid as seriesInstanceUid,
