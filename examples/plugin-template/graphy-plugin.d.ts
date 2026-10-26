@@ -2137,6 +2137,8 @@ export interface Viewer2DPluginHost extends PluginHostBase {
   ) => { ok: true; roiUid: string; centerLps: [number, number, number] } | { ok: false; reason: "bad-request" | "off-slice" | "no-geometry" | "too-large" | "no-image" | "thick-slab" | "self-intersecting" | "degenerate" | "failed" };
   /** `createRoi` で**このプラグインが作った** ROI だけを消す（ロック中・他の ROI は消えず false）。（次の版以降） */
   removeCreatedRoi: (roiUid: string) => boolean;
+  /** `showLabelVolume` で**このプラグインが出した** Mask（返った `segmentationId`）だけを消す（本体・他プラグイン・利用者の Mask、ロック中は消えず false）。 */
+  removeLabelVolume: (segmentationId: string) => boolean;
   /**
    * ROI の追加・変更・削除を購読する。返り値を呼ぶと解除（ダイアログを閉じるときは必ず解除する）。
    * **何が変わったかは渡さない**ので、通知を受けたら `getRois()` を読み直すこと。

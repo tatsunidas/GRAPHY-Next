@@ -4,8 +4,10 @@
  */
 package com.vis.graphynext.dicom.store;
 
+import com.vis.graphynext.anonymize.PixelCodec;
 import org.dcm4che3.data.Attributes;
 import org.dcm4che3.data.Tag;
+import org.dcm4che3.data.UID;
 import org.dcm4che3.io.DicomInputStream;
 import org.dcm4che3.net.ApplicationEntity;
 import org.dcm4che3.net.Association;
@@ -48,6 +50,51 @@ public class DicomStoreScu {
 
     /** AAssociateRQ が提示できる Presentation Context の上限（DICOM 仕様）。 */
     private static final int MAX_PRESENTATION_CONTEXTS = 128;
+
+    /**
+     * 保管庫が圧縮して持つ（受信時の可逆圧縮）転送構文。相手が受けないときは、復号して Explicit VR LE で送る。
+     * 有損 JPEG など、ほかの圧縮は従来どおり（変換しない）。
+     */
+    private static final Set<String> LOSSLESS_STORED = Set.of(UID.JPEGLSLossless, UID.JPEG2000Lossless);
+
+    /** 復号して送るための部品。null なら復号フォールバックなし（従来どおり、ファイルの転送構文だけ提示）。 */
+    private final PixelCodec codec;
+
+    public DicomStoreScu() {
+        this(null);
+    }
+
+    public DicomStoreScu(PixelCodec codec) {
+        this.codec = codec;
+    }
+
+    private boolean canFallBack(String tsuid) {
+        return codec != null && tsuid != null && LOSSLESS_STORED.contains(tsuid);
+    }
+
+    /** 送るときの転送構文。元の転送構文を相手が受けるならそれ、受けず Explicit VR LE を受けるならそれ、どちらも無ければ null。 */
+    private String chooseTs(Association as, String cuid, String tsuid) {
+        if (!canFallBack(tsuid)) {
+            return tsuid;
+        }
+        Set<String> accepted = as.getTransferSyntaxesFor(cuid);
+        if (accepted.contains(tsuid)) {
+            return tsuid;
+        }
+        return accepted.contains(UID.ExplicitVRLittleEndian) ? UID.ExplicitVRLittleEndian : null;
+    }
+
+    /** ファイルから送るデータセットを作る。chosen が元と違うとき（Explicit VR LE）は復号する。復号できなければ null。 */
+    private Attributes datasetFor(Path file, String tsuid, String chosen) throws IOException {
+        if (chosen.equals(tsuid)) {
+            try (DicomInputStream din = new DicomInputStream(file.toFile())) {
+                din.readFileMetaInformation();
+                return din.readDataset();
+            }
+        }
+        PixelCodec.Uncompressed u = codec.toUncompressed(file);
+        return u == null ? null : u.ds();
+    }
 
     public record StoreResult(boolean success, int status, String message) {
     }
@@ -109,11 +156,22 @@ public class DicomStoreScu {
         AAssociateRQ rq = new AAssociateRQ();
         rq.setCalledAET(calledAet);
         rq.addPresentationContext(new PresentationContext(1, cuid, tsuid));
+        if (canFallBack(tsuid)) {
+            rq.addPresentationContext(new PresentationContext(3, cuid, UID.ExplicitVRLittleEndian));
+        }
 
         Association as = null;
         try {
             as = ae.connect(local, remote, rq);
-            DimseRSP rsp = as.cstore(cuid, iuid, 0, new DataWriterAdapter(dataset), tsuid);
+            String sendTs = chooseTs(as, cuid, tsuid);
+            if (sendTs == null) {
+                return new StoreResult(false, -1, "相手が転送構文 " + tsuid + " も Explicit VR Little Endian も受け付けません");
+            }
+            Attributes toSend = datasetFor(dicomFile, tsuid, sendTs);
+            if (toSend == null) {
+                return new StoreResult(false, -1, "圧縮画像を復号できないため送れません（相手は " + tsuid + " を受け付けません）");
+            }
+            DimseRSP rsp = as.cstore(cuid, iuid, 0, new DataWriterAdapter(toSend), sendTs);
             rsp.next();
             int status = rsp.getCommand().getInt(Tag.Status, -1);
             if (status == 0) {
@@ -183,6 +241,12 @@ public class DicomStoreScu {
             if (pcKeys.add(key)) {
                 pcPairs.put(key, new String[] { cuid, tsuid });
             }
+            if (canFallBack(tsuid)) {
+                String evrKey = cuid + '\t' + UID.ExplicitVRLittleEndian;
+                if (pcKeys.add(evrKey)) {
+                    pcPairs.put(evrKey, new String[] { cuid, UID.ExplicitVRLittleEndian });
+                }
+            }
         }
         if (items.isEmpty()) {
             return new BatchResult(total, 0, failed, messages);
@@ -235,12 +299,19 @@ public class DicomStoreScu {
                     // 送信元ファイルは cstore の前に読み切って閉じる。ネットワーク I/O 中にファイルハンドルを
                     // 保持しないことで、受信側が同一パスへ書き戻す構成（自己送信）でも Windows のファイルロックで
                     // 失敗しない（POSIX は開いたまま rename 置換可だが Windows は不可）。
-                    Attributes dataset;
-                    try (DicomInputStream din = new DicomInputStream(it.file().toFile())) {
-                        din.readFileMetaInformation();
-                        dataset = din.readDataset();
+                    String sendTs = chooseTs(as, it.cuid(), it.tsuid());
+                    if (sendTs == null) {
+                        failed++;
+                        addMessage(messages, "相手が転送構文 " + it.tsuid() + " も Explicit VR Little Endian も受け付けません: " + it.iuid());
+                        continue;
                     }
-                    DimseRSP rsp = as.cstore(it.cuid(), it.iuid(), 0, new DataWriterAdapter(dataset), it.tsuid());
+                    Attributes dataset = datasetFor(it.file(), it.tsuid(), sendTs);
+                    if (dataset == null) {
+                        failed++;
+                        addMessage(messages, "圧縮画像を復号できないため送れません: " + it.iuid());
+                        continue;
+                    }
+                    DimseRSP rsp = as.cstore(it.cuid(), it.iuid(), 0, new DataWriterAdapter(dataset), sendTs);
                     rsp.next();
                     int status = rsp.getCommand().getInt(Tag.Status, -1);
                     if (status == 0) {

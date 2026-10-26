@@ -11,11 +11,15 @@
  *   表示: 2D ビューアで a と b を開き、キャンバスのスクリーンショットが一致する（画素の可逆性そのものは受信側の全バイト比較が保証。ここは表示まで届くかの確認）
  *   負例: c（画素が違う）は b と一致しない（比較器が差を見抜く）
  *   多重圧縮の禁止: a の保管済みファイル（圧縮済み）を再送しても、保管庫のファイルは 1 バイトも変わらない
+ *   送信: 圧縮して保管した a を、Explicit VR LE しか受けない外部 SCP（storescp）へ送ると復号して届き、JPEG-LS を受ける SCP にはそのまま届く。
+ *         どちらも受けない SCP への送信は、理由つきで失敗に数える
  */
 import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import os from "node:os";
+import net from "node:net";
+import { spawn } from "node:child_process";
 import type { Page } from "@playwright/test";
 
 import { resetDb } from "../backend/dbReset.js";
@@ -51,6 +55,50 @@ function findStorescu(): string {
 function storescu(bin: string, port: number, target: string): void {
   const r = spawnSync(bin, ["-c", `GRAPHYNEXT@127.0.0.1:${port}`, target], { encoding: "utf8", timeout: 120_000 });
   if (r.status !== 0) throw new Error(`storescu 失敗 (exit=${r.status}): ${(r.stdout + r.stderr).slice(-400)}`);
+}
+
+
+const SEND_PORT = 19614;
+
+/** 受け付ける転送構文を絞った storescp を起動する。受信したファイルは dir に書かれる。 */
+async function startStorescp(bin: string, dir: string, ts: string): Promise<{ stop: () => Promise<void> }> {
+  fs.mkdirSync(dir, { recursive: true });
+  const cfg = path.join(dir, "sop-classes.properties");
+  fs.writeFileSync(cfg, `Verification:ImplicitVRLittleEndian\nCTImageStorage:${ts}\n`);
+  const scpBin = path.join(path.dirname(bin), "storescp");
+  const out = path.join(dir, "rx");
+  fs.mkdirSync(out, { recursive: true });
+  // storescp は bash のラッパー越しに Java を起動する。ラッパーだけ止めると Java が残ってポートを握り続けるので、プロセスグループごと止める。
+  const proc = spawn(scpBin, ["-b", `RCVSCP:${SEND_PORT}`, "--directory", out, "--sop-classes", cfg], { stdio: "ignore", detached: true });
+  const stop = async () => {
+    try { process.kill(-(proc.pid as number), "SIGTERM"); } catch { /* 既に終了 */ }
+    for (let i = 0; i < 40; i++) {
+      const busy = await new Promise<boolean>((res) => { const sock = net.connect(SEND_PORT, "127.0.0.1", () => { sock.destroy(); res(true); }); sock.on("error", () => res(false)); });
+      if (!busy) return;
+      await new Promise((r) => setTimeout(r, 250));
+    }
+    throw new Error("storescp が止まりません（ポートを握ったまま）");
+  };
+  for (let i = 0; i < 60; i++) {
+    await new Promise((r) => setTimeout(r, 500));
+    const ok = await new Promise<boolean>((res) => {
+      const sock = net.connect(SEND_PORT, "127.0.0.1", () => { sock.destroy(); res(true); });
+      sock.on("error", () => res(false));
+    });
+    if (ok) return { stop };
+  }
+  await stop();
+  throw new Error("storescp が起動しません");
+}
+
+async function sendStudy(base: string, s: Study): Promise<{ total: number; sent: number; failed: number; messages: string[] }> {
+  const r = await fetch(`${base}/api/dicom/send`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ selections: [{ studyUid: s.studyUid, seriesUids: [] }], host: "127.0.0.1", port: SEND_PORT, calledAet: "RCVSCP", callingAet: "GRAPHYNEXT", tls: false }),
+  });
+  if (!r.ok) throw new Error(`send → ${r.status}`);
+  return (await r.json()) as { total: number; sent: number; failed: number; messages: string[] };
 }
 
 async function getJson<T>(base: string, p: string): Promise<T> {
@@ -203,6 +251,35 @@ async function main(): Promise<void> {
     const st2 = await getJson<{ compressed: number; skipped: Record<string, number> }>(base, "/api/dicom/receive-compress/status");
     check((st2.skipped["already-compressed"] ?? 0) === skippedBefore + 3, "状態: 圧縮済みで見送り +3 件", st2);
     check(st2.compressed === stC.compressed, "再送で圧縮件数が増えていない（多重圧縮なし）", [stC.compressed, st2.compressed]);
+
+    console.log("\n[6] 送信: 相手が Explicit VR LE しか受けないなら復号して届く／JPEG-LS を受けるならそのまま／どちらも受けないなら失敗");
+    const PIXEL_BYTES = 64 * 64 * 2;
+    const tail = (b: Buffer) => b.subarray(b.length - PIXEL_BYTES);
+    // b（非圧縮）の保管済みファイルの末尾＝元の画素
+    const rxDir1 = path.join(OUT_DIR, "send-evr");
+    const scp1 = await startStorescp(bin, rxDir1, "ExplicitVRLittleEndian");
+    let sum1;
+    try { sum1 = await sendStudy(base, truth.a); } finally { await scp1.stop(); }
+    check(sum1.sent === 3 && sum1.failed === 0, "Explicit VR LE だけ受ける相手へ、圧縮保管の a を 3 枚送れた", sum1);
+    const got1 = truth.a.sops.map((sop) => path.join(rxDir1, "rx", sop));
+    check(got1.every((f) => fs.existsSync(f)), "相手がファイルを受け取った", got1.map((f) => fs.existsSync(f)));
+    check(got1.every((f, i) => tail(fs.readFileSync(f)).equals(tail(fb[i]))), "相手が受け取った画素が、非圧縮の元の画素と一致する（復号して送った）");
+    check(got1.every((f, i) => fs.statSync(f).size > fb[i].length - 64), "受け取ったファイルは非圧縮の大きさ（復号されている）", got1.map((f) => fs.statSync(f).size));
+
+    const rxDir2 = path.join(OUT_DIR, "send-jls");
+    const scp2 = await startStorescp(bin, rxDir2, "ExplicitVRLittleEndian,JPEGLSLossless");
+    let sum2;
+    try { sum2 = await sendStudy(base, truth.a); } finally { await scp2.stop(); }
+    check(sum2.sent === 3 && sum2.failed === 0, "JPEG-LS を受ける相手へ送れた", sum2);
+    const got2 = truth.a.sops.map((sop) => path.join(rxDir2, "rx", sop));
+    check(got2.every((f, i) => fs.existsSync(f) && fs.statSync(f).size < fb[i].length - 1000), "圧縮のまま届いた（復号していない）", got2.map((f) => fs.existsSync(f) && fs.statSync(f).size));
+
+    const rxDir3 = path.join(OUT_DIR, "send-none");
+    const scp3 = await startStorescp(bin, rxDir3, "ImplicitVRLittleEndian");
+    let sum3;
+    try { sum3 = await sendStudy(base, truth.a); } finally { await scp3.stop(); }
+    check(sum3.sent === 0 && sum3.failed === 3, "負例: どちらも受けない相手には送れず、失敗 3 件に数える", sum3);
+    check(sum3.messages.some((m) => m.includes("受け付けません")), "失敗の理由が出る", sum3.messages.slice(0, 2));
   } finally {
     await driver.stop();
   }
