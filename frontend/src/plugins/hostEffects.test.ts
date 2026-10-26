@@ -30,7 +30,7 @@ describe("minEffectOf / HOST_EFFECTS", () => {
     expect(minEffectOf("toString")).toBe("write"); // Object.prototype のメンバ名でも表を素通りしない
   });
   it("書き込み系は全部 write（取りこぼし防止の名指し）", () => {
-    for (const k of ["setRoiMeta", "createRoi", "removeCreatedRoi", "saveDerivedSeries", "saveStructuredReport", "saveSegmentation", "saveStore", "deleteStore", "runBackend", "ai", "file"]) {
+    for (const k of ["setRoiMeta", "createRoi", "removeCreatedRoi", "removeLabelVolume", "saveDerivedSeries", "saveStructuredReport", "saveSegmentation", "saveStore", "deleteStore", "runBackend", "ai", "file"]) {
       expect(HOST_EFFECTS[k as keyof typeof HOST_EFFECTS], k).toBe("write");
     }
   });

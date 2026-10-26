@@ -132,7 +132,7 @@ export function Viewer2DMenuBar({
       putVesselAnalysis(runId, result, { id: m.id, name: m.name, version: m.version }),
     // 出所ラベルはプラグイン任せにしない: host が必ずマニフェストの表示名を入れる。
     showOverlay: (tileId, overlay) => actions.showOverlay(tileId, { ...overlay, label: m.name }),
-    showLabelVolume: (tileId, req) => actions.showLabelVolume(tileId, req, { name: m.name }),
+    showLabelVolume: (tileId, req) => actions.showLabelVolume(tileId, req, { id: m.id, name: m.name }),
     clearOverlay: (tileId) => actions.clearOverlay(tileId),
     // 出所（id/name/version）は host がマニフェストから入れる。プラグインに名乗らせない。
     saveDerivedSeries: (tileId, req) =>
@@ -171,6 +171,7 @@ export function Viewer2DMenuBar({
     // 作る ROI には「どのプラグインが作ったか」の印を**本体が**付ける（pluginId はここで入れる。名乗らせない）。
     createRoi: (tileId, req) => actions.createRoi(tileId, { pluginId: m.id, pluginName: m.name }, req),
     removeCreatedRoi: (roiUid) => actions.removeCreatedRoi(roiUid, m.id),
+    removeLabelVolume: (segmentationId) => actions.removeLabelVolume(segmentationId, m.id),
     subscribeRois: (listener) => actions.subscribeRois(listener),
     // H8: プラグイン専用の保存領域（患者単位・backend 保管）。**pluginId と patientKey は
     // host が入れる**。患者は対象タイルから引くので、プラグインが別患者の領域を勝手に
