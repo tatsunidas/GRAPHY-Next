@@ -61,7 +61,9 @@ import {
 } from "../viewer/roiContourTools";
 import { getRoiMaskMeta, subscribeRoiMaskStore } from "../viewer/roiMaskStore";
 import { markLabelVolume } from "../viewer/labelVolumeOrigin";
-import { getLoadedRois, registerRoiCollector, scheduleRoiSave } from "../viewer/roiSaveStore";
+import { getLoadedRois, getLoadedSpheres, registerRoiCollector, scheduleRoiSave } from "../viewer/roiSaveStore";
+import { collectSpheresForPatient } from "../viewer/sphereRestore";
+import { subscribeSphere3D } from "../viewer/sphere3dStore";
 import { collectRoisForPatient, sopOfImageId } from "../viewer/roiRestore";
 import { emitRoiReveal } from "../viewer/roiReveal";
 import { installRoiRevealReceiver } from "../viewer/roiRevealBridge";
@@ -1176,7 +1178,9 @@ function TileGrid({
   useEffect(() => {
     const pks = visiblePatientKeys ? visiblePatientKeys.split("\u0000") : [];
     if (pks.length === 0) return;
-    const unregisters = pks.map((pk) => registerRoiCollector(pk, () => collectRoisForPatient(pk, getLoadedRois(pk))));
+    const unregisters = pks.map((pk) =>
+      registerRoiCollector(pk, () => collectRoisForPatient(pk, getLoadedRois(pk)), () => collectSpheresForPatient(pk, getLoadedSpheres(pk))),
+    );
     const ev = csToolsEnums.Events;
     // ロックと表示の切り替えも保存項目（isLocked・isVisible）なので聞く。
     const names = [
@@ -1190,9 +1194,12 @@ function TileGrid({
     for (const name of names) eventTarget.addEventListener(name, onChange);
     // ラベル・scope・プラグイン属性の変更も保存対象なのでメタ store も見る。
     const unsubMeta = subscribeRoiMaskStore(onChange);
+    // 球の追加・変更・削除も保存対象。
+    const unsubSphere = subscribeSphere3D(onChange);
     return () => {
       for (const name of names) eventTarget.removeEventListener(name, onChange);
       unsubMeta();
+      unsubSphere();
       // 解除時に保留中の保存を流し切る（ウィンドウを閉じて計測が消えるのを防ぐ）。
       unregisters.forEach((u) => u());
     };
