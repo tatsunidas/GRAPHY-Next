@@ -36,6 +36,8 @@ const TURN_MAX = Math.PI / 6;
 const TURN_STEPS = 3;
 
 export type BranchStopReason = "faded" | "noEdge" | "diameterRange" | "border" | "maxLength";
+/** 追跡の終了理由。`rejoin`（主枝へ戻った）は側枝ではないので提案には出さない。 */
+type TraceStop = BranchStopReason | "rejoin";
 
 export interface BranchProposal {
   /** 主枝に近い側から先へ。画像 px。 */
@@ -201,12 +203,12 @@ export function proposeBranches(
   }
 
   // 3. 候補ごとに脊線を追う。
-  const traceFrom = (c: Cand): { pts: P[]; dias: number[]; stop: BranchStopReason } => {
+  const traceFrom = (c: Cand): { pts: P[]; dias: number[]; stop: TraceStop } => {
     const pts: P[] = [c.q.slice() as P];
     const dias: number[] = [];
     let u: P = c.u;
     let dB = Math.max(dMinPx, dMain[c.idx] * 0.7);
-    let stop: BranchStopReason = "maxLength";
+    let stop: TraceStop = "maxLength";
     const maxSteps = Math.ceil((Math.max(width, height) * 2) / 1.5);
     for (let s = 0; s < maxSteps; s++) {
       const p = pts[pts.length - 1];
