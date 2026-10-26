@@ -117,3 +117,48 @@ test("gemini: usageMetadata と modelVersion を取る（非ストリーム・�
   const r = p.result();
   assert.deepEqual([r.text, r.usage], ["ab", { in: 7, out: 5 }]);
 });
+
+const { buildEvalRecord, createEvalStore } = require("./aiRequestLog");
+const EVAL = { suiteVersion: 1, meta: { provider: "cloud", modelId: "m", modelVersion: "m-2026" }, cases: [{ id: "flip-h", pass: true }, { id: "slice-10th", pass: false }] };
+
+test("buildEvalRecord: 正例 — 件数と一致数は main が数え直す（レンダラの申告を使わない）", () => {
+  const r = buildEvalRecord({ ...EVAL, total: 99, passed: 99 });
+  assert.deepEqual(r, { suiteVersion: 1, provider: "cloud", modelId: "m", modelVersion: "m-2026", total: 2, passed: 1, cases: EVAL.cases });
+});
+
+test("buildEvalRecord: 負例 — 不正な id・型・空・巨大・版なし・余計な項目（質問本文など）は保存しない／出さない", () => {
+  for (const bad of [
+    null, 5, {}, { ...EVAL, cases: [] }, { ...EVAL, cases: "x" }, { ...EVAL, suiteVersion: 0 }, { ...EVAL, suiteVersion: "1" },
+    { ...EVAL, cases: [{ id: "BAD ID", pass: true }] }, { ...EVAL, cases: [{ id: "ok", pass: "yes" }] }, { ...EVAL, cases: [null] },
+    { ...EVAL, cases: Array.from({ length: 201 }, (_, i) => ({ id: `c${i}`, pass: true })) },
+  ]) assert.equal(buildEvalRecord(bad), null, JSON.stringify(bad).slice(0, 60));
+  const dirty = buildEvalRecord({ ...EVAL, cases: [{ id: "a", pass: true, text: "山田太郎の質問", args: { x: 1 } }], text: "秘密", meta: { ...EVAL.meta, apiKey: "sk-X" } });
+  assert.equal(JSON.stringify(dirty).includes("山田"), false);
+  assert.equal(JSON.stringify(dirty).includes("sk-X"), false);
+  assert.equal(JSON.stringify(dirty).includes("秘密"), false);
+  assert.equal(buildEvalRecord({ ...EVAL, meta: { provider: "bad provider!", modelId: 5 } }).provider, null, "不正な由来は null（不明）");
+});
+
+test("createEvalStore: 追記・新しい順の一覧・clear。形の違う行は飛ばす。書けなくても例外にならない", () => {
+  const file = tmp();
+  const s = createEvalStore({ file });
+  assert.deepEqual(s.list(), { ok: true, runs: [] });
+  assert.deepEqual(s.append(EVAL), { ok: true });
+  assert.deepEqual(s.append({ ...EVAL, meta: { ...EVAL.meta, modelVersion: "m-2026-11" } }), { ok: true });
+  fs.appendFileSync(file, '{壊れた\n{"suiteVersion":1,"cases":[{"id":"BAD","pass":true}]}\n');
+  const l = s.list();
+  assert.equal(l.runs.length, 2, "実在する 2 件（壊れた行・形の違う行は数えない）");
+  assert.equal(l.runs[0].modelVersion, "m-2026-11", "新しい順");
+  assert.equal(s.append({ cases: [] }).error, "bad-eval");
+  assert.equal(createEvalStore({ file: path.join(file, "no", "x.jsonl") }).append(EVAL).ok, false);
+  s.clear();
+  assert.equal(s.list().runs.length, 0);
+});
+
+test("createEvalStore: 上限で 1 世代ローテート", () => {
+  const file = tmp();
+  const s = createEvalStore({ file, maxBytes: 300 });
+  for (let i = 0; i < 8; i++) s.append(EVAL);
+  assert.ok(fs.existsSync(`${file}.1`));
+  assert.ok(s.list(50).runs.length >= 2);
+});

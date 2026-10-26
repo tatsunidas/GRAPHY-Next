@@ -302,6 +302,8 @@ export type AiChatResult =
       droppedImages?: number;
       degraded?: boolean;
       provenance: AiProvenance;
+      /** 応答側が名乗ったモデルの版（あれば）。 */
+      modelVersion?: string;
     }
   | { ok: false; error: string; status?: number; kind?: string };
 
@@ -539,6 +541,17 @@ export interface GraphyDesktop {
     error?: string;
   }>;
   assistantRequestLogClear?: () => Promise<{ ok: boolean; error?: string }>;
+  /** 回帰評価の結果の保存と一覧（質問 id と一致/不一致だけ。本文は保存しない）。アシスタント窓だけ。 */
+  assistantEvalAppend?: (run: {
+    suiteVersion: number;
+    meta: { provider: string | null; modelId: string | null; modelVersion: string | null };
+    cases: { id: string; pass: boolean }[];
+  }) => Promise<{ ok: boolean; error?: string }>;
+  assistantEvalList?: () => Promise<{
+    ok: boolean;
+    runs?: { ts: string; suiteVersion: number; provider: string | null; modelId: string | null; modelVersion: string | null; total: number; passed: number; cases: { id: string; pass: boolean }[] }[];
+    error?: string;
+  }>;
   assistantMacrosList?: () => Promise<{ ok: boolean; macros?: import("./assistant/macros/macroModel").Macro[]; error?: string }>;
   assistantMacrosSave?: (macro: {
     name: string;

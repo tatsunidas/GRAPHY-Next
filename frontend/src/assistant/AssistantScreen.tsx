@@ -18,6 +18,9 @@ import { buildRobotTools } from "./robot/planModel";
 import { MacroPanel, type MacroApi } from "./macros/MacroPanel";
 import { PluginToolPanel } from "./PluginToolPanel";
 import { RequestLogPanel, type RequestLogApi } from "./RequestLogPanel";
+import type { EvalApi } from "./EvalSection";
+import { EVAL_CASES, EVAL_SUITE_VERSION } from "./eval/cases";
+import { runEval } from "./eval/runEval";
 import { planEligible, toToolDef, type PluginToolEntry, type PluginToolResult } from "./pluginTools";
 import { candidatesFromActions } from "./macros/macroModel";
 import { DOC_CHUNKS } from "./docsBundle";
@@ -317,6 +320,24 @@ export function AssistantScreen() {
     () => (bridge?.assistantRequestLogSummary && bridge.assistantRequestLogClear ? { summary: bridge.assistantRequestLogSummary, clear: bridge.assistantRequestLogClear } : null),
     [bridge],
   );
+  // 回帰評価（固定質問セット）。ツールは実行しない。ツール呼び出しに対応しない提供元では使えない。
+  const evalApi = useMemo<EvalApi | null>(() => {
+    if (!bridge?.aiChat || !bridge.assistantEvalList || !bridge.assistantEvalAppend) return null;
+    const ok = resolved?.ok === true && resolved.toolMode !== "none";
+    return {
+      list: bridge.assistantEvalList,
+      append: (run) => bridge.assistantEvalAppend!({ suiteVersion: EVAL_SUITE_VERSION, meta: run.meta, cases: run.cases.map((c) => ({ id: c.id, pass: c.pass })) }),
+      run: (onProgress) =>
+        runEval({
+          cases: EVAL_CASES,
+          systemPrompt: buildSystemPrompt(locale, [], { canOperate: true }),
+          tools: buildTools(),
+          chat: (sessionId, messages, tools) => bridge.aiChat!({ sessionId, messages, tools, temperature: 0 }),
+          onProgress,
+        }),
+      destination: ok ? (resolved.local ? null : { host: resolved.endpointHost }) : undefined,
+    };
+  }, [bridge, resolved, locale]);
   const macroCandidates = useMemo(() => candidatesFromActions(state.messages.flatMap((m) => m.actions ?? [])), [state.messages]);
 
   const onPaste = (e: ClipboardEvent) => {
@@ -389,7 +410,7 @@ export function AssistantScreen() {
       {robot && resolved?.ok && resolved.toolMode === "none" && <div style={S.note}>{t("assistant.robot.noTools")}</div>}
       {robot && robotApi && <RobotPanel plan={plan} api={robotApi} t={t} onDiscard={() => setPlan(null)} />}
       {pluginToolOpen && <PluginToolPanel tools={pluginTools} onToggle={(id, on) => void togglePlugin(id, on)} busy={busy} t={t} />}
-      {requestLogOpen && requestLogApi && <RequestLogPanel api={requestLogApi} busy={busy} t={t} />}
+      {requestLogOpen && requestLogApi && <RequestLogPanel api={requestLogApi} evalApi={evalApi} busy={busy} t={t} />}
       {macroOpen && macroApi && <MacroPanel api={macroApi} candidates={macroCandidates} busy={busy} t={t} />}
       {note && <div style={S.note}>{note}</div>}
       {attachments.length > 0 && !(resolved?.ok && resolved.local) && (
