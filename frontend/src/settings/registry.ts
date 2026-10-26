@@ -665,6 +665,22 @@ export const SETTINGS_REGISTRY: CategoryDef[] = [
         ],
       },
       {
+        titleKey: "settings.sec.receiveCompress",
+        fields: [
+          {
+            key: "dicom.receiveCompress",
+            labelKey: "settings.field.receiveCompress",
+            type: "select",
+            default: "off",
+            helpKey: "settings.field.receiveCompress.help",
+            options: [
+              { value: "off", labelKey: "settings.opt.receiveCompress.off" },
+              { value: "jpegls", labelKey: "settings.opt.receiveCompress.jpegls" },
+            ],
+          },
+        ],
+      },
+      {
         titleKey: "settings.sec.pacs",
         fields: [
           {

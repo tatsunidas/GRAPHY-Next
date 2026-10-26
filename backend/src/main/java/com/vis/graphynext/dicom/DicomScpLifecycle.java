@@ -30,7 +30,8 @@ public class DicomScpLifecycle implements SmartLifecycle {
 
     public DicomScpLifecycle(DicomProperties props, DicomStorageService storage, DicomTlsService tlsService,
                              DicomLocalAeService localAe,
-                             com.vis.graphynext.anonymize.ReceiveAnonymizer anonymizer) {
+                             com.vis.graphynext.anonymize.ReceiveAnonymizer anonymizer,
+                             com.vis.graphynext.dicom.store.ReceiveCompressor compressor) {
         this.server = new DicomScpServer(
                 localAe.aeTitle(),
                 localAe.bindAddress(),
@@ -43,7 +44,7 @@ public class DicomScpLifecycle implements SmartLifecycle {
         List<TransferCapability> storageCaps =
                 StorageSopClasses.scpCapabilities(props.getStorageSopClassesResource());
         server.addService(
-                new DicomStoreScp(storage, tempDir, anonymizer),
+                new DicomStoreScp(storage, tempDir, anonymizer, compressor),
                 storageCaps.toArray(TransferCapability[]::new));
 
         // TLS が設定済み（GUI 保存 or application.yml）なら、平文に加えて TLS リスナーも有効化する。

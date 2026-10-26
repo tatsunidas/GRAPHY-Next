@@ -34,9 +34,18 @@ jobs:
         env:
           GRAPHY_REQUIRE_NATIVE_CODEC: "1"
         run: |
-          mvn -B -Dfrontend.skip=true -Dtest=LosslessCodecFeasibilityTest test \
+          mvn -B -Dfrontend.skip=true -Dtest='LosslessCodecFeasibilityTest,ReceiveCompressorTest,ReceiveCompressIntegrationTest' test \
             -Dmaven.wagon.http.retryHandler.count=3 \
             -Dmaven.wagon.httpconnectionManager.ttlSeconds=120
+      # 通常の CI にはネイティブが無く、圧縮のテストは「飛ばす」になる。ここでは飛ばされていないことを確かめる。
+      - name: Check nothing was skipped
+        working-directory: backend
+        shell: bash
+        run: |
+          grep -h "Tests run" target/surefire-reports/*LosslessCodecFeasibilityTest.txt target/surefire-reports/*ReceiveCompressorTest.txt target/surefire-reports/*ReceiveCompressIntegrationTest.txt
+          if grep -h "Tests run" target/surefire-reports/*LosslessCodecFeasibilityTest.txt target/surefire-reports/*ReceiveCompressorTest.txt target/surefire-reports/*ReceiveCompressIntegrationTest.txt | grep -v "Skipped: 0"; then
+            echo "飛ばされたテストがある"; exit 1
+          fi
       - name: Upload result
         if: always()
         uses: actions/upload-artifact@v4
