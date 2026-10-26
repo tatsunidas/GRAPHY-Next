@@ -126,3 +126,42 @@ describe("StudyList added tag columns", () => {
     expect(th).not.toContain("cursor:pointer");
   });
 });
+
+// ── 複数選択（アルバムへの追加用のチェック列） ──
+describe("StudyList のチェック列", () => {
+  const studies = [
+    { studyInstanceUid: "ST1", patientId: "P1", patientName: "N1", studyDate: "20261001", studyDescription: "D1", modality: "CT", numberOfInstances: 10 },
+    { studyInstanceUid: "ST2", patientId: "P2", patientName: "N2", studyDate: "20261002", studyDescription: "D2", modality: "MR", numberOfInstances: 5 },
+  ];
+  beforeEach(() => {
+    useStudies.mockReset();
+    useStudies.mockImplementation(() => ({ studies, reportCounts: {}, error: null }));
+    listColumnsState.cols = [];
+  });
+  const render2 = (props: Record<string, unknown>) =>
+    renderToStaticMarkup(
+      createElement(I18nProvider, null, createElement(StudyList, { filters: { studyDateFrom: "20261001" }, mode: "standalone", ...props })),
+    );
+
+  it("checked と onCheckedChange を渡したときだけ、チェック列を出す（従来の表は変えない）", () => {
+    expect(render2({})).not.toContain("study-check-");
+    const html = render2({ checked: new Set<string>(), onCheckedChange: () => {} });
+    expect(html).toContain('data-testid="study-check-ST1"');
+    expect(html).toContain('data-testid="study-check-ST2"');
+    expect(html).toContain('data-testid="study-check-page"');
+  });
+
+  it("選択済みの行だけがチェックされる", () => {
+    const html = render2({ checked: new Set(["ST2"]), onCheckedChange: () => {} });
+    const row = (id: string) => html.match(new RegExp(`<input[^>]*data-testid="study-check-${id}"[^>]*>`))![0];
+    expect(row("ST2")).toContain("checked");
+    expect(row("ST1")).not.toContain("checked");
+  });
+
+  it("全部が選択済みなら、見出しのチェックも入る", () => {
+    const all = render2({ checked: new Set(["ST1", "ST2"]), onCheckedChange: () => {} });
+    expect(all.match(/<input[^>]*data-testid="study-check-page"[^>]*>/)![0]).toContain("checked");
+    const part = render2({ checked: new Set(["ST1"]), onCheckedChange: () => {} });
+    expect(part.match(/<input[^>]*data-testid="study-check-page"[^>]*>/)![0]).not.toContain("checked");
+  });
+});

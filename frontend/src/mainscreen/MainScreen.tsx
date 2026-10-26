@@ -16,6 +16,8 @@ import { LIST_LAYOUT_STORAGE_KEY, isPaneLayout, parseListLayout, type ListLayout
 import { MenuBar } from "./MenuBar";
 import { Toolbar, type ToolKind } from "./Toolbar";
 import { SearchPanel } from "./SearchPanel";
+import { AlbumBar } from "./AlbumBar";
+import { missingUids, type AlbumView } from "./albumView";
 import { StatusBar } from "./StatusBar";
 import { useImportWatchStatus } from "./useImportWatchStatus";
 import { useReceiveAnonStatus } from "./useReceiveAnonStatus";
@@ -90,9 +92,14 @@ export function MainScreen({
   // 取り込み直後は、一覧を「いま取り込んだ検査」に絞る（既定の検索条件「今日」では過去の検査が出ないため）。
   const [importedView, setImportedView] = useState<ImportedView | null>(null);
   const searchFiltersRef = useRef<StudyFilters | null>(null);
+  // アルバムを開いている間は、一覧をそのアルバムのスタディに絞る（取り込み直後の一覧と同じ仕組み）。
+  const [albumViewState, setAlbumViewState] = useState<AlbumView | null>(null);
+  const [checkedStudies, setCheckedStudies] = useState<Set<string>>(new Set());
+  const [loadedStudies, setLoadedStudies] = useState<Study[] | null>(null);
   const onSearch = (f: StudyFilters) => {
     searchFiltersRef.current = f;
     setImportedView(null);
+    setAlbumViewState(null);
     setFilters(f);
   };
   const [importMsg, setImportMsg] = useState<string | null>(null);
@@ -190,6 +197,7 @@ export function MainScreen({
       setImportMsg(withDateNote);
       if (view) {
         setImportedView(view);
+        setAlbumViewState(null);
         setFilters(view.filters);
       }
       setReloadKey((k) => k + 1);
@@ -466,6 +474,22 @@ export function MainScreen({
         <div style={centerColumn}>
         <div style={listArea(listLayout)}>
         <div style={treeArea}>
+          <AlbumBar
+            view={albumViewState}
+            checked={checkedStudies}
+            missing={albumViewState ? missingUids(albumViewState.uids, loadedStudies) : []}
+            reloadKey={reloadKey + dbVersion}
+            onOpen={(v) => {
+              setImportedView(null);
+              setAlbumViewState(v);
+              setFilters(v.filters);
+            }}
+            onClose={() => {
+              setAlbumViewState(null);
+              setFilters(searchFiltersRef.current);
+            }}
+            onClearChecked={() => setCheckedStudies(new Set())}
+          />
           {importedView && (
             <div style={importedBanner} data-testid="imported-view-banner">
               <span>
@@ -486,6 +510,9 @@ export function MainScreen({
           )}
           <StudyList
             filters={filters}
+            checked={checkedStudies}
+            onCheckedChange={setCheckedStudies}
+            onLoaded={setLoadedStudies}
             reloadKey={reloadKey + dbVersion}
             connecting={!status}
             mode={isStandalone ? "standalone" : "web"}

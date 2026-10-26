@@ -85,7 +85,18 @@ export interface StudyFilters {
 
 export const fetchStatus = () => httpGet<AppStatus>("/api/status");
 
-export const fetchStudies = (filters?: StudyFilters) => {
+/**
+ * `studyInstanceUid`（カンマ区切り）が URL に載せきれない長さのときは、エンコード後の長さで分割した条件に直す。
+ * 載るなら 1 件のまま。他の条件は、UID 指定のときは無視される（backend の仕様）ので持ち回らない。
+ */
+export function splitStudyUidFilter(filters: StudyFilters): StudyFilters[] {
+  const uids = (filters.studyInstanceUid ?? "").split(",").filter((u) => u);
+  const chunks = chunkForQuery(uids);
+  if (chunks.length <= 1) return [filters];
+  return chunks.map((c) => ({ studyInstanceUid: c.join(",") }));
+}
+
+const fetchStudiesOnce = (filters?: StudyFilters) => {
   const params = new URLSearchParams();
   if (filters) {
     for (const [k, v] of Object.entries(filters)) {
@@ -94,6 +105,23 @@ export const fetchStudies = (filters?: StudyFilters) => {
   }
   const qs = params.toString();
   return httpGet<Study[]>(`/api/studies${qs ? `?${qs}` : ""}`);
+};
+
+export const fetchStudies = async (filters?: StudyFilters): Promise<Study[]> => {
+  const parts = filters ? splitStudyUidFilter(filters) : [filters];
+  if (parts.length === 1) return fetchStudiesOnce(parts[0]);
+  // 同じ検査が複数のかたまりに現れることは無いが、重複があっても 1 件にする。
+  const seen = new Set<string>();
+  const out: Study[] = [];
+  for (const list of await Promise.all(parts.map((p) => fetchStudiesOnce(p)))) {
+    for (const s of list) {
+      if (!seen.has(s.studyInstanceUid)) {
+        seen.add(s.studyInstanceUid);
+        out.push(s);
+      }
+    }
+  }
+  return out;
 };
 
 export const fetchSeries = (studyUid: string) =>

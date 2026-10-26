@@ -59,6 +59,9 @@ export function StudyList({
   layout,
   onLayoutChange,
   seriesHost,
+  checked,
+  onCheckedChange,
+  onLoaded,
 }: {
   filters?: StudyFilters | null;
   reloadKey?: number;
@@ -80,6 +83,14 @@ export function StudyList({
    * null はペインがまだ無い間で、シリーズ一覧は描かない。
    */
   seriesHost?: HTMLElement | null;
+  /**
+   * 複数選択（チェックボックス）。両方を渡したときだけチェック列を出す。行クリックの単一選択とは独立。
+   * 選択集合は呼び出し側が持つ（アルバムへの追加などのツールバーが一覧の外にあるため）。
+   */
+  checked?: ReadonlySet<string>;
+  onCheckedChange?: (next: Set<string>) => void;
+  /** 読み込み結果を返す（null は読み込み中）。アルバム表示で「見つからないスタディ」を数えるのに使う。 */
+  onLoaded?: (studies: Study[] | null) => void;
 }) {
   const { t } = useI18n();
   // 取得は hooks/useStudies に集約（モバイルシェルと共有。fw/mobile-ui-design.md §3.5）。
@@ -108,8 +119,15 @@ export function StudyList({
   useEffect(() => {
     setSelectedStudy(null);
     setPage(0);
+    if (checked && checked.size > 0) onCheckedChange?.(new Set());
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filterKey, reloadKey]);
+
+  useEffect(() => {
+    onLoaded?.(studies ?? null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [studies]);
+  const multi = checked !== undefined && onCheckedChange !== undefined;
 
   // ページ分割の前に全件ソートする（ページ内だけの並び替えにならないように）。
   const sortedStudies = applySort(studies ?? [], sort, STUDY_SORT);
@@ -165,6 +183,24 @@ export function StudyList({
         <table style={{ borderCollapse: "collapse", width: "100%", fontSize: 13 }}>
           <thead>
             <tr style={{ textAlign: "left", borderBottom: "2px solid #ddd" }}>
+              {multi && (
+                <th style={{ width: 28, padding: "6px 4px" }}>
+                  <input
+                    type="checkbox"
+                    data-testid="study-check-page"
+                    aria-label={t("album.checkPage")}
+                    checked={pageStudies.length > 0 && pageStudies.every((s) => checked!.has(s.studyInstanceUid))}
+                    onChange={(e) => {
+                      const next = new Set(checked);
+                      for (const s of pageStudies) {
+                        if (e.target.checked) next.add(s.studyInstanceUid);
+                        else next.delete(s.studyInstanceUid);
+                      }
+                      onCheckedChange!(next);
+                    }}
+                  />
+                </th>
+              )}
               <Th sortKey="patientId" sort={sort} onSort={onSort}>{t("field.patientId")}</Th>
               <Th sortKey="patientName" sort={sort} onSort={onSort}>{t("field.patientName")}</Th>
               <Th sortKey="studyDate" sort={sort} onSort={onSort}>{t("field.studyDate")}</Th>
@@ -191,6 +227,22 @@ export function StudyList({
                     background: selected ? "#eaf3fb" : "transparent",
                   }}
                 >
+                  {multi && (
+                    <td style={{ width: 28, padding: "4px" }} onClick={(e) => e.stopPropagation()}>
+                      <input
+                        type="checkbox"
+                        data-testid={`study-check-${s.studyInstanceUid}`}
+                        aria-label={t("album.checkStudy")}
+                        checked={checked!.has(s.studyInstanceUid)}
+                        onChange={(e) => {
+                          const next = new Set(checked);
+                          if (e.target.checked) next.add(s.studyInstanceUid);
+                          else next.delete(s.studyInstanceUid);
+                          onCheckedChange!(next);
+                        }}
+                      />
+                    </td>
+                  )}
                   <Td>{s.patientId || "—"}</Td>
                   <Td>{s.patientName || "—"}</Td>
                   <Td>{s.studyDate ? <DicomDate value={s.studyDate} /> : "—"}</Td>
@@ -204,7 +256,7 @@ export function StudyList({
                 </tr>
                 {selected && treeOpen && (
                   <tr data-testid="series-tree-row">
-                    <td colSpan={7 + stColumns.length} style={{ padding: 0 }}>
+                    <td colSpan={7 + (multi ? 1 : 0) + stColumns.length} style={{ padding: 0 }}>
                       <SeriesNavigator
                         key={s.studyInstanceUid}
                         study={s}
