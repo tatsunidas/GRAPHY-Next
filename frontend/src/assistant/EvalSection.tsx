@@ -20,6 +20,12 @@ export interface EvalApi {
   destination: { host: string } | null | undefined;
 }
 
+/** 実行ボタンの動き。外部へ出る宛先は先に確認（ask）、ローカルはそのまま実行（run）、使えない提供元は無効（unavailable）。 */
+export function evalStartMode(destination: EvalApi["destination"]): "ask" | "run" | "unavailable" {
+  if (destination === undefined) return "unavailable";
+  return destination === null ? "run" : "ask";
+}
+
 export function EvalSection({ api, busy, t, onRan }: { api: EvalApi; busy: boolean; t: T; onRan?: () => void }) {
   const [runs, setRuns] = useState<StoredEvalRun[]>([]);
   const [last, setLast] = useState<EvalRun | null>(null);
@@ -55,7 +61,8 @@ export function EvalSection({ api, busy, t, onRan }: { api: EvalApi; busy: boole
     onRan?.(); // 評価の要求は通常の記録にも残るので、上の件数を読み直す
   };
 
-  const unavailable = api.destination === undefined;
+  const mode = evalStartMode(api.destination);
+  const unavailable = mode === "unavailable";
   const latest = runs[0];
   const prev = latest ? runs.slice(1).find((r) => r.suiteVersion === latest.suiteVersion) : undefined;
   const cmp = latest && prev ? compareRuns(prev, latest) : null;
@@ -70,7 +77,7 @@ export function EvalSection({ api, busy, t, onRan }: { api: EvalApi; busy: boole
           <button
             style={S.btn}
             disabled={busy || progress !== null || unavailable}
-            onClick={() => (api.destination ? setAsking(true) : void start())}
+            onClick={() => (mode === "ask" ? setAsking(true) : void start())}
             data-testid="assistant-eval-run"
           >
             {t("assistant.eval.run")}
