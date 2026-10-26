@@ -28,6 +28,9 @@ export interface Sphere3D {
   label?: string;
   color: string;
   visible: boolean;
+  /** ROI グループ（セッション内のみ。球は保存されない）。 */
+  groupId?: string;
+  groupName?: string;
 }
 
 const byId = new Map<string, Sphere3D>();

@@ -1464,6 +1464,8 @@ export const ja: Record<string, string> = {
   "roiMgr.group.delete": "グループの ROI を削除（ロック中は残す）",
   "roiMgr.group.deleteConfirm": "グループ「{{name}}」の ROI {{n}} 件を削除します。よろしいですか？",
   "roiMgr.group.rename": "グループ名",
+  "roiMgr.group.sessionBadge": "一時",
+  "roiMgr.group.sessionOnly": "塗り ROI・球の所属は保存されません。再読み込みするとグループから外れます（形の ROI・計測の所属は保存されます）。",
   "roiStats.group.title": "グループ合算",
   "roiStats.group.rois": "ROI 数",
   "roiStats.group.area": "合計面積",
