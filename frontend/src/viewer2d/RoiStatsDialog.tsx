@@ -56,6 +56,7 @@ export function RoiStatsDialog({
   targets,
   initialUid,
   groupTitle,
+  skippedSpheres = 0,
   onClose,
 }: {
   /** 対象 ROI（ROI マネージャに出ている順）。 */
@@ -64,6 +65,8 @@ export function RoiStatsDialog({
   initialUid?: string;
   /** グループの計測結果を開くとき、そのグループ名。あれば表の下に「グループ合算」を出す。 */
   groupTitle?: string;
+  /** 範囲内のパラメトリック球の数。球は画素を持たず計測できないので、外れていることを明記する。 */
+  skippedSpheres?: number;
   onClose: () => void;
 }) {
   const { t } = useI18n();
@@ -218,6 +221,12 @@ export function RoiStatsDialog({
               blend: t(`fusion.blend.name.${fusionRows[0].fusion!.blend}`),
               fg: fusionRows[0].fusion!.foregroundLabel,
             })}
+          </div>
+        )}
+
+        {skippedSpheres > 0 && (
+          <div style={{ ...detailLine, ...dim, padding: "4px 12px" }} data-testid="roi-stats-skipped-spheres">
+            {t("roiStats.skippedSpheres", { n: skippedSpheres })}
           </div>
         )}
 

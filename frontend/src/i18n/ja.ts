@@ -1328,6 +1328,7 @@ export const ja: Record<string, string> = {
   "roiStats.unit.raw": "（未校正）",
   "roiStats.title": "ROI 計測結果",
   "roiStats.empty": "計測 ROI がありません。",
+  "roiStats.skippedSpheres": "球 {{n}} 件は計測に含まれません（球は中心と半径だけで画素を持たないため）。「塗りにする」で塗り ROI にすると計測できます。",
   "roiStats.recompute": "再計算する（校正やスライスを変えたあとに）",
   "roiStats.copyCsv": "CSV をクリップボードにコピー",
   "roiStats.saveCsv": "CSV ファイルとして保存",
