@@ -1510,7 +1510,7 @@ export const en: Record<string, string> = {
   "roiMgr.custom": "Custom attributes",
   "roiMgr.key": "Key",
   "roiMgr.value": "Value",
-  "roiMgr.select": "Select for operation",
+  "roiMgr.select": "Select (for operations and grouping)",
   "roiMgr.ops": "Ops (selected ROIs)",
   "roiMgr.merge": "MERGE (OR)",
   "roiMgr.split": "Split",

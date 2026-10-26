@@ -385,7 +385,8 @@ export function RoiManagerPanel({
     () => model.rois.filter((r) => !r.patientKey || r.patientKey === activePatientKey),
     [model, activePatientKey],
   );
-  const selectedRows = model.rois.filter((r) => selected.has(r.key) && r.rowKind !== "sphere");
+  // 形の行は注釈の選択（画像上・Ctrl+クリック・描画直後と同じ）、塗り ROI は行のチェックで選ぶ。
+  const selectedRows = model.rois.filter((r) => (r.rowKind === "shape" ? selUids.has(r.uid) : selected.has(r.key)) && r.rowKind !== "sphere");
   const operands: RoiOperand[] = selectedRows.map((r) =>
     r.rowKind === "painted" ? { kind: "painted", maskId: r.maskId, segIndex: segFilterOf(r) } : { kind: "shape", uid: (r as { uid: string }).uid },
   );
@@ -722,7 +723,7 @@ export function RoiManagerPanel({
         data-roi-uid={r.uid}
       >
         {annotationBasics(r)}
-        <input type="checkbox" checked={selected.has(r.key)} onClick={(e) => e.stopPropagation()} onChange={() => toggleSelect(r.key)} title={t("roiMgr.select")} data-testid="roi-row-select" />
+        <input type="checkbox" checked={selUids.has(r.uid)} onClick={(e) => e.stopPropagation()} onChange={() => toggleRoiSelection(r.uid)} title={t("roiMgr.select")} data-testid="roi-row-select" />
         <span title={t("roiMgr.iconShape")} style={{ color: "#5a6672" }}>{r.kind === "area" ? "▭" : r.kind === "line" ? "╱" : "•"}</span>
         <input
           type="text" style={name} title={r.tool}
