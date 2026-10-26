@@ -85,7 +85,12 @@ public class DemoModeFilter extends OncePerRequestFilter {
             new BlockedRoute(HttpMethod.DELETE, "/api/anonymizer/masks"),
             new BlockedRoute(HttpMethod.POST, "/api/dicom/echo"),
             new BlockedRoute(HttpMethod.POST, "/api/dicom/tls-config"),
-            new BlockedRoute(HttpMethod.PUT, "/api/settings")
+            new BlockedRoute(HttpMethod.PUT, "/api/settings"),
+            // アルバムは共有 DB への書き込み。一覧の取得（GET）は通す。
+            new BlockedRoute(HttpMethod.POST, "/api/albums/**"),
+            new BlockedRoute(HttpMethod.POST, "/api/albums"),
+            new BlockedRoute(HttpMethod.PUT, "/api/albums/**"),
+            new BlockedRoute(HttpMethod.DELETE, "/api/albums/**")
     );
 
     private final AntPathMatcher matcher = new AntPathMatcher();

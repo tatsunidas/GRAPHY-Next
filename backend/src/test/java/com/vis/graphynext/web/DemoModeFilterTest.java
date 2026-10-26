@@ -62,6 +62,11 @@ class DemoModeFilterTest {
             "POST,/api/dicom/echo",
             "POST,/api/dicom/tls-config",
             "PUT,/api/settings",
+            "POST,/api/albums",
+            "PUT,/api/albums/1",
+            "DELETE,/api/albums/1",
+            "POST,/api/albums/1/studies",
+            "POST,/api/albums/1/studies/remove",
     })
     void blocksRiskyRoutes(String method, String path) throws Exception {
         MockHttpServletRequest req = new MockHttpServletRequest(method, path);
@@ -91,6 +96,8 @@ class DemoModeFilterTest {
             "GET,/api/anonymizer/profiles",
             "GET,/api/anonymizer/masks",
             "GET,/api/settings",
+            "GET,/api/albums",
+            "GET,/api/albums/1/studies",
             "GET,/api/dicom/tls-config",
             "GET,/api/reports",
             "POST,/api/reports",
