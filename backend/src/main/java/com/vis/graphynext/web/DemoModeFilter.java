@@ -90,7 +90,10 @@ public class DemoModeFilter extends OncePerRequestFilter {
             new BlockedRoute(HttpMethod.POST, "/api/albums/**"),
             new BlockedRoute(HttpMethod.POST, "/api/albums"),
             new BlockedRoute(HttpMethod.PUT, "/api/albums/**"),
-            new BlockedRoute(HttpMethod.DELETE, "/api/albums/**")
+            new BlockedRoute(HttpMethod.DELETE, "/api/albums/**"),
+            // 塗り ROI の保存は任意サイズのバイナリを共有 DB へ書き込む。一覧・画素の取得（GET）は通す。
+            new BlockedRoute(HttpMethod.PUT, "/api/roi-masks/**"),
+            new BlockedRoute(HttpMethod.DELETE, "/api/roi-masks/**")
     );
 
     private final AntPathMatcher matcher = new AntPathMatcher();

@@ -108,6 +108,51 @@ class PatientKeyWithSlashTest {
         assertTrue(read.body().contains(KEY), "キーがそのまま返る（化けていない）: " + read.body());
     }
 
+    /** multipart/form-data を素の HttpClient で組む（meta=JSON 文字列、frames=バイナリ）。 */
+    private HttpResponse<String> putMask(String path, String meta, byte[] frames) throws IOException, InterruptedException {
+        String boundary = "----gnTestBoundary";
+        java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+        out.write(("--" + boundary + "\r\nContent-Disposition: form-data; name=\"meta\"\r\nContent-Type: application/json\r\n\r\n"
+                + meta + "\r\n").getBytes(StandardCharsets.UTF_8));
+        out.write(("--" + boundary + "\r\nContent-Disposition: form-data; name=\"frames\"; filename=\"frames.bin\"\r\n"
+                + "Content-Type: application/octet-stream\r\n\r\n").getBytes(StandardCharsets.UTF_8));
+        out.write(frames);
+        out.write(("\r\n--" + boundary + "--\r\n").getBytes(StandardCharsets.UTF_8));
+        return http.send(
+                HttpRequest.newBuilder(url(path))
+                        .header("Content-Type", "multipart/form-data; boundary=" + boundary)
+                        .PUT(HttpRequest.BodyPublishers.ofByteArray(out.toByteArray()))
+                        .build(),
+                HttpResponse.BodyHandlers.ofString());
+    }
+
+    @Test
+    void roiMaskRoundTripsWithSlashInPatientKey() throws Exception {
+        // 塗り ROI の保存も、キーに / を含む患者で黙って落ちないこと（multipart の実 HTTP で確かめる）。
+        byte[] frames = {1, 2, 3, 4, 5};
+        HttpResponse<String> saved = putMask(
+                "/api/roi-masks/mask-slash-1?patientKey=" + enc(KEY) + "&seriesUid=1.2.3&frameCount=2",
+                "{\"label\":\"ROI 1\"}", frames);
+        assertEquals(200, saved.statusCode(), saved.body());
+
+        HttpResponse<String> list = get("/api/roi-masks?patientKey=" + enc(KEY));
+        assertEquals(200, list.statusCode(), list.body());
+        assertTrue(list.body().contains("mask-slash-1"), "同じキーで一覧に出る: " + list.body());
+        assertFalse(list.body().contains("\"version\":null"), "本当に保存された: " + list.body());
+
+        HttpResponse<byte[]> got = http.send(
+                HttpRequest.newBuilder(url("/api/roi-masks/mask-slash-1/frames")).GET().build(),
+                HttpResponse.BodyHandlers.ofByteArray());
+        assertEquals(200, got.statusCode());
+        org.junit.jupiter.api.Assertions.assertArrayEquals(frames, got.body(), "画素がそのまま返る");
+
+        HttpResponse<String> del = http.send(
+                HttpRequest.newBuilder(url("/api/roi-masks/mask-slash-1?patientKey=" + enc(KEY))).DELETE().build(),
+                HttpResponse.BodyHandlers.ofString());
+        assertEquals(204, del.statusCode(), del.body());
+        assertFalse(get("/api/roi-masks?patientKey=" + enc(KEY)).body().contains("mask-slash-1"), "削除された");
+    }
+
     @Test
     void pluginStoreRoundTripsWithSlashInPatientKey() throws Exception {
         HttpResponse<String> res = get("/api/plugin-store/angio-quant?patientKey=" + enc(KEY));
