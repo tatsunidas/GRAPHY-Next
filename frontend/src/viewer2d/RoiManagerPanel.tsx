@@ -1031,7 +1031,9 @@ export function RoiManagerPanel({
     const uids = groupAnnUids(gid);
     const allLocked = uids.length > 0 && uids.every(isRoiLocked);
     const anyVisible = g.rois.some(roiVisible) || g.measures.some((m) => m.visible);
+    // 塗り ROI は保存されない（一時）。球は保存されるが、ロックの対象ではないので削除の可否は塗り ROI と同じに扱う。
     const tempOnly = g.rois.some((r) => r.rowKind !== "shape");
+    const sessionOnly = g.rois.some((r) => r.rowKind === "painted");
     const sec = groupSec(gid);
     return (
       <div key={`h:${sec}:${gid}`} style={groupHeadStyle} data-testid="roi-group-head" data-group-id={gid}>
@@ -1044,7 +1046,7 @@ export function RoiManagerPanel({
           data-testid="roi-group-name"
         />
         <span style={countBadge}>{g.rois.length + g.measures.length}</span>
-        {tempOnly && <span style={countBadge} title={t("roiMgr.group.sessionOnly")} data-testid="roi-group-temp">{t("roiMgr.group.sessionBadge")}</span>}
+        {sessionOnly && <span style={countBadge} title={t("roiMgr.group.sessionOnly")} data-testid="roi-group-temp">{t("roiMgr.group.sessionBadge")}</span>}
         <button onClick={() => setRowsVisible(g.rois, g.measures, !anyVisible)} style={eyeBtn} title={t("roiMgr.sectionEye")} data-testid="roi-group-visible">
           {anyVisible ? "👁" : "🚫"}
         </button>

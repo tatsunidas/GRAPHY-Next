@@ -1468,7 +1468,7 @@ export const en: Record<string, string> = {
   "roiMgr.group.deleteConfirm": "Delete {{n}} ROIs in group \"{{name}}\"?",
   "roiMgr.group.rename": "Group name",
   "roiMgr.group.sessionBadge": "temp",
-  "roiMgr.group.sessionOnly": "Membership of painted ROIs and spheres is not saved; they leave the group on reload (shape ROIs and measurements keep theirs).",
+  "roiMgr.group.sessionOnly": "Membership of painted ROIs is not saved; they leave the group on reload (shape ROIs, measurements and spheres keep theirs).",
   "roiStats.group.title": "Group total",
   "roiStats.group.rois": "ROIs",
   "roiStats.group.area": "Total area",

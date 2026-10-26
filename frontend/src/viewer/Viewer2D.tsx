@@ -50,6 +50,7 @@ import { emitRoiReveal } from "./roiReveal";
 import { reconcileGlobalAnnotations } from "./globalRoiSync";
 import { loadRoisCached, scheduleRoiSave } from "./roiSaveStore";
 import { addSavedRoiToViewport, restoreRoisIntoStack } from "./roiRestore";
+import { restoreSpheresIntoStack } from "./sphereRestore";
 import { listSpheres3D, sphereCanvasCircle, subscribeSphere3D, type SphereCanvasCircle } from "./sphere3dStore";
 import { ensureCornerstoneInitialized } from "./cornerstoneSetup";
 import { applyTransform, isPanned, readTransform, type ViewTransform, FIT_TRANSFORM } from "./transform";
@@ -2920,9 +2921,11 @@ export function Viewer2D({
     if (!patientKey || !imageIds.length) return;
     let cancelled = false;
     void loadRoisCached(patientKey).then((parsed) => {
-      if (cancelled || !parsed.rois.length) return;
+      if (cancelled || (!parsed.rois.length && !parsed.spheres.length)) return;
       const v = vp();
       if (!v) return;
+      // 球は Cornerstone の annotation ではなく自前のストア。スタックに参照スライスがある球だけ戻す。
+      restoreSpheresIntoStack(parsed.spheres, imageIdsRef.current, patientKey, seriesLabel);
       const n = restoreRoisIntoStack(parsed.rois, imageIdsRef.current, v, patientKey, seriesLabel);
       if (n > 0) {
         try {
