@@ -2514,6 +2514,8 @@ export interface PluginModule {
    * 🔴 **宣言を超える `host` の呼び出しは止まる**: `"read"` は読み取りと計算、`"display"` はそれに表示・遷移まで。保存・ROI の作成や変更・
    * 外部への送信など書き込み系のメンバに触れた時点で、ツールは `effect-violation` で失敗する（例外を握りつぶしても失敗になる）。
    * 書き込みをするツールは `"write"` と宣言すること。
+   * 待ち時間は既定 30 秒。外部計算機のように時間のかかるツールは、宣言に整数 `timeoutSec`（5〜900）を書くと、その秒数まで待つ
+   * （範囲外はそのツールが無効になる。利用者の確認の経路は変わらない）。
    * 戻り値は JSON にできる値（深さ 3・4 KB まで）。AI には信用できないデータとして渡る。
    */
   aiTools?: Record<string, (args: Record<string, unknown>, host: PluginHost) => unknown | Promise<unknown>>;

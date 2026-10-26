@@ -230,6 +230,8 @@ export interface PluginAiToolSpec {
   description: string;
   effect: "read" | "display" | "write";
   parameters: Record<string, unknown>;
+  /** 1 回の実行待ち（秒、5〜900）。省略時は 30 秒。backend が範囲を検査する。 */
+  timeoutSec?: number;
 }
 
 interface PluginHostBase {

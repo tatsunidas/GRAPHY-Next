@@ -21,6 +21,16 @@ const DEFAULT_TIMEOUT_MS = 5000;
 
 /** プラグインのツールの実行は、プラグインのコード（外部由来）が動くので表示操作より長く待つ。暫定値。 */
 const PLUGIN_TOOL_TIMEOUT_MS = 30000;
+/**
+ * ツール別の待ち時間（`aiTools[].timeoutSec`）。台帳の値（main が backend の宣言から作った）だけを使い、レンダラ供給の値は見ない。
+ * 2D 窓の実行器が同じ時間で先に切れて理由を返せるよう、中継はその 5 秒後まで待つ（既定の 30 秒は従来どおり）。
+ */
+const MAX_PLUGIN_TOOL_TIMEOUT_MS = 900000;
+function pluginToolTimeoutMs(entry) {
+  const t = entry && entry.timeoutMs;
+  if (!Number.isInteger(t) || t < 5000) return PLUGIN_TOOL_TIMEOUT_MS;
+  return Math.min(t, MAX_PLUGIN_TOOL_TIMEOUT_MS) + 5000;
+}
 const MAX_PLUGIN_ARGS_BYTES = 2000;
 /** 書き込みの確認ダイアログに出す引数の長さ。 */
 const MAX_WRITE_ARGS_PREVIEW = 300;
@@ -202,7 +212,7 @@ function createRelay({ resolveTarget, journal = () => {}, timeoutMs = DEFAULT_TI
         return { ok: false, error: "declined" };
       }
     }
-    const res = await relayInner(sid, { kind: "pluginTool", pluginId: entry.pluginId, tool: entry.tool, params }, isWrite, PLUGIN_TOOL_TIMEOUT_MS);
+    const res = await relayInner(sid, { kind: "pluginTool", pluginId: entry.pluginId, tool: entry.tool, params }, isWrite, pluginToolTimeoutMs(entry));
     if (!res || res.ok !== true) return { ok: false, error: typeof (res && res.error) === "string" ? res.error.slice(0, 80) : "plugin-error" };
     const r = sanitizeResult(res.data);
     if (pt.external) {
@@ -346,4 +356,4 @@ function createRelay({ resolveTarget, journal = () => {}, timeoutMs = DEFAULT_TI
   return { relay, handleResult, pendingCount: () => pending.size };
 }
 
-module.exports = { sanitizeCapturedImage, WRITE_ACTIONS, createRelay, createJournal, journalParams, readJournal, DEFAULT_TIMEOUT_MS };
+module.exports = { pluginToolTimeoutMs, sanitizeCapturedImage, WRITE_ACTIONS, createRelay, createJournal, journalParams, readJournal, DEFAULT_TIMEOUT_MS };

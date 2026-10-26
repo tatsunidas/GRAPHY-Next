@@ -461,3 +461,13 @@ test("🔴 pluginTool write: レンダラが付けた approved は使わない�
   const { sent } = await wcall(wOpts(async () => true, entry), entry);
   assert.strictEqual(sent[0][1].approved, false);
 });
+
+test("pluginToolTimeoutMs: 台帳に値が無ければ従来の 30 秒。値があればその 5 秒後（窓側が先に切れる）。上限 900 秒、不正値は既定", () => {
+  const { pluginToolTimeoutMs } = require("./viewerRelay");
+  assert.strictEqual(pluginToolTimeoutMs({}), 30000);
+  assert.strictEqual(pluginToolTimeoutMs(null), 30000);
+  assert.strictEqual(pluginToolTimeoutMs({ timeoutMs: 60000 }), 65000);
+  assert.strictEqual(pluginToolTimeoutMs({ timeoutMs: 900000 }), 905000);
+  assert.strictEqual(pluginToolTimeoutMs({ timeoutMs: 99999999 }), 905000, "上限を超える値は上限");
+  for (const bad of [0, 4999, -1, 60.5, "60000", NaN, Infinity]) assert.strictEqual(pluginToolTimeoutMs({ timeoutMs: bad }), 30000, String(bad));
+});

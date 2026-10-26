@@ -1,7 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { runToolLoop, type LoopDeps } from "./toolLoop";
 import { validatePluginArgs, type PluginToolEntry } from "./pluginTools";
-import { executePluginTool, type PluginToolDeps } from "../viewer2d/pluginToolBridge";
+import { executePluginTool, toolTimeoutMs, type PluginToolDeps } from "../viewer2d/pluginToolBridge";
 import type { PluginManifest } from "../plugins/pluginTypes";
 import type { AiChatResult, AiToolCall } from "../desktopBridge";
 
@@ -174,5 +174,30 @@ describe("executePluginTool (2D window)", () => {
       { pluginId: "demo", tool: "measure", params: { n: 1 } },
     );
     expect(slow).toEqual({ ok: false, error: "timeout" });
+  });
+});
+
+describe("tool timeout (aiTools[].timeoutSec)", () => {
+  it("toolTimeoutMs: 既定 30 秒、秒→ミリ秒、5〜900 秒に収める、数値でなければ既定", () => {
+    expect(toolTimeoutMs(undefined)).toBe(30000);
+    expect(toolTimeoutMs(120)).toBe(120000);
+    expect(toolTimeoutMs(1)).toBe(5000);
+    expect(toolTimeoutMs(99999)).toBe(900000);
+    for (const bad of ["60", null, NaN, Infinity, {}]) expect(toolTimeoutMs(bad), String(bad)).toBe(30000);
+  });
+  it("the spec's timeoutSec decides when the window gives up (a slow tool outlives the default only if declared)", async () => {
+    vi.useFakeTimers();
+    try {
+      const slow = async () => () => new Promise<unknown>((res) => setTimeout(() => res({ v: 2 }), 40_000));
+      const declared = manifest({ aiTools: [{ name: "measure", description: "d", effect: "read", parameters: PARAMS, timeoutSec: 60 }] });
+      const p1 = executePluginTool(bridgeDeps({ load: slow }, declared).deps, { pluginId: "demo", tool: "measure", params: { n: 1 } });
+      await vi.advanceTimersByTimeAsync(41_000);
+      expect(await p1).toEqual({ ok: true, data: { v: 2 } });
+      const p2 = executePluginTool(bridgeDeps({ load: slow }).deps, { pluginId: "demo", tool: "measure", params: { n: 1 } });
+      await vi.advanceTimersByTimeAsync(31_000);
+      expect(await p2).toEqual({ ok: false, error: "timeout" });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

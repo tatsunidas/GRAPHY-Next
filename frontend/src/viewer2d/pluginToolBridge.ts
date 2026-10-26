@@ -11,6 +11,15 @@ import type { PluginManifest } from "../plugins/pluginTypes";
 
 /** プラグインのコードの実行待ちの上限。暫定値（中継の 5 秒とは別枠）。 */
 export const PLUGIN_TOOL_TIMEOUT_MS = 30000;
+/** ツール別の待ち時間（`aiTools[].timeoutSec`）の範囲。backend の検査と同じ（manifest が壊れていても超えない）。 */
+export const MIN_TOOL_TIMEOUT_MS = 5000;
+export const MAX_TOOL_TIMEOUT_MS = 900000;
+
+export function toolTimeoutMs(timeoutSec: unknown): number {
+  return typeof timeoutSec === "number" && Number.isFinite(timeoutSec)
+    ? Math.min(MAX_TOOL_TIMEOUT_MS, Math.max(MIN_TOOL_TIMEOUT_MS, Math.round(timeoutSec * 1000)))
+    : PLUGIN_TOOL_TIMEOUT_MS;
+}
 
 export interface PluginToolDeps {
   manifests(): Promise<PluginManifest[]>;
@@ -44,7 +53,7 @@ export async function executePluginTool(deps: PluginToolDeps, cmd: { pluginId?: 
     const data = await Promise.race([
       Promise.resolve().then(() => fn(v.params)),
       new Promise<never>((_, rej) => {
-        timer = setTimeout(() => rej(new Error("timeout")), deps.timeoutMs ?? PLUGIN_TOOL_TIMEOUT_MS);
+        timer = setTimeout(() => rej(new Error("timeout")), deps.timeoutMs ?? toolTimeoutMs(spec.timeoutSec));
       }),
     ]);
     return { ok: true, data };
