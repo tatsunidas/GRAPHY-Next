@@ -1,0 +1,124 @@
+// AI への要求の記録（本文なし）。設計: roadmap AS-QA-001。electron に依存しない純モジュール（結線は main.js）。
+//
+// 目的: クラウドのモデルが黙って更新されたとき、動作の変化に気づき原因を調べられるようにする。
+// 🔴 **プロンプト・返答本文・ツールの引数と結果・画像・患者識別子・鍵・エラーの自由文は残さない**。
+//    1 行の項目は許可リスト（下の `buildRecord`）だけを通し、入力がそれ以外を持っていても出力に現れない。
+// 取れない値（トークン数など）は null＝不明。0 で埋めない。
+"use strict";
+
+const fs = require("node:fs");
+const path = require("node:path");
+
+/** 記録の上限。1 世代だけ残して上書きする。暫定値（利用実績で見直す）。 */
+const DEFAULT_MAX_BYTES = 2 * 1024 * 1024;
+
+const CODE_RE = /^[a-z0-9-]{1,40}$/;
+const NAME_RE = /^[A-Za-z0-9_-]{1,64}$/;
+const ID_RE = /^[A-Za-z0-9._\-\/:]{1,120}$/;
+const MAX_TOOL_CALLS = 16;
+
+const natural = (v) => (typeof v === "number" && Number.isInteger(v) && v >= 0 ? v : null);
+const word = (v, re) => (typeof v === "string" && re.test(v) ? v : undefined);
+
+/**
+ * 1 行の形に整える。`o` は gateway が持つ値（提供元・モデル・usage・所要時間・結果・ツール名・添付の数）。
+ * 許可リスト以外のキー・形式に合わない値は捨てる。
+ */
+function buildRecord(o) {
+  const src = o && typeof o === "object" ? o : {};
+  const usage = src.usage && typeof src.usage === "object" ? { in: natural(src.usage.in), out: natural(src.usage.out) } : null;
+  const outcome = src.outcome === "ok" ? "ok" : word(src.outcome, CODE_RE) ?? "other";
+  const images = src.attachments && src.attachments.images && typeof src.attachments.images === "object" ? src.attachments.images : {};
+  const temperature = typeof src.temperature === "number" && Number.isFinite(src.temperature) ? src.temperature : undefined;
+  const toolCalls = (Array.isArray(src.toolCalls) ? src.toolCalls : [])
+    .map((n) => word(n, NAME_RE))
+    .filter((n) => n !== undefined)
+    .slice(0, MAX_TOOL_CALLS);
+  return {
+    sessionId: word(src.sessionId, NAME_RE),
+    provider: word(src.provider, NAME_RE),
+    kind: word(src.kind, NAME_RE),
+    modelId: word(src.modelId, ID_RE),
+    ...(word(src.modelVersion, ID_RE) ? { modelVersion: src.modelVersion } : {}),
+    destination: src.destination === "local" ? "local" : "external",
+    ...(word(src.fallbackFrom, NAME_RE) ? { fallbackFrom: src.fallbackFrom } : {}),
+    params: temperature === undefined ? {} : { temperature },
+    usage: usage && (usage.in !== null || usage.out !== null) ? usage : null,
+    latencyMs: natural(Math.round(Number(src.latencyMs))),
+    outcome,
+    toolsOffered: natural(src.toolsOffered) ?? 0,
+    toolCalls,
+    attachments: { images: { count: natural(images.count) ?? 0, bytes: natural(images.bytes) ?? 0 } },
+  };
+}
+
+/** 記録器。書けなくても呼び出し側へ影響させない（会話を止めない）。 */
+function createRequestLog({ file, maxBytes = DEFAULT_MAX_BYTES, now = Date.now }) {
+  function append(o) {
+    try {
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      try {
+        if (fs.statSync(file).size >= maxBytes) fs.renameSync(file, `${file}.1`);
+      } catch {
+        /* まだ無い */
+      }
+      fs.appendFileSync(file, JSON.stringify({ ts: new Date(now()).toISOString(), ...buildRecord(o) }) + "\n");
+    } catch {
+      /* 記録できなくても会話は止めない */
+    }
+  }
+
+  function readAll() {
+    const rows = [];
+    for (const f of [`${file}.1`, file]) {
+      let text = "";
+      try {
+        text = fs.readFileSync(f, "utf8");
+      } catch {
+        continue;
+      }
+      for (const line of text.split("\n")) {
+        if (!line) continue;
+        try {
+          const e = JSON.parse(line);
+          if (e && typeof e === "object") rows.push(e);
+        } catch {
+          /* 壊れた行 */
+        }
+      }
+    }
+    return rows;
+  }
+
+  /** 件数、モデル別（要求数・入出力トークン合計・トークン不明の件数）、直近 `limit` 件（新しい順）。 */
+  function summary(limit = 20) {
+    const rows = readAll();
+    const byModel = new Map();
+    for (const r of rows) {
+      const key = `${r.provider ?? "?"}\u0000${r.modelVersion ?? r.modelId ?? "?"}`;
+      const m = byModel.get(key) ?? { provider: r.provider ?? null, model: r.modelVersion ?? r.modelId ?? null, requests: 0, tokensIn: 0, tokensOut: 0, unknownUsage: 0 };
+      m.requests++;
+      // 合計は取れた値だけ。片方でも不明な要求は unknownUsage に数える（合計が下限であることが分かるように）
+      if (r.usage && r.usage.in !== null) m.tokensIn += r.usage.in;
+      if (r.usage && r.usage.out !== null) m.tokensOut += r.usage.out;
+      if (!r.usage || r.usage.in === null || r.usage.out === null) m.unknownUsage++;
+      byModel.set(key, m);
+    }
+    return { ok: true, count: rows.length, byModel: [...byModel.values()], recent: rows.slice(-limit).reverse() };
+  }
+
+  function clear() {
+    for (const f of [file, `${file}.1`]) {
+      try {
+        fs.rmSync(f, { force: true });
+      } catch {
+        /* 無い */
+      }
+    }
+    return { ok: true };
+  }
+
+  return { append, summary, clear };
+}
+
+module.exports = { buildRecord, createRequestLog, DEFAULT_MAX_BYTES };
