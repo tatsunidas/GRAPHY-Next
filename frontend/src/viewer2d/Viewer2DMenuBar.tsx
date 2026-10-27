@@ -18,6 +18,7 @@ import {
   getVesselModel,
   listVesselModels,
   putVesselAnalysis,
+  registerPluginVesselModel,
 } from "../plugins/pluginVesselApi";
 import { openPluginWindow } from "../plugins/pluginWindowApi";
 import { mountValueViewport, mountVolumeView } from "../plugins/pluginViewportApi";
@@ -131,6 +132,9 @@ export function Viewer2DMenuBar({
     getVesselModel: (runId) => getVesselModel(runId),
     putVesselAnalysis: (runId, result) =>
       putVesselAnalysis(runId, result, { id: m.id, name: m.name, version: m.version }),
+    // H73: プラグインが作った 3D 血管モデルを登録簿へ入れる（本体の 3D 表示・QFR の色マップが読む）。
+    registerVesselModel: (model) =>
+      registerPluginVesselModel(model, { id: m.id, name: m.name, version: m.version }),
     // 出所ラベルはプラグイン任せにしない: host が必ずマニフェストの表示名を入れる。
     showOverlay: (tileId, overlay) => actions.showOverlay(tileId, { ...overlay, label: m.name }),
     showLabelVolume: (tileId, req) => actions.showLabelVolume(tileId, req, { id: m.id, name: m.name }),

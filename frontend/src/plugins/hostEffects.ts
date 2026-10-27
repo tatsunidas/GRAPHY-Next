@@ -69,6 +69,7 @@ export const HOST_EFFECTS: Record<HostKey, ToolEffect> = {
   removeCreatedRoi: "write",
   removeLabelVolume: "write",
   putVesselAnalysis: "write",
+  registerVesselModel: "write",
   saveDerivedSeries: "write",
   saveStructuredReport: "write",
   saveAngioReport: "write",

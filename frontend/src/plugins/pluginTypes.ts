@@ -31,8 +31,10 @@ import type { ViewerDerivedSeriesRequest, ViewerDerivedSeriesResult, ViewerOverl
 export type { PluginStoreDoc, PluginStoreSaveResult };
 
 import type {
+  RegisterVesselModelResult,
   VesselAnalysisResult,
   XaVesselAnalysisInput,
+  XaVesselModelInput,
   XaVesselModel,
   XaVesselModelSummary,
 } from "./pluginVesselApi";
@@ -65,6 +67,8 @@ export type {
   XaVesselProvenance,
   XaVesselSegment,
   VesselAnalysisResult,
+  RegisterVesselModelResult,
+  XaVesselModelInput,
 } from "./pluginVesselApi";
 export type { PluginSeriesPanelHandle, PluginSeriesPanelOptions } from "./pluginSeriesPanelApi";
 export type { AiGenerationOptions, AiGenerationOutcome } from "./pluginAiApi";
@@ -780,6 +784,18 @@ export interface Viewer2DPluginHost extends PluginHostBase {
    * host が凡例の脇に必ず出す。
    */
   putVesselAnalysis: (runId: string, result: XaVesselAnalysisInput) => VesselAnalysisResult;
+  /**
+   * **プラグインが作った 3D 血管モデルを登録する**（H73）。本体の 3D 表示と、`listVesselModels` /
+   * `getVesselModel`（QFR など他の解析）が読む登録簿へ入る。同じ `runKey` は置き換える。
+   * 登録はセッション限り。`runId`（`plugin:<プラグイン id>:<runKey>`）・登録時刻・出自（プラグインの id・名前・版）は
+   * **host が入れる**（プラグインに名乗らせない）。
+   *
+   * <p>🔴 **壊れた入力は理由つきで拒否する**（登録されない）。測れなかった点の径は `null`（0 や補間値で埋めない）。
+   * `diameterCalibrated: false`（未校正）のモデルは**全点 `null`** でなければ拒否する——px の値が mm の顔で
+   * FFR の入力に入る事故を入口で止める。点は有限、セグメントは 1 つ以上・各 2 点以上、`diameterMm` は点と同数、
+   * `parentId` は他のセグメントの id、総点数は 20000 以下。
+   */
+  registerVesselModel: (model: XaVesselModelInput) => RegisterVesselModelResult;
   /**
    * 処理結果（値マップ）を対象タイルの**表示中スライスへ重ねて見せる**（H4a）。
    * `tileId` 省略時は対象の先頭タイル。rows/cols が現在スライスと不一致なら false。
