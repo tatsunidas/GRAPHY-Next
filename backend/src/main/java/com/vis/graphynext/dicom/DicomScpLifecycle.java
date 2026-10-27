@@ -33,7 +33,9 @@ public class DicomScpLifecycle implements SmartLifecycle {
                              DicomLocalAeService localAe,
                              com.vis.graphynext.anonymize.ReceiveAnonymizer anonymizer,
                              com.vis.graphynext.dicom.store.ReceiveCompressor compressor,
-                             DicomQrAccess qrAccess, DicomFindQuery findQuery) {
+                             DicomQrAccess qrAccess, DicomFindQuery findQuery,
+                             DicomMoveTargets moveTargets, DicomRemoteAeService remoteAes,
+                             com.vis.graphynext.anonymize.PixelCodec codec) {
         this.server = new DicomScpServer(
                 localAe.aeTitle(),
                 localAe.bindAddress(),
@@ -49,10 +51,12 @@ public class DicomScpLifecycle implements SmartLifecycle {
                 new DicomStoreScp(storage, tempDir, anonymizer, compressor),
                 storageCaps.toArray(TransferCapability[]::new));
 
-        // 他端末からの検索（C-FIND）。患者情報を返すので既定は OFF。登録は起動時なので、切り替えは再起動後に反映。
+        // 他端末からの検索（C-FIND）と取得（C-MOVE）。患者情報・画像を返すので既定は OFF。登録は起動時なので、切り替えは再起動後に反映。
         this.queryRetrieveActive = qrAccess.enabled();
         if (queryRetrieveActive) {
             server.addService(new DicomFindScp(qrAccess, findQuery), DicomFindScp.capabilities());
+            server.addService(new DicomMoveScp(qrAccess, moveTargets, remoteAes, localAe, tlsService, codec),
+                    DicomMoveScp.capabilities());
         }
 
         // TLS が設定済み（GUI 保存 or application.yml）なら、平文に加えて TLS リスナーも有効化する。
