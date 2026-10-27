@@ -59,12 +59,12 @@ import {
   setSplineFitOn,
   toggleSplineFit,
 } from "../viewer/roiContourTools";
-import { getRoiMaskMeta, subscribeRoiMaskStore } from "../viewer/roiMaskStore";
+import { getRoiMaskMeta, subscribeRoiMaskChanged, subscribeRoiMaskStore } from "../viewer/roiMaskStore";
 import { markLabelVolume } from "../viewer/labelVolumeOrigin";
 import { getLoadedRois, getLoadedSpheres, registerRoiCollector, scheduleRoiSave } from "../viewer/roiSaveStore";
 import { collectSpheresForPatient } from "../viewer/sphereRestore";
 import { subscribeSphere3D } from "../viewer/sphere3dStore";
-import { startMaskPersistence } from "../viewer/maskSaveStore";
+import { isMaskId, startMaskPersistence } from "../viewer/maskSaveStore";
 import { startUnloadFlush } from "../viewer/unloadFlush";
 import { collectRoisForPatient, sopOfImageId } from "../viewer/roiRestore";
 import { emitRoiReveal } from "../viewer/roiReveal";
@@ -1195,7 +1195,10 @@ function TileGrid({
     const onChange = () => pks.forEach((pk) => scheduleRoiSave(pk));
     for (const name of names) eventTarget.addEventListener(name, onChange);
     // ラベル・scope・プラグイン属性の変更も保存対象なのでメタ store も見る。
-    const unsubMeta = subscribeRoiMaskStore(onChange);
+    // 塗り ROI のメタ（名前・グループなど）は形の ROI 文書に載らないので、変わっても保存を予約しない。
+    const unsubMeta = subscribeRoiMaskChanged((id) => {
+      if (!isMaskId(id)) onChange();
+    });
     // 球の追加・変更・削除も保存対象。
     const unsubSphere = subscribeSphere3D(onChange);
     // 塗り ROI（マスク）は別テーブルへ、変更があったものだけを保存する。
