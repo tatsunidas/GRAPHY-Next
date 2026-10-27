@@ -218,7 +218,19 @@ public class DicomController {
             throw new org.springframework.web.server.ResponseStatusException(
                     org.springframework.http.HttpStatus.BAD_REQUEST, "transferSyntax が不正です: " + req.transferSyntax());
         }
-        return send.send(selections, req.host(), req.port(), req.calledAet(), callingAet, req.tls(), policy);
+        var options = new DicomSendService.Options(policy, req.keyImagesOnly(),
+                req.includeKeyObject() == null || req.includeKeyObject());
+        return send.send(selections, req.host(), req.port(), req.calledAet(), callingAet, req.tls(), options);
+    }
+
+    /** 「キー画像のみ」送信が使えるか: スタディの確定済みレポートが参照するキー画像の数と、KO の数。 */
+    @GetMapping("/send/key-images")
+    public KeyImageAvailability sendKeyImages(@org.springframework.web.bind.annotation.RequestParam String studyUid) {
+        var ki = send.sendableKeyImages(studyUid);
+        return new KeyImageAvailability(ki.imageSopUids().size(), ki.koSopUids().size());
+    }
+
+    public record KeyImageAvailability(int keyImages, int keyObjects) {
     }
 
     public record EchoRequest(String host, int port, String calledAet, String callingAet, boolean tls) {
@@ -231,7 +243,8 @@ public class DicomController {
     }
 
     public record SendRequest(List<SendSelection> selections, String host, int port, String calledAet,
-                              String callingAet, boolean tls, String transferSyntax) {
+                              String callingAet, boolean tls, String transferSyntax, boolean keyImagesOnly,
+                              Boolean includeKeyObject) {
     }
 
     public record QrFindRequest(String host, int port, String calledAet, Map<String, String> matchKeys, boolean tls) {
