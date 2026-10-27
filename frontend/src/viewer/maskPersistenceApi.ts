@@ -9,7 +9,7 @@
  * 画素は JSON ではなく multipart のバイナリで送る（base64 の 33% 膨張と、JSON 文字列の長さ上限を避ける）。
  */
 import { apiBase } from "../apiBase";
-import { extractErrorMessage, HttpError, httpGet, httpSend } from "../http";
+import { extractErrorMessage, HttpError, httpGet, httpSend, KEEPALIVE_MAX_BYTES } from "../http";
 import type { SavedMaskSummary } from "./maskPersistence";
 
 const q = (patientKey: string): string => `patientKey=${encodeURIComponent(patientKey)}`;
@@ -41,7 +41,9 @@ export async function saveMask(maskUid: string, a: SaveMaskArgs): Promise<SavedM
   form.append("frames", new Blob([a.frames as BlobPart], { type: "application/octet-stream" }), "frames.bin");
   const ver = a.version === null ? "" : `&version=${a.version}`;
   const url = `${apiBase()}/api/roi-masks/${encodeURIComponent(maskUid)}?${q(a.patientKey)}&seriesUid=${encodeURIComponent(a.seriesUid)}&frameCount=${a.frameCount}${ver}`;
-  const res = await fetch(url, { method: "PUT", body: form });
+  // 本体が小さいときは、閉じる・再読み込みの最中でも送り切れるように keepalive にする（大きいと要求ごと失敗する）。
+  const keepalive = a.frames.length + a.meta.length <= KEEPALIVE_MAX_BYTES;
+  const res = await fetch(url, { method: "PUT", body: form, keepalive });
   if (!res.ok) throw new HttpError(await extractErrorMessage(res), res.status);
   return (await res.json()) as SavedMaskSummary;
 }

@@ -10,7 +10,8 @@
  * 409 を返す。RECIST のような長期の計測を黙って消さないための最後の砦なので、
  * **409 を握り潰さない**（呼び出し側が読み直して再保存する）。
  */
-import { httpGet, httpSend } from "../http";
+import { apiBase } from "../apiBase";
+import { extractErrorMessage, HttpError, httpGet, httpSend, KEEPALIVE_MAX_BYTES } from "../http";
 
 export interface RoiDocumentDto {
   patientKey: string;
@@ -31,13 +32,27 @@ const path = (patientKey: string): string => `/api/rois?patientKey=${encodeURICo
 export const fetchRoiDocument = (patientKey: string): Promise<RoiDocumentDto> =>
   httpGet<RoiDocumentDto>(path(patientKey));
 
-export const saveRoiDocument = (
+export async function saveRoiDocument(
   patientKey: string,
   json: string,
   roiCount: number,
   version: number | null,
-): Promise<RoiDocumentDto> =>
-  httpSend<RoiDocumentDto>(path(patientKey), "PUT", { json, roiCount, version });
+  keepalive = false,
+): Promise<RoiDocumentDto> {
+  const body = JSON.stringify({ json, roiCount, version });
+  // 閉じる・再読み込みの直前に送るとき用。`keepalive` は本体が小さいときだけ付ける（超えると要求ごと失敗する）。
+  if (keepalive && new Blob([body]).size <= KEEPALIVE_MAX_BYTES) {
+    const res = await fetch(`${apiBase()}${path(patientKey)}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body,
+      keepalive: true,
+    });
+    if (!res.ok) throw new HttpError(await extractErrorMessage(res), res.status);
+    return (await res.json()) as RoiDocumentDto;
+  }
+  return httpSend<RoiDocumentDto>(path(patientKey), "PUT", { json, roiCount, version });
+}
 
 export const deleteRoiDocument = (patientKey: string): Promise<void> =>
   httpSend<void>(path(patientKey), "DELETE");

@@ -39,7 +39,7 @@ import { deleteMask, fetchMaskFrames, listMasks, saveMask } from "./maskPersiste
 type AnyObj = Record<string, any>;
 
 /** 変更のあと、このあいだ静かになってから保存する（塗りのドラッグ中は 1 操作で多数のイベントが出る）。 */
-export const MASK_SAVE_DEBOUNCE_MS = 3000;
+export const MASK_SAVE_DEBOUNCE_MS = 500;
 
 /** 保存済みの行: `persistUid` → この窓のマスク ID と、最後に知っている版。 */
 const known = new Map<string, { maskId: string; version: number | null }>();
@@ -127,6 +127,18 @@ export function startMaskPersistence(): () => void {
 function enqueue(task: () => Promise<void>): Promise<void> {
   queue = queue.then(task).catch((e) => log.warn("mask persistence task failed", e));
   return queue;
+}
+
+/**
+ * 閉じる・再読み込みの直前: 保留中のデバウンスを止めて、いま送る（ベストエフォート）。
+ * 抽出・圧縮が非同期のため、最後の編集からデバウンス時間以内に閉じた分は間に合わない。
+ */
+export function flushMasksForUnload(): void {
+  if (timer) {
+    clearTimeout(timer);
+    timer = undefined;
+  }
+  if (dirty.size) void flush();
 }
 
 /** 保留中のぶんを保存する。 */
