@@ -100,6 +100,9 @@ contextBridge.exposeInMainWorld("graphyDesktop", {
   assistantMacrosList: () => ipcRenderer.invoke("graphy:assistant-macros-list"),
   assistantMacrosSave: (macro) => ipcRenderer.invoke("graphy:assistant-macros-save", macro),
   assistantMacrosDelete: (id) => ipcRenderer.invoke("graphy:assistant-macros-delete", id),
+  assistantSkillsList: () => ipcRenderer.invoke("graphy:assistant-skills-list"),
+  assistantSkillsSave: (skill) => ipcRenderer.invoke("graphy:assistant-skills-save", skill),
+  assistantSkillsDelete: (id) => ipcRenderer.invoke("graphy:assistant-skills-delete", id),
   // 2D ビューア窓側: main が中継してきた命令を受け、結果を返す。受けた命令は 2D 窓が許可リストで再検証する。
   onViewerCmd: (cb) => {
     const handler = (_e, cmd) => cb(cmd);

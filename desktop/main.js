@@ -33,6 +33,7 @@ const { isAssistantSender } = require("./assistantSender");
 const { createRelay, createJournal, readJournal } = require("./viewerRelay");
 const { createRequestLog, createEvalStore } = require("./aiRequestLog");
 const { createStore: createMacroStore } = require("./assistantMacros");
+const { createStore: createSkillStore } = require("./assistantSkills");
 const assistantPluginTools = require("./assistantPluginTools");
 const { createGate: createAiEgressGate } = require("./aiEgressGate");
 const aiProviders = require("./aiProviders");
@@ -1488,6 +1489,11 @@ ipcMain.handle("graphy:assistant-plugin-tools-set", async (e, pluginId, on) => {
 });
 // マクロ（表示操作の並び）の保存。形と大きさだけ main が見る（assistantMacros.js）。再生時の検証は 2D 窓が毎回行う。
 const macroStore = createMacroStore({ file: path.join(app.getPath("userData"), "assistant-macros.json") });
+// スキル（検証済み操作を入力・確認つきで並べたもの）の保存。形と大きさだけ main が見る（assistantSkills.js）。実行時の検証はアシスタント窓と 2D 窓が毎回行う。
+const skillStore = createSkillStore({ file: path.join(app.getPath("userData"), "assistant-skills.json") });
+ipcMain.handle("graphy:assistant-skills-list", (e) => (isAssistantSender(e) ? skillStore.list() : { ok: false, error: "forbidden" }));
+ipcMain.handle("graphy:assistant-skills-save", (e, s) => (isAssistantSender(e) ? skillStore.save(s) : { ok: false, error: "forbidden" }));
+ipcMain.handle("graphy:assistant-skills-delete", (e, id) => (isAssistantSender(e) ? skillStore.remove(id) : { ok: false, error: "forbidden" }));
 // AI への要求の記録（本文なし。aiRequestLog.js）。会話の完了ごとに gateway が 1 件書く。読み取りと消去はアシスタント窓だけ。
 const aiRequestLog = createRequestLog({ file: path.join(app.getPath("userData"), "ai-requests.jsonl") });
 aiGateway.setRequestLogHook((record) => aiRequestLog.append(record));
