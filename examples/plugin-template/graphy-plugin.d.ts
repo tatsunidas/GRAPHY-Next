@@ -485,6 +485,8 @@ export interface VesselModel {
   segments: VesselSegment[];
   calibration: VesselCalibration;
   provenance: VesselProvenance;
+  /** このモデルを登録したプラグイン（`registerVesselModel`）。本体の 3D QCA が作ったモデルには無い。 */
+  producer?: { pluginId: string; pluginName: string; version: string };
   at: number;
 }
 
@@ -522,6 +524,15 @@ export interface VesselAnalysisInput {
   /** 提供元の免責文。**そのまま画面に出る**（本体は要約も書き換えもしない）。 */
   disclaimer?: string;
 }
+
+/** `host.registerVesselModel()` に渡すモデル。`runId` / `at` / 出自は host が決めるので含まない。 */
+export type VesselModelInput = Omit<VesselModel, "runId" | "at" | "producer"> & {
+  /** 同じ鍵で登録し直すと置き換わる。1〜200 文字。 */
+  runKey: string;
+};
+
+/** `host.registerVesselModel()` の戻り。 */
+export type RegisterVesselModelResult = { ok: true; runId: string } | { ok: false; error: string };
 
 /** `host.putVesselAnalysis()` の戻り。 */
 export interface VesselAnalysisResult {
@@ -2073,6 +2084,13 @@ export interface Viewer2DPluginHost extends PluginHostBase {
    * 退化した `range`）。捨てて残りを採用すると**ずれたまま色が乗り**、誰も気付けない。
    */
   putVesselAnalysis: (runId: string, result: VesselAnalysisInput) => VesselAnalysisResult;
+  /**
+   * **プラグインが作った 3D 血管モデルを登録する**（**H73**）。本体の 3D 表示と `listVesselModels` / `getVesselModel`
+   * が読む登録簿へ入る。同じ `runKey` は置き換える。セッション限り。`runId` / 登録時刻 / 出自は host が入れる。
+   * 🔴 壊れた入力は理由つきで拒否する。測れなかった点の径は `null`（0 で埋めない）。未校正
+   * （`calibration.diameterCalibrated: false`）なら**全点 null**でなければ拒否する。
+   */
+  registerVesselModel: (model: VesselModelInput) => RegisterVesselModelResult;
   /**
    * 処理結果（値マップ）を**表示中スライスへ重ねて見せる**。`tileId` 省略時は対象の先頭タイル。
    * rows/cols が現在スライスと不一致なら false。**0.1.9 以降**。
