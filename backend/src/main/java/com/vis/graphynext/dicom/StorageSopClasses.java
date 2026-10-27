@@ -30,8 +30,20 @@ public final class StorageSopClasses {
     private StorageSopClasses() {
     }
 
-    /** クラスパス上の properties から SCP TransferCapability 群を構築する。 */
+    /** クラスパス上の properties から SCP（受信する側）の TransferCapability 群を構築する。 */
     public static List<TransferCapability> scpCapabilities(String classpathResource) {
+        return capabilities(classpathResource, TransferCapability.Role.SCP);
+    }
+
+    /**
+     * 同じ一覧から、SCU（送る側）の TransferCapability 群を構築する。C-GET で、受けた接続の上へ保存 SOP クラスを
+     * 返すときに、相手の役割選択（相手が受ける側になる）を受理するために要る。
+     */
+    public static List<TransferCapability> scuCapabilities(String classpathResource) {
+        return capabilities(classpathResource, TransferCapability.Role.SCU);
+    }
+
+    private static List<TransferCapability> capabilities(String classpathResource, TransferCapability.Role role) {
         Properties p = new Properties();
         try (InputStream in = StorageSopClasses.class.getResourceAsStream(classpathResource)) {
             if (in == null) {
@@ -54,9 +66,9 @@ public final class StorageSopClasses {
                 log.warn("SOP Class {} の Transfer Syntax が解決できずスキップ", key);
                 continue;
             }
-            caps.add(new TransferCapability(null, sopUid, TransferCapability.Role.SCP, tsuids));
+            caps.add(new TransferCapability(null, sopUid, role, tsuids));
         }
-        log.info("Storage SOP Class を {} 件登録（{}）", caps.size(), classpathResource);
+        log.info("Storage SOP Class を {} 件登録（{}、{}）", caps.size(), classpathResource, role);
         return caps;
     }
 
