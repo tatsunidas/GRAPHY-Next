@@ -20,6 +20,8 @@ import com.vis.graphynext.report.ReportType;
 import com.vis.graphynext.report.StaffRole;
 import com.vis.graphynext.roi.RoiDocument;
 import com.vis.graphynext.roi.RoiDocumentRepository;
+import com.vis.graphynext.roi.RoiMaskDocument;
+import com.vis.graphynext.roi.RoiMaskDocumentRepository;
 import com.vis.graphynext.settings.SettingsService;
 import org.dcm4che3.data.Attributes;
 import org.dcm4che3.data.Tag;
@@ -47,6 +49,7 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.stream.Stream;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -92,6 +95,8 @@ class DbTransferTest {
     ReportRepository reports;
     @Autowired
     RoiDocumentRepository rois;
+    @Autowired
+    RoiMaskDocumentRepository maskDocs;
     @Autowired
     GlamAnalysisDocumentRepository glam;
     @Autowired
@@ -336,5 +341,146 @@ class DbTransferTest {
         assertTrue(Files.exists(layout.resolveForRead(repo.findByStudyInstanceUid("cache-st").get(0))));
         // モード A でなければ、同じ操作は通る（拒否が条件つきであることの対）
         assertEquals(1, transfer.transfer(List.of("cache-st"), target.toString(), DbTransferService.Mode.copy).files());
+    }
+
+    private static byte[] frames(int seed) {
+        byte[] b = new byte[300];
+        for (int i = 0; i < b.length; i++) {
+            b[i] = (byte) (seed * 31 + i);
+        }
+        return b;
+    }
+
+    private void addMask(String uid, String pk, String series, int seed) {
+        maskDocs.save(new RoiMaskDocument(uid, pk, series, "{\"patientKey\":\"" + pk + "\",\"seed\":" + seed + "}",
+                frames(seed), 3));
+    }
+
+    @Test
+    void 塗りROI_移すシリーズの分だけ荷物に入り_移し先で同じ中身に取り込める() throws Exception {
+        ingest("MK1", "mk.st", "mk.se", "mk.1");
+        addMask("mk-a", "MK1", "mk.se", 1);
+        addMask("mk-other", "MK1", "mk.other.se", 2); // 移さないシリーズ
+
+        transfer.transfer(List.of("mk.st"), target.toString(), DbTransferService.Mode.copy);
+        Path pkg = onlyPackage();
+        TransferManifest m = mapper.readValue(pkg.resolve("manifest.json").toFile(), TransferManifest.class);
+        assertEquals(2, m.formatVersion(), "塗り ROI を含む荷物は版 2");
+        assertEquals(1, m.related().masks().size(), "別シリーズの塗り ROI は運ばない");
+        assertEquals("mk-a", m.related().masks().get(0).maskUid());
+        assertTrue(maskDocs.findById("mk-a").isPresent(), "コピーは移し元を残す");
+
+        tx.executeWithoutResult(s -> {
+            repo.deleteAll(repo.findByStudyInstanceUid("mk.st"));
+            maskDocs.deleteById("mk-a");
+        });
+        var res = targetInbox().ingestOne(pkg);
+        assertEquals(0, res.failed(), res.errors().toString());
+        assertEquals(0, res.conflicts());
+        RoiMaskDocument back = maskDocs.findById("mk-a").orElseThrow();
+        assertArrayEquals(frames(1), back.getFrames());
+        assertEquals("MK1", back.getPatientKey());
+        assertEquals("mk.se", back.getSeriesUid());
+        assertEquals(3, back.getFrameCount());
+        assertTrue(back.getMeta().contains("\"seed\":1"));
+        assertFalse(Files.exists(target.resolve("inbox/done").resolve(pkg.getFileName()).resolve("masks")),
+                "取り込めて衝突も無ければ、フレームの写しは残さない");
+        assertTrue(maskDocs.findById("mk-other").isPresent());
+    }
+
+    @Test
+    void 塗りROI_移動は運んだシリーズの分だけ移し元から消す() throws Exception {
+        ingest("MM1", "mm.st", "mm.se", "mm.1");
+        ingest("MM1", "mm.st2", "mm.se2", "mm.2");
+        addMask("mm-a", "MM1", "mm.se", 1);
+        addMask("mm-b", "MM1", "mm.se2", 2);
+
+        transfer.transfer(List.of("mm.st"), target.toString(), DbTransferService.Mode.move);
+        assertTrue(maskDocs.findById("mm-a").isEmpty(), "運んだシリーズの塗り ROI は移し元から消す");
+        assertTrue(maskDocs.findById("mm-b").isPresent(), "移していないシリーズの分は残す");
+        TransferManifest m = mapper.readValue(onlyPackage().resolve("manifest.json").toFile(), TransferManifest.class);
+        assertEquals(List.of("mm-a"), m.related().masks().stream().map(TransferManifest.MaskItem::maskUid).toList());
+    }
+
+    @Test
+    void 塗りROI_運べないときは移し元の塗りROIも消さない() throws Exception {
+        ingest("MN1", "mn.st", "mn.se", "mn.1");
+        addMask("mn-a", "MN1", "mn.se", 1);
+        Path f = layout.resolveForRead(repo.findByStudyInstanceUid("mn.st").get(0));
+        Files.delete(f);
+
+        assertThrows(IOException.class,
+                () -> transfer.transfer(List.of("mn.st"), target.toString(), DbTransferService.Mode.move));
+        assertTrue(maskDocs.findById("mn-a").isPresent());
+    }
+
+    @Test
+    void 塗りROI_取り込みは上書きしない_同じ中身は同一_違えば衝突でフレームを残す() throws Exception {
+        ingest("MC1", "mc.st", "mc.se", "mc.1");
+        addMask("mc-a", "MC1", "mc.se", 1);
+        transfer.transfer(List.of("mc.st"), target.toString(), DbTransferService.Mode.copy);
+        Path pkg = onlyPackage();
+
+        // 同じ中身 → 同一（衝突にしない）
+        var same = targetInbox().ingestOne(copyTree(pkg, pkg.resolveSibling("copy1")));
+        assertEquals(0, same.conflicts());
+        assertTrue(same.relatedSame() >= 1);
+
+        // 移し先の同じ maskUid が違う中身 → 衝突、既存は変えない
+        RoiMaskDocument cur = maskDocs.findById("mc-a").orElseThrow();
+        cur.update("mc.se", cur.getMeta(), frames(9), 3);
+        maskDocs.save(cur);
+        var res = targetInbox().ingestOne(copyTree(pkg, pkg.resolveSibling("copy2")));
+        assertEquals(1, res.conflicts());
+        assertArrayEquals(frames(9), maskDocs.findById("mc-a").orElseThrow().getFrames());
+        assertTrue(Files.exists(target.resolve("inbox/done/copy2/masks")), "衝突のときだけフレームを残す");
+    }
+
+    @Test
+    void 塗りROI_荷物のフレームの改ざんは照合で見つけ_保存せずに残す() throws Exception {
+        ingest("MT1", "mt.st", "mt.se", "mt.1");
+        addMask("mt-a", "MT1", "mt.se", 1);
+        transfer.transfer(List.of("mt.st"), target.toString(), DbTransferService.Mode.copy);
+        Path pkg = onlyPackage();
+        TransferManifest m = mapper.readValue(pkg.resolve("manifest.json").toFile(), TransferManifest.class);
+        DbTransferService.verify(pkg, m); // 無改ざんなら通る（正例）
+        Path f = pkg.resolve(m.related().masks().get(0).path());
+        byte[] b = Files.readAllBytes(f);
+        b[0] ^= 1;
+        Files.write(f, b);
+        assertThrows(IOException.class, () -> DbTransferService.verify(pkg, m));
+
+        tx.executeWithoutResult(s -> {
+            repo.deleteAll(repo.findByStudyInstanceUid("mt.st"));
+            maskDocs.deleteById("mt-a");
+        });
+        var res = targetInbox().ingestOne(pkg);
+        assertEquals(1, res.failed());
+        assertTrue(maskDocs.findById("mt-a").isEmpty(), "照合に失敗したフレームは保存しない");
+        assertTrue(Files.exists(target.resolve("inbox/done").resolve(pkg.getFileName()).resolve("masks")),
+                "取り込めなかったものは残す");
+    }
+
+    @Test
+    void 塗りROIが無い荷物は版1のまま_古い版のアプリでも読める() throws Exception {
+        ingest("MV9", "mv9.st", "mv9.se", "mv9.1");
+        transfer.transfer(List.of("mv9.st"), target.toString(), DbTransferService.Mode.copy);
+        TransferManifest m = mapper.readValue(onlyPackage().resolve("manifest.json").toFile(), TransferManifest.class);
+        assertEquals(1, m.formatVersion());
+        assertTrue(m.related().masks().isEmpty());
+    }
+
+    private static Path copyTree(Path from, Path to) throws IOException {
+        try (Stream<Path> s = Files.walk(from)) {
+            for (Path p : s.toList()) {
+                Path d = to.resolve(from.relativize(p).toString());
+                if (Files.isDirectory(p)) {
+                    Files.createDirectories(d);
+                } else {
+                    Files.copy(p, d);
+                }
+            }
+        }
+        return to;
     }
 }

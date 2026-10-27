@@ -135,9 +135,10 @@ public class DbTransferService {
                 series.add(r.getSeriesInstanceUid());
                 patientKeys.add(RelatedData.patientKey(r));
             }
-            TransferManifest manifest = new TransferManifest(TransferManifest.FORMAT_VERSION, id,
-                    Instant.now().toString(), mode.name(), currentFolder.toString(), List.copyOf(studies), files,
-                    related.collect(studies, series, patientKeys));
+            TransferManifest.Related rel = related.collect(studies, series, patientKeys, partial);
+            int version = rel.masks().isEmpty() ? TransferManifest.BASE_FORMAT_VERSION : TransferManifest.FORMAT_VERSION;
+            TransferManifest manifest = new TransferManifest(version, id,
+                    Instant.now().toString(), mode.name(), currentFolder.toString(), List.copyOf(studies), files, rel);
             mapper.writeValue(partial.resolve("manifest.json").toFile(), manifest);
 
             verify(partial, mapper.readValue(partial.resolve("manifest.json").toFile(), TransferManifest.class));
@@ -203,6 +204,15 @@ public class DbTransferService {
             if (!p.normalize().startsWith(pkg) || !Files.isRegularFile(p) || Files.size(p) != f.size()
                     || !sha256(p).equals(f.sha256())) {
                 throw new IOException("照合に失敗しました: " + f.path());
+            }
+        }
+        if (m.related() != null && m.related().masks() != null) {
+            for (TransferManifest.MaskItem k : m.related().masks()) {
+                Path p = pkg.resolve(k.path());
+                if (!p.normalize().startsWith(pkg) || !Files.isRegularFile(p) || Files.size(p) != k.size()
+                        || !sha256(p).equals(k.sha256())) {
+                    throw new IOException("照合に失敗しました: " + k.path());
+                }
             }
         }
     }

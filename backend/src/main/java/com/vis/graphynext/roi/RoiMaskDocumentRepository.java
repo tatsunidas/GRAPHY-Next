@@ -19,6 +19,8 @@ public interface RoiMaskDocumentRepository extends JpaRepository<RoiMaskDocument
 
     List<RoiMaskDocument> findByPatientKey(String patientKey);
 
+    List<RoiMaskDocument> findBySeriesUidIn(Collection<String> seriesUids);
+
     /** 画素（{@code frames}）を読まずに一覧を引く（画素は 1 件ごとに別 API で取る）。 */
     @Query("select new com.vis.graphynext.roi.RoiMaskSummary(d.maskUid, d.seriesUid, d.meta, d.frameCount, "
             + "d.frameBytes, d.version, d.updatedAt) from RoiMaskDocument d where d.patientKey = ?1 order by d.updatedAt")
