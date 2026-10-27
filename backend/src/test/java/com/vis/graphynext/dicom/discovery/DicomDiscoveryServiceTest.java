@@ -45,7 +45,11 @@ class DicomDiscoveryServiceTest {
                 DicomDiscoveryService a = service(true, true, probe, 11130, -1);
                 DicomDiscoveryService b = service(false, true, "PRS" + tag, 11131, -1);
                 advertiseAndSettle(a);
-                mdnsWorks = find(b.scan(), probe) != null;
+                try {
+                    mdnsWorks = find(b.scan(), probe) != null;
+                } catch (java.io.IOException e) {
+                    mdnsWorks = false; // bind できない・dns-sd が無いなど
+                }
                 a.shutdown();
             }
         }
@@ -59,7 +63,7 @@ class DicomDiscoveryServiceTest {
 
     private DicomDiscoveryService service(boolean advertise, boolean running, String ae, int port, int tlsPort) {
         Supplier<Boolean> on = () -> advertise;
-        DicomDiscoveryService s = new DicomDiscoveryService(on, () -> new ScpState(running, ae, port, tlsPort), () -> addrs, "9.9.9-test");
+        DicomDiscoveryService s = new DicomDiscoveryService(on, () -> new ScpState(running, ae, port, tlsPort), () -> addrs, MdnsEngine.forCurrentOs(), "9.9.9-test");
         created.add(s);
         return s;
     }

@@ -16,8 +16,6 @@ import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
 
-import javax.jmdns.JmDNS;
-import javax.jmdns.ServiceInfo;
 import java.io.IOException;
 import java.net.Inet4Address;
 import java.net.InetAddress;
@@ -38,8 +36,9 @@ import java.util.function.Supplier;
  * 患者情報・画像は一切流さない。設定の変更は SCP と同じく再起動後に反映。
  * <b>探索</b>は利用者が押したときだけ約 3 秒（常駐しない・保存しない）。
  *
- * <p>mDNS は認証が無く、同じ LAN の誰でも名前を名乗れる。見つけた相手の自動登録・自動送信はしない（呼び出し側の責務）。
- * 名前解決で起動が遅れた前例があるので、JmDNS には自局のホスト名の正引きをさせず、使うアドレスを自分で選んで渡す。
+ * <p>mDNS の実装は OS で分ける（{@link MdnsEngine}）。オフのときはエンジンを使わない（JmDNS の初期化も、
+ * {@code dns-sd} の起動もしない）。mDNS は認証が無く、同じ LAN の誰でも名前を名乗れる。
+ * 見つけた相手の自動登録・自動送信はしない（呼び出し側の責務）。
  */
 @Component
 @ConditionalOnProperty(prefix = "graphy.dicom.scp", name = "enabled", havingValue = "true")
@@ -48,13 +47,7 @@ public class DicomDiscoveryService {
     /** Settings(H2) に「ネットワーク上で自分の AE を知らせる」を保存するキー。frontend の registry と一致させること。 */
     public static final String ADVERTISE_KEY = "dicom.discovery.advertise";
 
-    /** DNS-SD のサービス型（IANA にサービス名 dicom が登録されている）。 */
-    public static final String TYPE = "_dicom._tcp.local.";
-
     private static final Logger log = LoggerFactory.getLogger(DicomDiscoveryService.class);
-    private static final int SCAN_MILLIS = 3000;
-    private static final int RESOLVE_MILLIS = 1500;
-    private static final String HOST_NAME = "graphy-next";
 
     /** 実際に待ち受けている SCP の状態。 */
     public record ScpState(boolean running, String aeTitle, int port, int tlsPort) {
@@ -72,10 +65,11 @@ public class DicomDiscoveryService {
     private final Supplier<Boolean> advertiseEnabled;
     private final Supplier<ScpState> scpState;
     private final Supplier<List<InetAddress>> addresses;
+    private final MdnsEngine engine;
     private final String appVersion;
 
-    private final List<JmDNS> advertisers = new ArrayList<>();
-    private ServiceInfo advertised;
+    private MdnsEngine.Advertisement advertisement;
+    private Status advertised;
     private String reason = "起動中";
 
     @org.springframework.beans.factory.annotation.Autowired
@@ -89,19 +83,20 @@ public class DicomDiscoveryService {
                     return new ScpState(running, localAe.aeTitle(), running ? scp.getServer().getPort() : localAe.scpPort(),
                             running ? scp.getServer().getTlsPort() : -1);
                 },
-                DicomDiscoveryService::pickAddresses, appVersion);
+                DicomDiscoveryService::pickAddresses, MdnsEngine.forCurrentOs(), appVersion);
     }
 
-    /** 試験用。広告の有無・SCP の状態・使うアドレスを差し込める。 */
+    /** 試験用。広告の有無・SCP の状態・使うアドレス・エンジンを差し込める。 */
     DicomDiscoveryService(Supplier<Boolean> advertiseEnabled, Supplier<ScpState> scpState,
-                          Supplier<List<InetAddress>> addresses, String appVersion) {
+                          Supplier<List<InetAddress>> addresses, MdnsEngine engine, String appVersion) {
         this.advertiseEnabled = advertiseEnabled;
         this.scpState = scpState;
         this.addresses = addresses;
+        this.engine = engine;
         this.appVersion = appVersion;
     }
 
-    /** 起動後に別スレッドで広告を始める。オフのとき・SCP が止まっているときは JmDNS を初期化しない。 */
+    /** 起動後に別スレッドで広告を始める。オフのとき・SCP が止まっているときはエンジンを使わない。 */
     @EventListener(ApplicationReadyEvent.class)
     public void onReady() {
         Thread t = new Thread(this::startAdvertising, "dicom-discovery-start");
@@ -111,7 +106,7 @@ public class DicomDiscoveryService {
 
     /** 広告を始める（試験からも呼ぶ）。条件を満たさなければ何もしない。 */
     synchronized void startAdvertising() {
-        if (!advertisers.isEmpty()) {
+        if (advertisement != null) {
             return;
         }
         if (!advertiseEnabled.get()) {
@@ -123,24 +118,16 @@ public class DicomDiscoveryService {
             reason = "DICOM 受信（SCP）が動いていません";
             return;
         }
-        // 有線・無線など複数の NIC があるとき、どれか 1 つに決めず、使えるすべての NIC で知らせる。
-        List<String> failures = new ArrayList<>();
-        for (InetAddress a : addresses.get()) {
-            try {
-                JmDNS j = JmDNS.create(a, HOST_NAME);
-                ServiceInfo info = ServiceInfo.create(TYPE, s.aeTitle(), s.port(), 0, 0, txtOf(s));
-                j.registerService(info);
-                advertisers.add(j);
-                if (advertised == null) {
-                    advertised = info;
-                }
-                log.info("mDNS 広告を開始: {} {} port={} tlsPort={} via {}", TYPE, s.aeTitle(), s.port(), s.tlsPort(), a);
-            } catch (IOException | RuntimeException e) {
-                failures.add(a + ": " + e.getMessage());
-                log.warn("mDNS 広告を開始できません（{}）: {}", a, e.toString());
-            }
+        Map<String, String> txt = txtOf(s);
+        try {
+            advertisement = engine.advertise(s.aeTitle(), s.port(), txt, addresses.get());
+            advertised = new Status(true, "広告中", s.aeTitle(), s.port(), s.tlsPort() > 0, Math.max(s.tlsPort(), 0), txt);
+            reason = "広告中";
+            log.info("mDNS 広告を開始: {} {} port={} tlsPort={}", MdnsEngine.TYPE, s.aeTitle(), s.port(), s.tlsPort());
+        } catch (IOException | RuntimeException e) {
+            reason = "広告を開始できません: " + e.getMessage();
+            log.warn("mDNS 広告を開始できません: {}", e.toString());
         }
-        reason = advertisers.isEmpty() ? "広告を開始できません: " + String.join(" / ", failures) : "広告中";
     }
 
     private Map<String, String> txtOf(ScpState s) {
@@ -156,118 +143,42 @@ public class DicomDiscoveryService {
         if (advertised == null) {
             return new Status(false, reason, null, 0, false, 0, Map.of());
         }
-        Map<String, String> txt = new LinkedHashMap<>();
-        for (String k : Collections.list(advertised.getPropertyNames())) {
-            txt.put(k, advertised.getPropertyString(k));
-        }
-        int tlsPort = parseInt(txt.get("tlsPort"));
-        return new Status(true, reason, advertised.getName(), advertised.getPort(), "1".equals(txt.get("tls")), tlsPort, txt);
+        return advertised;
     }
 
     /** 約 3 秒だけ探して、見つかった相手を返す。自局は除く。結果は保存しない。 */
     public List<Found> scan() throws IOException {
         ScpState self = scpState.get();
-        List<InetAddress> addrs = addresses.get();
-        // NIC ごとに並行して探す（逐次だと NIC の数だけ待つ）。同じ相手が複数の NIC で見えても 1 件にする。
-        List<List<Found>> parts = new ArrayList<>();
-        List<Thread> threads = new ArrayList<>();
-        List<IOException> errors = new ArrayList<>();
-        for (InetAddress a : addrs) {
-            Thread t = new Thread(() -> {
-                try {
-                    List<Found> r = scanOn(a, self);
-                    synchronized (parts) {
-                        parts.add(r);
-                    }
-                } catch (IOException e) {
-                    synchronized (errors) {
-                        errors.add(e);
-                    }
-                }
-            }, "dicom-discovery-scan");
-            t.setDaemon(true);
-            threads.add(t);
-            t.start();
-        }
-        for (Thread t : threads) {
-            try {
-                t.join();
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                break;
-            }
-        }
-        if (parts.isEmpty() && !errors.isEmpty()) {
-            throw errors.get(0);
-        }
         Map<String, Found> uniq = new LinkedHashMap<>();
-        for (List<Found> part : parts) {
-            for (Found f : part) {
-                uniq.putIfAbsent(f.aeTitle() + '\t' + f.host() + '\t' + f.port(), f);
+        for (MdnsEngine.Peer p : engine.browse(addresses.get())) {
+            boolean fromName = p.txtAet() == null || p.txtAet().isBlank();
+            String aet = fromName ? p.name() : p.txtAet().trim();
+            if (aet.equals(self.aeTitle()) && p.port() == self.port()) {
+                continue; // 自分自身
             }
+            int tlsPort = parseInt(p.txtTlsPort());
+            boolean tls = "1".equals(p.txtTls()) && tlsPort > 0;
+            // 同じ相手が複数の NIC で見えても 1 件にする（アドレスが違えば別の到達先として残す）
+            uniq.putIfAbsent(aet + '\t' + p.host() + '\t' + p.port(),
+                    new Found(p.name(), aet, fromName, p.host(), p.port(), tls, tls ? tlsPort : 0));
         }
         List<Found> out = new ArrayList<>(uniq.values());
         out.sort(Comparator.comparing(Found::name).thenComparing(Found::host));
         return out;
     }
 
-    private List<Found> scanOn(InetAddress addr, ScpState self) throws IOException {
-        JmDNS j = JmDNS.create(addr, HOST_NAME);
-        try {
-            List<Found> out = new ArrayList<>();
-            for (ServiceInfo listed : j.list(TYPE, SCAN_MILLIS)) {
-                ServiceInfo i = listed;
-                if (hostOf(i) == null || i.getPropertyString("aet") == null) {
-                    // 一覧の時点で、アドレスや TXT がまだ解決できていない相手は、名前を指定して解決し直す
-                    ServiceInfo resolved = j.getServiceInfo(TYPE, listed.getName(), RESOLVE_MILLIS);
-                    if (resolved != null) {
-                        i = resolved;
-                    }
-                }
-                String txtAet = i.getPropertyString("aet");
-                boolean fromName = txtAet == null || txtAet.isBlank();
-                String aet = fromName ? i.getName() : txtAet.trim();
-                if (aet.equals(self.aeTitle()) && i.getPort() == self.port()) {
-                    continue; // 自分自身
-                }
-                String host = hostOf(i);
-                if (host == null) {
-                    continue;
-                }
-                int tlsPort = parseInt(i.getPropertyString("tlsPort"));
-                boolean tls = "1".equals(i.getPropertyString("tls")) && tlsPort > 0;
-                out.add(new Found(i.getName(), aet, fromName, host, i.getPort(), tls, tls ? tlsPort : 0));
-            }
-            return out;
-        } finally {
-            closeQuietly(j);
-        }
-    }
-
     @jakarta.annotation.PreDestroy
     synchronized void shutdown() {
-        if (!advertisers.isEmpty()) {
-            for (JmDNS j : advertisers) {
-                try {
-                    j.unregisterAllServices();
-                } catch (RuntimeException ignore) {
-                    // 終了時のベストエフォート
-                }
-                closeQuietly(j);
+        if (advertisement != null) {
+            try {
+                advertisement.stop();
+            } catch (RuntimeException ignore) {
+                // 終了時のベストエフォート
             }
-            advertisers.clear();
+            advertisement = null;
             advertised = null;
             reason = "停止しました";
         }
-    }
-
-    private static String hostOf(ServiceInfo i) {
-        Inet4Address[] v4 = i.getInet4Addresses();
-        if (v4 != null && v4.length > 0) {
-            return v4[0].getHostAddress();
-        }
-        String[] any = i.getHostAddresses();
-        return any != null && any.length > 0 ? any[0] : null;
     }
 
     private static int parseInt(String v) {
@@ -275,14 +186,6 @@ public class DicomDiscoveryService {
             return v == null ? 0 : Integer.parseInt(v.trim());
         } catch (NumberFormatException e) {
             return 0;
-        }
-    }
-
-    private static void closeQuietly(JmDNS j) {
-        try {
-            j.close();
-        } catch (IOException | RuntimeException ignore) {
-            // ベストエフォート
         }
     }
 
