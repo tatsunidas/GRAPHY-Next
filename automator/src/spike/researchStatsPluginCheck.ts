@@ -9,6 +9,8 @@
  *   (2) 書き出した CSV が手計算と一致し、欠損を 0 にしていない
  *   (3) 再現情報の SHA-256 が、ファイルを別に計算した値と一致し、シードが記録される
  *   (4) 重複した患者 ID・0/1 でないイベントは、結合せずに理由を出して止まる（負例）
+ *   [10] 予後モデル（R5）: 最終の Cox・見かけの C・Schoenfeld の検定を statsmodels と突き合わせ、補正 C の再現
+ *   [11] P4 の LASSO: 最終モデルの特徴量を同じ λ の scikit-learn と突き合わせ、テスト集合で評価
  *
  * 画面の見た目はスクリーンショットで目視する（DOM の有無だけで判定しない）。
  */
@@ -105,6 +107,21 @@ function synthP4(n: number): { feat: string; clin: string } {
     const fa = norm() + 1.3 * g;
     feat.push([`Q${i}`, fa.toFixed(4), (norm() + 0.6 * g).toFixed(4), norm().toFixed(4), norm().toFixed(4), norm().toFixed(4), norm().toFixed(4), (fa * 1.02 + 0.01 * norm()).toFixed(4)].join(","));
     clin.push(`Q${i},${g === 1 ? "resp" : "no"},${40 + (i % 30)}`);
+  }
+  return { feat: feat.join("\r\n") + "\r\n", clin: clin.join("\r\n") + "\r\n" };
+}
+
+/** R5（予後モデル）用の合成データ。f_a が強く、f_b が中くらいに生存に効く。f_dup は f_a とほぼ同じ。時間に同点は無い。 */
+function synthR5(n: number): { feat: string; clin: string } {
+  let a = 777;
+  const rnd = () => { a = (Math.imul(a, 1664525) + 1013904223) >>> 0; return a / 4294967296; };
+  const norm = () => { let s = 0; for (let k = 0; k < 6; k++) s += rnd(); return s - 3; };
+  const feat = ["CaseLabel,f_a,f_b,f_n1,f_n2,f_n3,f_n4,f_dup"], clin = ["CaseLabel,time,event"];
+  for (let i = 0; i < n; i++) {
+    const fa = norm(), fb = norm();
+    const t = -Math.log(1 - rnd()) / Math.exp(1.0 * fa - 0.6 * fb) * 20, c = -Math.log(1 - rnd()) * 30;
+    feat.push([`S${i}`, fa.toFixed(4), fb.toFixed(4), norm().toFixed(4), norm().toFixed(4), norm().toFixed(4), norm().toFixed(4), (fa * 1.02 + 0.01 * norm()).toFixed(4)].join(","));
+    clin.push(`S${i},${(Math.min(t, c) + (i + 1) * 1e-6).toFixed(6)},${t <= c ? 1 : 0}`);
   }
   return { feat: feat.join("\r\n") + "\r\n", clin: clin.join("\r\n") + "\r\n" };
 }
@@ -569,6 +586,130 @@ async function main(): Promise<void> {
     await page.getByTestId("rs-run").click();
     await page.getByTestId("rs-errors").waitFor({ state: "visible", timeout: 20_000 });
     check(/書き換えられています/.test(await page.getByTestId("rs-errors").innerText()) && (await page.getByTestId("rs-p4-cv").count()) === 0, "手で書き換えた固定ファイルは、理由を出して止まる（負例）");
+    console.log("\n[10] 少数の特徴で予後モデル（R5）: 最終の Cox・見かけの C・Schoenfeld を statsmodels と突き合わせ、補正 C の再現と図");
+    const r5 = synthR5(110);
+    const r5Feat = write("r5_feat.csv", r5.feat), r5Clin = write("r5_clin.csv", r5.clin);
+    await page.getByTestId("rs-skill").selectOption("r5-model");
+    await page.getByTestId("rs-file-features").setInputFiles([r5Feat]);
+    await page.getByTestId("rs-file-clinical").setInputFiles(r5Clin);
+    await page.waitForFunction(() => !(document.querySelector('[data-testid="rs-run"]') as HTMLButtonElement | null)?.disabled, null, { timeout: 15_000 });
+    await page.getByTestId("rs-seed").fill("5");
+    await page.getByTestId("rs-seed").dispatchEvent("change");
+    check((await page.getByTestId("rs-r5-examples").innerText()).includes("既定値なし") && (await page.getByTestId("rs-r5-corr").inputValue()) === "" && (await page.getByTestId("rs-r5-nu").inputValue()) === "", "論文に無い値（相関のしきい値・ν）は空欄で始まり、使用例を示す");
+    check((await page.getByTestId("rs-r5-iter").inputValue()) === "100" && (await page.getByTestId("rs-r5-boot").inputValue()) === "2000" && (await page.getByTestId("rs-r5-max").inputValue()) === "4", "論文の値（100 反復・2000 回・5 未満 → 4）が既定で入る");
+    await page.getByTestId("rs-run").click();
+    await page.getByTestId("rs-errors").waitFor({ state: "visible", timeout: 20_000 });
+    check(/相関のしきい値/.test(await page.getByTestId("rs-errors").innerText()) && (await page.getByTestId("rs-r5").count()) === 0, "必須の値を入れずに実行すると、理由を出して止まる（負例）");
+    await setNum("rs-r5-corr", "0.9");
+    await setNum("rs-r5-nu", "0.1");
+    await setNum("rs-r5-boot", "200");
+    const r5Start = Date.now();
+    await page.getByTestId("rs-run").click();
+    await page.getByTestId("rs-r5").waitFor({ state: "visible", timeout: 600_000 });
+    console.log(`  （実行 ${((Date.now() - r5Start) / 1000).toFixed(1)} 秒）`);
+    check(/mboost/.test(await page.getByTestId("rs-warnings").innerText()), "ブースティングは mboost と同じ値とは言えない旨が出る");
+    const nr5 = await count();
+    await page.getByTestId("rs-save-r5-model").click();
+    const r5Model = (await downloaded("research-stats-r5-model.csv", nr5)).trim().split("\r\n").map((l) => l.split(","));
+    const r5Terms = r5Model.slice(1).filter((l) => l[0].startsWith("f_"));
+    const sel = r5Terms.map((l) => l[0]);
+    check(sel.includes("f_a") && sel.includes("f_b") && !sel.includes("f_dup") && sel.length <= 4, "効く特徴量（f_a・f_b）が選ばれ、f_dup は選ばれず、4 個以下", sel);
+    await page.getByTestId("rs-save-r5-steps").click();
+    const stepsCsv = await downloaded("research-stats-r5-steps.csv", nr5 + 1);
+    check(/correlation,f_dup,removed/.test(stepsCsv), "f_dup は相関で除いた、と選択の経過に出る", stepsCsv.split("\r\n").slice(0, 3));
+    const r5RefPath = path.join(OUT_DIR, "r5_reference.json");
+    execFileSync(refPy, ["-I", path.join(AUTOMATOR_ROOT, "src", "spike", "researchStatsR5Reference.py"), "r5", r5Feat, r5Clin, sel.join(","), r5RefPath]);
+    const r5ref = JSON.parse(fs.readFileSync(r5RefPath, "utf8")) as { hr: number[]; p: number[]; cApparent: number; globalP: number; perP: number[] };
+    const hrOk = r5Terms.every((l, q) => Math.abs(Number(l[2]) / r5ref.hr[q] - 1) < 1e-6 && Math.abs(Number(l[5]) - r5ref.p[q]) < 1e-8 + 1e-6 * r5ref.p[q]);
+    check(hrOk, "最終の Cox の HR（SD あたり）と p が statsmodels（Efron）と一致（相対 1e-6）", { app: r5Terms.map((l) => [l[0], l[2], l[5]]), ref: r5ref });
+    const cAppCsv = Number(r5Model.find((l) => l[0] === "c_index_apparent")![1]);
+    check(Math.abs(cAppCsv - r5ref.cApparent) < 1e-9, "見かけの C-index が別に書いた Harrell の C と一致", { app: cAppCsv, ref: r5ref.cApparent });
+    const cCorr = Number(r5Model.find((l) => l[0] === "c_index_corrected")![1]);
+    check(cCorr > 0.5 && cCorr < cAppCsv, "補正 C-index は 0.5 より大きく、見かけより小さい", { cCorr, cAppCsv });
+    await page.getByTestId("rs-save-record").click();
+    const rec5 = JSON.parse(await downloaded("research-stats-record.json", nr5 + 2) || "{}") as { steps: { id: string; summary: Record<string, unknown> }[] };
+    const md5 = rec5.steps?.find((x) => x.id === "r5-model")?.summary ?? {};
+    check(Math.abs(Number(md5.phGlobalP) - r5ref.globalP) < 1e-8, "比例ハザードの全体の p が、statsmodels の Schoenfeld 残差から求めた値と一致", { app: md5.phGlobalP, ref: r5ref.globalP });
+    const cText = await page.getByTestId("rs-r5-ccorr").innerText();
+    await page.getByTestId("rs-r5").screenshot({ path: path.join(OUT_DIR, "19-r5.png") });
+    await page.getByTestId("rs-r5-sch-svg-0").screenshot({ path: path.join(OUT_DIR, "20-r5-schoenfeld.png") });
+    await page.getByTestId("rs-r5-terms").screenshot({ path: path.join(OUT_DIR, "23-r5-terms.png") });
+    await page.getByTestId("rs-r5-c").screenshot({ path: path.join(OUT_DIR, "24-r5-c.png") });
+    await page.getByTestId("rs-r5-importance").screenshot({ path: path.join(OUT_DIR, "25-r5-importance.png") });
+    await page.getByTestId("rs-run").click();
+    await page.getByTestId("rs-r5").waitFor({ state: "detached", timeout: 20_000 }).catch(() => undefined);
+    await page.getByTestId("rs-r5").waitFor({ state: "visible", timeout: 600_000 });
+    check((await page.getByTestId("rs-r5-ccorr").innerText()) === cText, "同じシードでもう一度実行すると、補正 C-index も同じ", cText);
+    const nm5 = await count();
+    await page.getByTestId("rs-save-method").click();
+    const m5 = await downloaded("research-stats-method.txt", nm5);
+    check(m5.includes("相関の除外から後退選択までを毎回やり直す") && m5.includes("mboost と同じ値になるかは確かめていない") && m5.includes("Grambsch–Therneau"), "「方法」の文に、やり直しの範囲・mboost の注記・比例ハザードの確認が書かれる", m5.slice(0, 200));
+    // LASSO-Cox で絞る
+    await page.getByTestId("rs-r5-screen").selectOption("lasso");
+    await page.getByTestId("rs-run").click();
+    await page.getByTestId("rs-errors").waitFor({ state: "visible", timeout: 20_000 });
+    check(/λ の選び方/.test(await page.getByTestId("rs-errors").innerText()), "LASSO-Cox では λ の選び方を選ぶまで実行しない（負例）");
+    await page.getByTestId("rs-r5-rule").selectOption("1se");
+    await setNum("rs-r5-nlambda", "30");
+    await setNum("rs-r5-boot", "50");
+    const lStart = Date.now();
+    await page.getByTestId("rs-run").click();
+    await page.getByTestId("rs-r5-lasso").waitFor({ state: "visible", timeout: 600_000 });
+    console.log(`  （LASSO-Cox・ブートストラップ 50 回: ${((Date.now() - lStart) / 1000).toFixed(1)} 秒）`);
+    const selL = await page.getByTestId("rs-r5-term").allInnerTexts();
+    check(selL.some((x) => x.startsWith("f_a")), "LASSO-Cox で絞っても f_a が選ばれる", selL);
+    await page.getByTestId("rs-r5-lasso-svg").screenshot({ path: path.join(OUT_DIR, "21-r5-lasso.png") });
+
+    console.log("\n[11] P4 の LASSO: 最終モデルを scikit-learn と突き合わせ、テスト集合で評価");
+    await page.getByTestId("rs-skill").selectOption("p4-pipeline");
+    await page.getByTestId("rs-file-features").setInputFiles([p4Feat]);
+    await page.getByTestId("rs-file-clinical").setInputFiles(p4Clin);
+    await page.waitForFunction(() => !(document.querySelector('[data-testid="rs-run"]') as HTMLButtonElement | null)?.disabled, null, { timeout: 15_000 });
+    await page.getByTestId("rs-outcome").selectOption("outcome");
+    await page.getByTestId("rs-p4-kind").selectOption("binary");
+    await page.getByTestId("rs-positive").selectOption("resp");
+    await page.getByTestId("rs-p4-lock").selectOption("create");
+    await setNum("rs-p4-frac", "0.25");
+    await page.getByTestId("rs-p4-model").selectOption("lasso");
+    check((await page.getByTestId("rs-p4-k").count()) === 0 && (await page.getByTestId("rs-p4-nlambda").inputValue()) === "100", "LASSO では特徴量の数の候補の欄が消え、λ の点の数（100）が出る");
+    await page.getByTestId("rs-run").click();
+    await page.getByTestId("rs-errors").waitFor({ state: "visible", timeout: 20_000 });
+    check(/λ の選び方/.test(await page.getByTestId("rs-errors").innerText()), "λ の選び方を選ぶまで実行しない（負例）");
+    await page.getByTestId("rs-p4-lasso-rule").selectOption("min");
+    await setNum("rs-p4-nlambda", "30");
+    await page.getByTestId("rs-run").click();
+    await page.getByTestId("rs-p4-cv").waitFor({ state: "visible", timeout: 300_000 });
+    const lambdas = await page.getByTestId("rs-p4-fold-lambda").allInnerTexts();
+    const aucs = await page.getByTestId("rs-p4-fold-score").allInnerTexts();
+    check(lambdas.length === 10 && lambdas.every((x) => Number(x) > 0) && aucs.every((x) => Number(x) > 0.5), "分割ごとに λ と AUC が出る（10 分割、AUC は 0.5 より大きい）", { lambdas, aucs });
+    const nr = await count();
+    await page.getByTestId("rs-save-record").click();
+    const recL = JSON.parse(await downloaded("research-stats-record.json", nr) || "{}") as { steps: { id: string; summary: Record<string, unknown> }[] };
+    const fin = recL.steps?.find((x) => x.id === "p4-final")?.summary ?? {};
+    await page.getByTestId("rs-save-lock").click();
+    const lockL = await downloaded("research-stats-test-lock.json", nr + 1);
+    const lockLPath = write("lock_lasso.json", lockL);
+    const plRef = path.join(OUT_DIR, "p4_lasso_reference.json");
+    execFileSync(refPy, ["-I", path.join(AUTOMATOR_ROOT, "src", "spike", "researchStatsR5Reference.py"), "p4lasso", p4Feat, p4Clin, lockLPath, String(fin.lambda), "f_dup", plRef]);
+    const pl = JSON.parse(fs.readFileSync(plRef, "utf8")) as { dev: number; nonzero: string[] };
+    const appFeat = String(fin.features ?? "").split(" + ").filter(Boolean).sort();
+    check(JSON.stringify(appFeat) === JSON.stringify([...pl.nonzero].sort()) && appFeat.length > 0, "最終モデルの特徴量（係数が 0 でないもの）が、同じ λ の scikit-learn と一致", { app: appFeat, ref: pl.nonzero, lambda: fin.lambda });
+    check(/λ = /.test(await page.getByTestId("rs-p4-final-lambda").innerText()), "最終モデルの λ が画面に出る");
+    await page.getByTestId("rs-p4").screenshot({ path: path.join(OUT_DIR, "22-p4-lasso.png") });
+    await page.getByTestId("rs-p4-folds").screenshot({ path: path.join(OUT_DIR, "26-p4-lasso-folds.png") });
+    await page.getByTestId("rs-p4-lock").selectOption("use");
+    await page.getByTestId("rs-file-lock").setInputFiles(lockLPath);
+    await page.getByTestId("rs-lock-loaded").waitFor({ state: "visible", timeout: 15_000 });
+    await page.getByTestId("rs-run").click();
+    await page.getByTestId("rs-p4-evaluate").waitFor({ state: "visible", timeout: 300_000 });
+    await page.getByTestId("rs-p4-evaluate").click();
+    await page.getByTestId("rs-p4-test").waitFor({ state: "visible", timeout: 300_000 });
+    const tvL = (await page.getByTestId("rs-p4-test-value").innerText()).match(/AUC ([0-9.]+)/);
+    check(!!tvL && Number(tvL[1]) > 0.6 && (await page.getByTestId("rs-p4-test-count").innerText()).includes("1 回目"), "LASSO の最終モデルをテスト集合で 1 回評価できる", tvL?.[1]);
+    const nmL = await count();
+    await page.getByTestId("rs-save-method").click();
+    const mL = await downloaded("research-stats-method.txt", nmL);
+    check(mL.includes("L1 罰則つきロジスティック回帰") && mL.includes("偏差で最小のものを選んだ"), "「方法」の文に LASSO と λ の選び方が書かれる", mL.slice(0, 160));
   } finally {
     await driver.stop();
     fs.rmSync(path.join(PLUGINS_DIR, PLUGIN_ID), { recursive: true, force: true });
