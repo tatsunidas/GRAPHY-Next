@@ -718,6 +718,25 @@ export const SETTINGS_REGISTRY: CategoryDef[] = [
           },
         ],
       },
+      {
+        titleKey: "settings.sec.externalOpen",
+        fields: [
+          {
+            key: "external.openEnabled",
+            labelKey: "settings.field.externalOpenEnabled",
+            type: "toggle",
+            default: true,
+            helpKey: "settings.field.externalOpenEnabled.help",
+          },
+          {
+            key: "external.openConfirm",
+            labelKey: "settings.field.externalOpenConfirm",
+            type: "toggle",
+            default: false,
+            helpKey: "settings.field.externalOpenConfirm.help",
+          },
+        ],
+      },
     ],
   },
   TEXTURE_CATEGORY,

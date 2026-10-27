@@ -24,6 +24,14 @@ contextBridge.exposeInMainWorld("graphyDesktop", {
   // 単一の出力先フォルダを選ぶ（SeriesExtractor のコピー先など）。
   pickDirectory: () => ipcRenderer.invoke("graphy:pick-directory"),
   openViewer: (screen) => ipcRenderer.invoke("graphy:open-viewer", screen),
+  // 外部（RIS など）から「この検査を開く」を受ける。main が解釈・検証した要求だけが来る。購読を外す関数を返す。
+  onExternalOpen: (cb) => {
+    const h = (_e, parsed) => cb(parsed);
+    ipcRenderer.on("graphy:external-open", h);
+    return () => ipcRenderer.removeListener("graphy:external-open", h);
+  },
+  // 受け取れる状態になったと main に知らせる（これまでに溜まった要求が届く）。
+  externalOpenReady: () => ipcRenderer.send("graphy:external-open-ready"),
   // 接続中の全ディスプレイ情報を取得（モニター診断パネル用）。
   listDisplays: () => ipcRenderer.invoke("graphy:list-displays"),
   // 指定モニターに目視テストパターンをフルスクリーン表示する。
