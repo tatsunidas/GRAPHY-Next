@@ -134,6 +134,7 @@ import {
   registerPluginVolumes,
 } from "../plugins/pluginVolumeApi";
 import { resamplePluginVolume } from "../plugins/pluginResample";
+import { readXaSeriesFrame, readXaSeriesInfo } from "../plugins/pluginXaSeriesApi";
 import { openCurvedMprFromPlugin } from "../plugins/pluginCurvedMprApi";
 import {
   commitRtDoseExport,
@@ -1684,6 +1685,9 @@ function TileGrid({
       // （本体の regVolumeLoader / regWorkerClient をそのまま使う。計算をここに書かない）。
       loadVolume: (ref, onProgress) => loadPluginVolume(mode, studyUidOfSeries, ref, onProgress),
       estimateVolume: (ref) => estimatePluginVolume(mode, studyUidOfSeries, ref),
+      // H42: 開いていない XA シリーズの幾何と 1 フレーム（loadVolume は IPP の無い XA シネに使えない）。
+      readXaSeries: (ref) => readXaSeriesInfo(mode, studyUidOfSeries, ref),
+      readXaSeriesFrame: (ref, frameIndex) => readXaSeriesFrame(mode, studyUidOfSeries, ref, frameIndex),
       registerVolumes: (req, onProgress) =>
         registerPluginVolumes(mode, studyUidOfSeries, req, onProgress),
       resampleVolume: (source, transform, target) => resamplePluginVolume(source, transform, target),
@@ -1741,6 +1745,13 @@ function TileGrid({
         if (!id) return null;
         const c = queryViewerCommand(id, (cmd) => cmd.getXaCine());
         return c ? { tileId: id, ...c } : null;
+      },
+      // H41: 投影幾何（撮影角度・SID・SOD）。2 方向の対応付けに要る。読めない理由も渡す。
+      getXaGeometry: (tileId) => {
+        const id = tileId ?? resolveTargets()[0];
+        if (!id) return null;
+        const g = queryViewerCommand(id, (cmd) => cmd.getXaGeometry());
+        return g ? { tileId: id, ...g } : null;
       },
       // H5: ROI の読み出し。tileId 省略時は**対象タイル全部**を読む（H1〜H4 は「先頭タイル」だが、
       // 時系列の計測ではベースラインと追跡を並べて開くのが普通なので、まとめて読める方が素直）。

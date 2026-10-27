@@ -8,7 +8,7 @@ import { useWlPresets } from "./wlPresetStore";
 import { TOOL_IDS } from "../viewer/toolIds";
 import { type SortMode } from "../viewer/seriesSort";
 import type { SlabProjection } from "../viewer/slabPresets";
-import { type ViewerDerivedSeriesRequest, type ViewerDerivedSeriesResult, type ViewerOverlay, type ViewerPixelDataOptions, type ViewerSrRequest, type ViewerSrResult, type ViewerTarget, type ViewerAngioReportRequest, type ViewerPresentationStateRequest, type ViewerTilePixelData, type ViewerTileSpatialCalibration, type ViewerTileXaState, type ViewerTileXaCine, type ViewerTileRoi, type ViewerTileViewState, ViewerLabelVolume, ViewerLabelVolumeResult } from "../viewer/viewerCommands";
+import { type ViewerDerivedSeriesRequest, type ViewerDerivedSeriesResult, type ViewerOverlay, type ViewerPixelDataOptions, type ViewerSrRequest, type ViewerSrResult, type ViewerTarget, type ViewerAngioReportRequest, type ViewerPresentationStateRequest, type ViewerTilePixelData, type ViewerTileSpatialCalibration, type ViewerTileXaState, type ViewerTileXaCine, type ViewerTileXaGeometry, type ViewerTileRoi, type ViewerTileViewState, ViewerLabelVolume, ViewerLabelVolumeResult } from "../viewer/viewerCommands";
 import type { PluginAnalysisInput } from "../report/analysisResults";
 import type {
   PluginRegistrationRequest,
@@ -63,6 +63,8 @@ export interface ViewerActions {
   /** 対象タイルの XA 表示状態（DSA・フレーム軸）（H36）。XA / XRF でなければ null。 */
   getXaState(tileId?: string): ViewerTileXaState | null;
   getXaCine(tileId?: string): ViewerTileXaCine | null;
+  /** 対象タイルの XA 投影幾何（H41）。XA / XRF でなければ null。 */
+  getXaGeometry(tileId?: string): ViewerTileXaGeometry | null;
   /**
    * 対象タイルが表示しているスタックの imageId を z 昇順で返す（H31 の幾何委譲先）。
    * タイルが無ければ null。**空配列と null を混ぜない**（「無い」と「0 枚」は別）。
@@ -89,6 +91,13 @@ export interface ViewerActions {
   ): Promise<PluginVolume | null>;
   /** 読み込み前の大きさの見積り（H10）。 */
   estimateVolume(ref: PluginSeriesRef): Promise<PluginVolumeEstimate | null>;
+  /** 開いていない XA シリーズの幾何・フレーム数（H42）。 */
+  readXaSeries(ref: PluginSeriesRef): Promise<import("../plugins/pluginXaSeriesApi").PluginXaSeriesInfo | null>;
+  /** 開いていない XA シリーズの 1 フレーム（H42）。 */
+  readXaSeriesFrame(
+    ref: PluginSeriesRef,
+    frameIndex: number,
+  ): Promise<import("../plugins/pluginXaSeriesApi").PluginXaSeriesFrame | null>;
   /** **位置合わせを実行する**（H21）。本体の検証済み実装をそのまま使う。 */
   registerVolumes(
     req: PluginRegistrationRequest,
