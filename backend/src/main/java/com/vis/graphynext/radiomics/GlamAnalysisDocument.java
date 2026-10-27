@@ -101,6 +101,16 @@ public class GlamAnalysisDocument {
         return maskSeriesUid;
     }
 
+    /** 解析対象・マスクのシリーズが統合されたとき、新しいシリーズへ付け替える。null は「変えない」。 */
+    public void relinkSeries(String sourceSeriesUid, String maskSeriesUid) {
+        if (sourceSeriesUid != null) {
+            this.sourceSeriesUid = sourceSeriesUid;
+        }
+        if (maskSeriesUid != null) {
+            this.maskSeriesUid = maskSeriesUid;
+        }
+    }
+
     public String getLabel() {
         return label;
     }

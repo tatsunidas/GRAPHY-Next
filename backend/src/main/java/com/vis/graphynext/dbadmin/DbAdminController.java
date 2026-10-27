@@ -103,7 +103,7 @@ public class DbAdminController {
         DbAdminService.MergeResult r = service.mergeSeries(req.studyUid(), req.sourceSeriesUids(),
                 tgt.seriesInstanceUid(), tgt.seriesNumber(), tgt.seriesDescription());
         return Map.of("moved", r.moved(), "failed", r.failed(), "seriesInstanceUid", r.seriesInstanceUid(),
-                "masksMoved", r.masksMoved());
+                "masksMoved", r.masksMoved(), "refs", r.refs());
     }
 
     /** シリーズ分割（同一スタディ内 1→N・手動群・InstanceNumber 保持）。 */
@@ -119,7 +119,7 @@ public class DbAdminController {
                 .toList();
         DbAdminService.SplitResult r = service.splitSeries(req.studyUid(), req.seriesUid(), groups);
         return Map.of("groupsCreated", r.groupsCreated(), "moved", r.moved(),
-                "failed", r.failed(), "newSeriesUids", r.newSeriesUids(), "masksMoved", r.masksMoved());
+                "failed", r.failed(), "newSeriesUids", r.newSeriesUids(), "masksMoved", r.masksMoved(), "refs", r.refs());
     }
 
     /** 統計（時系列スタディ数・モダリティ別 など）。 */
