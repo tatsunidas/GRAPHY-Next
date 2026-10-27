@@ -131,6 +131,11 @@ export interface XaVesselModel {
   segments: XaVesselSegment[];
   calibration: XaVesselCalibration;
   provenance: XaVesselProvenance;
+  /**
+   * このモデルを登録したプラグイン（H73）。本体の 3D QCA が作ったモデルには無い。
+   * 🔴 プラグインに名乗らせない: host がマニフェストから入れる。
+   */
+  producer?: { pluginId: string; pluginName: string; version: string };
   at: number;
 }
 

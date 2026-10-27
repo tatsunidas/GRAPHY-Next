@@ -13,8 +13,9 @@ import {
   type RemoteAe,
 } from "../api";
 import { useI18n } from "../i18n/i18n";
-import { ageAt, fmtDate, storedStatusOf, type StoredStatus } from "./qrUtil";
+import { ageAt, storedStatusOf, type StoredStatus } from "./qrUtil";
 import { useTableSort, applySort, sortIndicator, type SortState, type Accessor } from "../tableSort";
+import { DicomDate } from "../i18n/dateFormat";
 
 type JobView = { received: number; expected: number; stored: number; phase: string; done: boolean; success: boolean; message?: string };
 
@@ -212,10 +213,10 @@ export function QrTable({
                   </Td>
                   <Td><StoredBadge status={st} t={t} /></Td>
                   <Td><RetrieveCell job={jobs.get(sk)} onClick={() => void retrieve(s, null)} onOpen={() => onOpenInViewer(s)} t={t} /></Td>
-                  <Td>{fmtDate(s.studyDate)}</Td>
+                  <Td><DicomDate value={s.studyDate} /></Td>
                   <Td>{s.patientId || ""}</Td>
                   <Td>{s.patientName || ""}</Td>
-                  <Td>{fmtDate(s.patientBirthDate)}</Td>
+                  <Td><DicomDate value={s.patientBirthDate} /></Td>
                   <Td>{s.patientSex || ""}</Td>
                   <Td>{age != null ? age : ""}</Td>
                   <Td>{s.modality || ""}</Td>

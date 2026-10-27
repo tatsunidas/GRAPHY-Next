@@ -85,7 +85,7 @@ export interface StudyFilters {
 
 export const fetchStatus = () => httpGet<AppStatus>("/api/status");
 
-export const fetchStudies = (filters?: StudyFilters) => {
+const fetchStudiesOnce = (filters?: StudyFilters) => {
   const params = new URLSearchParams();
   if (filters) {
     for (const [k, v] of Object.entries(filters)) {
@@ -94,6 +94,22 @@ export const fetchStudies = (filters?: StudyFilters) => {
   }
   const qs = params.toString();
   return httpGet<Study[]>(`/api/studies${qs ? `?${qs}` : ""}`);
+};
+
+/**
+ * `studyInstanceUid`（カンマ区切り）が URL に収まらない長さなら、`urlChunk.ts` で分けて取り、
+ * 重複を除いて結合する（アルバムや取り込み直後の一覧）。**1 本に収まるときは今までと同じ 1 リクエスト**。
+ * 1 つでも失敗したら全体を失敗にする（一部だけ出して「残りは無い」と読ませない）。
+ */
+export const fetchStudies = async (filters?: StudyFilters): Promise<Study[]> => {
+  const uids = filters?.studyInstanceUid?.split(",").filter((u) => u);
+  const chunks = uids ? chunkForQuery(uids) : [];
+  if (!filters || chunks.length <= 1) return fetchStudiesOnce(filters);
+  const parts = await Promise.all(
+    chunks.map((c) => fetchStudiesOnce({ ...filters, studyInstanceUid: c.join(",") })),
+  );
+  const seen = new Set<string>();
+  return parts.flat().filter((s) => !seen.has(s.studyInstanceUid) && !!seen.add(s.studyInstanceUid));
 };
 
 export const fetchSeries = (studyUid: string) =>
@@ -1762,7 +1778,15 @@ export interface SendRequest {
   /** 自局 AE（空なら backend の既定 localAeTitle）。 */
   callingAet?: string;
   tls?: boolean;
+  /** 送るときの転送構文。省略は保存どおり（STORED）。指定した構文を相手が受けないと、その画像は失敗として数える。 */
+  transferSyntax?: SendTransferSyntax;
+  /** true なら、選択スタディの確定済みレポートのキー画像だけを送る（シリーズの選択は問わない）。 */
+  keyImagesOnly?: boolean;
+  /** keyImagesOnly のとき、確定時に作られたキーオブジェクト（KO）も送るか。省略は送る。 */
+  includeKeyObject?: boolean;
 }
+
+export type SendTransferSyntax = "STORED" | "EXPLICIT_LE" | "IMPLICIT_LE";
 
 /** 送信結果サマリ。 */
 export interface SendResult {
@@ -1781,7 +1805,14 @@ export const sendDicom = (req: SendRequest) =>
     calledAet: req.calledAet,
     callingAet: req.callingAet ?? "",
     tls: req.tls ?? false,
+    transferSyntax: req.transferSyntax ?? "STORED",
+    keyImagesOnly: req.keyImagesOnly ?? false,
+    includeKeyObject: req.includeKeyObject ?? true,
   });
+
+/** 「キー画像のみ」で送れるキー画像・KO の数（確定済みレポートが参照するもの）。 */
+export const fetchSendKeyImages = (studyUid: string) =>
+  httpGet<{ keyImages: number; keyObjects: number }>(`/api/dicom/send/key-images?studyUid=${encodeURIComponent(studyUid)}`);
 
 // ── Query/Retrieve（QR ウィンドウ） ────────────────────────────
 

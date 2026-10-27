@@ -485,6 +485,8 @@ export interface VesselModel {
   segments: VesselSegment[];
   calibration: VesselCalibration;
   provenance: VesselProvenance;
+  /** このモデルを登録したプラグイン（`registerVesselModel`）。本体の 3D QCA が作ったモデルには無い。 */
+  producer?: { pluginId: string; pluginName: string; version: string };
   at: number;
 }
 
@@ -522,6 +524,15 @@ export interface VesselAnalysisInput {
   /** 提供元の免責文。**そのまま画面に出る**（本体は要約も書き換えもしない）。 */
   disclaimer?: string;
 }
+
+/** `host.registerVesselModel()` に渡すモデル。`runId` / `at` / 出自は host が決めるので含まない。 */
+export type VesselModelInput = Omit<VesselModel, "runId" | "at" | "producer"> & {
+  /** 同じ鍵で登録し直すと置き換わる。1〜200 文字。 */
+  runKey: string;
+};
+
+/** `host.registerVesselModel()` の戻り。 */
+export type RegisterVesselModelResult = { ok: true; runId: string } | { ok: false; error: string };
 
 /** `host.putVesselAnalysis()` の戻り。 */
 export interface VesselAnalysisResult {
@@ -589,6 +600,72 @@ export interface XaCine {
   frameStartTimesMs: number[];
   /** フレーム間隔が一様か。false なら「フレーム差 × 1/fps」は実時間と合わない。 */
   uniform: boolean;
+}
+
+/**
+ * XA の**投影幾何**。`host.getXaGeometry()` の戻り。**H41**。
+ *
+ * <p>2 方向のアンギオを対応付ける・3D に再構成するのに要る。座標系は患者 LPS（mm）。
+ * 角度は DICOM の `PositionerPrimaryAngle (0018,1510)` / `PositionerSecondaryAngle (0018,1511)` のまま（度）。
+ *
+ * <p>🔴 **読めないときは `geometry` が null で、理由が `missing` に入る。** 0 や既定値で埋めない。
+ * `imagerSpacingMm` は**検出器面**の値で、`SpatialCalibration` の校正済み mm/px とは別物
+ * （3D 再構成は校正値を使わない）。
+ *
+ * <p>⚠️ 主点は**画像中心と仮定**している（`FieldOfView*` による切り出しや装置側の回転・反転があるとずれる）。
+ * dataSet が**プリウォーム前**なら `missing` は `"noDataSet"`。シネを一度開けば温まる。
+ */
+export interface XaGeometry {
+  tileId: string;
+  imageId: string;
+  /** 読んだフレーム（0 origin）。 */
+  frameIndex: number;
+  geometry: XaViewGeometry | null;
+  missing: "noDataSet" | "noAngles" | "noDistances" | "noImagerSpacing" | "noImageSize" | null;
+  /** 角度がフレームごとに変わる収集（回転 DSA など）か。 */
+  perFrameAngles: boolean;
+}
+
+/** `host.readXaSeries()` の戻り。**H42**。 */
+export interface XaSeriesInfo {
+  seriesUid: string;
+  studyUid: string;
+  sopInstanceUid: string;
+  /** 1 を超えるとき、ここで扱うのは先頭インスタンスだけ。 */
+  instanceCount: number;
+  /** 先頭インスタンスのフレーム数。タグから読めなければ null（1 で埋めない）。 */
+  frameCount: number | null;
+  rows: number | null;
+  cols: number | null;
+  geometry: XaViewGeometry | null;
+  missing: "noDataSet" | "noAngles" | "noDistances" | "noImagerSpacing" | "noImageSize" | null;
+  perFrameAngles: boolean;
+}
+
+/** `host.readXaSeriesFrame()` の戻り。**H42**。 */
+export interface XaSeriesFrame {
+  seriesUid: string;
+  frameIndex: number;
+  rows: number;
+  cols: number;
+  /** 校正済みの画素（行優先）。表示 W/L は掛かっていない。 */
+  data: Float32Array;
+  unit: string;
+}
+
+export interface XaViewGeometry {
+  /** 一次角 [度]（LAO/RAO）。 */
+  primaryAngleDeg: number;
+  /** 二次角 [度]（CRA/CAU）。 */
+  secondaryAngleDeg: number;
+  /** 線源〜検出器 [mm]。 */
+  sidMm: number;
+  /** 線源〜等中心 [mm]。 */
+  sodMm: number;
+  /** 検出器面のピクセル間隔 [行, 列] [mm]。 */
+  imagerSpacingMm: [number, number];
+  /** 主点 [x, y] [px]。 */
+  principalPoint: [number, number];
 }
 
 /** `getPixelData` の任意指定。**0.1.9 以降**。 */
@@ -1966,6 +2043,21 @@ export interface Viewer2DPluginHost extends PluginHostBase {
    */
   getXaCine: (tileId?: string) => XaCine | null;
   /**
+   * 対象タイルの **XA 投影幾何**（撮影角度・SID・SOD・検出器のピクセル間隔・主点）（**H41**）。
+   * XA / XRF でなければ null。読めないときは `geometry` が null で理由が `missing` に入る。
+   */
+  getXaGeometry: (tileId?: string) => XaGeometry | null;
+  /**
+   * **開いていない XA シリーズ**の幾何・フレーム数・画像サイズ（**H42**）。2 方向（A・B）を 1 つのプラグイン窓で
+   * 同時に扱うための口。読めない部分は null（理由は `missing`）。対象は**先頭インスタンス**。
+   */
+  readXaSeries: (ref: PluginSeriesRef) => Promise<XaSeriesInfo | null>;
+  /**
+   * **開いていない XA シリーズの 1 フレーム**の校正済み画素（**H42**）。`frameIndex` は 0 起点、範囲外は null。
+   * `loadVolume` は IPP の無い XA シネに使えないので、こちらを使う。
+   */
+  readXaSeriesFrame: (ref: PluginSeriesRef, frameIndex: number) => Promise<XaSeriesFrame | null>;
+  /**
    * **再構成済み 3D 血管モデルの一覧**（**H11**）。新しい順。まだ無ければ空配列。
    * 点列を含まない要約だけを返す（本体は `getVesselModel()` で取る）。
    */
@@ -1992,6 +2084,13 @@ export interface Viewer2DPluginHost extends PluginHostBase {
    * 退化した `range`）。捨てて残りを採用すると**ずれたまま色が乗り**、誰も気付けない。
    */
   putVesselAnalysis: (runId: string, result: VesselAnalysisInput) => VesselAnalysisResult;
+  /**
+   * **プラグインが作った 3D 血管モデルを登録する**（**H73**）。本体の 3D 表示と `listVesselModels` / `getVesselModel`
+   * が読む登録簿へ入る。同じ `runKey` は置き換える。セッション限り。`runId` / 登録時刻 / 出自は host が入れる。
+   * 🔴 壊れた入力は理由つきで拒否する。測れなかった点の径は `null`（0 で埋めない）。未校正
+   * （`calibration.diameterCalibrated: false`）なら**全点 null**でなければ拒否する。
+   */
+  registerVesselModel: (model: VesselModelInput) => RegisterVesselModelResult;
   /**
    * 処理結果（値マップ）を**表示中スライスへ重ねて見せる**。`tileId` 省略時は対象の先頭タイル。
    * rows/cols が現在スライスと不一致なら false。**0.1.9 以降**。
@@ -2115,16 +2214,30 @@ export interface Viewer2DPluginHost extends PluginHostBase {
    * 保存は本体が予約する。`removeCreatedRoi` で、**このプラグインが作った ROI だけ**を消せる
    * （本体や他プラグインの ROI は消せない）。
    *
+   * <p>**多角形・自由曲線も作れる**（`tool: "PolygonROI" | "FreehandROI"`）。頂点を `verticesLps`（LPS mm）か `verticesPx`（表示中スライスの画素座標）の
+   * **どちらか一方**で順に渡す（閉じるので始点を繰り返さない。多角形 3〜64 点、自由曲線 3〜256 点）。全頂点が表示中のスライスの面内であること。
+   * 自己交差・面積ゼロの形は `self-intersecting` / `degenerate` で拒否する。`radiiMm` / `centerLps` / `centerPx` は使わない。
+   *
    * <p>AI ツール（`effect: "write"`）の中から呼ぶ場合、その実行の前に本体が利用者の確認を出す。
    * 失敗の理由: `bad-request`（ツール・数値が不正）／`off-slice`／`too-large`（半径が画像の大きさを超える）／
-   * `no-geometry`／`no-image`／`thick-slab`（ThickSlab 表示中は作れない）／`failed`。
+   * `self-intersecting`／`degenerate`（多角形・自由曲線のみ）／`no-geometry`／`no-image`／`thick-slab`（ThickSlab 表示中は作れない）／`failed`。
    */
   createRoi: (
     tileId: string | undefined,
-    req: { tool: "EllipticalROI" | "RectangleROI"; centerLps?: [number, number, number]; centerPx?: [number, number]; radiiMm: [number, number]; label?: string },
-  ) => { ok: true; roiUid: string; centerLps: [number, number, number] } | { ok: false; reason: "bad-request" | "off-slice" | "no-geometry" | "too-large" | "no-image" | "thick-slab" | "failed" };
+    req: {
+      tool: "EllipticalROI" | "RectangleROI" | "PolygonROI" | "FreehandROI";
+      centerLps?: [number, number, number];
+      centerPx?: [number, number];
+      radiiMm?: [number, number];
+      verticesLps?: [number, number, number][];
+      verticesPx?: [number, number][];
+      label?: string;
+    },
+  ) => { ok: true; roiUid: string; centerLps: [number, number, number] } | { ok: false; reason: "bad-request" | "off-slice" | "no-geometry" | "too-large" | "no-image" | "thick-slab" | "self-intersecting" | "degenerate" | "failed" };
   /** `createRoi` で**このプラグインが作った** ROI だけを消す（ロック中・他の ROI は消えず false）。（次の版以降） */
   removeCreatedRoi: (roiUid: string) => boolean;
+  /** `showLabelVolume` で**このプラグインが出した** Mask（返った `segmentationId`）だけを消す（本体・他プラグイン・利用者の Mask、ロック中は消えず false）。 */
+  removeLabelVolume: (segmentationId: string) => boolean;
   /**
    * ROI の追加・変更・削除を購読する。返り値を呼ぶと解除（ダイアログを閉じるときは必ず解除する）。
    * **何が変わったかは渡さない**ので、通知を受けたら `getRois()` を読み直すこと。
@@ -2497,6 +2610,11 @@ export interface PluginModule {
    * AI アシスタントから呼ばれるツールの実装。`plugin.json` の `permissions` に `"ai-tools"`、`aiTools` に同名の宣言が要る
    * （無いものは呼ばれない）。宣言の `effect` は `"read"`・`"display"`・`"write"`。`"write"`（データを変える）は**実行のたびに本体が
    * 利用者の確認を出し**、拒否されると呼ばれない。2D 窓が呼び出し時にだけ読み込み、`activate` は呼ばない。
+   * 🔴 **宣言を超える `host` の呼び出しは止まる**: `"read"` は読み取りと計算、`"display"` はそれに表示・遷移まで。保存・ROI の作成や変更・
+   * 外部への送信など書き込み系のメンバに触れた時点で、ツールは `effect-violation` で失敗する（例外を握りつぶしても失敗になる）。
+   * 書き込みをするツールは `"write"` と宣言すること。
+   * 待ち時間は既定 30 秒。外部計算機のように時間のかかるツールは、宣言に整数 `timeoutSec`（5〜900）を書くと、その秒数まで待つ
+   * （範囲外はそのツールが無効になる。利用者の確認の経路は変わらない）。
    * 戻り値は JSON にできる値（深さ 3・4 KB まで）。AI には信用できないデータとして渡る。
    */
   aiTools?: Record<string, (args: Record<string, unknown>, host: PluginHost) => unknown | Promise<unknown>>;

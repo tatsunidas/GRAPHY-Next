@@ -18,6 +18,7 @@ import {
   getVesselModel,
   listVesselModels,
   putVesselAnalysis,
+  registerPluginVesselModel,
 } from "../plugins/pluginVesselApi";
 import { openPluginWindow } from "../plugins/pluginWindowApi";
 import { mountValueViewport, mountVolumeView } from "../plugins/pluginViewportApi";
@@ -123,6 +124,7 @@ export function Viewer2DMenuBar({
     getSpatialCalibration: (tileId) => actions.getSpatialCalibration(tileId),
     getXaState: (tileId) => actions.getXaState(tileId),
     getXaCine: (tileId) => actions.getXaCine(tileId),
+    getXaGeometry: (tileId) => actions.getXaGeometry(tileId),
     // H11 / H12: 3D 血管モデルの受け渡しと、解析値の書き戻し（A7）。
     // タイルに紐付かない（再構成はセッション単位の登録簿）ので actions を経由しない。
     // 🔴 出自は host が入れる。**本体は FFR を計算しない**（fw/angio-design.md §11.1）。
@@ -130,9 +132,12 @@ export function Viewer2DMenuBar({
     getVesselModel: (runId) => getVesselModel(runId),
     putVesselAnalysis: (runId, result) =>
       putVesselAnalysis(runId, result, { id: m.id, name: m.name, version: m.version }),
+    // H73: プラグインが作った 3D 血管モデルを登録簿へ入れる（本体の 3D 表示・QFR の色マップが読む）。
+    registerVesselModel: (model) =>
+      registerPluginVesselModel(model, { id: m.id, name: m.name, version: m.version }),
     // 出所ラベルはプラグイン任せにしない: host が必ずマニフェストの表示名を入れる。
     showOverlay: (tileId, overlay) => actions.showOverlay(tileId, { ...overlay, label: m.name }),
-    showLabelVolume: (tileId, req) => actions.showLabelVolume(tileId, req, { name: m.name }),
+    showLabelVolume: (tileId, req) => actions.showLabelVolume(tileId, req, { id: m.id, name: m.name }),
     clearOverlay: (tileId) => actions.clearOverlay(tileId),
     // 出所（id/name/version）は host がマニフェストから入れる。プラグインに名乗らせない。
     saveDerivedSeries: (tileId, req) =>
@@ -162,6 +167,8 @@ export function Viewer2DMenuBar({
     // （位置合わせの答えが 2 つになるのを避ける。fw/registration-design.md）。
     loadVolume: (ref, onProgress) => actions.loadVolume(ref, onProgress),
     estimateVolume: (ref) => actions.estimateVolume(ref),
+    readXaSeries: (ref) => actions.readXaSeries(ref),
+    readXaSeriesFrame: (ref, frameIndex) => actions.readXaSeriesFrame(ref, frameIndex),
     registerVolumes: (req, onProgress) => actions.registerVolumes(req, onProgress),
     resampleVolume: (source, transform, target) => actions.resampleVolume(source, transform, target),
     goTo: (tileId, dims) => actions.goTo(tileId, dims),
@@ -171,6 +178,7 @@ export function Viewer2DMenuBar({
     // 作る ROI には「どのプラグインが作ったか」の印を**本体が**付ける（pluginId はここで入れる。名乗らせない）。
     createRoi: (tileId, req) => actions.createRoi(tileId, { pluginId: m.id, pluginName: m.name }, req),
     removeCreatedRoi: (roiUid) => actions.removeCreatedRoi(roiUid, m.id),
+    removeLabelVolume: (segmentationId) => actions.removeLabelVolume(segmentationId, m.id),
     subscribeRois: (listener) => actions.subscribeRois(listener),
     // H8: プラグイン専用の保存領域（患者単位・backend 保管）。**pluginId と patientKey は
     // host が入れる**。患者は対象タイルから引くので、プラグインが別患者の領域を勝手に
@@ -468,6 +476,7 @@ export function Viewer2DMenuBar({
         { label: `${t("fourier.menu")}…`, onClick: () => actions.openFourier(), testId: "menu-fourier" },
         { label: `${t("texture.menu")}…`, onClick: () => actions.openTexture() },
         { label: `${t("filterImg.menu")}…`, onClick: () => actions.openFilterImage(), testId: "menu-filter-image" },
+        { label: `${t("filterLayer.menu")}…`, onClick: () => actions.openFilterLayers(), testId: "menu-filter-layers" },
         { label: `${t("glam.menu")}…`, onClick: () => actions.openGlamAnalysis() },
         { label: `${t("roiFeat.menu")}…`, onClick: () => actions.openRoiFeatures(), testId: "menu-roi-features" },
         { label: `${t("roiFeat.maxSection.menu")}…`, onClick: () => actions.openMaxSection(), testId: "menu-max-section" },

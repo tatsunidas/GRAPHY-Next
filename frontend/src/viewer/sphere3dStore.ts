@@ -15,6 +15,11 @@ import type { DimScope } from "./roiMaskStore";
 
 export interface Sphere3D {
   id: string;
+  /**
+   * 保存用の安定 ID（`id` はセッション連番で、保存・別ウィンドウ間で衝突する）。
+   * 復元した球は保存時の値を引き継ぐ。
+   */
+  uid: string;
   studyUid: string;
   seriesUid: string;
   /** 作成スライスの imageId（Mask 焼き込み時のスタック解決に使う）。 */
@@ -28,6 +33,9 @@ export interface Sphere3D {
   label?: string;
   color: string;
   visible: boolean;
+  /** ROI グループ（形の ROI と同じく保存される。→ `roiPersistence.SavedSphere`）。 */
+  groupId?: string;
+  groupName?: string;
 }
 
 const byId = new Map<string, Sphere3D>();
@@ -44,9 +52,9 @@ function notify(): void {
   }
 }
 
-export function addSphere3D(s: Omit<Sphere3D, "id">): string {
+export function addSphere3D(s: Omit<Sphere3D, "id" | "uid"> & { uid?: string }): string {
   const id = `sphere3d-${++seq}`;
-  byId.set(id, { ...s, id });
+  byId.set(id, { ...s, id, uid: s.uid ?? crypto.randomUUID() });
   notify();
   return id;
 }

@@ -151,6 +151,9 @@ export function FusionImageViewer({
   onAutoWL,
   onSpatialChange,
   onLayoutChange,
+  invertValues,
+  mixBlendMode,
+  probeLabel,
 }: {
   instances: Instance[];
   mode: ViewerMode;
@@ -203,6 +206,12 @@ export function FusionImageViewer({
   /** 空間 Fusion（実座標整合）で描けているかを親へ通知。false のとき手動位置合わせは効かない。 */
   onSpatialChange?: (spatial: boolean) => void;
   onLayoutChange?: (layout: SeriesLayout) => void;
+  /** 描画だけ値の符号を反転する（フィルタ層の「負の側を見せる」）。カーソル値（プローブ）は反転しない。 */
+  invertValues?: boolean;
+  /** `mix-blend-mode` の上書き（フィルタ層はスクリーン合成）。未指定なら `blend`。 */
+  mixBlendMode?: React.CSSProperties["mixBlendMode"];
+  /** プローブに添える名前（フィルタ層の `r2` など）。状態バーの層ごとの値に使う。 */
+  probeLabel?: string;
 }) {
   const imageIds = useMemo(
     () => instances.map((i) => imageIdForInstance(mode, i.sopInstanceUid, studyUid, seriesUid)),
@@ -278,6 +287,7 @@ export function FusionImageViewer({
    */
   const drawValues = useCallback(
     (values: Float32Array, cols: number, rows: number, center: number, width: number, activeLut?: typeof lut) => {
+      if (invertValues) values = values.map((v) => -v);
       const canvas = canvasRef.current;
       if (!canvas) return;
       if (canvas.width !== cols) canvas.width = cols;
@@ -286,7 +296,7 @@ export function FusionImageViewer({
       if (!ctx) return;
       ctx.putImageData(toImageData(values, cols, rows, center, width, activeLut), 0, 0);
     },
-    [],
+    [invertValues],
   );
 
   /** オーバーレイを消去する（前景ボリューム範囲外のスライスなど、何も描かない場合に呼ぶ）。 */
@@ -482,7 +492,7 @@ export function FusionImageViewer({
         const { center, width } = resolveWL(voiLut, fusionPixels);
         drawValues(fusionPixels, bgCols, bgRows, center, width, activeLut);
         // 背景の画素格子に載った前景値。位置合わせを掛けているなら**ワープ後・補間後**の値。
-        setFusionProbeData(viewportId, { values: fusionPixels, cols: bgCols, rows: bgRows, ...probeMetaOf(fgSampleId) });
+        setFusionProbeData(viewportId, { values: fusionPixels, cols: bgCols, rows: bgRows, ...probeMetaOf(fgSampleId), label: probeLabel });
         setIsoGrid({ values: fusionPixels, cols: bgCols, rows: bgRows });
       } else {
         // ── 非空間フォールバック: 比例 Z で前景スライスを base 矩形にストレッチ ──
@@ -506,7 +516,7 @@ export function FusionImageViewer({
         drawValues(values, cols, rows, center, width, activeLut);
         // 非空間フォールバックは前景自身の格子。読み出し側（sampleFusionValue）が base 格子との
         // 比例で対応づける（引き伸ばして重ねているのと同じ対応）。
-        setFusionProbeData(viewportId, { values, cols, rows, ...probeMetaOf(fgId) });
+        setFusionProbeData(viewportId, { values, cols, rows, ...probeMetaOf(fgId), label: probeLabel });
         setIsoGrid(null); // 幾何なし: 背景の格子に載らないので等値線は出さない
       }
     } finally {
@@ -519,7 +529,7 @@ export function FusionImageViewer({
     // ⚠ 親のコールバック（onAutoWL / onSpatialChange）は**依存に入れない**。ref 経由で呼んでいる。
     // 入れると、レンダプロップ内で毎レンダ生成される関数によって再計算が毎レンダ走る。
   }, [baseImageId, baseIndex, baseCount, viewportId, fgDto, overlayC, overlayT, lut, windowCenter, windowWidth,
-      adjust, registration, notifySpatial, drawValues, clearCanvas, suvTick]);
+      adjust, registration, notifySpatial, drawValues, clearCanvas, suvTick, probeLabel]);
 
   useEffect(() => {
     void runFusion();
@@ -538,7 +548,7 @@ export function FusionImageViewer({
         style={{
           ...overlayPlacement(rect),
           opacity,
-          mixBlendMode: fusionBlendCss(blend),
+          mixBlendMode: mixBlendMode ?? fusionBlendCss(blend),
           pointerEvents: "none",
           imageRendering: "pixelated",
         }}

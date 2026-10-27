@@ -11,6 +11,7 @@ import com.vis.graphynext.importer.ImportWatchRepository;
 import com.vis.graphynext.report.ReportRepository;
 import com.vis.graphynext.plugin.store.PluginDocumentRepository;
 import com.vis.graphynext.roi.RoiDocumentRepository;
+import com.vis.graphynext.roi.RoiMaskDocumentRepository;
 import com.vis.graphynext.settings.SettingsService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -43,6 +44,7 @@ public class AutomatorService {
     private final DicomInstanceRepository dicomRepo;
     private final ReportRepository reportRepo;
     private final RoiDocumentRepository roiRepo;
+    private final RoiMaskDocumentRepository roiMaskRepo;
     private final PluginDocumentRepository pluginRepo;
     private final SettingsService settings;
     private final ImportWatchRepository importWatchRepo;
@@ -52,6 +54,7 @@ public class AutomatorService {
             DicomInstanceRepository dicomRepo,
             ReportRepository reportRepo,
             RoiDocumentRepository roiRepo,
+            RoiMaskDocumentRepository roiMaskRepo,
             PluginDocumentRepository pluginRepo,
             SettingsService settings,
             StorageLayout layout,
@@ -61,6 +64,7 @@ public class AutomatorService {
         this.dicomRepo = dicomRepo;
         this.reportRepo = reportRepo;
         this.roiRepo = roiRepo;
+        this.roiMaskRepo = roiMaskRepo;
         this.pluginRepo = pluginRepo;
         this.settings = settings;
     }
@@ -107,6 +111,10 @@ public class AutomatorService {
         long roiCount = roiRepo.count();
         roiRepo.deleteAll();
 
+        // 塗り ROI（別テーブル）も消す。残すと次の実行の復元に前回のマスクが混ざる。
+        long roiMaskCount = roiMaskRepo.count();
+        roiMaskRepo.deleteAll();
+
         long pluginCount = pluginRepo.count();
         pluginRepo.deleteAll();
 
@@ -118,9 +126,9 @@ public class AutomatorService {
         long watchLedger = importWatchRepo.count();
         importWatchRepo.deleteAll();
 
-        log.info("[automator] reset: instances={}, reports={}, roiDocuments={}, pluginDocuments={}, "
+        log.info("[automator] reset: instances={}, reports={}, roiDocuments={}, roiMasks={}, pluginDocuments={}, "
                 + "xaCalibrations={}, importWatchSettings={}, importWatchLedger={}",
-                instances.size(), reportCount, roiCount, pluginCount, calibCount, watchSettings, watchLedger);
+                instances.size(), reportCount, roiCount, roiMaskCount, pluginCount, calibCount, watchSettings, watchLedger);
         return new ResetResult(
                 instances.size(), (int) reportCount, (int) roiCount, (int) pluginCount, calibCount);
     }

@@ -21,6 +21,7 @@ import {
   type AngioPresentationRequest,
 } from "../api";
 import { useI18n } from "../i18n/i18n";
+import { useDateFormat, formatDateTime } from "../i18n/dateFormat";
 import { publishQcaSnapshot } from "./debugApi";
 import { readModalitySlice } from "./pixelCalibration";
 import { QcaEditor, type QcaEditMode } from "./QcaEditor";
@@ -52,13 +53,20 @@ import { needsLogTransform } from "./dsa";
 import { readXaDsaTags } from "./dsaLoader";
 import { publishAnalysisResult } from "../report/analysisResultStore";
 import { qcaRecord } from "../report/xaAnalysisRecords";
-import { describeView, qcaRunKey, registerQcaRun, removeQcaRun } from "./xaRecon3dStore";
+import { describeView, qcaRunKey, registerQcaRun, removeQcaRun, type XaQcaRun } from "./xaRecon3dStore";
+import {
+  DEFAULT_ANCHOR_COUNT,
+  proposeAnchors,
+  resnapAnchors,
+  type QcaAnchor,
+} from "./qcaAnchors";
 import { readXaViewGeometry } from "./xaViewGeometryProvider";
 import { calibrationForImageId, loaderSpacingFor, readXaCardiacPhase, readXaInputTags } from "./xaCalibrationProvider";
 import { checkXaInput } from "./xaInputCheck";
 import { persistXaUserCalibration } from "./xaCalibrationPersistence";
 import { clearedBy, deriveQcaSteps, type ManualInputKey } from "./xaTasks";
 import { viewerOverlayProps } from "./viewerOverlay";
+import { proposeBranches, type BranchProposal } from "./xaBranchProposal";
 
 /** [x,y] の並びを GSPS 用のフラットな配列にする。 */
 function flatten(points: readonly (readonly [number, number])[]): number[] {
@@ -249,10 +257,7 @@ function collectLengthPicks(
 
 /** 保存時刻を画面用に短くする。読めない ISO をそのまま出さない。 */
 function formatSavedAt(iso: string): string {
-  const d = new Date(iso);
-  if (!Number.isFinite(d.getTime())) return iso;
-  const p = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+  return formatDateTime(iso);
 }
 
 /** 保存（GSPS / SR）に必要な、表示中フレームの素性。SeriesViewer から渡す。 */
@@ -290,6 +295,7 @@ export function XaAnalysisDialog({
 }) {
   const defaultReference: QcaReferenceMode = { kind: "auto" };
   const { t } = useI18n();
+  useDateFormat(); // 書式の設定が変わったら再描画する
   // 校正を確定/解除したら自分の表示も更新する（imageId は変わらないので版番号で回す）。
   const [calibVersion, setCalibVersion] = useState(0);
   const calib = useMemo(
@@ -298,10 +304,23 @@ export function XaAnalysisDialog({
     [imageId, calibVersion],
   );
   // world → 画像ピクセルの換算は**ローダの spacing**で行う（校正値ではない）。
-  const picks = useMemo(() => {
+  const annotationPicks = useMemo(() => {
     const sp = loaderSpacingFor(imageId);
     return collectLengthPicks(imageId, sp.row, sp.col);
   }, [imageId, calibVersion]);
+  /** 側枝の候補（P2.5d）から利用者が「解析区間に追加」したもの。注釈ではない仮想の線（フリーライン）。 */
+  const [adopted, setAdopted] = useState<{ imageId: string; picks: LengthPick[] }>({ imageId, picks: [] });
+  const adoptedPicks = useMemo(() => (adopted.imageId === imageId ? adopted.picks : []), [adopted, imageId]);
+  const picks = useMemo(() => [...annotationPicks, ...adoptedPicks], [annotationPicks, adoptedPicks]);
+  /** 側枝の候補。どの中心線に対する候補かを token で持ち、中心線が変わったら出さない。 */
+  const [proposals, setProposals] = useState<{
+    imageId: string;
+    /** 探したときの主枝（解析区間の uid）と、その中心線の token。 */
+    mainUid: string;
+    token: string;
+    status: string;
+    items: BranchProposal[];
+  } | null>(null);
   const [selected, setSelected] = useState(0);
   /**
    * 🔴 **空間校正の選択は解析区間と別に持つ**（`fw/angio-design.md` §8.7）。
@@ -326,6 +345,19 @@ export function XaAnalysisDialog({
   const [trim, setTrim] = useState<{ from: number; to: number } | null>(null);
   const [refMode, setRefMode] = useState<QcaReferenceMode>(defaultReference);
   const [editMode, setEditMode] = useState<QcaEditMode>("none");
+  /**
+   * アンカー（3D QCA の目印。血管に直交する線）。血管に沿った順。位置は中心線の上。
+   * 初期は中心線を等分した**仮の位置**（未確認）で、利用者が確かめるまで 3D へは渡さない。
+   */
+  const [anchors, setAnchors] = useState<QcaAnchor[]>([]);
+  /** 初期の仮の位置を置いたか（0 点へ減らしたあとの再提案を防ぐ）。 */
+  const anchorsInitRef = useRef(false);
+  const anchorsRef = useRef<QcaAnchor[]>([]);
+  anchorsRef.current = anchors;
+  /** 中心線の変更で捨てたアンカーの数（知らせる）。 */
+  const [anchorsDropped, setAnchorsDropped] = useState(0);
+  /** 3D 用に最後に登録した実行（アンカーが変わったら同じ鍵で登録し直す）。 */
+  const lastRunRef = useRef<XaQcaRun | null>(null);
   /** ブラシ半径。単位は結果と同じ（校正済み mm / 未校正 px）。 */
   const [brushRadius, setBrushRadius] = useState<number | null>(null);
   /**
@@ -386,7 +418,49 @@ export function XaAnalysisDialog({
     setEditMode("none");
     setChartMode("none");
     setHighlight(null);
+    setAnchors([]);
+    setAnchorsDropped(0);
+    anchorsInitRef.current = false;
+    lastRunRef.current = null;
   };
+
+  /** 結果が出たら（または中心線が変わったら）アンカーを置く／付け直す。 */
+  useEffect(() => {
+    if (!result) return;
+    if (!anchorsInitRef.current) {
+      anchorsInitRef.current = true;
+      // 復元されたアンカーがあれば付け直し、無ければ仮の位置を置く。
+      if (anchors.length === 0) {
+        setAnchors(proposeAnchors(result.centerline, DEFAULT_ANCHOR_COUNT));
+        return;
+      }
+    }
+    // 径 1 本ぶんより離れたものは別の場所を指しうるので捨てる。
+    const dia = result.edgeOffsets.map((o) => o.right - o.left).sort((a, b) => a - b);
+    const tol = Math.max(3, dia.length ? dia[dia.length >> 1] : 0);
+    const r = resnapAnchors(result.centerline, anchors, tol);
+    if (r.dropped > 0) setAnchorsDropped((n) => n + r.dropped);
+    const same =
+      r.anchors.length === anchors.length &&
+      r.anchors.every((a, i) => a.x === anchors[i].x && a.y === anchors[i].y && a.confirmed === anchors[i].confirmed);
+    if (!same) setAnchors(r.anchors);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [result?.centerlineToken]);
+
+  // アンカーが変わったら、3D 用の登録を同じ鍵で登録し直す（確認済みだけが使われる）。
+  useEffect(() => {
+    if (lastRunRef.current) {
+      // 他ウィンドウは `at` が新しい登録だけを採る（`xaRecon3dStore.merge`）ので、必ず進める。
+      const next: XaQcaRun = {
+        ...lastRunRef.current,
+        anchors: anchors.map((a) => ({ ...a })),
+        at: Math.max(Date.now(), lastRunRef.current.at + 1),
+      };
+      lastRunRef.current = next;
+      registerQcaRun(next);
+    }
+    publishQcaSnapshot({ anchors: anchors.map((a) => ({ ...a })) });
+  }, [anchors]);
 
   useEffect(() => {
     setResult(null);
@@ -456,6 +530,53 @@ export function XaAnalysisDialog({
       /* 光らせられなくても解析は続けられる */
     }
   }, []);
+
+  /** 解析済みの中心線を主枝として、側枝の候補を探す（自動では走らせない。採否は人が決める）。 */
+  const findBranches = () => {
+    const slice = sliceRef.current;
+    if (!slice || !result) return;
+    const c = calibrationForImageId(imageId);
+    const row = c?.mmPerPxRow ?? null;
+    const col = c?.mmPerPxCol ?? null;
+    // 縦横の画素間隔が違うと「径 1 本ぶん」が円でなくなるので、等しいときだけ探す。
+    const mm = row && col && Math.abs(row - col) <= 1e-6 * Math.max(row, col) ? col : null;
+    const r = proposeBranches(slice.values, slice.width, slice.height, {
+      vesselIsDark: !isSubtracted,
+      mmPerPx: mm,
+      mainPath: result.centerline,
+    });
+    setProposals({ imageId, mainUid: pick?.uid ?? "", token: result.centerlineToken, status: r.status, items: r.proposals });
+  };
+
+  /**
+   * 候補を出してよいか。別の線を選んで `result` が空になっても、候補は主枝に対するものとして残す
+   * （1 本追加して解析した後に、残りの候補も追加できるように）。**主枝を解析し直して中心線が変わったとき**
+   * だけ、古い候補として隠す。
+   */
+  const proposalsVisible =
+    !!proposals &&
+    proposals.imageId === imageId &&
+    !(!!result && !!pick && pick.uid === proposals.mainUid && result.centerlineToken !== proposals.token);
+
+  const proposalUid = (p: BranchProposal): string => {
+    const end = p.pointsPx[p.pointsPx.length - 1];
+    return `proposal:${imageId}:${p.originMainIndex}:${Math.round(end[0])}:${Math.round(end[1])}`;
+  };
+
+  const adoptProposal = (i: number) => {
+    const p = proposals?.items[i];
+    if (!p) return;
+    const pts = p.pointsPx;
+    const uid = proposalUid(p);
+    const existing = picks.findIndex((x) => x.uid === uid);
+    if (existing >= 0) {
+      setSelected(existing);
+      return;
+    }
+    const lp: LengthPick = { uid, kind: "freeline", points: pts, p0: pts[0], p1: pts[pts.length - 1], lengthPx: pathLengthPx(pts) };
+    setAdopted({ imageId, picks: [...adoptedPicks, lp] });
+    setSelected(picks.length);
+  };
 
   const applyCalibration = (mm: number, method: "catheter" | "ruler", note: string) => {
     // 🔴 校正は**直線のみ**（`calibPicks`）。曲線の経路長を既知長と突き合わせると、
@@ -719,7 +840,7 @@ export function XaAnalysisDialog({
     const view = readXaViewGeometry(imageId, saveContext.frameIndex);
     const inputTags = view.geometry ? readXaInputTags(imageId) : null;
     if (view.geometry) {
-      registerQcaRun({
+      const runObj: XaQcaRun = {
         imageId,
         // 🔴 鍵は imageId ではなく**imageId ＋ 解析区間**（分岐部は同じフレームから 3 本取る）。
         runKey: qcaRunKey(imageId, pick.p0, pick.p1),
@@ -749,7 +870,9 @@ export function XaAnalysisDialog({
         inputCheck: inputTags ? checkXaInput(inputTags.tags, inputTags.isXaSopClass) : undefined,
         cardiacPhase: readXaCardiacPhase(imageId, saveContext.frameIndex) ?? undefined,
         at: Date.now(),
-      });
+      };
+      lastRunRef.current = runObj;
+      registerQcaRun({ ...runObj, anchors: anchorsRef.current.map((a) => ({ ...a })) });
     }
     // 中心線が変わったらエッジ修正の宛先も変わる。UI 側の token を追随させる
     // （合わないまま持ち回ると runQca が捨てて警告を出す）。
@@ -934,6 +1057,10 @@ export function XaAnalysisDialog({
         setEdgeToken(found.edgeToken);
         setTrim(found.trim);
         setRefMode(found.reference);
+        if (found.anchors) {
+          setAnchors(found.anchors.map((a) => ({ ...a })));
+          anchorsInitRef.current = false;
+        }
         setRestoredAt(found.savedAt);
         // 入力を戻したら**そのまま解析まで走らせる**。押させると「復元したのに何も出ない」になる。
         runAnalysis({
@@ -975,6 +1102,7 @@ export function XaAnalysisDialog({
         edgeEdits,
         trim,
         reference: refMode,
+        anchors: anchors.map((a) => ({ ...a })),
         sr: sr === undefined ? (savedAnalysis?.sr ?? null) : sr,
         savedAt: new Date().toISOString(),
       };
@@ -987,7 +1115,7 @@ export function XaAnalysisDialog({
         if (!r.ok) setError(t("xa.analysis.stateSaveFailed", { error: r.error ?? "" }));
       });
     },
-    [saveContext.patientKey, saveContext.studyUid, analysisKey, seriesUid, edgeToken, waypoints, edgeEdits, trim, refMode, savedAnalysis],
+    [saveContext.patientKey, saveContext.studyUid, analysisKey, seriesUid, edgeToken, waypoints, edgeEdits, trim, refMode, anchors, savedAnalysis],
   );
 
   return (
@@ -1043,6 +1171,11 @@ export function XaAnalysisDialog({
               <PickPreview
                 imageId={imageId}
                 picks={picks}
+                proposals={
+                  proposals && proposalsVisible
+                    ? proposals.items.map((p, i) => ({ label: String.fromCharCode(65 + i), points: p.pointsPx }))
+                    : []
+                }
                 selectedIndex={selected}
                 onSelect={(i) => {
                   setSelected(i);
@@ -1223,6 +1356,53 @@ export function XaAnalysisDialog({
             <span style={hint}>{t("xa.analysis.researchOnly")}</span>
           </div>
 
+          {/* 側枝の候補（P2.5d）。主枝の中心線から画像のコントラストだけで探す推測で、採否は人が決める。 */}
+          <div style={row}>
+            <button style={btn} data-testid="xa-branch-find" onClick={findBranches} disabled={!result || busy}>
+              {t("xa.branch.find")}
+            </button>
+            {!result && <span style={hint}>{t("xa.branch.need")}</span>}
+          </div>
+          {proposals && proposalsVisible && (
+            <div data-testid="xa-branch-proposals">
+              <div style={hint}>{t("xa.branch.caution")}</div>
+              {proposals.status === "noScale" && (
+                <div style={warn} data-testid="xa-branch-noscale">
+                  {t("xa.branch.noScale")}
+                </div>
+              )}
+              {proposals.status === "badMain" && (
+                <div style={warn} data-testid="xa-branch-badmain">
+                  {t("xa.branch.badMain")}
+                </div>
+              )}
+              {proposals.status === "ok" && proposals.items.length === 0 && (
+                <div style={hint} data-testid="xa-branch-none">
+                  {t("xa.branch.none")}
+                </div>
+              )}
+              {proposals.items.map((p, i) => {
+                const added = picks.some((x) => x.uid === proposalUid(p));
+                return (
+                  <div style={row} key={proposalUid(p)} data-testid="xa-branch-item">
+                    <span style={{ fontSize: 12 }}>
+                      {t("xa.branch.item", {
+                        label: String.fromCharCode(65 + i),
+                        length: p.lengthMm.toFixed(1),
+                        dia: p.diameterMm.toFixed(1),
+                        ratio: Math.round(p.contrastRatio * 100),
+                        stop: t(`xa.branch.stop.${p.stopReason}`),
+                      })}
+                    </span>
+                    <button style={btn} data-testid="xa-branch-add" disabled={added} onClick={() => adoptProposal(i)}>
+                      {added ? t("xa.branch.added") : t("xa.branch.add")}
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
           {result && sliceRef.current && (
             /* 中心線とエッジはどちらもこのパネルで直すので、両方の段がここを指す。 */
             <div data-step="centerline edges">
@@ -1233,7 +1413,7 @@ export function XaAnalysisDialog({
               </div>
               <div style={row}>
                 <span style={{ fontSize: 11, color: "#44586a" }}>{t("xa.qca.editMode")}:</span>
-                {(["none", "waypoint", "edge", "brush", "smooth"] as const).map((m) => (
+                {(["none", "waypoint", "edge", "brush", "smooth", "anchor"] as const).map((m) => (
                   <button
                     key={m}
                     style={editMode === m ? primaryBtn : btn}
@@ -1305,6 +1485,8 @@ export function XaAnalysisDialog({
                   reanalyze({ waypoints: next, edges: null });
                 }}
                 brushRadius={brushRadius ?? defaultBrushRadius(result.unit)}
+                anchors={anchors}
+                onAnchorsChange={setAnchors}
                 showEdges={showEdges}
                 showMask={showMask}
                 showStraight={showStraight}
@@ -1321,6 +1503,11 @@ export function XaAnalysisDialog({
                   reanalyze({ edges: { token: edgeToken, byPathIndex: next } });
                 }}
               />
+              {anchorsDropped > 0 ? (
+                <div style={warn} data-testid="xa-anchor-dropped">
+                  {t("xa.anchor.dropped", { n: String(anchorsDropped) })}
+                </div>
+              ) : null}
             </div>
           )}
 
@@ -1852,11 +2039,14 @@ const td: React.CSSProperties = { textAlign: "right", padding: "2px 16px 2px 0",
 function PickPreview({
   imageId,
   picks,
+  proposals,
   selectedIndex,
   onSelect,
 }: {
   imageId: string;
   picks: readonly LengthPick[];
+  /** 側枝の候補（破線で描く。クリックでは選べない）。 */
+  proposals: readonly { label: string; points: readonly (readonly [number, number])[] }[];
   selectedIndex: number;
   onSelect: (index: number) => void;
 }) {
@@ -1938,7 +2128,30 @@ function PickPreview({
       ctx.fillStyle = on ? "#ffb59b" : "#cfe0ef";
       ctx.fillText(`#${i + 1}`, tx, ty);
     });
-  }, [slice, view, picks, selectedIndex]);
+
+    // 側枝の候補は破線＋英字。一覧の番号付きの線（実線）と見分ける。
+    proposals.forEach((p) => {
+      if (p.points.length < 2) return;
+      ctx.save();
+      ctx.setLineDash([5, 4]);
+      ctx.strokeStyle = "#3fa66b";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      p.points.forEach(([x, y], k) => {
+        if (k === 0) ctx.moveTo(x * view.scale, y * view.scale);
+        else ctx.lineTo(x * view.scale, y * view.scale);
+      });
+      ctx.stroke();
+      ctx.restore();
+      const [ex, ey] = p.points[p.points.length - 1];
+      ctx.font = "bold 13px sans-serif";
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = "rgba(0,0,0,0.75)";
+      ctx.strokeText(p.label, ex * view.scale + 4, ey * view.scale - 4);
+      ctx.fillStyle = "#9fe3b8";
+      ctx.fillText(p.label, ex * view.scale + 4, ey * view.scale - 4);
+    });
+  }, [slice, view, picks, proposals, selectedIndex]);
 
   if (!slice || !view) return null;
   return (

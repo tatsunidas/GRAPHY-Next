@@ -7,6 +7,7 @@ package com.vis.graphynext.dbadmin;
 import com.vis.graphynext.dicom.store.DicomInstance;
 import com.vis.graphynext.dicom.store.DicomInstanceRepository;
 import com.vis.graphynext.dicom.store.StorageLayout;
+import com.vis.graphynext.roi.RoiMaskSeriesRelocator;
 import com.vis.graphynext.dicom.store.DicomStorageService;
 import com.vis.graphynext.settings.SettingsService;
 import org.dcm4che3.data.Attributes;
@@ -46,6 +47,8 @@ public class DbAdminService {
     private final DicomStorageService storage;
     private final StorageLayout layout;
     private final PatientRecordMover records;
+    private final RoiMaskSeriesRelocator maskRelocator;
+    private final SeriesRefsRelocator refsRelocator;
     /** 計算ジョブの台帳（無い構成では null）。消えたシリーズの UID を台帳から空にする。 */
     private com.vis.graphynext.compute.ComputeJobLedger computeLedger;
 
@@ -55,12 +58,15 @@ public class DbAdminService {
     }
 
     public DbAdminService(DicomInstanceRepository repo, SettingsService settings, DicomStorageService storage,
-                          StorageLayout layout, PatientRecordMover records) {
+                          StorageLayout layout, PatientRecordMover records,
+                          RoiMaskSeriesRelocator maskRelocator, SeriesRefsRelocator refsRelocator) {
         this.repo = repo;
         this.settings = settings;
         this.storage = storage;
         this.layout = layout;
         this.records = records;
+        this.maskRelocator = maskRelocator;
+        this.refsRelocator = refsRelocator;
     }
 
     /** 患者情報の編集の結果。records は ROI などを運んだ／残した件数。 */
@@ -255,7 +261,8 @@ public class DbAdminService {
     }
 
     /** シリーズ統合の結果（移動できた件数・失敗件数・統合先 SeriesInstanceUID）。 */
-    public record MergeResult(int moved, int failed, String seriesInstanceUid) {}
+    public record MergeResult(int moved, int failed, String seriesInstanceUid, int masksMoved,
+                              SeriesRefsRelocator.Result refs) {}
 
     /**
      * 同一スタディ内の複数シリーズを 1 つに統合する（N→1）。
@@ -295,26 +302,33 @@ public class DbAdminService {
 
         int moved = 0;
         int failed = 0;
+        Map<String, String> oldSeriesBySop = new java.util.LinkedHashMap<>();
         for (DicomInstance r : all) {
             int instanceNumber = moved + 1; // 成功ごとに 1..N（失敗時は同番号を次へ）
+            String oldSeries = r.getSeriesInstanceUid();
             try {
                 relocateInstance(r, studyUid, newSeriesUid, seriesNumber, seriesDesc, instanceNumber);
+                oldSeriesBySop.put(r.getSopInstanceUid(), oldSeries);
                 moved++;
             } catch (Exception e) {
                 failed++;
                 log.warn("シリーズ統合の書換に失敗: sop={} ({})", r.getSopInstanceUid(), e.toString());
             }
         }
-        log.info("シリーズ統合: study={} sources={} -> series={} (moved={}, failed={})",
-                studyUid, sourceSeriesUids, newSeriesUid, moved, failed);
-        return new MergeResult(moved, failed, newSeriesUid);
+        Map<String, String> newSeriesBySop = constant(oldSeriesBySop, newSeriesUid);
+        int masksMoved = maskRelocator.relocate(studyUid, oldSeriesBySop, newSeriesBySop).moved();
+        SeriesRefsRelocator.Result refs = refsRelocator.relocate(studyUid, oldSeriesBySop, newSeriesBySop);
+        log.info("シリーズ統合: study={} sources={} -> series={} (moved={}, failed={}, masks={})",
+                studyUid, sourceSeriesUids, newSeriesUid, moved, failed, masksMoved);
+        return new MergeResult(moved, failed, newSeriesUid, masksMoved, refs);
     }
 
     /** シリーズ分割の 1 群（対象 SOP と、その群に与える SeriesNumber/Description）。 */
     public record SplitGroup(List<String> sopInstanceUids, Integer seriesNumber, String seriesDescription) {}
 
     /** シリーズ分割の結果。 */
-    public record SplitResult(int groupsCreated, int moved, int failed, List<String> newSeriesUids) {}
+    public record SplitResult(int groupsCreated, int moved, int failed, List<String> newSeriesUids, int masksMoved,
+                              SeriesRefsRelocator.Result refs) {}
 
     /**
      * 同一スタディ内の 1 シリーズを、手動選択した群ごとに新シリーズへ分割する（1→N）。
@@ -355,6 +369,8 @@ public class DbAdminService {
         int failed = 0;
         int gi = 0;
         List<String> newUids = new ArrayList<>();
+        Map<String, String> oldSeriesBySop = new java.util.LinkedHashMap<>();
+        Map<String, String> newSeriesBySop = new java.util.LinkedHashMap<>();
         for (SplitGroup g : groups) {
             gi++;
             List<String> sops = g.sopInstanceUids() == null ? List.<String>of() : g.sopInstanceUids();
@@ -374,6 +390,8 @@ public class DbAdminService {
                 }
                 try {
                     relocateInstance(r, studyUid, newSeriesUid, seriesNumber, desc, null); // InstanceNumber 保持
+                    oldSeriesBySop.put(sop, seriesUid);
+                    newSeriesBySop.put(sop, newSeriesUid);
                     moved++;
                     anyMoved = true;
                 } catch (Exception e) {
@@ -385,9 +403,18 @@ public class DbAdminService {
                 newUids.add(newSeriesUid);
             }
         }
-        log.info("シリーズ分割: study={} series={} -> {} 群 (moved={}, failed={})",
-                studyUid, seriesUid, newUids.size(), moved, failed);
-        return new SplitResult(newUids.size(), moved, failed, newUids);
+        int masksMoved = maskRelocator.relocate(studyUid, oldSeriesBySop, newSeriesBySop).moved();
+        SeriesRefsRelocator.Result refs = refsRelocator.relocate(studyUid, oldSeriesBySop, newSeriesBySop);
+        log.info("シリーズ分割: study={} series={} -> {} 群 (moved={}, failed={}, masks={})",
+                studyUid, seriesUid, newUids.size(), moved, failed, masksMoved);
+        return new SplitResult(newUids.size(), moved, failed, newUids, masksMoved, refs);
+    }
+
+    /** 移した SOP をすべて同じシリーズ {@code series} へ移した、という対応表。 */
+    private static Map<String, String> constant(Map<String, String> bySop, String series) {
+        Map<String, String> m = new java.util.LinkedHashMap<>();
+        bySop.keySet().forEach(sop -> m.put(sop, series));
+        return m;
     }
 
     /** スタディ内の既存 SeriesNumber の最大値（無ければ 0）。 */

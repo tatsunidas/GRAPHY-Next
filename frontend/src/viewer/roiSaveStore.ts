@@ -22,6 +22,7 @@ import {
   type ParsedRoiFile,
   type RoiTombstone,
   type SavedRoi,
+  type SavedSphere,
 } from "./roiPersistence";
 import { fetchRoiDocument, saveRoiDocument } from "./roiPersistenceApi";
 import { mergeAnalyses, upsertAnalysis, type SavedQcaAnalysis } from "./qcaAnalysisState";
@@ -68,13 +69,21 @@ interface PatientState {
    * 解析状態が消える**。
    */
   analyses: SavedQcaAnalysis[];
+  /**
+   * 直近に読み込んだ／保存した球。ROI の `loaded` と同じ理由で持つ
+   * （開いていないシリーズの球を保存で落とさないため）。
+   */
+  spheres: SavedSphere[];
 }
 
 /** いま保存すべき内容を集めて返す関数（呼び出し側＝Viewer2D が Cornerstone から集める）。 */
 export type RoiCollector = () => SavedRoi[];
+/** 球の収集関数（任意）。無ければ読み込んだ球をそのまま書き戻す。 */
+export type SphereCollector = () => SavedSphere[];
 
 const states = new Map<string, PatientState>();
 const collectors = new Map<string, RoiCollector>();
+const sphereCollectors = new Map<string, SphereCollector>();
 const listeners = new Set<(patientKey: string, result: RoiSaveResult) => void>();
 
 /** 既定のデバウンス。ROI のドラッグ中は 1 操作で多数のイベントが出るので、落ち着くまで待つ。 */
@@ -83,7 +92,7 @@ export const ROI_SAVE_DEBOUNCE_MS = 1500;
 function stateOf(patientKey: string): PatientState {
   let s = states.get(patientKey);
   if (!s) {
-    s = { known: new Set(), pendingTombstones: new Map(), loaded: [], analyses: [] };
+    s = { known: new Set(), pendingTombstones: new Map(), loaded: [], analyses: [], spheres: [] };
     states.set(patientKey, s);
   }
   return s;
@@ -93,8 +102,10 @@ function stateOf(patientKey: string): PatientState {
  * 患者の ROI 収集関数を登録する（2D Viewer の画面が開いている間だけ）。
  * 返り値で解除。解除時に**保留中の保存を流し切る**（ウィンドウを閉じて計測が消えるのを防ぐ）。
  */
-export function registerRoiCollector(patientKey: string, collect: RoiCollector): () => void {
+export function registerRoiCollector(patientKey: string, collect: RoiCollector, collectSpheres?: SphereCollector): () => void {
   collectors.set(patientKey, collect);
+  if (collectSpheres) sphereCollectors.set(patientKey, collectSpheres);
+  else sphereCollectors.delete(patientKey);
   return () => {
     if (collectors.get(patientKey) === collect) {
       const s = states.get(patientKey);
@@ -105,6 +116,7 @@ export function registerRoiCollector(patientKey: string, collect: RoiCollector):
         void saveRoiNow(patientKey);
       }
       collectors.delete(patientKey);
+      sphereCollectors.delete(patientKey);
     }
   };
 }
@@ -161,7 +173,9 @@ export async function loadRois(patientKey: string): Promise<ParsedRoiFile> {
     const parsed = parseSaveFile(dto.json);
     // 読んだ時点の UID を「既知」に入れる。以後これが消えたら削除とみなす。
     for (const r of parsed.rois) s.known.add(r.roiUid);
+    for (const sp of parsed.spheres) s.known.add(sp.uid);
     s.loaded = parsed.rois;
+    s.spheres = parsed.spheres;
     // 🔴 読み込みで**未保存の解析を捨てない**（ダイアログが保存した直後に別の読み込みが
     //    走ることがある）。同じ id は新しい方を採る。
     s.analyses = mergeAnalyses(parsed.analyses, s.analyses);
@@ -170,7 +184,7 @@ export async function loadRois(patientKey: string): Promise<ParsedRoiFile> {
   } catch (e) {
     log.warn("roi load failed", patientKey, e);
     // 読めなかったときは版を未確定のままにする（未確定だと保存を試みない＝上書き事故を避ける）。
-    return { rois: [], deleted: [], analyses: [] };
+    return { rois: [], deleted: [], analyses: [], spheres: [] };
   }
 }
 
@@ -190,8 +204,19 @@ export function scheduleRoiSave(patientKey: string, debounceMs = ROI_SAVE_DEBOUN
   }, debounceMs);
 }
 
+/**
+ * 閉じる・再読み込みの直前に、保存待ち（デバウンス中）の患者を今すぐ送る。
+ * 🔴 React のアンマウントはページごと閉じるときは走らないので、`pagehide` から呼ぶ（`unloadFlush.ts`）。
+ * `put` → `fetch` は同期で開始されるので、閉じる前に要求が出る。`keepalive` で送信中に閉じても切れない。
+ */
+export function flushRoiSavesForUnload(): void {
+  for (const [patientKey, s] of states) {
+    if (s.timer) void saveRoiNow(patientKey, { keepalive: true });
+  }
+}
+
 /** いま保存する（明示保存・アンマウント時のフラッシュ）。予約済みのデバウンスは取り消す。 */
-export function saveRoiNow(patientKey: string): Promise<RoiSaveResult> {
+export function saveRoiNow(patientKey: string, opts?: { keepalive?: boolean }): Promise<RoiSaveResult> {
   const s = stateOf(patientKey);
   if (s.timer) {
     clearTimeout(s.timer);
@@ -201,7 +226,7 @@ export function saveRoiNow(patientKey: string): Promise<RoiSaveResult> {
     s.dirtyAgain = true;
     return s.inflight;
   }
-  const run = doSave(patientKey).then(async (result) => {
+  const run = doSave(patientKey, opts?.keepalive).then(async (result) => {
     s.inflight = undefined;
     notify(patientKey, result);
     if (s.dirtyAgain && result.ok) {
@@ -215,7 +240,7 @@ export function saveRoiNow(patientKey: string): Promise<RoiSaveResult> {
   return run;
 }
 
-async function doSave(patientKey: string): Promise<RoiSaveResult> {
+async function doSave(patientKey: string, keepalive = false): Promise<RoiSaveResult> {
   const collect = collectors.get(patientKey);
   if (!collect) return { ok: false, error: "no collector" };
   const s = stateOf(patientKey);
@@ -232,7 +257,15 @@ async function doSave(patientKey: string): Promise<RoiSaveResult> {
     log.warn("roi collect failed", patientKey, e);
     return { ok: false, error: String(e) };
   }
-  const present = new Set(rois.map((r) => r.roiUid));
+  let spheres: SavedSphere[];
+  try {
+    spheres = sphereCollectors.get(patientKey)?.() ?? s.spheres;
+  } catch (e) {
+    log.warn("sphere collect failed", patientKey, e);
+    return { ok: false, error: String(e) };
+  }
+  // 球の uid も ROI と同じ「既知／現存」の差分で削除（墓標）を判定する。
+  const present = new Set([...rois.map((r) => r.roiUid), ...spheres.map((sp) => sp.uid)]);
   const now = new Date().toISOString();
   for (const t of tombstonesFor(s.known, present, now)) s.pendingTombstones.set(t.roiUid, t);
   // 生きている ROI は墓標から外す（同じ UID が復活することは無いが、取り違えを防ぐ多重防御）。
@@ -242,10 +275,11 @@ async function doSave(patientKey: string): Promise<RoiSaveResult> {
     rois,
     deleted: [...s.pendingTombstones.values()],
     analyses: s.analyses,
+    spheres,
   };
 
   try {
-    const saved = await put(patientKey, local, s.version);
+    const saved = await put(patientKey, local, s.version, keepalive);
     commit(s, saved.content, saved.version);
     return { ok: true, roiCount: saved.content.rois.length };
   } catch (e) {
@@ -274,12 +308,13 @@ async function put(
   patientKey: string,
   content: ParsedRoiFile,
   version: number | null | undefined,
+  keepalive = false,
 ): Promise<{ content: ParsedRoiFile; version: number | null }> {
-  const file = buildSaveFile(content.rois, content.deleted, "graphy-next", content.analyses);
-  const dto = await saveRoiDocument(patientKey, JSON.stringify(file), file.rois.length, version ?? null);
+  const file = buildSaveFile(content.rois, content.deleted, "graphy-next", content.analyses, content.spheres);
+  const dto = await saveRoiDocument(patientKey, JSON.stringify(file), file.rois.length, version ?? null, keepalive);
   // 上限で切られた墓標を状態にも反映するため、保存した内容（＝切られた後）を返す。
   return {
-    content: { rois: file.rois, deleted: file.deleted ?? [], analyses: file.analyses ?? [] },
+    content: { rois: file.rois, deleted: file.deleted ?? [], analyses: file.analyses ?? [], spheres: file.spheres ?? [] },
     version: dto.version,
   };
 }
@@ -288,10 +323,11 @@ function commit(s: PatientState, content: ParsedRoiFile, version: number | null)
   // 保存した内容が最新なので、復元キャッシュは捨てる（次に開くタイルは新しい方を見る）。
   loadCache.clear();
   s.version = version;
-  s.known = new Set(content.rois.map((r) => r.roiUid));
+  s.known = new Set([...content.rois.map((r) => r.roiUid), ...content.spheres.map((sp) => sp.uid)]);
   s.pendingTombstones = new Map(content.deleted.map((t) => [t.roiUid, t]));
   s.loaded = content.rois;
   s.analyses = content.analyses;
+  s.spheres = content.spheres;
 }
 
 /**
@@ -300,6 +336,11 @@ function commit(s: PatientState, content: ParsedRoiFile, version: number | null)
  */
 export function getLoadedRois(patientKey: string): SavedRoi[] {
   return states.get(patientKey)?.loaded ?? [];
+}
+
+/** 直近に読み込んだ／保存した球（収集側が、開いていないシリーズの球を持ち越すために読む）。 */
+export function getLoadedSpheres(patientKey: string): SavedSphere[] {
+  return states.get(patientKey)?.spheres ?? [];
 }
 
 /**

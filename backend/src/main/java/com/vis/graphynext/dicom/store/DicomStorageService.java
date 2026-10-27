@@ -120,6 +120,9 @@ public class DicomStorageService {
         entity.setStudyDate(ds.getString(Tag.StudyDate));
         entity.setStudyDescription(ds.getString(Tag.StudyDescription));
         entity.setAccessionNumber(ds.getString(Tag.AccessionNumber));
+        entity.setStudyTime(ds.getString(Tag.StudyTime, ""));
+        entity.setStudyId(ds.getString(Tag.StudyID, ""));
+        entity.setReferringPhysicianName(ds.getString(Tag.ReferringPhysicianName, ""));
         entity.setSeriesInstanceUid(seriesUid);
         entity.setModality(ds.getString(Tag.Modality));
         entity.setSeriesNumber(ds.getInt(Tag.SeriesNumber, 0));
@@ -342,6 +345,33 @@ public class DicomStorageService {
     }
 
     /**
+     * StudyTime・StudyID・ReferringPhysicianName を持たない（まだ読んでいない）既存の行を、保存済みのファイルの
+     * ヘッダから埋める。ファイルに値が無ければ空文字を入れる（読んだ印）。ヘッダを読めない行は null のまま残す
+     * （空で埋めない）。戻り値は埋めた行数。
+     */
+    @Transactional
+    public int backfillStudyExtras() {
+        int filled = 0;
+        int unreadable = 0;
+        for (DicomInstance inst : repo.findByStudyTimeIsNull()) {
+            Attributes ds = readHeaderQuietly(inst);
+            if (ds == null) {
+                unreadable++;
+                continue;
+            }
+            inst.setStudyTime(ds.getString(Tag.StudyTime, ""));
+            inst.setStudyId(ds.getString(Tag.StudyID, ""));
+            inst.setReferringPhysicianName(ds.getString(Tag.ReferringPhysicianName, ""));
+            repo.save(inst);
+            filled++;
+        }
+        if (filled > 0 || unreadable > 0) {
+            log.info("StudyTime などの埋め直し: 埋めた {} 件・読めず null のまま {} 件", filled, unreadable);
+        }
+        return filled;
+    }
+
+    /**
      * 受信日時を持たない既存の行を、ファイルの更新時刻で埋める（起動時に 1 回）。
      *
      * <p>更新時刻は受信のときに書かれ、その後の書き換え（患者編集など）で新しくなるだけなので、実際の受信より
@@ -421,11 +451,24 @@ public class DicomStorageService {
                 insts.addAll(repo.findBySeries(studyUid, se));
             }
         }
+        return locate(insts).stream().map(Located::path).toList();
+    }
+
+    /** 索引のインスタンスと、その読めるローカルファイル。 */
+    public record Located(DicomInstance instance, Path path) {
+    }
+
+    /** 索引のインスタンスを、読めるローカルファイルに対応づける（実在しないものは除外）。 */
+    public List<Located> locate(List<DicomInstance> insts) {
         layout.prefetch(insts, () -> false); // モード A: 手元に無いものを先にまとめて取り寄せる（失敗は例外）
-        return insts.stream()
-                .map(layout::resolveForRead)
-                .filter(java.util.Objects::nonNull)
-                .toList();
+        List<Located> out = new java.util.ArrayList<>(insts.size());
+        for (DicomInstance inst : insts) {
+            Path p = layout.resolveForRead(inst);
+            if (p != null) {
+                out.add(new Located(inst, p));
+            }
+        }
+        return out;
     }
 
     /**

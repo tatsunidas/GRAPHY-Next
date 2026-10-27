@@ -14,6 +14,7 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { NumberField } from "../hooks/NumberField";
 import { useI18n, type TFn } from "../i18n/i18n";
+import { useDateFormat, formatDateTime } from "../i18n/dateFormat";
 import { HttpError } from "../http";
 import {
   cancelRoiFeatureJob,
@@ -82,9 +83,7 @@ const FINISHED = new Set(["DONE", "FAILED", "CANCELLED"]);
 /** 計算日時の表示（分まで）。backend の Instant は ISO 文字列か秒の数値で届く。 */
 function formatComputedAt(v: string | number): string {
   const d = typeof v === "number" ? new Date(v * 1000) : new Date(v);
-  if (Number.isNaN(d.getTime())) return String(v);
-  const p = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+  return Number.isNaN(d.getTime()) ? String(v) : formatDateTime(d);
 }
 
 function download(text: string, filename: string, type = "text/csv;charset=utf-8") {
@@ -98,6 +97,7 @@ function download(text: string, filename: string, type = "text/csv;charset=utf-8
 
 export function RoiFeatureScreen() {
   const { t } = useI18n();
+  useDateFormat(); // 書式の設定が変わったら再描画する
 
   const ctx = useMemo<RoiFeatureContext | null>(() => {
     try {

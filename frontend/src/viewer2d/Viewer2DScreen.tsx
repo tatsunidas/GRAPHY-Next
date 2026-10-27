@@ -59,8 +59,13 @@ import {
   setSplineFitOn,
   toggleSplineFit,
 } from "../viewer/roiContourTools";
-import { subscribeRoiMaskStore } from "../viewer/roiMaskStore";
-import { getLoadedRois, registerRoiCollector, scheduleRoiSave } from "../viewer/roiSaveStore";
+import { getRoiMaskMeta, subscribeRoiMaskChanged, subscribeRoiMaskStore } from "../viewer/roiMaskStore";
+import { markLabelVolume } from "../viewer/labelVolumeOrigin";
+import { getLoadedRois, getLoadedSpheres, registerRoiCollector, scheduleRoiSave } from "../viewer/roiSaveStore";
+import { collectSpheresForPatient } from "../viewer/sphereRestore";
+import { subscribeSphere3D } from "../viewer/sphere3dStore";
+import { isMaskId, startMaskPersistence } from "../viewer/maskSaveStore";
+import { startUnloadFlush } from "../viewer/unloadFlush";
 import { collectRoisForPatient, sopOfImageId } from "../viewer/roiRestore";
 import { emitRoiReveal } from "../viewer/roiReveal";
 import { installRoiRevealReceiver } from "../viewer/roiRevealBridge";
@@ -85,7 +90,7 @@ import { useAssistantBridge } from "./useAssistantBridge";
 import { useWlPresets } from "./wlPresetStore";
 import { presetLabel } from "./wlPresets";
 import { emitToast, subscribeToast } from "../viewer/toast";
-import { composeTileWithAnnotations, downscaleDataUrl, visibleRoiCount } from "../viewer/tileCapture";
+import { composeTileWithAnnotations, cropDataUrl, cropRect, downscaleDataUrl, roiBoundsFromCanvasPoints, visibleRoiCount } from "../viewer/tileCapture";
 import { askCopyWithRoi, CopyImageAskHost } from "./CopyImageAsk";
 import { classifySeriesRenderability } from "../viewer/seriesRenderable";
 import { subscribeSeriesRefresh } from "../viewer/viewerRefresh";
@@ -110,6 +115,10 @@ import { buildPluginAnalysisRecord } from "../report/analysisResults";
 import { publishAnalysisResult } from "../report/analysisResultStore";
 import { TextureDialog } from "../viewer/TextureDialog";
 import { FilterImageDialog } from "../viewer/FilterImageDialog";
+import { FilterLayerBar, FilterLayerDialog } from "../viewer/FilterLayerDialog";
+import { useFilterLayers } from "../viewer/filterLayerStore";
+import { layerWindow, singleColorLut } from "../viewer/filterLayers";
+import { layerProbeKey } from "../viewer/fusionProbe";
 import { WwWlAdjustDialog, type WlTarget } from "./WwWlAdjustDialog";
 import { WlPresetDialog } from "./WlPresetDialog";
 import { fetchSettings } from "../settings/settingsApi";
@@ -125,6 +134,7 @@ import {
   registerPluginVolumes,
 } from "../plugins/pluginVolumeApi";
 import { resamplePluginVolume } from "../plugins/pluginResample";
+import { readXaSeriesFrame, readXaSeriesInfo } from "../plugins/pluginXaSeriesApi";
 import { openCurvedMprFromPlugin } from "../plugins/pluginCurvedMprApi";
 import {
   commitRtDoseExport,
@@ -148,6 +158,7 @@ import { desktop } from "../desktopBridge";
 import { studyUidsOfTiles, useStudyInUse } from "../retention/useStudyInUse";
 import { closeAllPluginWindows } from "../plugins/pluginWindowApi";
 import { mountSeriesPanel, closeAllSeriesPanels, PluginSeriesPanels } from "../plugins/pluginSeriesPanelApi";
+import { formatDateTime, formatDicomDate, useDateFormat } from "../i18n/dateFormat";
 
 // ── 型定義 ────────────────────────────────────────────────────
 
@@ -321,6 +332,22 @@ function tileVisibleRoiCount(tileId: string): number {
     vp?.getCurrentImageId?.(),
     (uid) => csAnnotation.visibility.isAnnotationVisible(uid) ?? true,
   );
+}
+
+/**
+ * 表示中の画像に属し、可視で、**選択中**の ROI の点列（handles.points と輪郭の polyline）を canvas 座標（CSS px）で返す。
+ * アシスタントの添付を ROI の外接矩形で切り出すのに使う（読み取りだけ。選択・表示は変えない）。
+ */
+function selectedRoiCanvasPoints(tileId: string): number[][][] {
+  const element = tileViewportElement(tileId);
+  const vp = element ? (getEnabledElement(element)?.viewport as unknown as { getCurrentImageId?: () => string; worldToCanvas?: (p: number[]) => number[] } | undefined) : undefined;
+  const cur = vp?.getCurrentImageId?.();
+  if (!vp || !cur || !vp.worldToCanvas) return [];
+  const selected = new Set<string>(csAnnotation.selection.getAnnotationsSelected() ?? []);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return (csAnnotation.state.getAllAnnotations() as any[])
+    .filter((a) => selected.has(String(a?.annotationUID)) && a?.metadata?.referencedImageId === cur && a?.isVisible !== false && (csAnnotation.visibility.isAnnotationVisible(String(a?.annotationUID)) ?? true))
+    .map((a) => [...((a?.data?.handles?.points ?? []) as number[][]), ...((a?.data?.contour?.polyline ?? []) as number[][])].map((w) => Array.from(vp.worldToCanvas!(w))));
 }
 
 /** 指定タイルの画像（PNG の dataURL）。withRoi なら ROI の線と計測の文字を重ねる（四隅の文字は含まない）。コピーとアシスタントの添付が共用する。 */
@@ -1154,7 +1181,9 @@ function TileGrid({
   useEffect(() => {
     const pks = visiblePatientKeys ? visiblePatientKeys.split("\u0000") : [];
     if (pks.length === 0) return;
-    const unregisters = pks.map((pk) => registerRoiCollector(pk, () => collectRoisForPatient(pk, getLoadedRois(pk))));
+    const unregisters = pks.map((pk) =>
+      registerRoiCollector(pk, () => collectRoisForPatient(pk, getLoadedRois(pk)), () => collectSpheresForPatient(pk, getLoadedSpheres(pk))),
+    );
     const ev = csToolsEnums.Events;
     // ロックと表示の切り替えも保存項目（isLocked・isVisible）なので聞く。
     const names = [
@@ -1167,10 +1196,22 @@ function TileGrid({
     const onChange = () => pks.forEach((pk) => scheduleRoiSave(pk));
     for (const name of names) eventTarget.addEventListener(name, onChange);
     // ラベル・scope・プラグイン属性の変更も保存対象なのでメタ store も見る。
-    const unsubMeta = subscribeRoiMaskStore(onChange);
+    // 塗り ROI のメタ（名前・グループなど）は形の ROI 文書に載らないので、変わっても保存を予約しない。
+    const unsubMeta = subscribeRoiMaskChanged((id) => {
+      if (!isMaskId(id)) onChange();
+    });
+    // 球の追加・変更・削除も保存対象。
+    const unsubSphere = subscribeSphere3D(onChange);
+    // 塗り ROI（マスク）は別テーブルへ、変更があったものだけを保存する。
+    const stopMasks = startMaskPersistence();
+    // 閉じる・再読み込みの直前に、保存待ちを送る。
+    const stopUnload = startUnloadFlush();
     return () => {
+      stopUnload();
+      stopMasks();
       for (const name of names) eventTarget.removeEventListener(name, onChange);
       unsubMeta();
+      unsubSphere();
       // 解除時に保留中の保存を流し切る（ウィンドウを閉じて計測が消えるのを防ぐ）。
       unregisters.forEach((u) => u());
     };
@@ -1200,6 +1241,7 @@ function TileGrid({
   const [maxSectionTarget, setMaxSectionTarget] = useState<Tile | null>(null);
   const [textureTarget, setTextureTarget] = useState<Tile | null>(null);
   const [filterImageTarget, setFilterImageTarget] = useState<Tile | null>(null);
+  const [filterLayerTarget, setFilterLayerTarget] = useState<Tile | null>(null);
   // コントラスト調整（W/L）ダイアログの対象（開いている時のみ non-null）。
   const [wlAdjust, setWlAdjust] = useState<WlTarget | null>(null);
 
@@ -1343,6 +1385,21 @@ function TileGrid({
   const [focusedTileId, setFocusedTileId] = useState<string | null>(null);
   const focusedTile = patient.tiles.find((tl) => tl.id === focusedTileId) ?? null;
   const focusedPatientKey = focusedTile ? derivePatientKey(focusedTile.study) : null;
+  // ROI マネージャに出すシリーズ。画面に出ているタイルのシリーズ（連結タイルは構成するシリーズ全部）。
+  const shownRoiSeries = useMemo(
+    () =>
+      patient.tiles.flatMap((tl) =>
+        (tl.concat ? tl.concat.parts.map((pt, i) => ({ study: pt.study, series: pt.series, label: tl.concat?.labels[i] })) : [{ study: tl.study, series: tl.series, label: undefined }]).map(
+          (x) => ({
+            patientKey: derivePatientKey(x.study),
+            patientName: x.study.patientName || x.study.patientId || "",
+            seriesUid: x.series.seriesInstanceUid,
+            label: x.label ?? `#${x.series.seriesNumber ?? "?"} ${x.series.modality ?? ""} ${x.series.seriesDescription ?? ""}`.trim(),
+          }),
+        ),
+      ),
+    [patient.tiles],
+  );
   // 凡例のチップを押したとき、その患者のタイルを短く強調する。
   const [flashKey, setFlashKey] = useState<string | null>(null);
   const flashTimer = useRef<number | null>(null);
@@ -1483,10 +1540,11 @@ function TileGrid({
   const resolveRoiEditTarget = useCallback((): string | null => {
     if (selectedIds.size === 1) return [...selectedIds][0];
     if (patient.tiles.length === 1) return patient.tiles[0].id;
-    const focused = getFocusedTile();
+    // ツールバーの「操作の対象」（resolveTargets）と同じ順序。見出しのクリックでも宛先が変わる。
+    const focused = focusedTileId ?? getFocusedTile();
     if (focused && patient.tiles.some((tl) => tl.id === focused)) return focused;
     return null;
-  }, [selectedIds, patient.tiles]);
+  }, [selectedIds, patient.tiles, focusedTileId]);
   // コピー・複製の宛先は、ROI を持つタイル（画像のクリックに頼らない）。
   const roiOwnerTile = useCallback(
     (uid: string): string | null =>
@@ -1627,6 +1685,9 @@ function TileGrid({
       // （本体の regVolumeLoader / regWorkerClient をそのまま使う。計算をここに書かない）。
       loadVolume: (ref, onProgress) => loadPluginVolume(mode, studyUidOfSeries, ref, onProgress),
       estimateVolume: (ref) => estimatePluginVolume(mode, studyUidOfSeries, ref),
+      // H42: 開いていない XA シリーズの幾何と 1 フレーム（loadVolume は IPP の無い XA シネに使えない）。
+      readXaSeries: (ref) => readXaSeriesInfo(mode, studyUidOfSeries, ref),
+      readXaSeriesFrame: (ref, frameIndex) => readXaSeriesFrame(mode, studyUidOfSeries, ref, frameIndex),
       registerVolumes: (req, onProgress) =>
         registerPluginVolumes(mode, studyUidOfSeries, req, onProgress),
       resampleVolume: (source, transform, target) => resamplePluginVolume(source, transform, target),
@@ -1684,6 +1745,13 @@ function TileGrid({
         if (!id) return null;
         const c = queryViewerCommand(id, (cmd) => cmd.getXaCine());
         return c ? { tileId: id, ...c } : null;
+      },
+      // H41: 投影幾何（撮影角度・SID・SOD）。2 方向の対応付けに要る。読めない理由も渡す。
+      getXaGeometry: (tileId) => {
+        const id = tileId ?? resolveTargets()[0];
+        if (!id) return null;
+        const g = queryViewerCommand(id, (cmd) => cmd.getXaGeometry());
+        return g ? { tileId: id, ...g } : null;
       },
       // H5: ROI の読み出し。tileId 省略時は**対象タイル全部**を読む（H1〜H4 は「先頭タイル」だが、
       // 時系列の計測ではベースラインと追跡を並べて開くのが普通なので、まとめて読める方が素直）。
@@ -1755,7 +1823,15 @@ function TileGrid({
         const id = tileId ?? resolveTargets()[0];
         if (!id) return { ok: false, error: "no target tile" };
         const label = (req.label?.trim() || producer.name).slice(0, 64);
-        return (await queryViewerCommand(id, (c) => c.importLabelVolume(req, label))) ?? { ok: false, error: "tile is not available" };
+        const r = (await queryViewerCommand(id, (c) => c.importLabelVolume(req, label))) ?? { ok: false as const, error: "tile is not available" };
+        if (r.ok) markLabelVolume(r.segmentationId, producer.id);
+        return r;
+      },
+      removeLabelVolume: (segmentationId, pluginId) => {
+        for (const id of resolveTargets()) {
+          if (queryViewerCommand(id, (c) => c.removeLabelVolume(segmentationId, pluginId))) return true;
+        }
+        return false;
       },
       // H4b: プラグインの出力を派生シリーズとして保存する。**必ず確認ダイアログを挟む**
       // （抑止不可）。ここで同意が取れてからタイル側の保存コマンドを呼ぶ。
@@ -2018,7 +2094,8 @@ function TileGrid({
         }
       },
       convertMeasureToRoi: (measureUid) => {
-        const target = resolveRoiEditTarget();
+        // 全患者表示では、操作中のタイルと計測の持ち主のタイルが違いうる。持ち主を優先する。
+        const target = roiOwnerTile(measureUid) ?? resolveRoiEditTarget();
         if (!target) { notify(t("roi.paste.noTile")); return; }
         queryViewerCommand(target, (c) => c.convertMeasureToRoi(measureUid));
       },
@@ -2033,12 +2110,21 @@ function TileGrid({
         runViewerCommand(targets, (c) => c.selectRoi(roiUid, exclusive));
       },
       copyRoi: (roiUid) => {
-        const uid = roiUid ?? selectedAnnotations()[0]?.annotationUID;
-        if (!uid) { notify(t("roi.copy.none")); return; }
-        const target = roiOwnerTile(uid as string) ?? resolveRoiEditTarget();
+        // 指定が無ければ、選択中の ROI すべて（複数可）。
+        const uids = roiUid
+          ? [roiUid]
+          : selectedAnnotations().map((a) => a.annotationUID as string | undefined).filter((u): u is string => !!u);
+        if (uids.length === 0) { notify(t("roi.copy.none")); return; }
+        // 貼り付け先は 1 つのタイルなので、患者・タイルが混ざった選択はコピーさせない（黙って一部だけ取らない）。
+        if (new Set(uids.map((u) => getRoiMaskMeta(u)?.patientKey).filter(Boolean)).size > 1) { notify(t("roi.copy.crossPatient")); return; }
+        const owners = uids.map((u) => roiOwnerTile(u));
+        if (new Set(owners.filter(Boolean)).size > 1) { notify(t("roi.copy.crossTile")); return; }
+        const target = owners.find(Boolean) ?? resolveRoiEditTarget();
         if (!target) { notify(t("roi.paste.noTile")); return; }
-        const ok = queryViewerCommand(target, (c) => c.copyRoi(uid as string));
-        notify(t(ok ? "roi.copy.done" : "roi.copy.failed"));
+        const n = queryViewerCommand(target, (c) => c.copyRois(uids)) ?? 0;
+        if (n === 0) notify(t("roi.copy.failed"));
+        else if (n < uids.length) notify(t("roi.copy.partial", { n, m: uids.length - n }));
+        else notify(t(n > 1 ? "roi.copy.doneN" : "roi.copy.done", { n }));
       },
       pasteRoi: () => {
         if (!hasClipboardRoi()) { notify(t("roi.paste.empty")); return; }
@@ -2227,6 +2313,14 @@ function TileGrid({
         if (isConcatTile(tile)) { notify(t("series.concat.disabled")); return; }
         setFilterImageTarget(tile);
       },
+      // フィルタ層: 対象タイルに、LoG の派生シリーズを色分けで重ねる。
+      openFilterLayers: () => {
+        const tid = resolveTargets()[0];
+        const tile = patient.tiles.find((tl) => tl.id === tid);
+        if (!tile) { comingSoon(t("filterLayer.menu")); return; }
+        if (isConcatTile(tile)) { notify(t("series.concat.disabled")); return; }
+        setFilterLayerTarget(tile);
+      },
       // GLAM 解析: 別ウィンドウ（#glam）で開く。対象は localStorage 経由で渡す
       // （ウィンドウを跨ぐため。2D ビューアの graphy-viewer-ctx とは別キーにして取り合わない）。
       openGlamAnalysis: () => {
@@ -2331,8 +2425,19 @@ function TileGrid({
     setTool: actions.setTool,
     setLayoutCols: (c) => onSetGrid(patient.patientKey, 0, c),
     presets: wlPresets.map((p) => ({ key: p.key, label: presetLabel(p, t), center: p.center, width: p.width })),
-    captureTile: async (tileId, withRoi) => {
-      const url = await captureTileImage(tileId, withRoi);
+    captureTile: async (tileId, withRoi, crop) => {
+      let rect = null;
+      if (crop) {
+        const groups = selectedRoiCanvasPoints(tileId);
+        const bounds = roiBoundsFromCanvasPoints(groups);
+        if (!bounds) return "no-selected-roi";
+        const canvas = tileViewportElement(tileId)?.querySelector("canvas") as HTMLCanvasElement | null;
+        if (!canvas || !canvas.clientWidth || !canvas.clientHeight) return null;
+        rect = cropRect(bounds, canvas.clientWidth, canvas.clientHeight, canvas.width / canvas.clientWidth);
+        if (!rect) return "roi-not-visible";
+      }
+      let url = await captureTileImage(tileId, withRoi);
+      if (url && rect) url = await cropDataUrl(url, rect);
       return url ? downscaleDataUrl(url, ASSISTANT_IMAGE_MAX_EDGE) : null;
     },
   });
@@ -2661,6 +2766,7 @@ function TileGrid({
       )}
       {showRoiMgr && (
         <RoiManagerPanel
+          shownSeries={shownRoiSeries}
           activePatientKey={
             global ? (focusedPatientKey ?? (patient.tiles[0] ? derivePatientKey(patient.tiles[0].study) : "")) : patient.patientKey
           }
@@ -2668,6 +2774,7 @@ function TileGrid({
           mode={mode}
           onRevealRoi={revealRoi}
           onDuplicateRoi={(uid) => actions.duplicateRoi(uid)}
+          onCopyRoi={(uid) => actions.copyRoi(uid)}
           onConvertToRoi={(uid) => actions.convertMeasureToRoi(uid)}
           onClose={() => setShowRoiMgr(false)}
         />
@@ -2785,6 +2892,15 @@ function TileGrid({
           onClose={() => setTextureTarget(null)}
         />
       )}
+      {filterLayerTarget && (
+        <FilterLayerDialog
+          key={filterLayerTarget.id}
+          tileId={filterLayerTarget.id}
+          study={filterLayerTarget.study}
+          series={filterLayerTarget.series}
+          onClose={() => setFilterLayerTarget(null)}
+        />
+      )}
       {filterImageTarget && (
         <FilterImageDialog
           key={filterImageTarget.id}
@@ -2888,6 +3004,7 @@ function TileCell({
   onDrop: (targetTileId: string, zone: "before" | "after" | "center" | "none") => void;
 }) {
   const { t } = useI18n();
+  useDateFormat(); // 書式の設定が変わったら再描画する
   // 動画タイル（表示の操作だけを受けるタイル）。同期（🔗）の対象外
   const isVideoTile = useIsDisplayOnlyTile(commandKey);
   // ドラッグオーバー中のゾーン（ビジュアルオーバーレイ制御用）
@@ -3000,7 +3117,8 @@ function TileCell({
     ? t("series.concat.heading", { parts: tile.concat.labels.join(" + "), count: tile.concat.layout.nZ })
     : tile.series.seriesDescription ||
       `#${tile.series.seriesNumber ?? "?"} ${tile.series.modality ?? ""}`.trim();
-  const dateLabel = tile.study.studyDate || "";
+  const dateFmt = useDateFormat(); // 書式が変わったら見出しを描き直す
+  const dateLabel = tile.study.studyDate ? formatDicomDate(tile.study.studyDate, dateFmt.date) : "";
   const studyDesc = tile.study.studyDescription || "";
 
   // 既定 W/L の受け取り。**useCallback で識別子を固定する**。
@@ -3134,6 +3252,8 @@ function TileCell({
     [fusionRegistration],
   );
 
+  const filterLayers = useFilterLayers(tile.id);
+
   const renderFusionOverlay = useMemo<RenderOverlay | undefined>(() => {
     if (!tile.fusion) return undefined;
     const fusion = tile.fusion;
@@ -3165,6 +3285,44 @@ function TileCell({
     );
   }, [tile.fusion, mode, fusionC, fusionT, fusionLut, fusionWL, isolineOn, isolineLevel, fusionAdjust,
       registrationTransform, handleFusionAutoWL]);
+
+  // フィルタ層（LoG の派生画像の色分け重ね）。前景の Fusion とは独立に、層の数だけ同じ部品を並べる。
+  // しきい値＝窓の下限（それ以下は透明）。層どうしはスクリーン合成で重なる。
+  const renderOverlayAll = useMemo<RenderOverlay | undefined>(() => {
+    if (filterLayers.length === 0) return renderFusionOverlay;
+    return (ctx) => (
+      <>
+        {renderFusionOverlay?.(ctx)}
+        {filterLayers.map((l, i) => {
+          if (!l.visible) return null;
+          const w = layerWindow(l.side, l.threshold, l.maxAbs);
+          return (
+            <FusionImageViewer
+              key={l.id}
+              rect={ctx.rect}
+              baseImageId={ctx.imageId}
+              baseIndex={ctx.index}
+              baseCount={ctx.count}
+              viewportId={layerProbeKey(ctx.viewportId, i)}
+              instances={l.instances}
+              mode={mode}
+              studyUid={l.study.studyInstanceUid}
+              seriesUid={l.series.seriesInstanceUid}
+              overlayC={0}
+              overlayT={0}
+              lut={singleColorLut(l.color)}
+              opacity={l.opacity}
+              mixBlendMode="screen"
+              windowCenter={w.center}
+              windowWidth={w.width}
+              invertValues={w.invert}
+              probeLabel={`r${l.rMm}`}
+            />
+          );
+        })}
+      </>
+    );
+  }, [filterLayers, renderFusionOverlay, mode]);
 
   // ── タイルヘッダー DnD（タイル並び替え） ──
 
@@ -3388,7 +3546,7 @@ function TileCell({
           patientKey={patientKey}
           seriesLabel={seriesLabel}
           onDimChange={(c, tIdx, z) => { bgDimsRef.current = { c, t: tIdx }; onDimChange(c, tIdx, z); }}
-          renderFusionOverlay={renderFusionOverlay}
+          renderFusionOverlay={renderOverlayAll}
           // タスク・ランチャー（A13-2）の依頼を引き受けるのは**このタイルだけ**
           // （StudyList のプレビューに取られないようにする）。
           acceptsTaskLaunch
@@ -3444,17 +3602,19 @@ function TileCell({
       )}
 
       {/* 保存済みの位置合わせの状態。★ stale は「当てていない」ことを必ず見せる。 */}
+      {panelOpen && <FilterLayerBar tileId={tile.id} />}
+
       {panelOpen && tile.fusion && restoreState.kind !== "none" && (
         <div style={restoreState.kind === "stale" ? restoreStaleBar : restoreBar}>
           {restoreState.kind === "restored" ? (
             <span>
-              {t("registration.restored", { at: new Date(restoreState.savedAt).toLocaleString() })}
+              {t("registration.restored", { at: formatDateTime(restoreState.savedAt) })}
               {/* 承認済みの記録は、そうと分かるようにする。データに印だけ残して
                   画面に出さないと、利用者からは普通の復元と区別がつかない。 */}
               {restoreState.accepted && (
                 <span style={{ marginLeft: 6, opacity: 0.85 }}>
                   {t("registration.acceptedNote", {
-                    at: new Date(restoreState.accepted.at).toLocaleString(),
+                    at: formatDateTime(restoreState.accepted.at),
                   })}
                 </span>
               )}
@@ -4230,7 +4390,8 @@ function StudyNode({
   };
 
   const patientLabel = study.patientName || study.patientId || "—";
-  const studyMeta = [study.studyDate, study.studyDescription, study.modality]
+  useDateFormat(); // 書式が変わったら描き直す
+  const studyMeta = [study.studyDate ? formatDicomDate(study.studyDate) : "", study.studyDescription, study.modality]
     .filter(Boolean)
     .join(" · ");
 

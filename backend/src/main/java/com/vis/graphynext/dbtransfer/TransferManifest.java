@@ -23,7 +23,10 @@ public record TransferManifest(
         List<FileEntry> files,
         Related related) {
 
-    public static final int FORMAT_VERSION = 1;
+    /** 読める最大の版。2 は塗り ROI（{@code masks/}）を含む荷物。 */
+    public static final int FORMAT_VERSION = 2;
+    /** 塗り ROI を含まない荷物の版。古い版のアプリでも読める（含む荷物だけ 2 にして、フレームを黙って捨てる事故を防ぐ）。 */
+    public static final int BASE_FORMAT_VERSION = 1;
 
     /** {@code path} は荷物のフォルダからの相対（{@code /} 区切り）。 */
     public record FileEntry(String path, String studyUid, String seriesUid, String sopUid, long size, String sha256) {
@@ -35,7 +38,8 @@ public record TransferManifest(
             Map<String, String> calibrations,
             List<PatientDocItem> rois,
             List<PatientDocItem> registrations,
-            List<PluginDocItem> plugins) {
+            List<PluginDocItem> plugins,
+            List<MaskItem> masks) {
     }
 
     public record ReportItem(
@@ -63,5 +67,10 @@ public record TransferManifest(
     }
 
     public record PluginDocItem(String pluginId, String patientKey, String json) {
+    }
+
+    /** 塗り ROI。フレーム（deflate 済みのバイト列）は荷物の {@code path}（{@code masks/<maskUid>.frames}）に置く。 */
+    public record MaskItem(String maskUid, String patientKey, String seriesUid, String meta, int frameCount,
+                           int frameBytes, String path, long size, String sha256) {
     }
 }

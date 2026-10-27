@@ -6,15 +6,25 @@
 // （送信側の検証は信用しない）。manifest（backend が検査した宣言）に無いツール・権限の無いプラグイン・
 // 実装の無いツール・承認の無い書き込みツールは実行しない。例外の本文はモデルに返さない（`plugin-error` 固定）。
 import { validatePluginArgs } from "../assistant/pluginTools";
+import { EffectViolation, type ToolEffect } from "../plugins/hostEffects";
 import type { PluginManifest } from "../plugins/pluginTypes";
 
 /** プラグインのコードの実行待ちの上限。暫定値（中継の 5 秒とは別枠）。 */
 export const PLUGIN_TOOL_TIMEOUT_MS = 30000;
+/** ツール別の待ち時間（`aiTools[].timeoutSec`）の範囲。backend の検査と同じ（manifest が壊れていても超えない）。 */
+export const MIN_TOOL_TIMEOUT_MS = 5000;
+export const MAX_TOOL_TIMEOUT_MS = 900000;
+
+export function toolTimeoutMs(timeoutSec: unknown): number {
+  return typeof timeoutSec === "number" && Number.isFinite(timeoutSec)
+    ? Math.min(MAX_TOOL_TIMEOUT_MS, Math.max(MIN_TOOL_TIMEOUT_MS, Math.round(timeoutSec * 1000)))
+    : PLUGIN_TOOL_TIMEOUT_MS;
+}
 
 export interface PluginToolDeps {
   manifests(): Promise<PluginManifest[]>;
   /** 実装を取り出して host を束ねた関数を返す（無ければ null）。 */
-  load(m: PluginManifest, tool: string): Promise<((args: Record<string, unknown>) => unknown) | null>;
+  load(m: PluginManifest, tool: string, effect: ToolEffect): Promise<((args: Record<string, unknown>) => unknown) | null>;
   timeoutMs?: number;
 }
 
@@ -38,16 +48,17 @@ export async function executePluginTool(deps: PluginToolDeps, cmd: { pluginId?: 
   if (!v.ok) return v;
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
-    const fn = await deps.load(m, spec.name);
+    const fn = await deps.load(m, spec.name, spec.effect);
     if (!fn) return { ok: false, error: "no-function" };
     const data = await Promise.race([
       Promise.resolve().then(() => fn(v.params)),
       new Promise<never>((_, rej) => {
-        timer = setTimeout(() => rej(new Error("timeout")), deps.timeoutMs ?? PLUGIN_TOOL_TIMEOUT_MS);
+        timer = setTimeout(() => rej(new Error("timeout")), deps.timeoutMs ?? toolTimeoutMs(spec.timeoutSec));
       }),
     ]);
     return { ok: true, data };
   } catch (e) {
+    if (e instanceof EffectViolation) return { ok: false, error: "effect-violation" };
     return { ok: false, error: e instanceof Error && e.message === "timeout" ? "timeout" : "plugin-error" };
   } finally {
     if (timer) clearTimeout(timer);

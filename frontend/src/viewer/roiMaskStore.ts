@@ -40,6 +40,9 @@ export interface RoiMaskMeta {
   scope?: RoiScope;
   /** 作成時の scope（原本。編集で "all" にしても元 index を復元できるよう保持）。 */
   origin?: RoiScope;
+  /** ROI グループの鍵と名前（同じ鍵の ROI が 1 つのグループ。名前は所属 ROI に持たせ、メンバーがいる間だけグループが存在する）。 */
+  groupId?: string;
+  groupName?: string;
   /** 任意のカスタム属性（DICOM/ImageJ 出力時に保持）。 */
   custom?: Record<string, string>;
   /** このマスクに存在する segment index の一覧（多セグメント, D3）。Mask のみ。既定 [1]。 */
@@ -49,6 +52,8 @@ export interface RoiMaskMeta {
   /** このマスクを直近 SEG 書き出しした先（再書き出し時、standalone なら旧シリーズを自動削除して
    * 「更新」相当にするために使う。`segExport.ts` 参照）。 */
   lastSegExport?: { studyUid: string; seriesUid: string; sopInstanceUid: string };
+  /** 保存（`roi_mask_document`）の行の鍵。初めて保存するときに採番し、復元したマスクは保存時の値を引き継ぐ。 */
+  persistUid?: string;
 }
 
 const metaById = new Map<string, RoiMaskMeta>();
@@ -99,10 +104,18 @@ export function addMaskSegment(segmentationId: string, index: number): number[] 
   return next;
 }
 
-function notify(): void {
+function notify(itemId?: string): void {
   for (const l of [...listeners]) {
     try {
       l();
+    } catch {
+      /* ignore */
+    }
+  }
+  if (itemId === undefined) return;
+  for (const l of [...changedListeners]) {
+    try {
+      l(itemId);
     } catch {
       /* ignore */
     }
@@ -117,11 +130,47 @@ export function getRoiMaskMeta(itemId: string): RoiMaskMeta | undefined {
 export function setRoiMaskMeta(itemId: string, patch: Partial<RoiMaskMeta>): void {
   const cur = metaById.get(itemId) ?? {};
   metaById.set(itemId, { ...cur, ...patch, custom: { ...cur.custom, ...patch.custom } });
-  notify();
+  notify(itemId);
 }
 
 export function deleteRoiMaskMeta(itemId: string): void {
-  if (metaById.delete(itemId)) notify();
+  const cur = metaById.get(itemId);
+  if (!metaById.delete(itemId)) return;
+  notify(itemId);
+  for (const l of [...deletedListeners]) {
+    try {
+      l(itemId, cur);
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
+const deletedListeners = new Set<(itemId: string, meta: RoiMaskMeta | undefined) => void>();
+
+/**
+ * メタが削除されたことの購読（マスクを利用者が消した合図）。保存側が、保存済みの行を消すのに使う。
+ * 🔴 ビューポートの破棄ではメタは消えない（`deleteRoiMaskMeta` を呼ぶのは削除操作だけ）ので、
+ * タイルを閉じただけで保存済みのマスクが消えることはない。
+ */
+export function subscribeRoiMaskDeleted(l: (itemId: string, meta: RoiMaskMeta | undefined) => void): () => void {
+  deletedListeners.add(l);
+  return () => {
+    deletedListeners.delete(l);
+  };
+}
+
+const changedListeners = new Set<(itemId: string) => void>();
+
+/**
+ * どの項目が変わったかを知りたい購読者用（`subscribeRoiMaskStore` は項目を伝えない）。
+ * 形の ROI の保存は、形の ROI のメタが変わったときだけ予約したいので、塗り ROI の項目を除くのに使う。
+ */
+export function subscribeRoiMaskChanged(l: (itemId: string) => void): () => void {
+  changedListeners.add(l);
+  return () => {
+    changedListeners.delete(l);
+  };
 }
 
 /** 変更購読（マネージャ UI の再描画用）。 */

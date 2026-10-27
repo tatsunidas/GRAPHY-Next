@@ -36,6 +36,8 @@ export interface CapturedImage {
   h: number;
 }
 
+export type CaptureRefusal = "no-selected-roi" | "roi-not-visible";
+
 export interface BridgeDeps {
   /** 命令の対象タイル（選択があれば選択、無ければ全タイル）。 */
   targets(): string[];
@@ -45,7 +47,8 @@ export interface BridgeDeps {
   /** 全タイルの ROI（識別子・座標を含み得る生の値）。必ず projectRois を通してから外へ出す。 */
   readRois(): RawRoi[];
   /** タイルの表示画像（縮小済み）。ROI を重ねるか選べる。取れなければ null。 */
-  captureTile(id: string, withRoi: boolean): Promise<CapturedImage | null>;
+  /** `crop` は選択中の ROI の外接矩形で切り出す。選択が無い／画面に出ていないときは理由の文字列。 */
+  captureTile(id: string, withRoi: boolean, crop: boolean): Promise<CapturedImage | CaptureRefusal | null>;
   run(ids: string[], fn: (c: ViewerCommands) => void): void;
   runSeries(ids: string[], fn: (c: SeriesCommands) => void): void;
   activeTool(): string;
@@ -69,6 +72,8 @@ export interface BridgeCommand {
   includeLabels?: boolean;
   /** captureView: ROI の線と計測文字を重ねるか。 */
   withRoi?: boolean;
+  /** captureView: 選択中の ROI の外接矩形で切り出すか。 */
+  crop?: boolean;
   /** main が利用者の承認を取ったあとにだけ付ける。データを変える操作はこれが無いと実行しない。 */
   approved?: boolean;
   /** main が確認の前に付ける。検証（引数・対象）だけして何も実行しない。write 操作にだけ使える。 */
@@ -111,8 +116,9 @@ function symbolOfTool(deps: BridgeDeps, toolId: string): DisplayTool | undefined
 export async function executeCaptureView(deps: BridgeDeps, cmd: BridgeCommand): Promise<ActionResult> {
   const id = deps.targets()[0] ?? deps.allTiles()[0];
   if (!id) return { ok: false, error: "no-tile" };
-  const image = await deps.captureTile(id, cmd.withRoi === true).catch(() => null);
+  const image = await deps.captureTile(id, cmd.withRoi === true, cmd.crop === true).catch(() => null);
   if (!image) return { ok: false, error: "capture-failed" };
+  if (typeof image === "string") return { ok: false, error: image };
   return { ok: true, image };
 }
 
@@ -210,6 +216,16 @@ export function executeCommand(deps: BridgeDeps, cmd: BridgeCommand): ActionResu
       if (!r) return { ok: false, error: "no-tile" };
       if (!r.ok) return { ok: false, error: `roi-${r.reason}` };
       // 取り消しは「作った ROI だけ消す」。手描きの ROI には触れない。
+      inverse.push({ id: "removeAssistantRoi", params: { roiUid: r.roiUid } });
+      break;
+    }
+    case "createContourRoi": {
+      const r = deps.createRoi(first, {
+        tool: p.shape === "freehand" ? "FreehandROI" : "PolygonROI",
+        verticesView: p.points as [number, number][],
+      });
+      if (!r) return { ok: false, error: "no-tile" };
+      if (!r.ok) return { ok: false, error: `roi-${r.reason}` };
       inverse.push({ id: "removeAssistantRoi", params: { roiUid: r.roiUid } });
       break;
     }

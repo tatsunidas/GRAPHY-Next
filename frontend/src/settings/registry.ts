@@ -6,12 +6,17 @@
 // label/help/options/section.title/category.label は i18n キー（t() で解決）。
 // ここにカテゴリ/セクション/フィールドを追加するだけで、ダイアログ右パネルが自動描画する。
 
+import type { TFn } from "../i18n/i18n";
+import { DATE_FORMATS, DEFAULT_DATE_FORMAT, DEFAULT_TIME_FORMAT, TIME_FORMATS, sampleDate, sampleTime } from "../i18n/dateFormat";
+
 export type FieldType = "toggle" | "text" | "number" | "select" | "color";
 
 export interface FieldOption {
   value: string;
   /** i18n キー。 */
   labelKey: string;
+  /** 表示名を実行時に組み立てる場合（日付の見本など）。あれば labelKey より優先。 */
+  label?: (t: TFn) => string;
 }
 
 export interface FieldDef {
@@ -207,6 +212,30 @@ export const SETTINGS_REGISTRY: CategoryDef[] = [
               { value: "ja", labelKey: "settings.opt.lang.ja" },
               { value: "en", labelKey: "settings.opt.lang.en" },
             ],
+          },
+          // 日付・時刻の書式は言語と同じく localStorage（SettingsDialog で特別扱い）。表示だけを変える
+          {
+            key: "general.dateFormat",
+            labelKey: "settings.field.dateFormat",
+            type: "select",
+            default: DEFAULT_DATE_FORMAT,
+            helpKey: "settings.field.dateFormat.help",
+            options: DATE_FORMATS.map((f) => ({
+              value: f,
+              labelKey: "settings.opt.dateFormat",
+              label: () => `${f}（${sampleDate(f)}）`,
+            })),
+          },
+          {
+            key: "general.timeFormat",
+            labelKey: "settings.field.timeFormat",
+            type: "select",
+            default: DEFAULT_TIME_FORMAT,
+            options: TIME_FORMATS.map((f) => ({
+              value: f,
+              labelKey: `settings.opt.timeFormat.${f}`,
+              label: (t: TFn) => `${t(`settings.opt.timeFormat.${f}`)}（${sampleTime(f)}）`,
+            })),
           },
         ],
       },
@@ -632,6 +661,41 @@ export const SETTINGS_REGISTRY: CategoryDef[] = [
             type: "text",
             default: "0.0.0.0",
             helpKey: "settings.field.localAeBindAddress.help",
+          },
+        ],
+      },
+      {
+        titleKey: "settings.sec.scpQr",
+        fields: [
+          {
+            key: "dicom.scpQrEnabled",
+            labelKey: "settings.field.scpQrEnabled",
+            type: "toggle",
+            default: false,
+            helpKey: "settings.field.scpQrEnabled.help",
+          },
+          {
+            key: "dicom.scpQrAllowAll",
+            labelKey: "settings.field.scpQrAllowAll",
+            type: "toggle",
+            default: false,
+            helpKey: "settings.field.scpQrAllowAll.help",
+          },
+        ],
+      },
+      {
+        titleKey: "settings.sec.receiveCompress",
+        fields: [
+          {
+            key: "dicom.receiveCompress",
+            labelKey: "settings.field.receiveCompress",
+            type: "select",
+            default: "off",
+            helpKey: "settings.field.receiveCompress.help",
+            options: [
+              { value: "off", labelKey: "settings.opt.receiveCompress.off" },
+              { value: "jpegls", labelKey: "settings.opt.receiveCompress.jpegls" },
+            ],
           },
         ],
       },

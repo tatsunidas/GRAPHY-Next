@@ -146,8 +146,10 @@ abstract class FileSystemPluginRegistry implements PluginRegistry {
         }
         List<AiToolSpec> tools = AiToolSpec.sanitize(d.aiTools(), d.permissions(),
                 why -> log.warn("[plugins] {}: {}", d.id(), why));
+        List<java.util.Map<String, Object>> skills = SkillSpec.sanitize(d.skills(), d.permissions(),
+                why -> log.warn("[plugins] {}: {}", d.id(), why));
         return new PluginManifest(d.id(), d.name(), d.version(), fe, be, d.permissions(), category,
-                tools.isEmpty() ? null : tools);
+                tools.isEmpty() ? null : tools, skills.isEmpty() ? null : skills);
     }
 
     /** 走査で見つかった 1 プラグイン（フォルダ + 記述）。 */

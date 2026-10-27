@@ -20,6 +20,7 @@ import { desktop } from "../desktopBridge";
 import { selectionHasCfm } from "./cfmNotice";
 import { exportPercent, runExportJob } from "./exportJob";
 import { TriCheckbox } from "./TriCheckbox";
+import { DicomDate } from "../i18n/dateFormat";
 
 /**
  * Export: MainScreen で選択中のスタディ<b>の患者</b>のスタディ/シリーズをツリー表示し、
@@ -306,7 +307,7 @@ export function ExportDialog({
                   </button>
                   <TriCheckbox state={cstate} onChange={() => void toggleStudy(st.studyInstanceUid)} />
                   <span style={{ cursor: "pointer" }} onClick={() => void toggleExpand(st.studyInstanceUid)}>
-                    {st.studyDate || "—"} / {st.studyDescription || "—"}
+                    {st.studyDate ? <DicomDate value={st.studyDate} /> : "—"} / {st.studyDescription || "—"}
                     <span style={{ color: "#8a98a6", fontSize: 11 }}>
                       {" "}
                       {st.modality || ""} ({st.numberOfInstances})

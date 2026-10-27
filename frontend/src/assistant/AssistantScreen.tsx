@@ -16,7 +16,17 @@ import { runToolLoop } from "./toolLoop";
 import { RobotPanel, type RobotPlan } from "./robot/RobotPanel";
 import { buildRobotTools } from "./robot/planModel";
 import { MacroPanel, type MacroApi } from "./macros/MacroPanel";
+import type { Macro } from "./macros/macroModel";
+import { SkillPanel, type SkillApi, type SkillDraft, type SkillSuggestion } from "./skills/SkillPanel";
+import { mergeSkills } from "./skills/skillView";
+import { buildSkillTools, promptSkills } from "./skills/skillTools";
+import { macroToSkill } from "./skills/macroToSkill";
+import type { PluginSkillEntry, Skill } from "./skills/skillModel";
 import { PluginToolPanel } from "./PluginToolPanel";
+import { RequestLogPanel, type RequestLogApi } from "./RequestLogPanel";
+import type { EvalApi } from "./EvalSection";
+import { EVAL_CASES, EVAL_SUITE_VERSION } from "./eval/cases";
+import { runEval } from "./eval/runEval";
 import { planEligible, toToolDef, type PluginToolEntry, type PluginToolResult } from "./pluginTools";
 import { candidatesFromActions } from "./macros/macroModel";
 import { DOC_CHUNKS } from "./docsBundle";
@@ -67,6 +77,7 @@ export function AssistantScreen() {
   const [input, setInput] = useState("");
   const [images, setImages] = useState<UiImage[]>([]);
   const [withRoi, setWithRoi] = useState(true);
+  const [cropRoi, setCropRoi] = useState(false);
   const [capturing, setCapturing] = useState(false);
   /** 表示中のタイルから取った画像の数（焼き込み文字の注意を出す）。 */
   const [viewShots, setViewShots] = useState(0);
@@ -76,8 +87,15 @@ export function AssistantScreen() {
   const confirmedRef = useRef(false);
   const [note, setNote] = useState<string | null>(null);
   const [macroOpen, setMacroOpen] = useState(false);
+  const [skillOpen, setSkillOpen] = useState(false);
+  const [userSkills, setUserSkills] = useState<Skill[]>([]);
+  const [skillsVersion, setSkillsVersion] = useState(0);
+  const [pluginSkills, setPluginSkills] = useState<PluginSkillEntry[]>([]);
+  const [skillSuggest, setSkillSuggest] = useState<SkillSuggestion | null>(null);
+  const [skillDraft, setSkillDraft] = useState<SkillDraft | null>(null);
   const [robot, setRobot] = useState(false);
   const [pluginToolOpen, setPluginToolOpen] = useState(false);
+  const [requestLogOpen, setRequestLogOpen] = useState(false);
   const [pluginTools, setPluginTools] = useState<PluginToolEntry[]>([]);
   const [plan, setPlan] = useState<RobotPlan | null>(null);
   const [resolved, setResolved] = useState<AiResolveResult | null>(null);
@@ -150,10 +168,10 @@ export function AssistantScreen() {
     }
     setCapturing(true);
     try {
-      const r = await bridge?.assistantViewerCmd?.(sessionId, { kind: "captureView", withRoi });
+      const r = await bridge?.assistantViewerCmd?.(sessionId, { kind: "captureView", withRoi, crop: cropRoi });
       if (!r || !("ok" in r) || r.ok !== true || !("image" in r) || !r.image?.base64) {
         const code = r && "error" in r && typeof r.error === "string" ? r.error : "failed";
-        const known = ["no-viewer", "no-tile", "image-model-not-set", "declined", "timeout", "capture-failed"];
+        const known = ["no-viewer", "no-tile", "image-model-not-set", "declined", "timeout", "capture-failed", "no-selected-roi", "roi-not-visible"];
         setNote(t(`assistant.viewImage.err.${known.includes(code) ? code : "failed"}`));
         return;
       }
@@ -163,7 +181,7 @@ export function AssistantScreen() {
     } finally {
       setCapturing(false);
     }
-  }, [bridge, sessionId, withRoi, images.length, t]);
+  }, [bridge, sessionId, withRoi, cropRoi, images.length, t]);
 
   const addFiles = useCallback(
     async (files: File[]) => {
@@ -225,8 +243,10 @@ export function AssistantScreen() {
       .map((m) => ({ role: m.role, text: m.text }));
     // ツールを送るのは、使える口があり、提供元がツール呼び出しに対応するとき（toolMode:none は案内のみ）。
     const canOperate = !!bridge.assistantViewerCmd && !!resolved?.ok && resolved.toolMode !== "none";
+    // モデルへ見せるスキル: 検証に通ったものだけ（チャットモードで操作ツールが使えるとき）。
+    const offered = promptSkills(mergeSkills(userSkills, pluginSkills).map((e) => e.skill), enabledPluginTools);
     const req: AiChatMessage[] = [
-      { role: "system", text: buildSystemPrompt(locale, hits, { canOperate, robot, pluginTools: canOperate && !robot && enabledPluginTools.length > 0, robotPluginTools: canOperate && robot && planEligible(enabledPluginTools).length > 0 }) },
+      { role: "system", text: buildSystemPrompt(locale, hits, { canOperate, robot, skills: canOperate && !robot ? offered : undefined, pluginTools: canOperate && !robot && enabledPluginTools.length > 0, robotPluginTools: canOperate && robot && planEligible(enabledPluginTools).length > 0 }) },
       ...history,
       { role: "user", text: composed.text, images: allImages.length ? allImages.map((i) => ({ base64: i.base64, mimeType: i.mimeType })) : undefined },
     ];
@@ -241,7 +261,17 @@ export function AssistantScreen() {
     const viewer = (cmd: { kind: "action" | "getState" | "getMeasurements"; id?: string; params?: unknown }) =>
       bridge.assistantViewerCmd!(sessionId, cmd);
     if (robot) setPlan(null);
-    const result = await runToolLoop(req, canOperate ? (robot ? buildRobotTools(enabledPluginTools) : [...buildTools(), ...enabledPluginTools.map(toToolDef)]) : [], {
+    const result = await runToolLoop(req, canOperate ? (robot ? buildRobotTools(enabledPluginTools) : [...buildTools(), ...buildSkillTools(), ...enabledPluginTools.map(toToolDef)]) : [], {
+      skills: canOperate && !robot ? offered : undefined,
+      skillIds: userSkills.map((s) => s.id),
+      onSkillStart: (p) => {
+        setSkillSuggest({ nonce: Date.now(), skillId: p.skillId, inputs: p.inputs });
+        setSkillOpen(true);
+      },
+      onSkillDraft: (p) => {
+        setSkillDraft({ nonce: Date.now(), skill: p.skill });
+        setSkillOpen(true);
+      },
       mode: robot ? "robot" : "chat",
       onPlan: (p) => setPlan(p),
       chat: (messages, tools) => bridge.aiChat!({ sessionId, messages, tools: tools.length ? tools : undefined, stream: true }),
@@ -263,7 +293,7 @@ export function AssistantScreen() {
       flush();
     }
     dispatch({ type: "done", result });
-  }, [input, images, attachments, ingesting, resolved, t, state.pending, state.messages, bridge, locale, sessionId, flush, robot, enabledPluginTools]);
+  }, [input, images, attachments, ingesting, resolved, t, state.pending, state.messages, bridge, locale, sessionId, flush, robot, enabledPluginTools, userSkills, pluginSkills]);
 
   const stop = useCallback(() => {
     abortedRef.current = true;
@@ -296,6 +326,41 @@ export function AssistantScreen() {
       viewer: (cmd) => bridge.assistantViewerCmd!(sessionId, cmd),
     };
   }, [bridge, sessionId]);
+  // スキルの口。保存は main（形と大きさの検証）、実行は send と同じ viewer 中継（2D 窓が毎回検証）。
+  const skillApi = useMemo<SkillApi | null>(() => {
+    if (!bridge?.assistantSkillsList || !bridge.assistantSkillsSave || !bridge.assistantSkillsDelete || !bridge.assistantViewerCmd) return null;
+    return {
+      list: () => bridge.assistantSkillsList!(),
+      save: (s) => bridge.assistantSkillsSave!(s),
+      remove: (id) => bridge.assistantSkillsDelete!(id),
+      viewer: (cmd) => bridge.assistantViewerCmd!(sessionId, cmd),
+      pluginTools: enabledPluginTools,
+      pluginTool: (cmd) => bridge.assistantViewerCmd!(sessionId, cmd) as Promise<PluginToolResult>,
+      pluginSkills,
+    };
+  }, [bridge, sessionId, enabledPluginTools, pluginSkills]);
+  const reloadSkills = useCallback(async () => {
+    const r = await bridge?.assistantSkillsList?.();
+    setUserSkills(r?.ok && r.skills ? r.skills : []);
+    const ps = await bridge?.assistantPluginSkillsList?.();
+    setPluginSkills(ps?.ok && ps.skills ? ps.skills : []);
+    setSkillsVersion((v) => v + 1);
+  }, [bridge]);
+  useEffect(() => {
+    void reloadSkills();
+  }, [reloadSkills]);
+  // マクロ → スキル。マクロは残す。検証に通らなければ理由を返す。
+  const convertMacro = useCallback(
+    async (m: Macro): Promise<{ ok: boolean; error?: string }> => {
+      const c = macroToSkill(m, () => Math.random().toString(16).slice(2, 10));
+      if (!c.ok) return { ok: false, error: c.error };
+      const r = await bridge?.assistantSkillsSave?.(c.skill);
+      if (!r?.ok) return { ok: false, error: r?.error ?? "unavailable" };
+      await reloadSkills();
+      return { ok: true };
+    },
+    [bridge, reloadSkills],
+  );
   const robotApi = useMemo(
     () =>
       bridge?.assistantViewerCmd
@@ -310,6 +375,28 @@ export function AssistantScreen() {
         : null,
     [bridge, sessionId, enabledPluginTools],
   );
+  const requestLogApi = useMemo<RequestLogApi | null>(
+    () => (bridge?.assistantRequestLogSummary && bridge.assistantRequestLogClear ? { summary: bridge.assistantRequestLogSummary, clear: bridge.assistantRequestLogClear } : null),
+    [bridge],
+  );
+  // 回帰評価（固定質問セット）。ツールは実行しない。ツール呼び出しに対応しない提供元では使えない。
+  const evalApi = useMemo<EvalApi | null>(() => {
+    if (!bridge?.aiChat || !bridge.assistantEvalList || !bridge.assistantEvalAppend) return null;
+    const ok = resolved?.ok === true && resolved.toolMode !== "none";
+    return {
+      list: bridge.assistantEvalList,
+      append: (run) => bridge.assistantEvalAppend!({ suiteVersion: EVAL_SUITE_VERSION, meta: run.meta, cases: run.cases.map((c) => ({ id: c.id, pass: c.pass })) }),
+      run: (onProgress) =>
+        runEval({
+          cases: EVAL_CASES,
+          systemPrompt: buildSystemPrompt(locale, [], { canOperate: true }),
+          tools: buildTools(),
+          chat: (sessionId, messages, tools) => bridge.aiChat!({ sessionId, messages, tools, temperature: 0 }),
+          onProgress,
+        }),
+      destination: ok ? (resolved.local ? null : { host: resolved.endpointHost }) : undefined,
+    };
+  }, [bridge, resolved, locale]);
   const macroCandidates = useMemo(() => candidatesFromActions(state.messages.flatMap((m) => m.actions ?? [])), [state.messages]);
 
   const onPaste = (e: ClipboardEvent) => {
@@ -352,9 +439,19 @@ export function AssistantScreen() {
             {t("assistant.plugintools.button")}
           </button>
         )}
+        {requestLogApi && (
+          <button style={S.linkBtn} onClick={() => setRequestLogOpen((v) => !v)} data-testid="assistant-requestlog-toggle">
+            {t("assistant.requestlog.button")}
+          </button>
+        )}
         {macroApi && (
           <button style={S.linkBtn} onClick={() => setMacroOpen((v) => !v)} data-testid="assistant-macro-toggle">
             {t("assistant.macro.button")}
+          </button>
+        )}
+        {skillApi && (
+          <button style={S.linkBtn} onClick={() => { setSkillOpen((v) => !v); void reloadSkills(); }} data-testid="assistant-skill-toggle">
+            {t("assistant.skill.button")}
           </button>
         )}
         <button style={S.linkBtn} disabled={busy || !state.messages.length} onClick={() => dispatch({ type: "clear" })}>
@@ -377,7 +474,9 @@ export function AssistantScreen() {
       {robot && resolved?.ok && resolved.toolMode === "none" && <div style={S.note}>{t("assistant.robot.noTools")}</div>}
       {robot && robotApi && <RobotPanel plan={plan} api={robotApi} t={t} onDiscard={() => setPlan(null)} />}
       {pluginToolOpen && <PluginToolPanel tools={pluginTools} onToggle={(id, on) => void togglePlugin(id, on)} busy={busy} t={t} />}
-      {macroOpen && macroApi && <MacroPanel api={macroApi} candidates={macroCandidates} busy={busy} t={t} />}
+      {requestLogOpen && requestLogApi && <RequestLogPanel api={requestLogApi} evalApi={evalApi} busy={busy} t={t} />}
+      {macroOpen && macroApi && <MacroPanel api={macroApi} candidates={macroCandidates} busy={busy} t={t} onConvert={convertMacro} />}
+      {skillOpen && skillApi && <SkillPanel api={skillApi} busy={busy} t={t} locale={locale} suggestion={skillSuggest} draft={skillDraft} onChanged={() => void reloadSkills()} reloadKey={skillsVersion} />}
       {note && <div style={S.note}>{note}</div>}
       {attachments.length > 0 && !(resolved?.ok && resolved.local) && (
         <div style={S.note} data-testid="assistant-attach-dest">
@@ -517,6 +616,9 @@ export function AssistantScreen() {
           </button>
           <label style={S.dim} title={t("assistant.viewImage.roiHelp")}>
             <input type="checkbox" checked={withRoi} onChange={(e) => setWithRoi(e.target.checked)} data-testid="assistant-attach-view-roi" /> {t("assistant.viewImage.roi")}
+          </label>
+          <label style={S.dim} title={t("assistant.viewImage.cropHelp")}>
+            <input type="checkbox" checked={cropRoi} onChange={(e) => setCropRoi(e.target.checked)} data-testid="assistant-attach-view-crop" /> {t("assistant.viewImage.crop")}
           </label>
           {voice.available ? (
             <button

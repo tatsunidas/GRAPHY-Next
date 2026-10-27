@@ -14,6 +14,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useI18n } from "../i18n/i18n";
+import { useDateFormat, formatDateTime } from "../i18n/dateFormat";
 import { fetchSeriesLayout, type Instance, type Series, type Study } from "../api";
 import type { ViewerMode } from "../viewer/imageId";
 import { estimateRegVolume, loadRegVolume } from "../viewer/regVolumeLoader";
@@ -60,6 +61,7 @@ export function RegistrationPanel({
   viewerMode, fixed, moving, result, restoredAt, onResult, onClose,
 }: RegistrationPanelProps) {
   const { t } = useI18n();
+  useDateFormat(); // 書式の設定が変わったら再描画する
   const [phase, setPhase] = useState<Phase>("idle");
   const [progress, setProgress] = useState(0);
   const [status, setStatus] = useState("");
@@ -423,7 +425,7 @@ export function RegistrationPanel({
             <div style={hint}>{t("registration.fromSro")}</div>
           ) : restoredAt ? (
             <div style={hint}>
-              {t("registration.fromRecord", { at: new Date(restoredAt).toLocaleString() })}
+              {t("registration.fromRecord", { at: formatDateTime(restoredAt) })}
             </div>
           ) : (
             <div style={row}>

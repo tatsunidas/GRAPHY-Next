@@ -27,10 +27,15 @@ import java.util.List;
 public class DicomScpLifecycle implements SmartLifecycle {
 
     private final DicomScpServer server;
+    private final boolean queryRetrieveActive;
 
     public DicomScpLifecycle(DicomProperties props, DicomStorageService storage, DicomTlsService tlsService,
                              DicomLocalAeService localAe,
-                             com.vis.graphynext.anonymize.ReceiveAnonymizer anonymizer) {
+                             com.vis.graphynext.anonymize.ReceiveAnonymizer anonymizer,
+                             com.vis.graphynext.dicom.store.ReceiveCompressor compressor,
+                             DicomQrAccess qrAccess, DicomFindQuery findQuery,
+                             DicomMoveTargets moveTargets, DicomRemoteAeService remoteAes,
+                             com.vis.graphynext.anonymize.PixelCodec codec) {
         this.server = new DicomScpServer(
                 localAe.aeTitle(),
                 localAe.bindAddress(),
@@ -43,8 +48,20 @@ public class DicomScpLifecycle implements SmartLifecycle {
         List<TransferCapability> storageCaps =
                 StorageSopClasses.scpCapabilities(props.getStorageSopClassesResource());
         server.addService(
-                new DicomStoreScp(storage, tempDir, anonymizer),
+                new DicomStoreScp(storage, tempDir, anonymizer, compressor),
                 storageCaps.toArray(TransferCapability[]::new));
+
+        // 他端末からの検索（C-FIND）と取得（C-MOVE／C-GET）。患者情報・画像を返すので既定は OFF。登録は起動時なので、切り替えは再起動後に反映。
+        this.queryRetrieveActive = qrAccess.enabled();
+        if (queryRetrieveActive) {
+            server.addService(new DicomFindScp(qrAccess, findQuery), DicomFindScp.capabilities());
+            server.addService(new DicomMoveScp(qrAccess, moveTargets, remoteAes, localAe, tlsService, codec),
+                    DicomMoveScp.capabilities());
+            // C-GET は、受けた接続の上で保存 SOP クラスを返す。相手の役割選択を受理するため、同じ一覧の SCU ロールも登録する。
+            List<TransferCapability> getCaps = new java.util.ArrayList<>(List.of(DicomGetScp.capabilities()));
+            getCaps.addAll(StorageSopClasses.scuCapabilities(props.getStorageSopClassesResource()));
+            server.addService(new DicomGetScp(qrAccess, moveTargets, codec), getCaps.toArray(TransferCapability[]::new));
+        }
 
         // TLS が設定済み（GUI 保存 or application.yml）なら、平文に加えて TLS リスナーも有効化する。
         // リスナーは起動時バインドのため、GUI での TLS 変更は再起動後に反映される。
@@ -56,6 +73,11 @@ public class DicomScpLifecycle implements SmartLifecycle {
 
     public DicomScpServer getServer() {
         return server;
+    }
+
+    /** 他端末からの検索に応答するサービスを、この起動で登録したか。 */
+    public boolean isQueryRetrieveActive() {
+        return queryRetrieveActive;
     }
 
     @Override

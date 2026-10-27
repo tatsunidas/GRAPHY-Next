@@ -84,6 +84,11 @@ public class KeyImageRef {
         return seriesInstanceUid;
     }
 
+    /** 画像が別のシリーズへ移った（シリーズの統合・分割）とき、SOP は変わらないのでシリーズだけ付け替える。 */
+    public void setSeriesInstanceUid(String seriesInstanceUid) {
+        this.seriesInstanceUid = seriesInstanceUid;
+    }
+
     public Integer getFrameNumber() {
         return frameNumber;
     }

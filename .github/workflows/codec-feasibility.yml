@@ -1,0 +1,55 @@
+name: Lossless codec feasibility
+
+# 可逆圧縮（JPEG-LS／JPEG 2000／RLE の Lossless）への符号化が、各 OS の OpenCV ネイティブで使えるかの実測。
+# 手動実行のみ（取得元が SourceForge で、常用 CI の足を引っ張らないため）。結果は JSON をアーティファクトに残す。
+on:
+  workflow_dispatch:
+
+jobs:
+  feasibility:
+    name: Codec (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+      # このホスト向けの OpenCV ネイティブを ~/dcm4che-<版> へ取得する（Dcm4cheHome が ~/dcm4che-* を探す）。
+      - name: Fetch dcm4che native
+        shell: bash
+        run: |
+          DCM4CHE_TOOLS_OUT_DIR="$HOME/dcm4che-5.34.3" bash scripts/fetch-dcm4che-tools.sh
+          DCM4CHE_TOOLS_OUT_DIR="$HOME/dcm4che-5.34.3" bash scripts/fetch-dcm4che-tools.sh --check
+      # GRAPHY_REQUIRE_NATIVE_CODEC=1: ネイティブが使えない・1 件も通らないときは「飛ばす」でなく落とす。
+      - name: Run feasibility test
+        working-directory: backend
+        shell: bash
+        env:
+          GRAPHY_REQUIRE_NATIVE_CODEC: "1"
+        run: |
+          mvn -B -Dfrontend.skip=true -Dtest='LosslessCodecFeasibilityTest,ReceiveCompressorTest,ReceiveCompressIntegrationTest,DicomStoreScuCompressedTest,ImageJCompressedFileTest,CompressedFileEditTest' test \
+            -Dmaven.wagon.http.retryHandler.count=3 \
+            -Dmaven.wagon.httpconnectionManager.ttlSeconds=120
+      # 通常の CI にはネイティブが無く、圧縮のテストは「飛ばす」になる。ここでは飛ばされていないことを確かめる。
+      - name: Check nothing was skipped
+        working-directory: backend
+        shell: bash
+        run: |
+          grep -h "Tests run" target/surefire-reports/*LosslessCodecFeasibilityTest.txt target/surefire-reports/*ReceiveCompressorTest.txt target/surefire-reports/*ReceiveCompressIntegrationTest.txt target/surefire-reports/*DicomStoreScuCompressedTest.txt target/surefire-reports/*ImageJCompressedFileTest.txt target/surefire-reports/*CompressedFileEditTest.txt
+          if grep -h "Tests run" target/surefire-reports/*LosslessCodecFeasibilityTest.txt target/surefire-reports/*ReceiveCompressorTest.txt target/surefire-reports/*ReceiveCompressIntegrationTest.txt target/surefire-reports/*DicomStoreScuCompressedTest.txt target/surefire-reports/*ImageJCompressedFileTest.txt target/surefire-reports/*CompressedFileEditTest.txt | grep -v "Skipped: 0"; then
+            echo "飛ばされたテストがある"; exit 1
+          fi
+      - name: Upload result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lossless-feasibility-${{ matrix.os }}
+          path: backend/target/lossless-feasibility.json
+          if-no-files-found: warn

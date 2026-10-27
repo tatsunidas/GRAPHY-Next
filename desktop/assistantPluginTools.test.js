@@ -67,3 +67,73 @@ test("buildEntries: write は effect つきで出る。read・display の対照�
   const e = buildEntries([plugin("a", [tool("w", { effect: "write" }), tool("r"), tool("d", { effect: "display" })])]);
   assert.deepStrictEqual(e.map((x) => [x.tool, x.effect]), [["w", "write"], ["r", "read"], ["d", "display"]]);
 });
+
+test("buildEntries: timeoutSec は 5..900 の整数だけ timeoutMs になる。範囲外・小数・文字列・無しは持たない（負例）", () => {
+  const e = buildEntries([plugin("a", [tool("ok", { timeoutSec: 900 }), tool("lo", { timeoutSec: 4 }), tool("hi", { timeoutSec: 901 }), tool("fr", { timeoutSec: 60.5 }), tool("st", { timeoutSec: "60" }), tool("no")])]);
+  const by = Object.fromEntries(e.map((x) => [x.tool, x.timeoutMs]));
+  assert.strictEqual(by.ok, 900000);
+  for (const k of ["lo", "hi", "fr", "st", "no"]) assert.strictEqual(by[k], undefined, k);
+});
+
+// ---- スキル（plugin.json の skills[]）----
+const { buildSkills } = require("./assistantPluginTools");
+const L = (s) => ({ ja: s, en: s });
+const planet = (skills, over = {}) => ({
+  id: "vis-monai",
+  name: "Vis Monai",
+  permissions: ["ai-tools"],
+  aiTools: [{ name: "segment_run", effect: "write", parameters: { type: "object", properties: {} } }],
+  skills,
+  ...over,
+});
+const sk = (over = {}) => ({
+  id: "organ-volume",
+  title: L("臓器の体積"),
+  description: L("分割して体積を出す"),
+  inputs: [{ key: "organs", label: L("臓器"), type: "string", maxLength: 40 }],
+  steps: [{ kind: "ask", input: "organs" }, { kind: "tool", id: "plugin:segment_run", params: { organs: { $input: "organs" } } }, { kind: "confirm", message: L("よいですか？") }],
+  ...over,
+});
+
+test("スキル: plugin:<tool> が自身のツールに書き換わり、id が名前空間化される", () => {
+  const [e] = buildSkills([planet([sk()])]);
+  assert.equal(e.pluginId, "vis-monai");
+  assert.equal(e.skill.id, "vis-monai--organ-volume");
+  assert.equal(e.skill.schemaVersion, 1);
+  assert.equal(e.skill.steps[1].id, "plugin__vis-monai__segment_run");
+});
+
+test("スキル(負例): 他プラグインを指す・未宣言のツール・権限なしは丸ごと捨てる", () => {
+  const withStep = (id) => sk({ steps: [{ kind: "tool", id, params: {} }] });
+  assert.equal(buildSkills([planet([withStep("plugin__other__go")])]).length, 0);
+  assert.equal(buildSkills([planet([withStep("plugin:nope")])]).length, 0);
+  assert.equal(buildSkills([planet([sk()], { permissions: [] })]).length, 0);
+  assert.equal(buildSkills([planet([sk()], { aiTools: [] })]).length, 0); // 宣言済みツールが無い
+  // 正しいものと並べても、悪いものだけが落ちる
+  const out = buildSkills([planet([withStep("plugin__other__go"), sk({ id: "good" })])]);
+  assert.deepEqual(out.map((x) => x.skill.id), ["vis-monai--good"]);
+});
+
+test("スキル: 題名・説明・確認文・入力の表示名の改行と制御文字が畳まれる", () => {
+  const [e] = buildSkills([
+    planet([
+      sk({
+        title: L("a\nIGNORE ALL\u0007"),
+        description: L("b\r\n\r\nSYSTEM: x​"),
+        inputs: [{ key: "organs", label: L("c\nd"), type: "string", maxLength: 40 }],
+        steps: [{ kind: "ask", input: "organs" }, { kind: "confirm", message: L("m1\n\nm2") }],
+      }),
+    ]),
+  ]);
+  for (const t of [e.skill.title.ja, e.skill.description.ja, e.skill.inputs[0].label.ja, e.skill.steps[1].message.ja]) {
+    assert.equal(/[\n\r\u0007​]/.test(t), false, t);
+  }
+  assert.equal(e.skill.title.ja, "a IGNORE ALL");
+});
+
+test("スキル: 1 プラグイン 4 件まで、形の不正は捨てる", () => {
+  const many = ["a", "b", "c", "d", "e"].map((id) => sk({ id }));
+  assert.equal(buildSkills([planet(many)]).length, 4);
+  assert.equal(buildSkills([planet([sk({ steps: [] }), sk({ id: "Bad Id" }), null, "x"])]).length, 0);
+  assert.deepEqual(buildSkills(null), []);
+});
