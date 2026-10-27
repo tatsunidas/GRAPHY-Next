@@ -68,6 +68,11 @@ public class DicomStoreScu {
         this.codec = codec;
     }
 
+    /** 保管庫が可逆圧縮で持つ転送構文か（相手が受けないとき、復号して送る対象）。 */
+    public static boolean isLosslessStored(String tsuid) {
+        return tsuid != null && LOSSLESS_STORED.contains(tsuid);
+    }
+
     private boolean canFallBack(String tsuid) {
         return codec != null && tsuid != null && LOSSLESS_STORED.contains(tsuid);
     }

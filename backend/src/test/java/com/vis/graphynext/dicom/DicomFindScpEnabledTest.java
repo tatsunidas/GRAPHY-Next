@@ -60,6 +60,17 @@ class DicomFindScpEnabledTest {
                 "STRANGER", studyKeys());
         assertEquals(Status.UnableToProcess, refused.status(), "登録外の AE は拒否される");
 
+        // 取得（C-MOVE）も同じ起動で登録されている: 登録済みの相手は受理され、未登録の宛先は 0xA801、登録外の相手は 0xC000
+        Attributes moveKeys = studyKeys();
+        moveKeys.setString(Tag.StudyInstanceUID, VR.UI, "1.2.3");
+        MoveScpClient.Moved listed = MoveScpClient.move(PORT, UID.StudyRootQueryRetrieveInformationModelMove,
+                "LISTED", "NOWHERE", moveKeys, 0);
+        assertTrue(listed.accepted(), "有効のとき MOVE のコンテキストが受理される");
+        assertEquals(Status.MoveDestinationUnknown, listed.status());
+        MoveScpClient.Moved stranger = MoveScpClient.move(PORT, UID.StudyRootQueryRetrieveInformationModelMove,
+                "STRANGER", "LISTED", moveKeys, 0);
+        assertEquals(Status.UnableToProcess, stranger.status(), "登録外の AE は取得も拒否される");
+
         @SuppressWarnings("unchecked")
         Map<String, Object> qr = (Map<String, Object>) controller.scpStatus().get("queryRetrieve");
         assertEquals(Map.of("enabled", true, "active", true, "allowAll", false), qr);

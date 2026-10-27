@@ -421,11 +421,24 @@ public class DicomStorageService {
                 insts.addAll(repo.findBySeries(studyUid, se));
             }
         }
+        return locate(insts).stream().map(Located::path).toList();
+    }
+
+    /** 索引のインスタンスと、その読めるローカルファイル。 */
+    public record Located(DicomInstance instance, Path path) {
+    }
+
+    /** 索引のインスタンスを、読めるローカルファイルに対応づける（実在しないものは除外）。 */
+    public List<Located> locate(List<DicomInstance> insts) {
         layout.prefetch(insts, () -> false); // モード A: 手元に無いものを先にまとめて取り寄せる（失敗は例外）
-        return insts.stream()
-                .map(layout::resolveForRead)
-                .filter(java.util.Objects::nonNull)
-                .toList();
+        List<Located> out = new java.util.ArrayList<>(insts.size());
+        for (DicomInstance inst : insts) {
+            Path p = layout.resolveForRead(inst);
+            if (p != null) {
+                out.add(new Located(inst, p));
+            }
+        }
+        return out;
     }
 
     /**

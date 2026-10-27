@@ -59,6 +59,12 @@ class DicomFindScpDefaultOffTest {
         assertFalse(r.accepted(), "既定は OFF: 登録済みの相手でも FIND は使えない");
         assertEquals(0, r.matches().size());
 
+        Attributes moveKeys = new Attributes(keys);
+        moveKeys.setString(Tag.StudyInstanceUID, VR.UI, "1.2.3");
+        MoveScpClient.Moved mv = MoveScpClient.move(PORT, UID.StudyRootQueryRetrieveInformationModelMove,
+                "LISTED", "LISTED", moveKeys, 0);
+        assertFalse(mv.accepted(), "既定は OFF: 登録済みの相手でも MOVE は使えない");
+
         assertTrue(echo.echo("127.0.0.1", PORT, "GRAPHYNEXT", "LISTED").success(), "C-ECHO は通る");
 
         @SuppressWarnings("unchecked")
