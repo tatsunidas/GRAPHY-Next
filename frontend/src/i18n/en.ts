@@ -2013,6 +2013,9 @@ export const en: Record<string, string> = {
   "xa.analysis.showOnImage": "Show on image",
   "xa.analysis.showOnImageHint": "Highlight the selected line on the image (the list text alone does not tell which line it is).",
   "xa.analysis.saveFailed": "Could not save.",
+  "xa.analysis.noReference": "Could not identify the source instance to reference.",
+  "xa.analysis.savedGsps": "Presentation state saved ({{uid}})",
+  "xa.analysis.saveGsps": "Save presentation state (GSPS)",
   // ── Reading a saved presentation state (GSPS). fw/angio-design.md 14.1 ──
   "xa.pr.open": "Apply state",
   "xa.pr.title": "Apply a saved presentation state (GSPS)",

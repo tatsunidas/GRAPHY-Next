@@ -2077,6 +2077,13 @@ export function SeriesViewer({
         <XaCalibrationDialog
           imageId={displayImageIds[zc]}
           seriesUid={seriesUid}
+          saveContext={{
+            studyUid,
+            // 保存の参照先は合成 imageId ではなく**ネイティブフレーム**の元インスタンス。
+            sopInstanceUid: sopUidFromImageId(zStack[zc] ?? ""),
+            frameIndex: zc,
+            dsa: dsaState ? { maskFrames: dsaState.maskFrames, dx: dsaState.dx, dy: dsaState.dy } : null,
+          }}
           onClose={() => setCalibDialogOpen(false)}
           // 校正が変わったら表示（スケールバー・計測ラベル）を作り直す。
           // DSA 中は合成 imageId の版番号、非 DSA でも refreshKey でスタックを初期化し直す。

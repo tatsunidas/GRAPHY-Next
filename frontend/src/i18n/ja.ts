@@ -2015,6 +2015,9 @@ export const ja: Record<string, string> = {
   "xa.analysis.showOnImage": "画像で示す",
   "xa.analysis.showOnImageHint": "選んでいる線を画像の上で光らせます（どの線を選んでいるか一覧の文字だけでは分かりにくいため）。",
   "xa.analysis.saveFailed": "保存できませんでした。",
+  "xa.analysis.noReference": "参照する元インスタンスを特定できませんでした。",
+  "xa.analysis.savedGsps": "表示状態を保存しました（{{uid}}）",
+  "xa.analysis.saveGsps": "表示状態を保存 (GSPS)",
   // ── 表示状態（GSPS）の読み込み。fw/angio-design.md §14.1 ──────────────
   "xa.pr.open": "表示状態を適用",
   "xa.pr.title": "保存された表示状態（GSPS）を適用する",

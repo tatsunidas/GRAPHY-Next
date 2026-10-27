@@ -15,7 +15,9 @@
 import { useCallback, useMemo, useState } from "react";
 import { getRenderingEngine } from "@cornerstonejs/core";
 import { annotation as csAnnotation, utilities as csToolsUtilities } from "@cornerstonejs/tools";
+import { createXaPresentationState } from "../api";
 import { useI18n } from "../i18n/i18n";
+import { readVoiWindow } from "./viewportRead";
 import { ENGINE_ID } from "./Viewer2D";
 import { calibrationForImageId, loaderSpacingFor } from "./xaCalibrationProvider";
 import { persistXaUserCalibration } from "./xaCalibrationPersistence";
@@ -91,15 +93,48 @@ function highlightLine(uid: string | null): void {
   }
 }
 
+/** 保存（GSPS）の参照先。SeriesViewer から渡す。 */
+export interface XaSaveContext {
+  studyUid: string;
+  /** 表示中フレームの元インスタンス。 */
+  sopInstanceUid: string | null;
+  /** 表示中フレーム（**0 origin**。DICOM へ書くときに +1 する）。 */
+  frameIndex: number;
+  /** DSA 中ならその設定（マスクフレームは 0 origin）。 */
+  dsa?: { maskFrames: number[]; dx: number; dy: number } | null;
+}
+
+/**
+ * 表示中ビューポートの実 VOI を読む。メタデータではなく**実際に表示されている値**を保存する
+ * （W/L を触った後にメタデータの値を保存すると、開き直したときに違う見え方になる）。読めなければ null。
+ */
+function readVoiFor(imageId: string): { windowCenter: number; windowWidth: number } | null {
+  try {
+    const engine = getRenderingEngine(ENGINE_ID);
+    if (!engine) return null;
+    for (const vp of engine.getViewports()) {
+      const current = (vp as { getCurrentImageId?: () => string | undefined }).getCurrentImageId?.();
+      if (current !== imageId) continue;
+      const w = readVoiWindow(vp as never);
+      if (w && Number.isFinite(w.center) && Number.isFinite(w.width)) return { windowCenter: w.center, windowWidth: w.width };
+    }
+  } catch {
+    /* 読めなければ VOI は保存しない */
+  }
+  return null;
+}
+
 export function XaCalibrationDialog({
   imageId,
   seriesUid,
+  saveContext,
   onClose,
   onCalibrated,
 }: {
   /** 校正する線を探す imageId（表示中フレーム。DSA 表示中は合成 imageId）。 */
   imageId: string;
   seriesUid: string;
+  saveContext: XaSaveContext;
   onClose: () => void;
   onCalibrated?: () => void;
 }) {
@@ -120,6 +155,8 @@ export function XaCalibrationDialog({
   const [knownMm, setKnownMm] = useState("");
   const [frSize, setFrSize] = useState("6");
   const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState<string | null>(null);
   const line = lines[selected] ?? null;
 
   const label = useCallback(
@@ -142,6 +179,51 @@ export function XaCalibrationDialog({
     setError(null);
     setCalibVersion((v) => v + 1);
     onCalibrated?.();
+  };
+
+  /** 表示状態（W/L・DSA マスク・校正）を XA/XRF の GSPS として保存する（非破壊）。 */
+  const savePresentationState = () => {
+    const sop = saveContext.sopInstanceUid;
+    if (!sop) {
+      setError(t("xa.analysis.noReference"));
+      return;
+    }
+    setSaving(true);
+    setError(null);
+    const c = calibrationForImageId(imageId);
+    createXaPresentationState({
+      studyInstanceUid: saveContext.studyUid,
+      seriesInstanceUid: seriesUid,
+      sopInstanceUid: sop,
+      // DICOM のフレーム番号は 1 origin。
+      frameNumbers: [saveContext.frameIndex + 1],
+      label: "XA",
+      description: "GRAPHY-Next presentation state",
+      voi: readVoiFor(imageId),
+      invert: false,
+      mask: saveContext.dsa
+        ? {
+            maskFrameNumbers: saveContext.dsa.maskFrames.map((i) => i + 1),
+            // DICOM の MaskSubPixelShift は [row, column]。内部の {dx=横, dy=縦} と並びが逆。
+            subPixelShiftRow: saveContext.dsa.dy,
+            subPixelShiftCol: saveContext.dsa.dx,
+          }
+        : null,
+      calibration:
+        c && c.mmPerPxRow != null && c.mmPerPxCol != null
+          ? {
+              mmPerPxRow: c.mmPerPxRow,
+              mmPerPxCol: c.mmPerPxCol,
+              type: c.source === "user-catheter" || c.source === "dicom-fiducial" ? "FIDUCIAL" : "GEOMETRY",
+              description: c.provenance,
+            }
+          : null,
+      polylines: [],
+      texts: [],
+    })
+      .then((r) => setSaved(t("xa.analysis.savedGsps", { uid: r.sopInstanceUid.length > 12 ? `…${r.sopInstanceUid.slice(-12)}` : r.sopInstanceUid })))
+      .catch(() => setError(t("xa.analysis.saveFailed")))
+      .finally(() => setSaving(false));
   };
 
   return (
@@ -257,6 +339,19 @@ export function XaCalibrationDialog({
             </button>
           </div>
           <div style={hint}>{t("xa.analysis.catheterCaveat")}</div>
+        </div>
+        <div style={section} data-step="save">
+          <div style={row}>
+            <button
+              style={btn}
+              data-testid="xa-save-gsps"
+              disabled={saving || !saveContext.sopInstanceUid}
+              onClick={savePresentationState}
+            >
+              {t("xa.analysis.saveGsps")}
+            </button>
+            {saved && <span style={hint} data-testid="xa-save-gsps-msg">{saved}</span>}
+          </div>
         </div>
         {error && <div style={warn} data-testid="xa-calib-error">{error}</div>}
         <div style={{ ...row, justifyContent: "flex-end" }}>

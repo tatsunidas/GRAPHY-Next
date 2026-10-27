@@ -180,6 +180,25 @@ async function main(): Promise<void> {
     check(!!m3 && !!before && m3.unit === before.unit && Math.abs(m3.value - before.value) < 0.05, "[5] 計測値も校正前の値に戻る", { before, m3 });
     await viewer.screenshot({ path: path.join(OUT_DIR, "3-cleared.png") }).catch(() => {});
 
+    // ── 8. 表示状態（GSPS）の保存が校正ダイアログから残っている ──────────────
+    {
+      const base = `http://127.0.0.1:${driver.ports.http}/api`;
+      const countPr = async (): Promise<number> => {
+        const studies = (await (await fetch(`${base}/studies`)).json()) as { studyInstanceUid: string }[];
+        const ss = (await (await fetch(`${base}/studies/${studies[0].studyInstanceUid}/series`)).json()) as { modality?: string }[];
+        return ss.filter((x) => x.modality === "PR").length;
+      };
+      const before = await countPr();
+      await openDialog(viewer);
+      await viewer.getByTestId("xa-save-gsps").click();
+      const msg = await viewer.getByTestId("xa-save-gsps-msg").waitFor({ state: "visible", timeout: 20_000 }).then(() => true).catch(() => false);
+      check(msg, "[8] GSPS を保存でき、完了の表示が出る");
+      await viewer.waitForTimeout(1_500);
+      const after = await countPr();
+      check(after === before + 1, "[8] 保管庫に PR シリーズが 1 件増えた", { before, after });
+      await closeDialog(viewer);
+    }
+
     // ── 7. QLV が開く ─────────────────────────────────────────────
     const qlv = viewer.getByTestId("qlv-open");
     if ((await qlv.count()) === 1 && !(await qlv.isDisabled())) {
