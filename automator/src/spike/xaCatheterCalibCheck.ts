@@ -39,7 +39,7 @@ function check(cond: boolean, label: string, detail?: unknown): void {
   console.log(`  [${cond ? "ok  " : "FAIL"}] ${label}${detail === undefined ? "" : ` — ${JSON.stringify(detail)}`}`);
 }
 
-/** 画像の画素座標 p0 → p1 に Length を引く（qfrPluginCheck と同じ手順）。 */
+/** 画像の画素座標 p0 → p1 に Length を引く（画像座標から画面座標へ換算して引く。旧 qfrPluginCheck の手順を引き継いだもの）。 */
 async function drawBetweenImagePixels(viewer: Page, p0: [number, number], p1: [number, number]): Promise<void> {
   const raw = (await viewer.evaluate(`(() => {
     const g = window.__graphyDebug;
