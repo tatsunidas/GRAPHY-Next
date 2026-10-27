@@ -1778,7 +1778,11 @@ export interface SendRequest {
   /** 自局 AE（空なら backend の既定 localAeTitle）。 */
   callingAet?: string;
   tls?: boolean;
+  /** 送るときの転送構文。省略は保存どおり（STORED）。指定した構文を相手が受けないと、その画像は失敗として数える。 */
+  transferSyntax?: SendTransferSyntax;
 }
+
+export type SendTransferSyntax = "STORED" | "EXPLICIT_LE" | "IMPLICIT_LE";
 
 /** 送信結果サマリ。 */
 export interface SendResult {
@@ -1797,6 +1801,7 @@ export const sendDicom = (req: SendRequest) =>
     calledAet: req.calledAet,
     callingAet: req.callingAet ?? "",
     tls: req.tls ?? false,
+    transferSyntax: req.transferSyntax ?? "STORED",
   });
 
 // ── Query/Retrieve（QR ウィンドウ） ────────────────────────────
