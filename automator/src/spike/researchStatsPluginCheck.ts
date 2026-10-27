@@ -94,6 +94,21 @@ function synthR3(n: number): { files: string[]; missing2: string } {
   return { files, missing2: m2 };
 }
 
+/** パイプライン（P4）用の合成データ。f_a は強く、f_b は中くらいに結果と関係し、f_n1〜f_n4 は無関係、f_dup は f_a とほぼ同じ（相関で除かれる）。 */
+function synthP4(n: number): { feat: string; clin: string } {
+  let a = 4242;
+  const rnd = () => { a = (Math.imul(a, 1664525) + 1013904223) >>> 0; return a / 4294967296; };
+  const norm = () => { let s = 0; for (let k = 0; k < 6; k++) s += rnd(); return s - 3; };
+  const feat = ["CaseLabel,f_a,f_b,f_n1,f_n2,f_n3,f_n4,f_dup"], clin = ["CaseLabel,outcome,age"];
+  for (let i = 0; i < n; i++) {
+    const g = rnd() < 0.45 ? 1 : 0;
+    const fa = norm() + 1.3 * g;
+    feat.push([`Q${i}`, fa.toFixed(4), (norm() + 0.6 * g).toFixed(4), norm().toFixed(4), norm().toFixed(4), norm().toFixed(4), norm().toFixed(4), (fa * 1.02 + 0.01 * norm()).toFixed(4)].join(","));
+    clin.push(`Q${i},${g === 1 ? "resp" : "no"},${40 + (i % 30)}`);
+  }
+  return { feat: feat.join("\r\n") + "\r\n", clin: clin.join("\r\n") + "\r\n" };
+}
+
 async function main(): Promise<void> {
   fs.rmSync(OUT_DIR, { recursive: true, force: true });
   fs.mkdirSync(OUT_DIR, { recursive: true });
@@ -458,6 +473,102 @@ async function main(): Promise<void> {
     await page.getByTestId("rs-save-method").click();
     const m3 = await downloaded("research-stats-method.txt", n11);
     check(m3.includes("absolute agreement") && m3.includes("good より低い"), "「方法」の文に、ICC の種類と除外の基準が書かれる", m3.slice(0, 200));
+    console.log("\n[9] 予測モデルの性能（P4）: 別実装（scipy・scikit-learn・statsmodels）との突き合わせ・テスト集合の固定と回数");
+    const p4 = synthP4(120);
+    const p4Feat = write("p4_feat.csv", p4.feat), p4Clin = write("p4_clin.csv", p4.clin);
+    const p4RefPath = path.join(OUT_DIR, "p4_reference.json");
+    execFileSync("python3", ["-I", path.join(AUTOMATOR_ROOT, "src", "spike", "researchStatsP4Reference.py"), p4Feat, p4Clin, "11", "0.25", "0.95", p4RefPath]);
+    const p4ref = JSON.parse(fs.readFileSync(p4RefPath, "utf8")) as { testIds: string[]; dev: number; test: number; kept: string[]; removed: string[]; folds: { k: number | null; score: number | null; features: string[] }[]; pooled: number[]; final: { k: number; features: string[] }; testAuc: number; testLower: number; testUpper: number };
+    check(p4ref.removed.join() === "f_dup" && p4ref.folds.length === 10, "参照側でも f_dup だけが相関で除かれ、外側 5 分割 × 2 回 = 10 分割", p4ref.removed);
+    await page.getByTestId("rs-recipe").selectOption("p4-pipeline");
+    await page.getByTestId("rs-file-features").setInputFiles([p4Feat]);
+    await page.getByTestId("rs-file-clinical").setInputFiles(p4Clin);
+    await page.waitForFunction(() => !(document.querySelector('[data-testid="rs-run"]') as HTMLButtonElement | null)?.disabled, null, { timeout: 15_000 });
+    await page.getByTestId("rs-outcome").selectOption("outcome");
+    await page.getByTestId("rs-seed").fill("11");
+    await page.getByTestId("rs-seed").dispatchEvent("change");
+    check((await page.getByTestId("rs-p4-examples").innerText()).includes("既定値なし"), "分割数などは既定値なしで、文献の使用例を出典つきで示す");
+    check((await page.getByTestId("rs-p4-outer").inputValue()) === "" && (await page.getByTestId("rs-p4-k").inputValue()) === "", "分割数・候補の欄は空で始まる");
+    await page.getByTestId("rs-run").click();
+    await page.getByTestId("rs-errors").waitFor({ state: "visible", timeout: 20_000 });
+    check(/結果の型/.test(await page.getByTestId("rs-errors").innerText()) && (await page.getByTestId("rs-p4").count()) === 0, "設定を入れずに実行すると、理由を出して止まる（負例）");
+    await page.getByTestId("rs-p4-kind").selectOption("binary");
+    await page.getByTestId("rs-positive").selectOption("resp");
+    await page.getByTestId("rs-p4-lock").selectOption("create");
+    const setNum = async (id: string, v: string) => { await page.getByTestId(id).fill(v); await page.getByTestId(id).dispatchEvent("change"); };
+    await setNum("rs-p4-frac", "0.25");
+    await setNum("rs-p4-outer", "5");
+    await setNum("rs-p4-inner", "4");
+    await setNum("rs-p4-repeats", "2");
+    await setNum("rs-p4-k", "1, 2, 4");
+    await page.getByTestId("rs-p4-const").check();
+    await setNum("rs-p4-corr", "0.95");
+    await page.getByTestId("rs-run").click();
+    await page.getByTestId("rs-p4-cv").waitFor({ state: "visible", timeout: 120_000 });
+    check((await page.getByTestId("rs-p4-sizes").innerText()).includes(`開発集合 ${p4ref.dev} 人・テスト集合 ${p4ref.test} 人・特徴量 ${p4ref.kept.length} 個`), "開発・テストの人数と特徴量の数が参照と一致", await page.getByTestId("rs-p4-sizes").innerText());
+    check(((await page.getByTestId("rs-p4-removed").textContent()) ?? "").includes("f_dup"), "相関で除いた特徴量（f_dup）が理由つきで出る");
+    const shownScores = await page.getByTestId("rs-p4-fold-score").allInnerTexts();
+    check(shownScores.length === 10 && shownScores.every((x, q) => p4ref.folds[q].score === null ? x === "—" : Math.abs(Number(x) - (p4ref.folds[q].score as number)) <= 6e-4), "外側の分割ごとの AUC（表示は小数 3 桁）が参照と一致", shownScores);
+    const nf = await count();
+    await page.getByTestId("rs-save-p4-folds").click();
+    const foldsCsv = (await downloaded("research-stats-p4-folds.csv", nf)).trim().split("\r\n").map((l) => l.split(","));
+    const fc = (name: string) => foldsCsv[0].indexOf(name);
+    const foldsOk = foldsCsv.slice(1).every((l, q) => {
+      const e = p4ref.folds[q];
+      return Number(l[fc("k")]) === e.k && l[fc("features")] === e.features.join(" + ") && (e.score === null ? l[fc("score")] === "" : Math.abs(Number(l[fc("score")]) - e.score) < 1e-9);
+    }) && foldsCsv.length === 11;
+    check(foldsOk, "書き出した分割ごとの結果（選んだ特徴量の数・特徴量・AUC）が参照と一致（AUC は 1e-9）", foldsCsv.slice(1, 4));
+    const pooledShown = (await page.getByTestId("rs-p4-pooled").innerText()).match(/([0-9.]+), ([0-9.]+)/);
+    check(!!pooledShown && Math.abs(Number(pooledShown[1]) - p4ref.pooled[0]) <= 6e-4 && Math.abs(Number(pooledShown[2]) - p4ref.pooled[1]) <= 6e-4, "予測を束ねた AUC（反復ごと）が参照と一致", { shown: pooledShown?.slice(1), ref: p4ref.pooled });
+    check((await page.getByTestId("rs-p4-noci").innerText()).includes("信頼区間を付けていません"), "交差検証の値に信頼区間を付けない理由が出る");
+    check((await page.getByTestId("rs-p4-final").innerText()).includes(p4ref.final.features.join(" + ")), "最終モデルの特徴量が参照と一致", p4ref.final);
+    check((await page.getByTestId("rs-p4-evaluate").count()) === 0, "作ったばかりの固定ファイルでは「テスト集合で評価する」は出ない（保存して読み込んでから）");
+    const nl = await count();
+    await page.getByTestId("rs-save-lock").click();
+    const lockText = await downloaded("research-stats-test-lock.json", nl);
+    const lock = JSON.parse(lockText || "{}") as { testIds?: string[]; evaluations?: unknown[]; sha256?: string };
+    check(JSON.stringify(lock.testIds) === JSON.stringify(p4ref.testIds) && Array.isArray(lock.evaluations) && lock.evaluations.length === 0, "固定ファイルのテスト症例が参照の分割と一致し、評価は 0 回", { n: lock.testIds?.length });
+    await page.getByTestId("rs-p4").screenshot({ path: path.join(OUT_DIR, "14-p4-create.png") });
+    await page.getByTestId("rs-p4-fold-svg").screenshot({ path: path.join(OUT_DIR, "15-p4-folds.png") });
+
+    // 保存した固定ファイルを読み込んで、テスト集合で評価する
+    const lockPath = write("lock.json", lockText);
+    await page.getByTestId("rs-p4-lock").selectOption("use");
+    await page.getByTestId("rs-file-lock").setInputFiles(lockPath);
+    await page.getByTestId("rs-lock-loaded").waitFor({ state: "visible", timeout: 15_000 });
+    await page.getByTestId("rs-run").click();
+    await page.getByTestId("rs-p4-cv").waitFor({ state: "visible", timeout: 120_000 });
+    const scoresUse = await page.getByTestId("rs-p4-fold-score").allInnerTexts();
+    check(JSON.stringify(scoresUse) === JSON.stringify(shownScores), "読み込んだ固定ファイルで、同じシードなら交差検証は作ったときと同じ");
+    await page.getByTestId("rs-p4-evaluate").click();
+    await page.getByTestId("rs-p4-test").waitFor({ state: "visible", timeout: 120_000 });
+    const tv = (await page.getByTestId("rs-p4-test-value").innerText()).match(/AUC ([0-9.]+)（DeLong 法の 95% CI ([0-9.]+)～([0-9.]+)）、(\d+) 人/);
+    check(!!tv && Math.abs(Number(tv[1]) - p4ref.testAuc) <= 6e-4 && Math.abs(Number(tv[2]) - p4ref.testLower) <= 6e-4 && Math.abs(Number(tv[3]) - p4ref.testUpper) <= 6e-4 && Number(tv[4]) === p4ref.test, "テスト集合の AUC と DeLong の信頼区間が scikit-learn・定義どおりの式と一致", { shown: tv?.slice(1), ref: [p4ref.testAuc, p4ref.testLower, p4ref.testUpper] });
+    check((await page.getByTestId("rs-p4-test-count").innerText()).includes("1 回目"), "1 回目の評価と表示される");
+    const lock1 = JSON.parse(await downloaded("research-stats-test-lock.json", nl + 1) || "{}") as { evaluations?: { n: number }[] };
+    check(lock1.evaluations?.length === 1 && lock1.evaluations[0].n === 1, "評価すると、回数 1 を記録した固定ファイルが保存される", lock1.evaluations);
+    await page.getByTestId("rs-p4").screenshot({ path: path.join(OUT_DIR, "16-p4-test.png") });
+    await page.getByTestId("rs-p4-roc-svg").screenshot({ path: path.join(OUT_DIR, "17-p4-roc.png") });
+    await page.getByTestId("rs-p4-cal-svg").screenshot({ path: path.join(OUT_DIR, "18-p4-cal.png") });
+    // 2 回目
+    await page.getByTestId("rs-run").click();
+    await page.getByTestId("rs-p4-evaluate").waitFor({ state: "visible", timeout: 120_000 });
+    await page.getByTestId("rs-p4-evaluate").click();
+    await page.getByTestId("rs-p4-test").waitFor({ state: "visible", timeout: 120_000 });
+    const cnt2 = page.getByTestId("rs-p4-test-count");
+    check((await cnt2.innerText()).includes("2 回目") && /rs-warn/.test((await cnt2.getAttribute("class")) ?? ""), "同じ画面で続けて評価すると 2 回目になり、警告として出る");
+    const nm = await count();
+    await page.getByTestId("rs-save-method").click();
+    const m4 = await downloaded("research-stats-method.txt", nm);
+    check(m4.includes("入れ子の交差検証") && m4.includes("2 回目") && m4.includes("信頼区間は付けない"), "「方法」の文に、入れ子の交差検証・テストの評価回数・区間を付けない理由が書かれる", m4.slice(0, 160));
+    // 書き換えた固定ファイルは読み込まない
+    const tampered = JSON.parse(lockText) as { testIds: string[] };
+    tampered.testIds = tampered.testIds.slice(1);
+    const tamperedPath = write("lock_tampered.json", JSON.stringify(tampered));
+    await page.getByTestId("rs-file-lock").setInputFiles(tamperedPath);
+    await page.getByTestId("rs-run").click();
+    await page.getByTestId("rs-errors").waitFor({ state: "visible", timeout: 20_000 });
+    check(/書き換えられています/.test(await page.getByTestId("rs-errors").innerText()) && (await page.getByTestId("rs-p4-cv").count()) === 0, "手で書き換えた固定ファイルは、理由を出して止まる（負例）");
   } finally {
     await driver.stop();
     fs.rmSync(path.join(PLUGINS_DIR, PLUGIN_ID), { recursive: true, force: true });
