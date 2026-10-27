@@ -10,7 +10,7 @@ import { undoRun } from "../macros/runMacro";
 import type { PluginToolEntry, PluginToolResult } from "../pluginTools";
 import { BUNDLED_SKILLS } from "./bundled";
 import { runSkill } from "./runSkill";
-import { exportSkill, parseSkillText, pick, skillEffect, upFrontInputs, type Skill, type SkillEntry, type SkillInput } from "./skillModel";
+import { exportSkill, parseSkillText, pick, skillEffect, upFrontInputs, validateSkill, type Skill, type SkillEntry, type SkillInput } from "./skillModel";
 import { initialText, mergeSkills, parseFieldText, stepSummary } from "./skillView";
 
 type T = (k: string, v?: Record<string, string | number>) => string;
@@ -24,13 +24,44 @@ export interface SkillApi {
   pluginTool?: (cmd: { kind: "pluginTool"; name: string; params: Record<string, unknown> }) => Promise<PluginToolResult>;
 }
 
+/** アシスタントからの提案・下書き（`nonce` が変わるたびに 1 件として扱う）。 */
+export interface SkillSuggestion {
+  nonce: number;
+  skillId: string;
+  inputs: Record<string, unknown>;
+}
+export interface SkillDraft {
+  nonce: number;
+  skill: Skill;
+}
+
 type Pending = { kind: "ask"; spec: SkillInput; text: string } | { kind: "confirm"; message: string };
 
-export function SkillPanel({ api, busy, t, locale }: { api: SkillApi; busy: boolean; t: T; locale: string }) {
+export function SkillPanel({
+  api,
+  busy,
+  t,
+  locale,
+  suggestion,
+  draft,
+  onChanged,
+  reloadKey,
+}: {
+  api: SkillApi;
+  busy: boolean;
+  t: T;
+  locale: string;
+  suggestion?: SkillSuggestion | null;
+  draft?: SkillDraft | null;
+  onChanged?: () => void;
+  /** 画面側でスキルが変わったら増える（マクロからの変換など）。変わったら一覧を読み直す。 */
+  reloadKey?: number;
+}) {
   const [user, setUser] = useState<Skill[]>([]);
   const [msg, setMsg] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
   const [open, setOpen] = useState<string | null>(null); // 手順を開いているスキルの id
-  const [form, setForm] = useState<{ entry: SkillEntry; text: Record<string, string> } | null>(null);
+  const [form, setForm] = useState<{ entry: SkillEntry; text: Record<string, string>; suggested?: boolean } | null>(null);
+  const [draftSkill, setDraftSkill] = useState<Skill | null>(null);
   const [running, setRunning] = useState<{ id: string; step: number; total: number } | null>(null);
   const [pending, setPending] = useState<Pending | null>(null);
   const [lastRun, setLastRun] = useState<InverseStep[][] | null>(null);
@@ -43,9 +74,39 @@ export function SkillPanel({ api, busy, t, locale }: { api: SkillApi; busy: bool
   }, [api]);
   useEffect(() => {
     void reload();
-  }, [reload]);
+  }, [reload, reloadKey]);
 
   const entries = mergeSkills(user);
+
+  // アシスタントの開始の提案: 入力欄にモデルの値を入れた状態で出す。自動では開始しない。
+  useEffect(() => {
+    if (!suggestion) return;
+    const entry = mergeSkills(user).find((e) => e.skill.id === suggestion.skillId);
+    if (!entry) return setMsg({ kind: "err", text: t("assistant.skill.suggestGone") });
+    setMsg(null);
+    setForm({
+      entry,
+      suggested: true,
+      text: Object.fromEntries(upFrontInputs(entry.skill).map((i) => [i.key, suggestion.inputs[i.key] !== undefined ? String(suggestion.inputs[i.key]) : initialText(i)])),
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [suggestion?.nonce]);
+  // 下書き: 保存するまで一覧にも main にも入らない。
+  useEffect(() => {
+    if (draft) setDraftSkill(draft.skill);
+  }, [draft?.nonce]);
+
+  const saveDraft = async () => {
+    if (!draftSkill) return;
+    const chk = validateSkill(draftSkill, api.pluginTools);
+    if (!chk.ok) return setMsg({ kind: "err", text: t("assistant.skill.importFailed", { error: chk.error }) });
+    const r = await api.save(chk.skill);
+    if (!r.ok) return setMsg({ kind: "err", text: t("assistant.skill.importFailed", { error: r.error ?? "?" }) });
+    setDraftSkill(null);
+    setMsg({ kind: "ok", text: t("assistant.skill.imported", { name: pick(chk.skill.title, locale) }) });
+    await reload();
+    onChanged?.();
+  };
 
   const begin = (entry: SkillEntry) => {
     setMsg(null);
@@ -129,6 +190,7 @@ export function SkillPanel({ api, busy, t, locale }: { api: SkillApi; busy: bool
     const r = await api.remove(s.id);
     if (!r.ok) setMsg({ kind: "err", text: t("assistant.skill.saveFailed", { error: r.error ?? "?" }) });
     await reload();
+    onChanged?.();
   };
 
   const exportOne = (s: Skill) => {
@@ -150,6 +212,7 @@ export function SkillPanel({ api, busy, t, locale }: { api: SkillApi; busy: bool
     if (!r.ok) return setMsg({ kind: "err", text: t("assistant.skill.importFailed", { error: r.error ?? "?" }) });
     setMsg({ kind: "ok", text: t("assistant.skill.imported", { name: pick(chk.skill.title, locale) }) });
     await reload();
+    onChanged?.();
   };
 
   const idle = running === null;
@@ -195,7 +258,18 @@ export function SkillPanel({ api, busy, t, locale }: { api: SkillApi; busy: bool
       })}
       {form && (
         <div style={P.card} data-testid="assistant-skill-form">
+          {form.suggested && <span style={P.badge} data-testid="assistant-skill-suggested">{t("assistant.skill.suggested")}</span>}
           <strong>{pick(form.entry.skill.title, locale)}</strong>
+          {form.suggested && (
+            <>
+              <ol style={P.steps} data-testid="assistant-skill-form-steps">
+                {form.entry.skill.steps.map((s, i) => (
+                  <li key={i}>{stepSummary(t, s, form.entry.skill, locale, api.pluginTools)}</li>
+                ))}
+              </ol>
+              {skillEffect(form.entry.skill, api.pluginTools) === "write" && <span style={P.badgeWarn}>{t("assistant.skill.write")}</span>}
+            </>
+          )}
           {upFrontInputs(form.entry.skill).map((spec) => (
             <label key={spec.key} style={P.row}>
               <span style={{ minWidth: 120 }}>{pick(spec.label, locale)}</span>
@@ -212,6 +286,23 @@ export function SkillPanel({ api, busy, t, locale }: { api: SkillApi; busy: bool
           <div style={P.row}>
             <button style={P.btnPrimary} onClick={submitForm} data-testid="assistant-skill-start">{t("assistant.skill.start")}</button>
             <button style={P.btn} onClick={() => setForm(null)} data-testid="assistant-skill-form-cancel">{t("assistant.skill.cancel")}</button>
+          </div>
+        </div>
+      )}
+      {draftSkill && (
+        <div style={P.card} data-testid="assistant-skill-draft">
+          <span style={P.badge}>{t("assistant.skill.draft")}</span>
+          <strong data-testid="assistant-skill-draft-name">{pick(draftSkill.title, locale)}</strong>
+          <div style={P.dim}>{pick(draftSkill.description, locale)}</div>
+          <ol style={P.steps}>
+            {draftSkill.steps.map((s, i) => (
+              <li key={i}>{stepSummary(t, s, draftSkill, locale, api.pluginTools)}</li>
+            ))}
+          </ol>
+          {skillEffect(draftSkill, api.pluginTools) === "write" && <span style={P.badgeWarn}>{t("assistant.skill.write")}</span>}
+          <div style={P.row}>
+            <button style={P.btnPrimary} onClick={() => void saveDraft()} data-testid="assistant-skill-draft-save">{t("assistant.skill.save")}</button>
+            <button style={P.btn} onClick={() => setDraftSkill(null)} data-testid="assistant-skill-draft-discard">{t("assistant.skill.discard")}</button>
           </div>
         </div>
       )}

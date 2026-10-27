@@ -26,7 +26,7 @@ export function stepLabel(t: T, s: MacroStep, pluginTools?: readonly PluginToolE
   return `${name}${p ? ` ${p}` : ""}`;
 }
 
-export function MacroPanel({ api, candidates, busy, t }: { api: MacroApi; candidates: MacroStep[]; busy: boolean; t: T }) {
+export function MacroPanel({ api, candidates, busy, t, onConvert }: { api: MacroApi; candidates: MacroStep[]; busy: boolean; t: T; onConvert?: (m: Macro) => Promise<{ ok: boolean; error?: string }> }) {
   const [macros, setMacros] = useState<Macro[]>([]);
   const [name, setName] = useState("");
   const [picked, setPicked] = useState<boolean[]>([]);
@@ -83,6 +83,11 @@ export function MacroPanel({ api, candidates, busy, t }: { api: MacroApi; candid
     setMsg({ kind: "ok", text: r.skipped ? t("assistant.macro.undoneSome", { n: r.skipped }) : t("assistant.macro.undone") });
   };
 
+  const convert = async (m: Macro) => {
+    const r = await onConvert!(m);
+    setMsg(r.ok ? { kind: "ok", text: t("assistant.macro.converted") } : { kind: "err", text: t("assistant.macro.convertFailed", { error: r.error ?? "?" }) });
+  };
+
   const remove = async (m: Macro) => {
     const r = await api.remove(m.id);
     if (!r.ok) setMsg({ kind: "err", text: t("assistant.macro.saveFailed", { error: r.error ?? "?" }) });
@@ -105,6 +110,9 @@ export function MacroPanel({ api, candidates, busy, t }: { api: MacroApi; candid
               <button style={P.btn} onClick={() => (abortRef.current = true)} data-testid="assistant-macro-abort">{t("assistant.macro.abort")}</button>
             ) : (
               <button style={P.btnPrimary} disabled={busy || running !== null} onClick={() => void run(m)} data-testid="assistant-macro-run">{t("assistant.macro.run")}</button>
+            )}
+            {onConvert && (
+              <button style={P.btn} disabled={running !== null} onClick={() => void convert(m)} data-testid="assistant-macro-to-skill">{t("assistant.macro.toSkill")}</button>
             )}
             <button style={P.btn} disabled={running !== null} onClick={() => void remove(m)} data-testid="assistant-macro-delete">{t("assistant.macro.delete")}</button>
           </div>
