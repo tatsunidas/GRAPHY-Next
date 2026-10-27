@@ -187,6 +187,35 @@ class TagEditTest {
     }
 
     @Test
+    void 他端末からの検索に使う3つのタグを変えると_索引の列も合い_消すと空文字になる() throws Exception {
+        Attributes extra = new Attributes();
+        extra.setString(Tag.StudyTime, VR.TM, "090000");
+        extra.setString(Tag.StudyID, VR.SH, "A1");
+        extra.setString(Tag.ReferringPhysicianName, VR.PN, "Old^Name");
+        ingest("TE9.st", "TE9.se", "TE9.s1", "S", 1, extra);
+        var scope = series("TE9.st", "TE9.se");
+
+        var r = service.apply(scope, List.of(set("StudyTime", "090000", "101500"), set("StudyID", "A1", "B2"),
+                set("ReferringPhysicianName", "Old^Name", "New^Name")));
+        assertEquals(java.util.Set.of("STUDY_TIME", "STUDY_ID", "REFERRING_PHYSICIAN_NAME"),
+                new java.util.HashSet<>(r.indexColumns()), "3 つとも索引の列として扱われる");
+        Attributes ds = read(fileOf("TE9.s1"));
+        assertEquals("101500", ds.getString(Tag.StudyTime));
+        assertEquals("B2", ds.getString(Tag.StudyID));
+        assertEquals("New^Name", ds.getString(Tag.ReferringPhysicianName));
+        DicomInstance row = repo.findById("TE9.s1").orElseThrow();
+        assertEquals("101500", row.getStudyTime(), "索引も新しい値");
+        assertEquals("B2", row.getStudyId());
+        assertEquals("New^Name", row.getReferringPhysicianName());
+
+        service.apply(scope, List.of(new TagEditService.Edit("StudyID", null, "remove", "B2", null)));
+        assertFalse(read(fileOf("TE9.s1")).contains(Tag.StudyID));
+        assertEquals("", repo.findById("TE9.s1").orElseThrow().getStudyId(),
+                "消したら空文字（null は「まだ読んでいない」印なので戻さない）");
+        assertEquals(List.of(), leftovers());
+    }
+
+    @Test
     void 索引に無いタグを足す_変える_消す() throws Exception {
         ingest("TE2.st", "TE2.se", "TE2.s1", "S", 1);
         var scope = series("TE2.st", "TE2.se");

@@ -53,6 +53,12 @@ class DicomFindScpTest {
     private static final String PATIENT_ROOT = UID.PatientRootQueryRetrieveInformationModelFind;
     private static final String CALLER = "WORKSTN1";
 
+    /** スタディごとの StudyTime・StudyID・ReferringPhysicianName。載せていないスタディ（1.9.4）は 3 つとも持たない。 */
+    private static final Map<String, String[]> EXTRAS = Map.of(
+            "1.9.1", new String[] {"093015", "S100", "Smith^John"},
+            "1.9.2", new String[] {"140000", "S200", "鈴木^一郎"},
+            "1.9.3", new String[] {"235959", "S300", "Brown^Ann"});
+
     @Autowired
     DicomStorageService storage;
     @Autowired
@@ -214,11 +220,56 @@ class DicomFindScpTest {
 
     @Test
     void keyForAnAttributeTheIndexLacks_isIgnored_andReturnedEmpty() throws Exception {
-        Found r = find(STUDY_ROOT, keys("STUDY", Tag.StudyInstanceUID, "", Tag.StudyID, "NOPE", Tag.StudyTime, ""));
-        assertEquals(4, r.matches().size(), "索引に無い StudyID のキーは無視する");
-        assertTrue(r.matches().get(0).contains(Tag.StudyID) && r.matches().get(0).getString(Tag.StudyID, "").isEmpty(),
-                "要求された属性は空で返す（欠かさない）");
-        assertTrue(r.matches().get(0).contains(Tag.StudyTime));
+        // InstitutionName は索引に無い属性
+        Found r = find(STUDY_ROOT, keys("STUDY", Tag.StudyInstanceUID, "", Tag.InstitutionName, "NOPE"));
+        assertEquals(4, r.matches().size(), "索引に無い属性のキーは無視する");
+        assertTrue(r.matches().get(0).contains(Tag.InstitutionName)
+                && r.matches().get(0).getString(Tag.InstitutionName, "").isEmpty(), "要求された属性は空で返す（欠かさない）");
+    }
+
+    @Test
+    void studyId_isMatchedAndReturned() throws Exception {
+        assertEquals(Set.of("1.9.1"), studyUids(Tag.StudyID, "S100"));
+        assertEquals(Set.of("1.9.1", "1.9.2", "1.9.3"), studyUids(Tag.StudyID, "S?00"), "? は 1 文字");
+        assertEquals(Set.of("1.9.1", "1.9.2", "1.9.3"), studyUids(Tag.StudyID, "S*"), "値の無い 1.9.4 は S* に一致しない");
+        assertEquals(Set.of(), studyUids(Tag.StudyID, "NOPE"), "存在しない StudyID は 0 件（無視されて全件になってはいけない）");
+        assertEquals(Set.of(), studyUids(Tag.StudyID, "S10"), "部分一致ではない");
+
+        Found r = find(STUDY_ROOT, keys("STUDY", Tag.StudyInstanceUID, "", Tag.StudyID, ""));
+        assertEquals("S200", one(r, Tag.StudyInstanceUID, "1.9.2").getString(Tag.StudyID), "索引の値を返す");
+        Attributes none = one(r, Tag.StudyInstanceUID, "1.9.4");
+        assertTrue(none.contains(Tag.StudyID) && none.getString(Tag.StudyID, "").isEmpty(), "値の無いスタディは空で返す");
+    }
+
+    @Test
+    void studyTime_rangeIsInclusive_andTruncatesToTheKeyPrecision() throws Exception {
+        assertEquals(Set.of("1.9.1"), studyUids(Tag.StudyTime, "0900-1000"));
+        assertEquals(Set.of("1.9.2", "1.9.3"), studyUids(Tag.StudyTime, "1400-"));
+        assertEquals(Set.of("1.9.1"), studyUids(Tag.StudyTime, "-0930"), "093015 は -0930 に含まれる（桁数をそろえて比べる）");
+        assertEquals(Set.of("1.9.1"), studyUids(Tag.StudyTime, "0930-0930"));
+        assertEquals(Set.of("1.9.1"), studyUids(Tag.StudyTime, "093015"), "範囲でなければ完全一致");
+        assertEquals(Set.of(), studyUids(Tag.StudyTime, "0931-1359"), "範囲の外");
+        assertEquals(Set.of(), studyUids(Tag.StudyTime, "0930"), "完全一致は桁数違いを許さない");
+        Found r = find(STUDY_ROOT, keys("STUDY", Tag.StudyInstanceUID, "", Tag.StudyTime, ""));
+        assertEquals("093015", one(r, Tag.StudyInstanceUID, "1.9.1").getString(Tag.StudyTime));
+    }
+
+    @Test
+    void referringPhysicianName_isCaseInsensitive_andWildcardAware() throws Exception {
+        assertEquals(Set.of("1.9.1"), studyUids(Tag.ReferringPhysicianName, "smith*"), "大文字小文字を区別しない（PN）");
+        assertEquals(Set.of("1.9.1"), studyUids(Tag.ReferringPhysicianName, "SMITH^JOHN"));
+        assertEquals(Set.of(), studyUids(Tag.ReferringPhysicianName, "Smith"), "ワイルドカードが無ければ完全一致");
+        assertEquals(Set.of("1.9.2"), studyUids(Tag.ReferringPhysicianName, "鈴木*"));
+        Found r = find(STUDY_ROOT, keys("STUDY", Tag.StudyInstanceUID, "", Tag.ReferringPhysicianName, ""));
+        assertEquals("鈴木^一郎", one(r, Tag.StudyInstanceUID, "1.9.2").getString(Tag.ReferringPhysicianName), "UTF-8 で返る");
+    }
+
+    @Test
+    void theNewStudyAttributes_areInheritedBySeriesAndImageLevels() throws Exception {
+        Found s = find(STUDY_ROOT, keys("SERIES", Tag.SeriesInstanceUID, "", Tag.StudyID, "S100"));
+        assertEquals(Set.of("1.9.1.1", "1.9.1.2"), uids(s, Tag.SeriesInstanceUID));
+        Found i = find(STUDY_ROOT, keys("IMAGE", Tag.SOPInstanceUID, "", Tag.StudyID, "S300"));
+        assertEquals(Set.of("1.9.3.1.1", "1.9.3.1.2", "1.9.3.1.3"), uids(i, Tag.SOPInstanceUID));
     }
 
     @Test
@@ -349,6 +400,12 @@ class DicomFindScpTest {
         a.setString(Tag.Modality, VR.CS, modality);
         a.setString(Tag.SeriesNumber, VR.IS, String.valueOf(seriesNo));
         a.setString(Tag.InstanceNumber, VR.IS, String.valueOf(instNo));
+        String[] extra = EXTRAS.get(study);
+        if (extra != null) {
+            a.setString(Tag.StudyTime, VR.TM, extra[0]);
+            a.setString(Tag.StudyID, VR.SH, extra[1]);
+            a.setString(Tag.ReferringPhysicianName, VR.PN, extra[2]);
+        }
         Path f = Files.createTempFile("find", ".dcm");
         storage.ingest(DicomPhantomFactory.writeFile(f, a, UID.ExplicitVRLittleEndian));
     }

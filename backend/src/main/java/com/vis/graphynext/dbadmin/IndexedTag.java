@@ -22,7 +22,10 @@ enum IndexedTag {
     MODALITY(Tag.Modality, false),
     SERIES_NUMBER(Tag.SeriesNumber, true),
     SERIES_DESCRIPTION(Tag.SeriesDescription, false),
-    INSTANCE_NUMBER(Tag.InstanceNumber, true);
+    INSTANCE_NUMBER(Tag.InstanceNumber, true),
+    STUDY_TIME(Tag.StudyTime, false),
+    STUDY_ID(Tag.StudyID, false),
+    REFERRING_PHYSICIAN_NAME(Tag.ReferringPhysicianName, false);
 
     final int tag;
     private final boolean integer;
@@ -58,6 +61,9 @@ enum IndexedTag {
             case SERIES_NUMBER -> r.getSeriesNumber();
             case SERIES_DESCRIPTION -> r.getSeriesDescription();
             case INSTANCE_NUMBER -> r.getInstanceNumber();
+            case STUDY_TIME -> r.getStudyTime();
+            case STUDY_ID -> r.getStudyId();
+            case REFERRING_PHYSICIAN_NAME -> r.getReferringPhysicianName();
         };
     }
 
@@ -71,11 +77,19 @@ enum IndexedTag {
             case SERIES_NUMBER -> r.setSeriesNumber((Integer) v);
             case SERIES_DESCRIPTION -> r.setSeriesDescription((String) v);
             case INSTANCE_NUMBER -> r.setInstanceNumber((Integer) v);
+            // 値を消したときは null でなく空文字（null は「まだ読んでいない行」の印なので戻さない）
+            case STUDY_TIME -> r.setStudyTime(emptyIfNull((String) v));
+            case STUDY_ID -> r.setStudyId(emptyIfNull((String) v));
+            case REFERRING_PHYSICIAN_NAME -> r.setReferringPhysicianName(emptyIfNull((String) v));
         }
     }
 
     boolean matches(DicomInstance r, Attributes ds) {
         return Objects.equals(norm(fromRow(r)), norm(fromFile(ds)));
+    }
+
+    private static String emptyIfNull(String v) {
+        return v == null ? "" : v;
     }
 
     private static Object norm(Object v) {

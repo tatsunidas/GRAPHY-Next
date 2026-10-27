@@ -79,6 +79,34 @@ class DicomMatcherTest {
     }
 
     @Test
+    void referringPhysicianName_isCaseInsensitive_likeAnyPersonName() {
+        Attributes c = new Attributes();
+        c.setString(Tag.ReferringPhysicianName, VR.PN, "Smith^John");
+        c.setString(Tag.StudyID, VR.SH, "AbC");
+        assertTrue(m(key(Tag.ReferringPhysicianName, VR.PN, "smith*"), c));
+        assertFalse(m(key(Tag.ReferringPhysicianName, VR.PN, "jones*"), c));
+        assertTrue(m(key(Tag.StudyID, VR.SH, "AbC"), c));
+        assertFalse(m(key(Tag.StudyID, VR.SH, "abc"), c), "人名以外は大文字小文字を区別する");
+    }
+
+    @Test
+    void timeRange_inclusiveBothEnds_truncatingToTheKeyPrecision() {
+        Attributes c = new Attributes();
+        c.setString(Tag.StudyTime, VR.TM, "093015.250000");
+        assertTrue(m(key(Tag.StudyTime, VR.TM, "0930-0930"), c), "桁数の少ない端は、値をその桁数に切って比べる");
+        assertTrue(m(key(Tag.StudyTime, VR.TM, "093015-093015"), c));
+        assertTrue(m(key(Tag.StudyTime, VR.TM, "0900-1000"), c));
+        assertTrue(m(key(Tag.StudyTime, VR.TM, "0930-"), c));
+        assertTrue(m(key(Tag.StudyTime, VR.TM, "-0930"), c));
+        assertFalse(m(key(Tag.StudyTime, VR.TM, "0931-1000"), c), "下端より前");
+        assertFalse(m(key(Tag.StudyTime, VR.TM, "0800-0929"), c), "上端より後");
+        assertFalse(m(key(Tag.StudyTime, VR.TM, "093016-"), c), "秒まで指定した下端より前");
+        Attributes empty = new Attributes();
+        empty.setNull(Tag.StudyTime, VR.TM);
+        assertFalse(m(key(Tag.StudyTime, VR.TM, "0000-2359"), empty), "時刻の無い候補は範囲に入らない");
+    }
+
+    @Test
     void japaneseName_matchesByWildcard() {
         Attributes c = cand("P", "山田^太郎", "20260101", "CT");
         assertTrue(m(key(Tag.PatientName, VR.PN, "山田*"), c));

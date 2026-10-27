@@ -95,6 +95,9 @@ public interface DicomInstanceRepository extends JpaRepository<DicomInstance, St
                    max(i.studyDate) as studyDate,
                    max(i.studyDescription) as studyDescription,
                    max(i.accessionNumber) as accessionNumber,
+                   max(i.studyTime) as studyTime,
+                   max(i.studyId) as studyId,
+                   max(i.referringPhysicianName) as referringPhysicianName,
                    count(distinct i.seriesInstanceUid) as numberOfSeries,
                    count(i) as numberOfInstances
             from DicomInstance i
@@ -119,6 +122,12 @@ public interface DicomInstanceRepository extends JpaRepository<DicomInstance, St
         String getStudyDescription();
 
         String getAccessionNumber();
+
+        String getStudyTime();
+
+        String getStudyId();
+
+        String getReferringPhysicianName();
 
         long getNumberOfSeries();
 
@@ -214,6 +223,9 @@ public interface DicomInstanceRepository extends JpaRepository<DicomInstance, St
 
     /** NumberOfFrames を保存する前に取り込んだ行（起動時の埋め直し用）。 */
     List<DicomInstance> findByNumberOfFramesIsNull();
+
+    /** StudyTime などをまだ読んでいない行（列を足す前に保存した行）。 */
+    List<DicomInstance> findByStudyTimeIsNull();
 
     /** 受信日時を保存する前に取り込んだ行（起動時の埋め直し用）。 */
     List<DicomInstance> findByReceivedAtIsNull();
