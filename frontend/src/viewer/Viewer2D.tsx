@@ -72,7 +72,7 @@ import { getOrCreateCameraSync, getOrCreateVoiSync, getOrCreatePresentationSync,
 import { registerReferenceSource, bumpReference, subscribeReference, computeReferenceSegments, type RefSegment } from "./referenceLines";
 import { registerViewerCommands, requestTool, type ViewerCommands, type ViewerDerivedSeriesRequest, type ViewerDerivedSeriesResult, type ViewerOverlay, type ViewerPixelData, type ViewerSrRequest, type ViewerSrResult, type ViewerPixelDataOptions, type ViewerAngioReportRequest, type ViewerPresentationStateRequest, type ViewerRoi, type ViewerSpatialCalibration, type ViewerTargetInfo, type ViewerViewState, type ViewerXaState, type ViewerXaCine, ViewerLabelVolume, ViewerLabelVolumeResult } from "./viewerCommands";
 import { buildPluginMeta, computeCalipers, hasShapeCalipers, pickPluginMeta, readRoiStats, roiPointsPx } from "./roiRead";
-import { CONTOUR_TOOL_NAMES, SPLINE_TYPE_LINEAR } from "./roiContourTools";
+import { CONTOUR_TOOL_NAMES, SPLINE_TYPE_LINEAR, cancelContourDrawing } from "./roiContourTools";
 import { POINT_ROI_TOOL_NAME } from "./pointRoiTool";
 import { annotationRoiKind } from "./roiKind";
 import { convertMeasureToRoi } from "./measureToRoi";
@@ -1365,6 +1365,8 @@ export function Viewer2D({
       element.removeEventListener(EVENTS.CAMERA_MODIFIED, onCameraModified);
       element.removeEventListener("pointerdown", onFocusPointerDown);
       removeSelectionGestures?.();
+      // 描画中のまま壊すと全体の描画中フラグが残り、以後どこにも描けなくなる
+      cancelContourDrawing(ToolGroupManager.getToolGroup(syncGroupId ?? toolGroupId), viewportId, element);
       element.removeEventListener(EVENTS.VOI_MODIFIED, onVoiModified);
       element.removeEventListener("mousemove", onMove);
       element.removeEventListener("mouseleave", onLeave);

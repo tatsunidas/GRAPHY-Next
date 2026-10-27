@@ -29,6 +29,7 @@ import {
   AnnotationTool,
   ToolGroupManager,
   annotation as csAnnotation,
+  state as csToolsState,
 } from "@cornerstonejs/tools";
 import {
   drawing as csDrawingUtils,
@@ -69,6 +70,8 @@ export class PolylineRoiTool extends SplineROITool {
     forceOpenAfterFinish(this);
     // 開いた輪郭でも統計を出す（上流は closed のときしか描かない）。
     forceTextBoxOnOpenContour(this);
+    // 追従線は描いている線だけに引く（上流は開いた線すべてに引く）。
+    limitPreviewToDrawnAnnotation(this);
   }
 }
 
@@ -377,6 +380,33 @@ function forceOpenAfterFinish(tool: any): void {
     const result = original.call(tool, evt, ...rest);
     openContour(annotation);
     return result;
+  };
+}
+
+/**
+ * **マウス追従の破線を、描いている注釈にだけ引く。**
+ *
+ * <p>上流 `SplineROITool.renderAnnotationInstance` は `editData.lastCanvasPoint` があり線が開いていれば
+ * 追従線を引くが、**それが描いている注釈かを見ない**。同じスライスの開いたポリゴンライン全部の
+ * 末端からカーソルへ線が出る。他の注釈を描く間だけ `lastCanvasPoint` を隠して上流へ渡す。
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function limitPreviewToDrawnAnnotation(tool: any): void {
+  const original = tool.renderAnnotationInstance;
+  if (typeof original !== "function") return;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  tool.renderAnnotationInstance = (renderContext: any) => {
+    const editData = tool.editData;
+    if (!editData?.lastCanvasPoint || editData.annotation === renderContext.annotation) {
+      return original.call(tool, renderContext);
+    }
+    const saved = editData.lastCanvasPoint;
+    editData.lastCanvasPoint = undefined;
+    try {
+      return original.call(tool, renderContext);
+    } finally {
+      editData.lastCanvasPoint = saved;
+    }
   };
 }
 
@@ -699,6 +729,30 @@ export function continuePolyline(annotation: any, element: HTMLDivElement): bool
   tool._activateDraw(element);
   renderAnnotations();
   return true;
+}
+
+/**
+ * 描画中のスプラインツールを止める（ビューポートを壊す前に呼ぶ）。
+ *
+ * <p>描画中（続きを描く含む）にタイルが閉じられると、ツールの `_deactivateDraw` が走らず
+ * Cornerstone 全体の `state.isInteractingWithTool` が true のまま残り、以後どのタイルでも
+ * 新規の描画が始まらなくなる。ツールグループごと壊される前に、上流の `cancel` で後始末させる。
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function cancelContourDrawing(toolGroup: any, viewportId: string, element: HTMLDivElement): void {
+  for (const name of Object.values(CONTOUR_TOOL_NAMES)) {
+    const tool = toolGroup?.getToolInstance?.(name);
+    if (!tool?.isDrawing || typeof tool.cancel !== "function") continue;
+    if (!tool.editData?.viewportIdsToRender?.includes(viewportId)) continue;
+    try {
+      tool.cancel(element);
+    } catch {
+      // 要素が既に無効などで上流の後始末に失敗しても、全体のフラグだけは戻す。
+      csToolsState.isInteractingWithTool = false;
+      tool.isDrawing = false;
+      tool.editData = null;
+    }
+  }
 }
 
 /** つなぐの結果。 */
