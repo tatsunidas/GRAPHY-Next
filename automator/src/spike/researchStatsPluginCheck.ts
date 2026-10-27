@@ -208,9 +208,9 @@ async function main(): Promise<void> {
     check(csv === "Patient,time,event,outcome,f1,f2\r\nP1,12,1,resp,2,10\r\nP2,8,0,no,5,20\r\n", "データセット CSV が手計算と一致（P1 の f2 = 10。欠損を 0 とみて 5 にしていない）", csv);
     const n1 = await count();
     await page.getByTestId("rs-save-record").click();
-    const rec = JSON.parse(await downloaded("research-stats-record.json", n1) || "{}") as { seed?: number; pluginVersion?: string; recipeId?: string; status?: string; inputs?: { name: string; sha256: string | null; rows: number }[] };
+    const rec = JSON.parse(await downloaded("research-stats-record.json", n1) || "{}") as { seed?: number; pluginVersion?: string; skillId?: string; status?: string; inputs?: { name: string; sha256: string | null; rows: number }[] };
     const expectSha: Record<string, string> = { "featA.csv": sha(featA), "featB.csv": sha(featB), "clin.csv": sha(clin) };
-    check(rec.seed === 7 && rec.recipeId === "dataset-check" && rec.status === "ok", "再現情報にシード 7・レシピ・状態が載る", { seed: rec.seed, id: rec.recipeId, status: rec.status });
+    check(rec.seed === 7 && rec.skillId === "dataset-check" && rec.status === "ok", "再現情報にシード 7・スキル・状態が載る", { seed: rec.seed, id: rec.skillId, status: rec.status });
     check(rec.pluginVersion === JSON.parse(fs.readFileSync(path.join(PLUGINS_DIR, PLUGIN_ID, "plugin.json"), "utf8")).version, "再現情報の版が plugin.json と一致", rec.pluginVersion);
     check(!!rec.inputs && rec.inputs.every((i) => i.sha256 === expectSha[i.name]) && rec.inputs.length === 3, "入力ファイルの SHA-256 が、別に計算した値と一致", rec.inputs);
     const n2 = await count();
@@ -245,7 +245,7 @@ async function main(): Promise<void> {
     await page.getByTestId("rs-file-clinical").setInputFiles(r1Clin);
     await page.waitForFunction(() => !(document.querySelector('[data-testid="rs-run"]') as HTMLButtonElement | null)?.disabled, null, { timeout: 15_000 });
     check((await page.getByTestId("rs-time").inputValue()) === "time" && (await page.getByTestId("rs-clinical-id").inputValue()) === "CaseLabel", "列の割り当ての候補が入る（R1 の入力）");
-    await page.getByTestId("rs-recipe").selectOption("r1-prognosis");
+    await page.getByTestId("rs-skill").selectOption("r1-prognosis");
     await page.getByTestId("rs-covariates").locator("label", { hasText: "age" }).locator("input").check();
     await page.getByTestId("rs-bootstrap").fill("30");
     await page.getByTestId("rs-bootstrap").dispatchEvent("change");
@@ -339,7 +339,7 @@ async function main(): Promise<void> {
     await page.getByTestId("rs-file-features").setInputFiles([r2Feat]);
     await page.getByTestId("rs-file-clinical").setInputFiles(r2Clin);
     await page.waitForFunction(() => !(document.querySelector('[data-testid="rs-run"]') as HTMLButtonElement | null)?.disabled, null, { timeout: 15_000 });
-    await page.getByTestId("rs-recipe").selectOption("r2-discrimination");
+    await page.getByTestId("rs-skill").selectOption("r2-discrimination");
     await page.getByTestId("rs-multiplicity").selectOption("bh"); // [6] で「補正なし」にした設定が残っているので戻す
     check((await page.getByTestId("rs-positive").inputValue()) === "", "陽性とするラベルの既定は決めていない（選ぶまで空）");
     const labelsOffered = await page.getByTestId("rs-positive").locator("option").allInnerTexts();
@@ -410,8 +410,8 @@ async function main(): Promise<void> {
     type R3Ref = { n: number; icc: number; lower: number | null; upper: number | null; icc_t: number; lower_t: number | null; upper_t: number | null; category: string | null };
     const r3ref = JSON.parse(fs.readFileSync(r3RefPath, "utf8")) as { ids: number; features: Record<string, R3Ref>; ba: { n: number; bias: number; bias_ci: number[]; sd: number; lo: number; hi: number } };
     check(Math.abs(r3ref.features.f_same.icc - 1) < 1e-9 && r3ref.features.f_rand.category === "poor" && r3ref.features.f_shift.icc < r3ref.features.f_same.icc - 0.05, "参照側でも、f_same は ICC=1（区間は NaN）・f_rand は poor・f_shift は定数のずれで ICC が下がる", Object.fromEntries(Object.entries(r3ref.features).map(([k, v]) => [k, v.category])));
-    await page.getByTestId("rs-recipe").selectOption("r3-reproducibility");
-    check((await page.getByTestId("rs-file-clinical").count()) === 0, "再現性のレシピでは臨床 CSV の選択が出ない");
+    await page.getByTestId("rs-skill").selectOption("r3-reproducibility");
+    check((await page.getByTestId("rs-file-clinical").count()) === 0, "再現性のスキルでは臨床 CSV の選択が出ない");
     await page.getByTestId("rs-file-features").setInputFiles([r3Files[0]]);
     await page.getByTestId("rs-loaded").first().waitFor({ state: "attached", timeout: 15_000 });
     check(await page.getByTestId("rs-run").isDisabled(), "条件が 1 つのときは実行できない（負例）");
@@ -480,7 +480,7 @@ async function main(): Promise<void> {
     execFileSync("python3", ["-I", path.join(AUTOMATOR_ROOT, "src", "spike", "researchStatsP4Reference.py"), p4Feat, p4Clin, "11", "0.25", "0.95", p4RefPath]);
     const p4ref = JSON.parse(fs.readFileSync(p4RefPath, "utf8")) as { testIds: string[]; dev: number; test: number; kept: string[]; removed: string[]; folds: { k: number | null; score: number | null; features: string[] }[]; pooled: number[]; final: { k: number; features: string[] }; testAuc: number; testLower: number; testUpper: number };
     check(p4ref.removed.join() === "f_dup" && p4ref.folds.length === 10, "参照側でも f_dup だけが相関で除かれ、外側 5 分割 × 2 回 = 10 分割", p4ref.removed);
-    await page.getByTestId("rs-recipe").selectOption("p4-pipeline");
+    await page.getByTestId("rs-skill").selectOption("p4-pipeline");
     await page.getByTestId("rs-file-features").setInputFiles([p4Feat]);
     await page.getByTestId("rs-file-clinical").setInputFiles(p4Clin);
     await page.waitForFunction(() => !(document.querySelector('[data-testid="rs-run"]') as HTMLButtonElement | null)?.disabled, null, { timeout: 15_000 });
