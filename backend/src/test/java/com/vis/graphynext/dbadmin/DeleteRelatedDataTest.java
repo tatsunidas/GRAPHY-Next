@@ -144,7 +144,7 @@ class DeleteRelatedDataTest {
         assertTrue(glam.existsById("g-b"));
         assertTrue(plugins.existsById(new PluginDocumentId("pp", "CL1")), "患者の画像が残るのでプラグインの記録は残す");
         assertTrue(reports.existsById("rep-a-final") && reports.existsById("rep-a-draft"), "レポートは消さない");
-        assertEquals(new PatientRecordMover.Cleanup(1, 1, 1, 1, 1, 0), r.related());
+        assertEquals(new PatientRecordMover.Cleanup(1, 1, 1, 1, 1, 0, 0), r.related());
     }
 
     @Test

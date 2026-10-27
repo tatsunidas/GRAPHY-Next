@@ -97,6 +97,13 @@ public class RoiMaskDocument {
         this.updatedAt = Instant.now();
     }
 
+    /** 患者キーが変わったとき（患者 ID の編集など）に、行とメタの患者キーを新しい値へ付け替える。画素・シリーズは変えない。 */
+    public void moveTo(String patientKey, String meta) {
+        this.patientKey = patientKey;
+        this.meta = meta;
+        this.updatedAt = Instant.now();
+    }
+
     public String getMaskUid() {
         return maskUid;
     }

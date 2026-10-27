@@ -22,6 +22,8 @@ import com.vis.graphynext.report.Report;
 import com.vis.graphynext.report.ReportRepository;
 import com.vis.graphynext.roi.RoiDocument;
 import com.vis.graphynext.roi.RoiDocumentRepository;
+import com.vis.graphynext.roi.RoiMaskDocument;
+import com.vis.graphynext.roi.RoiMaskDocumentRepository;
 import com.vis.graphynext.settings.SettingsService;
 import org.springframework.stereotype.Component;
 
@@ -52,18 +54,20 @@ import java.util.function.Predicate;
 public class PatientRecordMover {
 
     public record Result(int roisMoved, int roiOverlaps, int registrationsMoved, int pluginDocsMoved,
-                         int pluginDocsKept, int reportsUpdated) {
-        static final Result NONE = new Result(0, 0, 0, 0, 0, 0);
+                         int pluginDocsKept, int reportsUpdated, int masksMoved) {
+        static final Result NONE = new Result(0, 0, 0, 0, 0, 0, 0);
 
         Result plus(Result o) {
             return new Result(roisMoved + o.roisMoved, roiOverlaps + o.roiOverlaps,
                     registrationsMoved + o.registrationsMoved, pluginDocsMoved + o.pluginDocsMoved,
-                    pluginDocsKept + o.pluginDocsKept, reportsUpdated + o.reportsUpdated);
+                    pluginDocsKept + o.pluginDocsKept, reportsUpdated + o.reportsUpdated,
+                    masksMoved + o.masksMoved);
         }
     }
 
     private final DicomInstanceRepository repo;
     private final RoiDocumentRepository rois;
+    private final RoiMaskDocumentRepository masks;
     private final RegistrationDocumentRepository registrations;
     private final PluginDocumentRepository plugins;
     private final ReportRepository reports;
@@ -71,11 +75,12 @@ public class PatientRecordMover {
     private final SettingsService settings;
     private final ObjectMapper mapper = new ObjectMapper();
 
-    public PatientRecordMover(DicomInstanceRepository repo, RoiDocumentRepository rois,
+    public PatientRecordMover(DicomInstanceRepository repo, RoiDocumentRepository rois, RoiMaskDocumentRepository masks,
                               RegistrationDocumentRepository registrations, PluginDocumentRepository plugins,
                               ReportRepository reports, GlamAnalysisDocumentRepository glam, SettingsService settings) {
         this.repo = repo;
         this.rois = rois;
+        this.masks = masks;
         this.registrations = registrations;
         this.plugins = plugins;
         this.reports = reports;
@@ -85,7 +90,7 @@ public class PatientRecordMover {
 
     /** 画像を削除したあとに片付けた付随データの件数。レポートは数えない（レポートは画像を消しても残す）。 */
     public record Cleanup(int roisRemoved, int analysesRemoved, int registrationsRemoved, int calibrationsRemoved,
-                          int glamRemoved, int pluginDocsRemoved) {
+                          int glamRemoved, int pluginDocsRemoved, int masksRemoved) {
     }
 
     /**
@@ -93,6 +98,7 @@ public class PatientRecordMover {
      *
      * <ul>
      *   <li>ROI・解析状態: 消えた SOP を指すもの。</li>
+     *   <li>塗り ROI（マスク）: 消えたシリーズのもの。患者の画像がすべて消えたときは、その患者のものをすべて。</li>
      *   <li>位置合わせ・XA 校正: 消えたシリーズ（DB に 1 枚も残っていない）を指すもの。</li>
      *   <li>GLAM: 消えた検査のもの、または元のシリーズ・マスクが消えたシリーズのもの。</li>
      *   <li>患者の画像がすべて消えたとき: その患者キーの ROI・位置合わせの文書とプラグインの記録をまるごと。</li>
@@ -101,7 +107,7 @@ public class PatientRecordMover {
      */
     public Cleanup afterDelete(List<DicomInstance> deleted) {
         if (deleted.isEmpty()) {
-            return new Cleanup(0, 0, 0, 0, 0, 0);
+            return new Cleanup(0, 0, 0, 0, 0, 0, 0);
         }
         repo.flush();
         Set<String> sops = new HashSet<>();
@@ -128,8 +134,13 @@ public class PatientRecordMover {
         int analysesRemoved = 0;
         int regsRemoved = 0;
         int pluginsRemoved = 0;
+        // 塗り ROI は画素を持つ別テーブル。消えたシリーズのものを消す（シリーズ UID は一意）。
+        int masksRemoved = goneSeries.isEmpty() ? 0 : (int) masks.deleteBySeriesUidIn(goneSeries);
         for (String key : keys) {
             boolean patientGone = !remains(key);
+            if (patientGone) {
+                masksRemoved += (int) masks.deleteByPatientKey(key);
+            }
             RoiDocument roi = rois.findById(key).orElse(null);
             if (roi != null) {
                 ObjectNode d = parse(roi.getJson());
@@ -182,7 +193,7 @@ public class PatientRecordMover {
             glam.deleteAll(hit);
             glamRemoved += hit.size();
         }
-        return new Cleanup(roisRemoved, analysesRemoved, regsRemoved, calib, glamRemoved, pluginsRemoved);
+        return new Cleanup(roisRemoved, analysesRemoved, regsRemoved, calib, glamRemoved, pluginsRemoved, masksRemoved);
     }
 
     /** 編集の前に、行ごとの元のキーを控える（SOP → キー）。 */
@@ -220,6 +231,7 @@ public class PatientRecordMover {
             String to = e.getKey().get(1);
             boolean whole = !remains(from);
             total = total.plus(moveRois(from, to, whole, e.getValue(), sops.get(e.getKey())));
+            total = total.plus(moveMasks(from, to, whole, e.getValue()));
             total = total.plus(moveRegistrations(from, to, whole, e.getValue()));
             total = total.plus(movePlugins(from, to, whole));
         }
@@ -234,7 +246,7 @@ public class PatientRecordMover {
                     }
                 }
             }
-            total = total.plus(new Result(0, 0, 0, 0, 0, n));
+            total = total.plus(new Result(0, 0, 0, 0, 0, n, 0));
         }
         return total;
     }
@@ -278,7 +290,33 @@ public class PatientRecordMover {
             src.update(write(s), array(s, "rois").size());
             rois.save(src);
         }
-        return new Result(movingRois.size() - overlaps, overlaps, 0, 0, 0, 0);
+        return new Result(movingRois.size() - overlaps, overlaps, 0, 0, 0, 0, 0);
+    }
+
+    /**
+     * 塗り ROI の行を新しい患者キーへ付け替える。全部移るとき（{@code whole}）は元のキーの全部、一部の検査だけのときは、
+     * メタの検査 UID（原本 {@code origin}、無ければ {@code scope}）が動いた検査のものだけ。
+     * 行の患者キーとメタ JSON の患者キーを両方書き換える（復元はメタの患者キーも見るため）。画素・シリーズは変えない。
+     */
+    private Result moveMasks(String from, String to, boolean whole, Set<String> studyUids) {
+        int moved = 0;
+        for (RoiMaskDocument m : masks.findByPatientKey(from)) {
+            ObjectNode meta = parse(m.getMeta());
+            if (!whole) {
+                String st = meta.path("origin").path("studyUid").asText("");
+                if (st.isEmpty()) {
+                    st = meta.path("scope").path("studyUid").asText("");
+                }
+                if (!studyUids.contains(st)) {
+                    continue;
+                }
+            }
+            meta.put("patientKey", to);
+            m.moveTo(to, write(meta));
+            masks.save(m);
+            moved++;
+        }
+        return moved == 0 ? Result.NONE : new Result(0, 0, 0, 0, 0, 0, moved);
     }
 
     private void save(RoiDocument dst, String key, ObjectNode d) {
@@ -328,7 +366,7 @@ public class PatientRecordMover {
             src.update(write(s), array(s, "records").size());
             registrations.save(src);
         }
-        return new Result(0, 0, added, 0, 0, 0);
+        return new Result(0, 0, added, 0, 0, 0, 0);
     }
 
     private Result movePlugins(String from, String to, boolean whole) {
@@ -345,7 +383,7 @@ public class PatientRecordMover {
             plugins.delete(p);
             moved++;
         }
-        return new Result(0, 0, 0, moved, kept, 0);
+        return new Result(0, 0, 0, moved, kept, 0, 0);
     }
 
     /** obj[field] のうち条件に合う要素を取り出して返し、obj には残りを入れ直す。 */

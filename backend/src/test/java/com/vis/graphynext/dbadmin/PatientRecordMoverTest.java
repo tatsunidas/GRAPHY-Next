@@ -128,7 +128,7 @@ class PatientRecordMoverTest {
         assertTrue(regs.existsById("WH9") && !regs.existsById("WH1"));
         assertTrue(plugins.existsById(new PluginDocumentId("pa", "WH9")));
         assertEquals("WH9", reports.findById("rep-wh").orElseThrow().getPatientId());
-        assertEquals(new PatientRecordMover.Result(2, 0, 1, 1, 0, 1), r);
+        assertEquals(new PatientRecordMover.Result(2, 0, 1, 1, 0, 1, 0), r);
     }
 
     @Test
@@ -155,7 +155,7 @@ class PatientRecordMoverTest {
         assertEquals(1, regs.findById("ST8").orElseThrow().getRecordCount());
         assertEquals(1, regs.findById("ST1").orElseThrow().getRecordCount());
         assertTrue(plugins.existsById(new PluginDocumentId("pb", "ST1")), "プラグインの記録は分けられないので残す");
-        assertEquals(new PatientRecordMover.Result(2, 0, 1, 0, 1, 0), r);
+        assertEquals(new PatientRecordMover.Result(2, 0, 1, 0, 1, 0, 0), r);
     }
 
     @Test
@@ -178,6 +178,6 @@ class PatientRecordMoverTest {
         assertTrue(rois.findById("MG2").orElseThrow().getJson().contains("\"writer\":\"keep\""));
         assertEquals("{\"from\":2}", plugins.findById(new PluginDocumentId("pc", "MG2")).orElseThrow().getJson());
         assertTrue(plugins.existsById(new PluginDocumentId("pc", "MG1")), "移せなかったものは元の鍵に残す");
-        assertEquals(new PatientRecordMover.Result(1, 1, 0, 0, 1, 0), r);
+        assertEquals(new PatientRecordMover.Result(1, 1, 0, 0, 1, 0, 0), r);
     }
 }
