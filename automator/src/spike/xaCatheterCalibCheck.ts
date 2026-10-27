@@ -5,12 +5,12 @@
  * 準備:  cd bench && python3 make_phantom_xa.py --out ./phantom（bench/phantom/GNBP-XA/truth.json と DICOM）
  *
  * ファントム: 6Fr（外径 2.0 mm）のカテーテルが 316 行目、径 3.0 mm の血管が 196 行目に横向きに走る。真の mm/px は 0.225。
- * - 解析区間（血管に沿う長い線）と、校正の線（カテーテルを横切る短い線）を**別々に**画素の座標で引く
- *   （xaQcaCheck の [4c] が落ちていた原因は、解析区間の 275 px の線をそのままカテーテルとして校正したこと＝0.0073 mm/px）
+ * - 血管に沿う長い線と、校正の線（カテーテルを横切る短い線）を**別々に**画素の座標で引き、校正の線だけを選ぶ
  * - 2 つの読み込み時の状態で確かめる:
  *     e-nothing        … 校正情報なし（読み込み時の world は px）。Rubo の実画像と同じ
  *     d-geometry-only  … SID/SOD だけ（読み込み時に world が mm になる。PR #204 で直した経路）
- * - 確かめること: 校正値 ≈ 0.225 mm/px（線を画面で引く誤差があるので ±8%）・血管の径（RVD・MLD）≈ 3.0 mm（±15%）
+ * - 確かめること: 校正値 ≈ 0.225 mm/px（線を画面で引く誤差があるので ±8%）
+ *   （血管の径の検査は 2D QCA を本体から外したので、プラグイン側で行う）
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -56,23 +56,6 @@ async function drawBetweenImagePixels(viewer: Page, p0: [number, number], p1: [n
   const dy = Math.round((f[1].fy - f[0].fy) * h);
   await dragOnCanvasHost(viewer, HOST, dx, dy, 0, 14, { fracX: f[0].fx, fracY: f[0].fy });
   await viewer.waitForTimeout(800);
-}
-
-/** QCA 結果テーブルから数値を拾う（xaQcaCheck と同じ）。 */
-async function qcaNumbers(page: Page): Promise<Record<string, number> | null> {
-  return page.evaluate(() => {
-    const dialog = document.querySelector('[data-testid="xa-analysis-dialog"]')?.parentElement;
-    if (!dialog) return null;
-    const cells = Array.from(dialog.querySelectorAll("td")).map((td) => (td.textContent ?? "").trim());
-    const out: Record<string, number> = {};
-    for (let i = 0; i < cells.length - 1; i++) {
-      const m = /^([\d.]+)/.exec(cells[i + 1]);
-      if (!m) continue;
-      if (cells[i] === "MLD") out.mld = Number(m[1]);
-      else if (cells[i] === "RVD") out.rvd = Number(m[1]);
-    }
-    return out;
-  });
 }
 
 async function main(): Promise<void> {
@@ -130,15 +113,13 @@ async function main(): Promise<void> {
       const half = catheterPx / 2;
       await drawBetweenImagePixels(viewer, [256, truth.catheterAxisRow - half], [256, truth.catheterAxisRow + half]);
 
-      await viewer.getByTestId("xa-analysis-open").click();
-      await viewer.getByTestId("xa-analysis-dialog").waitFor({ state: "visible", timeout: 10_000 });
-      await viewer.getByTestId("xa-analysis-pick").selectOption("0");
+      await viewer.getByTestId("xa-calibration-open").click();
+      await viewer.getByTestId("xa-calibration-dialog").waitFor({ state: "visible", timeout: 10_000 });
       // 校正の候補は直線だけ。ラベル（#2）で選ぶ
       const calibOpts = await viewer.getByTestId("xa-calib-pick").locator("option").allTextContents();
       const idx = calibOpts.findIndex((o) => o.trim().startsWith("#2"));
       check(idx >= 0, `${key}: 校正の候補にカテーテルの線（#2）がある`, calibOpts);
       await viewer.getByTestId("xa-calib-pick").selectOption(String(idx));
-      check((await viewer.getByTestId("xa-calib-same-as-analysis").count()) === 0, `${key}: 「解析区間と同じ線」の警告が出ない`);
       await viewer.getByTestId("xa-catheter-fr").fill(String(truth.catheterFr));
       await viewer.getByTestId("xa-calibrate-catheter").click();
       await viewer.waitForTimeout(1_500);
@@ -146,11 +127,6 @@ async function main(): Promise<void> {
       const mmPerPx = Number(/\(([\d.]+) mm\/px\)/.exec(status)?.[1] ?? NaN);
       check(Math.abs(mmPerPx / truth.mmPerPx - 1) < 0.08, `${key}: 校正値が真値 ${truth.mmPerPx} mm/px に合う（±8%）`, { status, mmPerPx });
 
-      await viewer.getByRole("button", { name: /解析する|Analyze/ }).click();
-      await viewer.waitForTimeout(6_000);
-      const n = await qcaNumbers(viewer);
-      check(!!n && Math.abs((n.rvd ?? 0) / truth.vesselDiameterMm - 1) < 0.15, `${key}: RVD が真値 ${truth.vesselDiameterMm} mm に合う（±15%）`, n);
-      check(!!n && Math.abs((n.mld ?? 0) / truth.vesselDiameterMm - 1) < 0.15, `${key}: MLD が真値 ${truth.vesselDiameterMm} mm に合う（狭窄なし・±15%）`, n);
       await viewer.screenshot({ path: path.join(OUT_DIR, `${key}.png`) }).catch(() => {});
       await viewer.close();
     }

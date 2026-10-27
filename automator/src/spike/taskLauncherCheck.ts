@@ -125,11 +125,12 @@ async function main(): Promise<void> {
     // ── ① スタディ未選択でも開く（「何ができるか」の一覧としての価値）───────────
     await openLauncher(mainPage);
     const idle = await readCards(mainPage);
-    check(Object.keys(idle).length === 7, "[一覧] タスクが 7 枚並ぶ", Object.keys(idle));
+    check(Object.keys(idle).length === 4, "[一覧] タスクが 4 枚並ぶ（QCA 系はプラグインへ移したので出ない）", Object.keys(idle));
+    check(idle.qca === undefined && idle.qca3d === undefined && idle.qca3dBifurcation === undefined, "[一覧] 2D/3D QCA・分岐部のカードは出ない", Object.keys(idle));
     check(
-      idle.qca?.enabled === "0" && idle.qca?.reason === "xa.task.reason.noStudy",
+      idle.qlv?.enabled === "0" && idle.qlv?.reason === "xa.task.reason.noStudy",
       "[一覧] スタディ未選択なら実装済みタスクも押せず、理由が『スタディを選べ』",
-      idle.qca,
+      idle.qlv,
     );
     check(
       idle.qlvBiplane?.enabled === "0" && idle.qlvBiplane?.reason === "xa.task.reason.notImplemented",
@@ -157,7 +158,7 @@ async function main(): Promise<void> {
     // 🔴 `qva` はここから外した（2026-09-01）。**カードごと撤去**したので「押せる」も
     //    「押せない」も検査できない（存在しないものは `xa[id]` が undefined になる）。
     //    理由は `frontend/src/viewer/xaTaskCatalog.ts` の注記。
-    for (const id of ["qca", "qca3d", "qca3dBifurcation", "qlv", "report"]) {
+    for (const id of ["qlv", "report"]) {
       check(xa[id]?.enabled === "1", `[XA] ${id} が押せる`, xa[id]);
     }
     check(xa.qva === undefined, "[XA] QVA のカードは出ない（作り直しのため導線を撤去）", xa.qva);
@@ -166,27 +167,27 @@ async function main(): Promise<void> {
 
     // ── ③ 押すと 2D ビューアが開き、その解析ダイアログが開く（本題）──────────
     const viewer = await driver.waitForNewPage(
-      () => mainPage.getByTestId("task-card-qca").click(),
+      () => mainPage.getByTestId("task-card-qlv").click(),
       (url) => url.includes("2dviewer"),
     );
     await viewer.getByTestId("series-viewer-root").first().waitFor({ state: "visible", timeout: 30_000 });
     const opened = await viewer
-      .getByTestId("xa-analysis-dialog")
+      .getByTestId("qlv-dialog")
       .waitFor({ state: "visible", timeout: 20_000 })
       .then(() => true)
       .catch(() => false);
-    check(opened, "[起動] ★カードを押すとビューアが開き QCA のダイアログまで開く");
+    check(opened, "[起動] ★カードを押すとビューアが開き QLV のダイアログまで開く");
     if (!opened) return;
     const tiles = await viewer.getByTestId("series-viewer-root").count();
     check(tiles === 1, "[起動] 依頼したシリーズだけが開いている", tiles);
     // 既存の導線を消していないこと（ランチャーは*追加*の入口・§21.2）。
     check(
-      (await viewer.getByTestId("xa-analysis-open").count()) === 1,
+      (await viewer.getByTestId("qlv-open").count()) === 1,
       "[起動] ★ビューア側の既存ボタンも残っている",
     );
-    await viewer.screenshot({ path: path.join(OUT_DIR, "3-viewer-qca.png") }).catch(() => {});
-    await viewer.getByTestId("xa-dialog-close").click();
-    await viewer.getByTestId("xa-analysis-dialog").waitFor({ state: "detached", timeout: 10_000 });
+    await viewer.screenshot({ path: path.join(OUT_DIR, "3-viewer-qlv.png") }).catch(() => {});
+    await viewer.getByTestId("qlv-close").click();
+    await viewer.getByTestId("qlv-dialog").waitFor({ state: "detached", timeout: 10_000 });
 
     // ── ④ 依頼が残らない（★ localStorage に置かない設計の検査）──────────────
     // ビューアを再読込する。**シリーズは復帰する**（＝ビューアのコンテキストは localStorage で残る）が、
@@ -194,7 +195,7 @@ async function main(): Promise<void> {
     await viewer.reload();
     await viewer.getByTestId("series-viewer-root").first().waitFor({ state: "visible", timeout: 30_000 });
     await viewer.waitForTimeout(3_000);
-    const reopened = await viewer.getByTestId("xa-analysis-dialog").count();
+    const reopened = await viewer.getByTestId("qlv-dialog").count();
     check(reopened === 0, "[残留] ★再読込しても解析ダイアログが勝手に開かない", reopened);
     check(
       (await viewer.getByTestId("series-viewer-root").count()) === 1,
@@ -215,9 +216,9 @@ async function main(): Promise<void> {
       await openLauncher(mainPage);
       const ct = await readCards(mainPage);
       check(
-        ct.qca?.enabled === "0" && ct.qca?.reason === "xa.task.reason.noXaSeries",
-        "[CT] ★XA 以外のシリーズでは QCA が落ち、理由がモダリティ",
-        ct.qca,
+        ct.qlv?.enabled === "0" && ct.qlv?.reason === "xa.task.reason.noXaSeries",
+        "[CT] ★XA 以外のシリーズでは QLV が落ち、理由がモダリティ",
+        ct.qlv,
       );
       check(ct.report?.enabled === "1", "[CT] 報告書はシリーズを問わず押せる", ct.report);
       await mainPage.screenshot({ path: path.join(OUT_DIR, "4-launcher-ct.png") }).catch(() => {});

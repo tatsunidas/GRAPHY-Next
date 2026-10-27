@@ -191,20 +191,6 @@ async function main(): Promise<void> {
     check(a.length === 1, "つないだら 1 本になった", a.length);
     check(a[0]?.points.length === sum || a[0]?.points.length === sum - 1, `点の数が合計（${sum}）になる`, a[0]?.points.length);
     await shot("5-joined");
-    // つないだ線が、QCA の解析区間として拾われる
-    const openBtn = v.getByTestId("xa-analysis-open");
-    check(await openBtn.isVisible().catch(() => false), "XA 解析ボタンが出ている");
-    await openBtn.click();
-    await v.getByTestId("xa-analysis-dialog").waitFor({ state: "visible", timeout: 10_000 });
-    await v.waitForTimeout(800);
-    // 解析区間の選択肢の文言（例「#1 — 183.6 mm（ポリゴンライン · 11計測点数）」）を読む
-    const optText = ((await v.locator("select").filter({ hasText: "計測点数" }).first().locator("option").first().textContent().catch(() => "")) ?? "").trim();
-    fs.writeFileSync(path.join(OUT_DIR, "5-qca-option.txt"), optText);
-    console.log(`  解析区間の候補: ${optText}`);
-    check(/ポリゴンライン/.test(optText) && optText.includes(`${sum}計測点数`), `つないだ線（${sum} 点）が解析区間の候補に出る`, optText);
-    await v.screenshot({ path: path.join(OUT_DIR, "5-qca-dialog.png") });
-    await v.getByTestId("xa-dialog-close").click();
-    await v.waitForTimeout(500);
 
     console.log("\n[6] ポリゴン（閉）でも点の追加・削除ができる。最小点数で断る");
     await pick("viewer2d-menu-roi", /^(✓ )?ポリゴン ROI（閉）$/);

@@ -51,7 +51,7 @@ async function main(): Promise<void> {
     const ind = async () => ((await page.getByTestId("cine-indicator").first().textContent().catch(() => null)) ?? "(なし)").trim();
     console.log("フレーム表示:", await ind());
     console.log("shot スライダー:", (await vis("dim-slider-other")) || (await vis("dim-slider-other-compact")));
-    console.log("XA 解析ボタン(xa-analysis-open):", await vis("xa-analysis-open"), " DSA チェック:", await vis("dsa-check"));
+    console.log("XA 解析ボタン(xa-calibration-open):", await vis("xa-calibration-open"), " DSA チェック:", await vis("dsa-check"));
     await page.screenshot({ path: path.join(OUT_DIR, "frame1.png") });
     if (await vis("cine-jump")) {
       const jump = page.getByTestId("cine-jump").first();

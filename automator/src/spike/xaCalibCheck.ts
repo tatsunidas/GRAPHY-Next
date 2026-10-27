@@ -139,9 +139,9 @@ async function main(): Promise<void> {
     await viewer.screenshot({ path: path.join(OUT_DIR, "2-length-px.png") }).catch(() => {});
 
     // ── 条件 3/4/5/6: カテーテル校正 ────────────────────────────────
-    await viewer.getByTestId("xa-analysis-open").click();
+    await viewer.getByTestId("xa-calibration-open").click();
     await viewer.waitForTimeout(800);
-    await viewer.getByTestId("xa-analysis-dialog").waitFor({ state: "visible", timeout: 10_000 });
+    await viewer.getByTestId("xa-calibration-dialog").waitFor({ state: "visible", timeout: 10_000 });
     check(true, "[3a] 校正 / QCA ダイアログが開く");
     await viewer.screenshot({ path: path.join(OUT_DIR, "3-dialog.png") }).catch(() => {});
 
@@ -160,7 +160,7 @@ async function main(): Promise<void> {
     check(!!mmPerPx, "[3b] mm/px が確定した", mmPerPx?.[1]);
 
     // ダイアログを閉じて表示を見る。
-    await viewer.getByTestId("xa-dialog-close").click();
+    await viewer.getByTestId("xa-calibration-close").click();
     await viewer.waitForTimeout(1_500);
 
     const bar1 = await scaleBarLabel(viewer);
@@ -183,11 +183,11 @@ async function main(): Promise<void> {
     await viewer.screenshot({ path: path.join(OUT_DIR, "4-calibrated.png") }).catch(() => {});
 
     // ── 条件 7: 解除 ───────────────────────────────────────────────
-    await viewer.getByTestId("xa-analysis-open").click();
+    await viewer.getByTestId("xa-calibration-open").click();
     await viewer.waitForTimeout(800);
     await viewer.getByTestId("xa-clear-calibration").click();
     await viewer.waitForTimeout(1_000);
-    await viewer.getByTestId("xa-dialog-close").click();
+    await viewer.getByTestId("xa-calibration-close").click();
     await viewer.waitForTimeout(1_500);
     const bar2 = await scaleBarLabel(viewer);
     check(!!bar2 && /px/.test(bar2), "[7] 校正解除で px 表示に戻る", bar2);
