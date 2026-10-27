@@ -3,6 +3,7 @@
  * Author: Tatsuaki Kobayashi
  */
 import type { StudyFilters } from "../api";
+import { formatDicomDate } from "../i18n/dateFormat";
 
 /** 保存済み状態。none=未保存 / partial=一部 / full=全件 / unknown=判定不能。 */
 export type StoredStatus = "none" | "partial" | "full" | "unknown";
@@ -40,12 +41,9 @@ export function ageAt(studyDate: string | null, birthDate: string | null): numbe
   return age >= 0 && age < 200 ? age : null;
 }
 
-/** "YYYYMMDD" → "YYYY-MM-DD"（表示用）。空はそのまま。 */
+/** DICOM DA を設定の書式にする（表示用）。空は空文字、形式に合わない値は元のまま。 */
 export function fmtDate(d: string | null | undefined): string {
-  if (!d) return "";
-  const s = d.replace(/[^0-9]/g, "");
-  if (s.length < 8) return d;
-  return `${s.slice(0, 4)}-${s.slice(4, 6)}-${s.slice(6, 8)}`;
+  return d ? formatDicomDate(d) : "";
 }
 
 /** StudyFilters を C-FIND の matchKeys（DICOM キーワード）へ変換する。 */

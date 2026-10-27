@@ -18,6 +18,7 @@ import {
   type ParsedRoiFile,
   type RoiSaveContext,
   type SavedRoi,
+  type SavedSphere,
 } from "./roiPersistence";
 
 const SOP = "1.2.840.113619.2.340.3.1.2.3";
@@ -188,7 +189,7 @@ describe("parseSaveFile — 壊れた入力で全部を失わない", () => {
   });
 
   it("JSON として壊れていれば空配列（例外にしない）", () => {
-    const empty: ParsedRoiFile = { rois: [], deleted: [], analyses: [] };
+    const empty: ParsedRoiFile = { rois: [], deleted: [], analyses: [], spheres: [] };
     expect(parseSaveFile("{not json")).toEqual(empty);
     expect(parseSaveFile("")).toEqual(empty);
     expect(parseSaveFile(null)).toEqual(empty);
@@ -202,7 +203,7 @@ describe("parseSaveFile — 壊れた入力で全部を失わない", () => {
       schema: ROI_SCHEMA_VERSION + 1,
       rois: [{ roiUid: "x", tool: "Length", sopInstanceUid: SOP, points: [[0, 0, 0], [1, 1, 1]] }],
     });
-    expect(parseSaveFile(json)).toEqual({ rois: [], deleted: [], analyses: [] });
+    expect(parseSaveFile(json)).toEqual({ rois: [], deleted: [], analyses: [], spheres: [] });
   });
 
   it("scope の z/c/t は数値か \"all\" だけ通す", () => {
@@ -332,6 +333,7 @@ describe("mergeSaveFiles — 別ウィンドウの計測を失わず、削除は
     rois,
     deleted: deleted.map((roiUid) => ({ roiUid, at })),
     analyses: [],
+    spheres: [],
   });
 
   it("双方の ROI が残る（和を取る）", () => {
@@ -382,7 +384,7 @@ describe("mergeSaveFiles — 別ウィンドウの計測を失わず、削除は
   it("片方が空でも成立する", () => {
     expect(mergeSaveFiles(file([]), file([roi("a")])).rois.map((r) => r.roiUid)).toEqual(["a"]);
     expect(mergeSaveFiles(file([roi("a")]), file([])).rois.map((r) => r.roiUid)).toEqual(["a"]);
-    expect(mergeSaveFiles(file([]), file([]))).toEqual({ rois: [], deleted: [], analyses: [] });
+    expect(mergeSaveFiles(file([]), file([]))).toEqual({ rois: [], deleted: [], analyses: [], spheres: [] });
   });
 });
 
@@ -517,5 +519,61 @@ describe("マルチフレームのフレーム記録（2026-08-28）", () => {
       return "img";
     }, () => false);
     expect(seen).toEqual([2, undefined]);
+  });
+});
+
+describe("球 ROI の保存（spheres）", () => {
+  const sph = (uid: string, over: Partial<SavedSphere> = {}): SavedSphere => ({
+    uid, studyUid: "1.2.3", seriesUid: "1.2.4", refSopInstanceUid: SOP,
+    center: [1, 2, 3], radiusMm: 5.5, c: "all", t: 0, label: "Sphere", color: "#00e5ff", visible: true, ...over,
+  });
+  const parsedOf = (spheres: SavedSphere[], deleted: string[] = []): ParsedRoiFile => ({
+    rois: [], deleted: deleted.map((roiUid) => ({ roiUid, at: "2026-10-26T00:00:00Z" })), analyses: [], spheres,
+  });
+
+  it("build → parse で往復する（グループも保つ）", () => {
+    const a = sph("s1", { groupId: "g1", groupName: "グループ 1" });
+    const file = buildSaveFile([], [], "t", [], [a, sph("s2", { visible: false })]);
+    const back = parseSaveFile(JSON.stringify(file)).spheres;
+    expect(back).toEqual([a, sph("s2", { visible: false })]);
+    expect(file.schema).toBe(ROI_SCHEMA_VERSION);
+  });
+
+  it("球が無いときはキーを出さない・旧ファイルは空配列", () => {
+    const file = buildSaveFile([], [], "t");
+    expect("spheres" in file).toBe(false);
+    expect(parseSaveFile(JSON.stringify(file)).spheres).toEqual([]);
+  });
+
+  it("壊れた球だけを個別に落とす（必須項目・数値・重複）", () => {
+    const good = sph("ok");
+    const raw = { schema: 1, rois: [], spheres: [
+      good,
+      sph("dup"), sph("dup"),
+      { ...sph("nouid"), uid: "" },
+      sph("noseries", { seriesUid: "" }),
+      sph("nosop", { refSopInstanceUid: "" }),
+      sph("zero", { radiusMm: 0 }),
+      sph("nan", { radiusMm: NaN }),
+      { ...sph("c2"), center: [1, 2] },
+      { ...sph("c3"), center: [1, "x", 3] },
+      null, "x",
+    ] };
+    expect(parseSaveFile(JSON.stringify(raw)).spheres.map((s) => s.uid)).toEqual(["ok", "dup"]);
+  });
+
+  it("墓標に載った球は読まない・保存しない", () => {
+    const raw = { schema: 1, rois: [], deleted: [{ roiUid: "gone", at: "x" }], spheres: [sph("gone"), sph("keep")] };
+    expect(parseSaveFile(JSON.stringify(raw)).spheres.map((s) => s.uid)).toEqual(["keep"]);
+    const built = buildSaveFile([], [{ roiUid: "gone", at: "x" }], "t", [], [sph("gone"), sph("keep")]);
+    expect(built.spheres?.map((s) => s.uid)).toEqual(["keep"]);
+  });
+
+  it("マージ: 和集合・同じ uid はローカル・墓標の球は除く", () => {
+    const m = mergeSaveFiles(
+      parsedOf([sph("a"), sph("b", { label: "remote" }), sph("dead")]),
+      parsedOf([sph("b", { label: "local" }), sph("c")], ["dead"]),
+    );
+    expect(m.spheres.map((s) => [s.uid, s.label])).toEqual([["a", "Sphere"], ["b", "local"], ["c", "Sphere"]]);
   });
 });

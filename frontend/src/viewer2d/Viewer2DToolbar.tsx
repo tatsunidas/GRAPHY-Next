@@ -8,7 +8,7 @@ import { useWlPresets } from "./wlPresetStore";
 import { TOOL_IDS } from "../viewer/toolIds";
 import { type SortMode } from "../viewer/seriesSort";
 import type { SlabProjection } from "../viewer/slabPresets";
-import { type ViewerDerivedSeriesRequest, type ViewerDerivedSeriesResult, type ViewerOverlay, type ViewerPixelDataOptions, type ViewerSrRequest, type ViewerSrResult, type ViewerTarget, type ViewerAngioReportRequest, type ViewerPresentationStateRequest, type ViewerTilePixelData, type ViewerTileSpatialCalibration, type ViewerTileXaState, type ViewerTileXaCine, type ViewerTileRoi, type ViewerTileViewState, ViewerLabelVolume, ViewerLabelVolumeResult } from "../viewer/viewerCommands";
+import { type ViewerDerivedSeriesRequest, type ViewerDerivedSeriesResult, type ViewerOverlay, type ViewerPixelDataOptions, type ViewerSrRequest, type ViewerSrResult, type ViewerTarget, type ViewerAngioReportRequest, type ViewerPresentationStateRequest, type ViewerTilePixelData, type ViewerTileSpatialCalibration, type ViewerTileXaState, type ViewerTileXaCine, type ViewerTileXaGeometry, type ViewerTileRoi, type ViewerTileViewState, ViewerLabelVolume, ViewerLabelVolumeResult } from "../viewer/viewerCommands";
 import type { PluginAnalysisInput } from "../report/analysisResults";
 import type {
   PluginRegistrationRequest,
@@ -63,6 +63,8 @@ export interface ViewerActions {
   /** 対象タイルの XA 表示状態（DSA・フレーム軸）（H36）。XA / XRF でなければ null。 */
   getXaState(tileId?: string): ViewerTileXaState | null;
   getXaCine(tileId?: string): ViewerTileXaCine | null;
+  /** 対象タイルの XA 投影幾何（H41）。XA / XRF でなければ null。 */
+  getXaGeometry(tileId?: string): ViewerTileXaGeometry | null;
   /**
    * 対象タイルが表示しているスタックの imageId を z 昇順で返す（H31 の幾何委譲先）。
    * タイルが無ければ null。**空配列と null を混ぜない**（「無い」と「0 枚」は別）。
@@ -89,6 +91,13 @@ export interface ViewerActions {
   ): Promise<PluginVolume | null>;
   /** 読み込み前の大きさの見積り（H10）。 */
   estimateVolume(ref: PluginSeriesRef): Promise<PluginVolumeEstimate | null>;
+  /** 開いていない XA シリーズの幾何・フレーム数（H42）。 */
+  readXaSeries(ref: PluginSeriesRef): Promise<import("../plugins/pluginXaSeriesApi").PluginXaSeriesInfo | null>;
+  /** 開いていない XA シリーズの 1 フレーム（H42）。 */
+  readXaSeriesFrame(
+    ref: PluginSeriesRef,
+    frameIndex: number,
+  ): Promise<import("../plugins/pluginXaSeriesApi").PluginXaSeriesFrame | null>;
   /** **位置合わせを実行する**（H21）。本体の検証済み実装をそのまま使う。 */
   registerVolumes(
     req: PluginRegistrationRequest,
@@ -111,6 +120,7 @@ export interface ViewerActions {
   createRoi(tileId: string | undefined, by: { pluginId: string; pluginName: string }, req: import("../viewer/roiCreate").CreateRoiRequest): { ok: true; roiUid: string; centerLps: [number, number, number] } | { ok: false; reason: import("../viewer/roiCreate").CreateRoiFailure };
   /** そのプラグインが作った ROI だけを消す（出自の印が一致するときだけ）。 */
   removeCreatedRoi(roiUid: string, pluginId: string): boolean;
+  removeLabelVolume(segmentationId: string, pluginId: string): boolean;
   /**
    * ROI の追加・変更・削除を購読する（H5）。返り値で解除。
    * 通知はまとめられる（**何が変わったかは渡さない**ので、受け取ったら `getRois()` を読み直す）。
@@ -121,7 +131,7 @@ export interface ViewerActions {
   /** プラグインオーバーレイを消す。tileId 省略時は対象タイル全部。 */
   clearOverlay(tileId?: string): void;
   /** ラベルの volume を対象タイルの Mask として読み込む（H65）。tileId 省略時は対象の先頭。 */
-  showLabelVolume(tileId: string | undefined, req: ViewerLabelVolume, producer: { name: string }): Promise<ViewerLabelVolumeResult>;
+  showLabelVolume(tileId: string | undefined, req: ViewerLabelVolume, producer: { id: string; name: string }): Promise<ViewerLabelVolumeResult>;
   /**
    * プラグインの出力を派生シリーズとして保存する（H4b）。**確認ダイアログを必ず挟む**
    * （抑止不可。ユーザーが拒否したら `cancelled: true`）。
@@ -265,6 +275,8 @@ export interface ViewerActions {
   /** 対象タイルのシリーズで Texture（Radiomics 可視化マップ）ダイアログを開く。 */
   openTexture(): void;
   openFilterImage(): void;
+  /** 対象タイルに、LoG の派生シリーズを色分けで重ねるダイアログを開く。 */
+  openFilterLayers(): void;
   /** GLAM 解析（ROI 全体の記述子）を別ウィンドウで開く。 */
   openGlamAnalysis(): void;
   /** Radiomics 特徴量（ROI 全体の特徴量表）を別ウィンドウで開く。 */

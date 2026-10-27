@@ -71,6 +71,11 @@ export interface XaQcaRun {
   /** 手修正が入っているか（出自を 3D 側でも失わない）。 */
   edited: boolean;
   /**
+   * アンカー（3D QCA の目印。画像 px・中心線の上）。**血管に沿った順**で、番号が 2 方向の対応になる。
+   * `confirmed` でないものは 3D に使わない（仮の位置）。未設定なら目印は無い。
+   */
+  anchors?: { x: number; y: number; confirmed: boolean }[];
+  /**
    * 空間校正の出自と縮退区分（H35 と同じ語彙）。読めなければ undefined。
    *
    * <p>3D 側（A7 の H11）が「この幾何はどこまで信用してよいか」を外部モジュールへ渡すために要る。

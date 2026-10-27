@@ -19,6 +19,7 @@ import { ImportWatchPanel } from "./ImportWatchPanel";
 import { RetentionPanel } from "./RetentionPanel";
 import { isDesktop } from "../desktopBridge";
 import { useI18n, type Locale, type TFn } from "../i18n/i18n";
+import { getDateFormat, getTimeFormat, setDateFormat, setTimeFormat, type DateFormat, type TimeFormat } from "../i18n/dateFormat";
 import { markRestartRequired } from "../restartRequiredEvents";
 
 /** 変更が SCP リスナー（自局 AE）に反映されるのにアプリ再起動が要るキー。 */
@@ -26,6 +27,7 @@ const RESTART_REQUIRED_KEYS = new Set([
   "dicom.localAeTitle",
   "dicom.localAePort",
   "dicom.localAeBindAddress",
+  "dicom.scpQrEnabled",
 ]);
 
 export function SettingsDialog({
@@ -42,6 +44,7 @@ export function SettingsDialog({
   const [map, setMap] = useState<SettingsMap>({});
   const [selectedId, setSelectedId] = useState<string>(SETTINGS_REGISTRY[0]?.id ?? "");
   const [error, setError] = useState<string | null>(null);
+  const [, setFmtTick] = useState(0); // 書式の保存は localStorage。選択の表示を更新するための再描画
 
   useEffect(() => {
     if (!open) return;
@@ -64,6 +67,17 @@ export function SettingsDialog({
       setLocale(value as Locale);
       return;
     }
+    // 日付・時刻の書式は localStorage（開いている全画面へ変更イベントで届く）。DICOM の値は変えない
+    if (field.key === "general.dateFormat") {
+      setDateFormat(value as DateFormat);
+      setFmtTick((n) => n + 1);
+      return;
+    }
+    if (field.key === "general.timeFormat") {
+      setTimeFormat(value as TimeFormat);
+      setFmtTick((n) => n + 1);
+      return;
+    }
     // デバッグモードは frontend logger 用に localStorage も即時更新（backend へも保存し DEBUG 切替）
     if (field.key === "general.debugMode") {
       try {
@@ -81,6 +95,8 @@ export function SettingsDialog({
 
   const valueOf = (field: FieldDef): string => {
     if (field.key === "general.language") return locale;
+    if (field.key === "general.dateFormat") return getDateFormat();
+    if (field.key === "general.timeFormat") return getTimeFormat();
     if (field.key === "general.debugMode") {
       try {
         return localStorage.getItem("graphy.debug") === "true" ? "true" : "false";
@@ -251,10 +267,10 @@ function renderControl(field: FieldDef, t: TFn, raw: string, onChange: (f: Field
       );
     case "select":
       return (
-        <select value={raw} onChange={(e) => onChange(field, e.target.value)} style={input}>
+        <select data-testid={`settings-field-${field.key}`} value={raw} onChange={(e) => onChange(field, e.target.value)} style={input}>
           {field.options?.map((o) => (
             <option key={o.value} value={o.value}>
-              {t(o.labelKey)}
+              {o.label ? o.label(t) : t(o.labelKey)}
             </option>
           ))}
         </select>

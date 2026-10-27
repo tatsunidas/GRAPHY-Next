@@ -15,6 +15,7 @@ import { useSeries } from "../hooks/useSeries";
 import { useStudies } from "../hooks/useStudies";
 import { useI18n } from "../i18n/i18n";
 import { DATE_RANGE_KEYS, DATE_RANGE_LABEL_KEY, dateRangeFilter, type DateRangeKey } from "./dateRange";
+import { formatDicomDate, useDateFormat } from "../i18n/dateFormat";
 
 /** 検索フォーム ＋ スタディ一覧。 */
 export function MobileStudyList({
@@ -27,6 +28,7 @@ export function MobileStudyList({
   onSelect: (s: Study) => void;
 }) {
   const { t } = useI18n();
+  useDateFormat(); // 日付の書式が変わったら描き直す
   const [query, setQuery] = useState("");
   const [range, setRange] = useState<DateRangeKey>("month");
   const { studies, error, loading } = useStudies(filters);
@@ -142,10 +144,9 @@ export function MobileSeriesList({ study, onSelect }: { study: Study; onSelect: 
   );
 }
 
-/** DICOM `YYYYMMDD` を `YYYY-MM-DD` にする（それ以外の形式はそのまま返す）。 */
+/** DICOM `YYYYMMDD` を設定の書式にする（それ以外の形式はそのまま返す）。 */
 function formatStudyDate(v: string | null): string {
-  if (!v) return "";
-  return /^\d{8}$/.test(v) ? `${v.slice(0, 4)}-${v.slice(4, 6)}-${v.slice(6, 8)}` : v;
+  return v ? formatDicomDate(v) : "";
 }
 
 // ── スタイル ──

@@ -24,13 +24,16 @@ import java.util.regex.Pattern;
  * （number / integer / string / enum。境界必須・ネスト無し）。
  */
 @JsonInclude(JsonInclude.Include.NON_NULL)
-public record AiToolSpec(String name, String description, String effect, Map<String, Object> parameters) {
+public record AiToolSpec(String name, String description, String effect, Map<String, Object> parameters, Integer timeoutSec) {
 
     /** 利用者が AI からの呼び出しを許す権限（plugin.json の permissions）。 */
     public static final String PERMISSION = "ai-tools";
     public static final int MAX_TOOLS_PER_PLUGIN = 8;
     public static final int MAX_DESCRIPTION = 300;
     public static final int MAX_PARAMS = 8;
+    /** ツール 1 回の実行待ちの範囲（秒）。省略時は本体の既定（30 秒）。外部計算機を使う長いツール向け。 */
+    public static final int MIN_TIMEOUT_SEC = 5;
+    public static final int MAX_TIMEOUT_SEC = 900;
     public static final int MAX_ENUM_VALUES = 16;
     public static final int MAX_STRING_LENGTH = 1000;
     private static final int MAX_PARAM_DESCRIPTION = 200;
@@ -72,7 +75,7 @@ public record AiToolSpec(String name, String description, String effect, Map<Str
     private static AiToolSpec one(Map<String, Object> t, List<AiToolSpec> already) {
         if (t == null) throw new IllegalArgumentException("null entry");
         for (String k : t.keySet()) {
-            if (!List.of("name", "description", "effect", "parameters").contains(k)) {
+            if (!List.of("name", "description", "effect", "parameters", "timeoutSec").contains(k)) {
                 throw new IllegalArgumentException("unknown key '" + k + "'");
             }
         }
@@ -87,7 +90,14 @@ public record AiToolSpec(String name, String description, String effect, Map<Str
         if (desc == null || desc.isBlank() || desc.length() > MAX_DESCRIPTION) {
             throw new IllegalArgumentException(name + ": description must be 1.." + MAX_DESCRIPTION + " chars");
         }
-        return new AiToolSpec(name, desc.strip(), effect, params(name, t.get("parameters")));
+        Integer timeoutSec = null;
+        if (t.containsKey("timeoutSec")) {
+            if (!(t.get("timeoutSec") instanceof Integer n) || n < MIN_TIMEOUT_SEC || n > MAX_TIMEOUT_SEC) {
+                throw new IllegalArgumentException(name + ": timeoutSec must be an integer " + MIN_TIMEOUT_SEC + ".." + MAX_TIMEOUT_SEC);
+            }
+            timeoutSec = n;
+        }
+        return new AiToolSpec(name, desc.strip(), effect, params(name, t.get("parameters")), timeoutSec);
     }
 
     @SuppressWarnings("unchecked")

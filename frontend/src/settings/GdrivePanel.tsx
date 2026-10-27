@@ -10,6 +10,7 @@
  */
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import { useI18n } from "../i18n/i18n";
+import { useDateFormat, formatDateTime } from "../i18n/dateFormat";
 import { desktop, type GdriveDesktopStatus, type GdriveMode } from "../desktopBridge";
 import { HttpError } from "../http";
 import {
@@ -45,6 +46,7 @@ const RESTORE_POLL_MS = 1000;
 
 export function GdrivePanel() {
   const { t } = useI18n();
+  useDateFormat(); // 書式の設定が変わったら再描画する
   const d = desktop();
   const [ds, setDs] = useState<GdriveDesktopStatus | null>(null);
   const [sync, setSync] = useState<GdriveSyncStatus | null>(null);
@@ -524,7 +526,7 @@ function gbText(bytes: number): string {
 }
 
 function formatTime(ms: number | null, none: string): string {
-  return ms ? new Date(ms).toLocaleString() : none;
+  return ms ? formatDateTime(ms) : none;
 }
 
 const TONES: Record<Tone, CSSProperties> = {

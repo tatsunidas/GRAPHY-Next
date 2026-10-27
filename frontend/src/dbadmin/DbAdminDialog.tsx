@@ -32,6 +32,7 @@ import { friendlyDbAdminError } from "./dbAdminErrors";
 import { SeriesExtractorPanel } from "../mainscreen/SeriesExtractorPanel";
 import { DbScopePicker } from "./DbScopePicker";
 import type { ScopeSpec } from "../mainscreen/seriesScopeUtil";
+import { formatDicomDate } from "../i18n/dateFormat";
 
 type Tab = "patients" | "series" | "stats";
 
@@ -1021,7 +1022,7 @@ function StatsTab() {
 
 // --- 小物 ---
 function studyLabel(s: Study): string {
-  return `${formatDate(s.studyDate)} / ${s.studyDescription || "—"}${s.modality ? ` (${s.modality})` : ""}`;
+  return `${s.studyDate ? formatDicomDate(s.studyDate) : "—"} / ${s.studyDescription || "—"}${s.modality ? ` (${s.modality})` : ""}`;
 }
 function seriesLabel(se: Series): string {
   return `#${se.seriesNumber ?? "—"} ${se.modality || ""} ${se.seriesDescription || "—"}`;
@@ -1064,10 +1065,6 @@ function TabBtn({ active, onClick, children, testId }: { active: boolean; onClic
       {children}
     </button>
   );
-}
-function formatDate(d: string | null): string {
-  if (!d || d.length !== 8) return d || "—";
-  return `${d.slice(0, 4)}-${d.slice(4, 6)}-${d.slice(6, 8)}`;
 }
 
 const overlay: React.CSSProperties = {

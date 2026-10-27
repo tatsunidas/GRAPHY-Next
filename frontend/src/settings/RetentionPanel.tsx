@@ -10,6 +10,7 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { emitDbChanged } from "../dbEvents";
 import { useI18n } from "../i18n/i18n";
+import { useDateFormat } from "../i18n/dateFormat";
 import { RetentionLogDialog } from "./RetentionLogDialog";
 import {
   disableRetention,
@@ -48,6 +49,7 @@ const STATUS_POLL_MS = 3000;
 
 export function RetentionPanel() {
   const { t } = useI18n();
+  useDateFormat(); // 書式の設定が変わったら再描画する
   const [status, setStatus] = useState<RetentionStatus | null>(null);
   const [unavailable, setUnavailable] = useState(false);
   const [saved, setSaved] = useState<RetentionConfig | null>(null);

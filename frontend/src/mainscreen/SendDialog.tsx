@@ -6,17 +6,20 @@ import { useEffect, useRef, useState } from "react";
 import {
   echoDicom,
   fetchRemoteAes,
+  fetchSendKeyImages,
   fetchSeries,
   fetchStudies,
   sendDicom,
   type RemoteAe,
   type SendSelection,
+  type SendTransferSyntax,
   type Series,
   type Study,
 } from "../api";
 import { useI18n } from "../i18n/i18n";
 import { selectionHasCfm } from "./cfmNotice";
 import { TriCheckbox } from "./TriCheckbox";
+import { DicomDate } from "../i18n/dateFormat";
 
 /**
  * DICOM Send: MainScreen で選択中のスタディ<b>の患者</b>のスタディ/シリーズをツリー表示し、
@@ -51,6 +54,11 @@ export function SendDialog({
   const [host, setHost] = useState("");
   const [port, setPort] = useState("104");
   const [tls, setTls] = useState(false);
+  const [transferSyntax, setTransferSyntax] = useState<SendTransferSyntax>("STORED");
+  const [keyImagesOnly, setKeyImagesOnly] = useState(false);
+  const [includeKeyObject, setIncludeKeyObject] = useState(true);
+  // スタディごとの、確定済みレポートのキー画像の数（「キー画像のみ」を選べるかの判定に使う）。
+  const [keyImageCounts, setKeyImageCounts] = useState<Map<string, number>>(new Map());
 
   const [busy, setBusy] = useState(false);
   const [echoing, setEchoing] = useState(false);
@@ -67,6 +75,8 @@ export function SendDialog({
     setSeriesByStudy(new Map());
     setExpandedStudies(new Set());
     setCheckedSeries(new Set());
+    setKeyImageCounts(new Map());
+    setKeyImagesOnly(false);
     seriesStudy.current = new Map();
     setError(null);
     setInfo(null);
@@ -76,6 +86,15 @@ export function SendDialog({
       .then(async (sts) => {
         if (cancelled) return;
         setStudies(sts);
+        Promise.all(
+          sts.map((s) =>
+            fetchSendKeyImages(s.studyInstanceUid)
+              .then((r) => [s.studyInstanceUid, r.keyImages] as const)
+              .catch(() => [s.studyInstanceUid, 0] as const),
+          ),
+        ).then((rows) => {
+          if (!cancelled) setKeyImageCounts(new Map(rows));
+        });
         // 選択中スタディは展開＋全シリーズ初期チェック（その場で送信できる状態にする）。
         if (study) {
           try {
@@ -241,12 +260,16 @@ export function SendDialog({
         port: Number(port),
         calledAet: aeTitle.trim(),
         tls,
+        transferSyntax,
+        keyImagesOnly: keyImagesOnly && keyImagesAvailable,
+        includeKeyObject,
       });
       if (r.failed > 0) {
         setError(t("send.result.partial", { sent: r.sent, total: r.total, failed: r.failed }));
         if (r.messages.length > 0) setInfo(r.messages.slice(0, 5).join(" / "));
       } else {
-        setInfo(t("send.result.ok", { sent: r.sent }));
+        // 注記（特定フレームのキー画像を全体で送った、など）は成功でも出す。
+        setInfo([t("send.result.ok", { sent: r.sent }), ...r.messages.slice(0, 5)].join(" / "));
       }
     } catch (e) {
       setError(t("common.fetchError", { error: String(e) }));
@@ -256,6 +279,9 @@ export function SendDialog({
   };
 
   const selectedSeriesCount = checkedSeries.size;
+  // 「キー画像のみ」は、チェックしたシリーズのあるスタディのどれかに、確定済みレポートのキー画像がある時だけ選べる。
+  const checkedStudies = new Set([...checkedSeries].map((s) => seriesStudy.current.get(s)).filter((s): s is string => !!s));
+  const keyImagesAvailable = [...checkedStudies].some((s) => (keyImageCounts.get(s) ?? 0) > 0);
   const canSend = !busy && selectedSeriesCount > 0 && destReady;
 
   return (
@@ -290,7 +316,7 @@ export function SendDialog({
                   </button>
                   <TriCheckbox state={cstate} onChange={() => void toggleStudy(st.studyInstanceUid)} />
                   <span style={{ cursor: "pointer" }} onClick={() => void toggleExpand(st.studyInstanceUid)}>
-                    {st.studyDate || "—"} / {st.studyDescription || "—"}
+                    {st.studyDate ? <DicomDate value={st.studyDate} /> : "—"} / {st.studyDescription || "—"}
                     <span style={{ color: "#8a98a6", fontSize: 11 }}>
                       {" "}
                       {st.modality || ""} ({st.numberOfInstances})
@@ -348,6 +374,41 @@ export function SendDialog({
             <button onClick={runEcho} disabled={echoing || !destReady} style={{ ...btn, marginLeft: 8 }}>
               {echoing ? t("send.echo.running") : t("send.echo")}
             </button>
+          </div>
+          <div style={destRow}>
+            <label style={destLabel}>{t("send.ts")}</label>
+            {(["STORED", "EXPLICIT_LE", "IMPLICIT_LE"] as const).map((v) => (
+              <label key={v} style={opt}>
+                <input
+                  type="radio"
+                  name="send-ts"
+                  checked={transferSyntax === v}
+                  onChange={() => setTransferSyntax(v)}
+                />
+                {t(`send.ts.${v}`)}
+              </label>
+            ))}
+          </div>
+          <div style={destRow}>
+            <label style={opt} title={keyImagesAvailable ? undefined : t("send.keyOnly.unavailable")}>
+              <input
+                type="checkbox"
+                checked={keyImagesOnly && keyImagesAvailable}
+                disabled={!keyImagesAvailable}
+                onChange={(e) => setKeyImagesOnly(e.target.checked)}
+              />
+              {t("send.keyOnly")}
+            </label>
+            <label style={{ ...opt, marginLeft: 8 }}>
+              <input
+                type="checkbox"
+                checked={includeKeyObject}
+                disabled={!keyImagesOnly || !keyImagesAvailable}
+                onChange={(e) => setIncludeKeyObject(e.target.checked)}
+              />
+              {t("send.keyOnly.ko")}
+            </label>
+            {!keyImagesAvailable && <span style={{ fontSize: 11, color: "#8a98a6" }}>{t("send.keyOnly.unavailable")}</span>}
           </div>
         </div>
 

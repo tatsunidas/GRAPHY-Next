@@ -4,6 +4,7 @@
  */
 package com.vis.graphynext.imagej;
 
+import com.vis.graphynext.anonymize.PixelCodec;
 import com.vis.graphynext.dicom.ParametricMapFrameExpander;
 import com.vis.graphynext.dicom.SeriesLayout;
 import com.vis.graphynext.dicom.store.DicomStorageService;
@@ -43,8 +44,11 @@ public class ImageJBridgeService {
 
     private final DicomStorageService storage;
 
-    public ImageJBridgeService(DicomStorageService storage) {
+    private final PixelCodec codec;
+
+    public ImageJBridgeService(DicomStorageService storage, PixelCodec codec) {
         this.storage = storage;
+        this.codec = codec;
     }
 
     /** ブリッジ結果（次元）。 */
@@ -171,7 +175,41 @@ public class ImageJBridgeService {
     }
 
     /** ImageJ Opener で DICOM を開き、指定フレームの ImageProcessor と Calibration を返す。 */
-    private Loaded openProcessor(Path path, int frameIndex) {
+    Loaded openProcessor(Path path, int frameIndex) {
+        Path decoded = null;
+        try {
+            // ImageJ の DICOM 読み込みは圧縮画素（JPEG-LS など）を知らない。圧縮ファイルは復号した一時ファイルで開く。
+            if (!isUncompressedFile(path)) {
+                decoded = codec.toUncompressedTempFile(path);
+                if (decoded == null) {
+                    log.warn("[imagej] 圧縮画像を復号できないため開けません（圧縮画素の伸長が使えない可能性）: {}", path.getFileName());
+                    return null;
+                }
+            }
+            return openProcessorFile(decoded != null ? decoded : path, frameIndex);
+        } catch (IOException e) {
+            log.warn("[imagej] 画像を開けません: {} ({})", path.getFileName(), e.toString());
+            return null;
+        } finally {
+            if (decoded != null) {
+                try {
+                    Files.deleteIfExists(decoded);
+                } catch (IOException ignore) {
+                    // ベストエフォート
+                }
+            }
+        }
+    }
+
+    private static boolean isUncompressedFile(Path path) throws IOException {
+        try (DicomInputStream in = new DicomInputStream(path.toFile())) {
+            Attributes fmi = in.readFileMetaInformation();
+            String ts = fmi == null ? null : fmi.getString(org.dcm4che3.data.Tag.TransferSyntaxUID);
+            return ts == null || PixelCodec.isUncompressed(ts);
+        }
+    }
+
+    private Loaded openProcessorFile(Path path, int frameIndex) {
         ImagePlus imp = new Opener().openImage(path.toString());
         if (imp == null) return null;
         // Calibration は ImagePlus 単位（全フレーム共通）。RescaleSlope/Intercept 由来の値校正を含む。

@@ -26,6 +26,22 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useI18n } from "../i18n/i18n";
 import { publishQcaSnapshot } from "./debugApi";
 import { toRanges, type QcaResult } from "./qca";
+import {
+  ANCHOR_LINE_MARGIN,
+  MAX_ANCHORS,
+  addAnchor,
+  anchorColor,
+  anchorLine,
+  anchorStripColumn,
+  confirmAnchor,
+  insertAnchorAt,
+  localRadiusPx,
+  moveAnchorTo,
+  removeAnchor,
+  snapToCenterline,
+  stepAnchor,
+  type QcaAnchor,
+} from "./qcaAnchors";
 import { brushEdges, type BrushedEdge, smoothEdges, detectEdgeOutliers } from "./qcaBrush";
 import {
   buildStraightened,
@@ -39,7 +55,7 @@ import {
  * `smooth` は「ならす」ブラシ（§8.8.1）。**押すブラシでは外れ点を直せない**
  * ——半径内へ同じ移動量を配るので、外れ点を押せば近傍まで外れ、近傍を押せば外れ点は残る。
  */
-export type QcaEditMode = "none" | "waypoint" | "edge" | "brush" | "smooth";
+export type QcaEditMode = "none" | "waypoint" | "edge" | "brush" | "smooth" | "anchor";
 
 export interface QcaEditorProps {
   /** 解析に使った画素（モダリティ値）。 */
@@ -87,6 +103,12 @@ export interface QcaEditorProps {
   onEdgeEdit: (pathIndex: number, side: "left" | "right", offset: number) => void;
   /** ブラシ 1 回ぶん（複数点）。`qcaBrush.brushEdges` の結果をそのまま渡す。 */
   onEdgeEditMany: (edits: readonly BrushedEdge[]) => void;
+  /**
+   * アンカー（3D QCA の目印。血管に直交する線）。**血管に沿った順**。未指定なら出さない。
+   * 位置は常に中心線の上（`qcaAnchors.ts`）。確認前は破線で、確認するまで 3D へは渡らない。
+   */
+  anchors?: readonly QcaAnchor[];
+  onAnchorsChange?: (next: QcaAnchor[]) => void;
 }
 
 /** 表示パネルの最大寸法 [px]。 */
@@ -96,6 +118,62 @@ const MAX_H = 300;
 const MAX_STRIP_H = 190;
 /** 掴んだと判定する距離 [画面 px]。 */
 const GRAB_PX = 8;
+/** 拡大窓（ルーペ）の一辺 [画面 px]。倍率は血管の径から導く（下限 4 倍）。 */
+const LOUPE_PX = 240;
+const LOUPE_MIN_ZOOM = 4;
+
+/**
+ * アンカー線を描く（本画面とルーペで同じ）。血管に**直交**する線と番号。
+ * 確認前は破線・薄め、選択中は太く白い縁取り。
+ */
+function drawAnchorLines(
+  ctx: CanvasRenderingContext2D,
+  result: QcaResult,
+  anchors: readonly QcaAnchor[],
+  selected: number | null,
+  project: (x: number, y: number) => [number, number],
+  px: number,
+): void {
+  anchors.forEach((a, k) => {
+    const sn = snapToCenterline(result.centerline, [a.x, a.y]);
+    if (!sn) return;
+    const r = localRadiusPx(result.centerline, result.edgeOffsets, sn.s);
+    const line = anchorLine(result.centerline, a, Math.max(3, r * (1 + ANCHOR_LINE_MARGIN)));
+    if (!line) return;
+    const [x0, y0] = project(line.p0[0], line.p0[1]);
+    const [x1, y1] = project(line.p1[0], line.p1[1]);
+    const color = anchorColor(k);
+    ctx.save();
+    if (k === selected) {
+      ctx.strokeStyle = "#ffffff";
+      ctx.lineWidth = 4 * px;
+      ctx.beginPath();
+      ctx.moveTo(x0, y0);
+      ctx.lineTo(x1, y1);
+      ctx.stroke();
+    }
+    ctx.strokeStyle = color;
+    ctx.globalAlpha = a.confirmed ? 1 : 0.75;
+    ctx.lineWidth = 2 * px;
+    ctx.setLineDash(a.confirmed ? [] : [4 * px, 3 * px]);
+    ctx.beginPath();
+    ctx.moveTo(x0, y0);
+    ctx.lineTo(x1, y1);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.globalAlpha = 1;
+    // 番号（線の端に縁取り付きで）。
+    ctx.font = `bold ${Math.round(12 * px)}px sans-serif`;
+    ctx.lineWidth = 3 * px;
+    ctx.strokeStyle = "rgba(0,0,0,0.8)";
+    const lx = x1 + (x1 - x0) * 0.08;
+    const ly = y1 + (y1 - y0) * 0.08;
+    ctx.strokeText(String(k + 1), lx - 3 * px, ly + 4 * px);
+    ctx.fillStyle = color;
+    ctx.fillText(String(k + 1), lx - 3 * px, ly + 4 * px);
+    ctx.restore();
+  });
+}
 
 export function QcaEditor({
   pixels,
@@ -115,10 +193,18 @@ export function QcaEditor({
   onWaypointsChange,
   onEdgeEdit,
   onEdgeEditMany,
+  anchors,
+  onAnchorsChange,
 }: QcaEditorProps) {
   const { t } = useI18n();
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const stripRef = useRef<HTMLCanvasElement | null>(null);
+  const loupeRef = useRef<HTMLCanvasElement | null>(null);
+  /** 選んでいるアンカー（番号 − 1）。 */
+  const [selAnchor, setSelAnchor] = useState<number | null>(null);
+  const [anchorDrag, setAnchorDrag] = useState<"main" | "loupe" | null>(null);
+  /** ルーペの中心。ドラッグ中は動かさない（掴んだ線が逃げないように）。 */
+  const [loupeCenter, setLoupeCenter] = useState<[number, number] | null>(null);
   /**
    * ストレート像の上のドラッグ。
    *
@@ -128,6 +214,7 @@ export function QcaEditor({
   const [stripDrag, setStripDrag] = useState<
     | { kind: "waypoint"; index: number }
     | { kind: "edge" | "brush" | "smooth"; pathIndex: number; side: "left" | "right"; centerIndex: number }
+    | { kind: "anchor" }
     | null
   >(null);
   const [drag, setDrag] = useState<
@@ -425,9 +512,13 @@ export function QcaEditor({
       ctx.fill();
       ctx.stroke();
     }
+    // アンカー（3D QCA の目印）。血管に直交する線と番号。モードに関わらず見せる。
+    if (anchors && anchors.length) {
+      drawAnchorLines(ctx, result, anchors, mode === "anchor" ? selAnchor : null, (x, y) => [sx(x), sy(y)], 1);
+    }
   // 🔴 `mode` と `brushRadius` を依存に入れる——外れ点の印は smooth のときだけ描き、
   //    半径で変わる。入れ忘れると「モードを切り替えても印が出ない / 消えない」になる。
-  }, [backdropCanvas, result, waypoints, view, highlightIndex, maxDiameterIndex, mode, brushRadius, showEdges, showMask]);
+  }, [backdropCanvas, result, waypoints, view, highlightIndex, maxDiameterIndex, mode, brushRadius, showEdges, showMask, anchors, selAnchor]);
 
   // 実機検証が帯の上の座標を計算できるよう、帯の座標系も公開する。
   useEffect(() => {
@@ -609,7 +700,195 @@ export function QcaEditor({
         ctx.stroke();
       }
     }
-  }, [straight, stripView, result, waypoints, highlightIndex, maxDiameterIndex, mode, brushRadius, showEdges, showMask]);
+
+    // アンカー（3D QCA の目印）。帯の上では**縦の線**（中心線上の位置＝1 つの列）で、全高にわたる。
+    // 本画面・拡大窓と同じ番号・色・破線（確認前）・選択の縁取りにそろえる。
+    if (anchors && anchors.length) {
+      anchors.forEach((a, k) => {
+        const col = anchorStripColumn(result.centerline, straight.indexToCol, a);
+        if (col === null) return;
+        const x = sxOf(col);
+        const color = anchorColor(k);
+        ctx.save();
+        if (mode === "anchor" && k === selAnchor) {
+          ctx.strokeStyle = "#ffffff";
+          ctx.lineWidth = 4;
+          ctx.beginPath();
+          ctx.moveTo(x, 0);
+          ctx.lineTo(x, stripView.dh);
+          ctx.stroke();
+        }
+        ctx.strokeStyle = color;
+        ctx.globalAlpha = a.confirmed ? 1 : 0.75;
+        ctx.lineWidth = 2;
+        ctx.setLineDash(a.confirmed ? [] : [4, 3]);
+        ctx.beginPath();
+        ctx.moveTo(x, 0);
+        ctx.lineTo(x, stripView.dh);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.globalAlpha = 1;
+        ctx.font = "bold 12px sans-serif";
+        ctx.lineWidth = 3;
+        ctx.strokeStyle = "rgba(0,0,0,0.8)";
+        ctx.strokeText(String(k + 1), x + 3, 12);
+        ctx.fillStyle = color;
+        ctx.fillText(String(k + 1), x + 3, 12);
+        ctx.restore();
+      });
+    }
+  }, [straight, stripView, result, waypoints, highlightIndex, maxDiameterIndex, mode, brushRadius, showEdges, showMask, anchors, selAnchor]);
+
+  // ── アンカー（拡大窓・操作）──────────────────────────────
+  const anchorList = anchors ?? [];
+  const anchorsRef = useRef(anchorList);
+  anchorsRef.current = anchorList;
+  // 選択が範囲外になったら外す（消した・数が減った）。
+  useEffect(() => {
+    if (selAnchor != null && selAnchor >= anchorList.length) setSelAnchor(null);
+  }, [selAnchor, anchorList.length]);
+  // ルーペの中心は、掴んでいないときだけ選択中（無ければ先頭）のアンカーへ合わせる。
+  useEffect(() => {
+    if (anchorDrag) return;
+    const a = selAnchor != null ? anchorList[selAnchor] : anchorList[0];
+    setLoupeCenter(a ? [a.x, a.y] : null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selAnchor, anchorDrag, anchors]);
+
+  /** 拡大窓の座標系。倍率は血管の径から導く（径の 3 倍が収まる窓、下限 4 倍の整数倍）。 */
+  const loupe = useMemo(() => {
+    if (mode !== "anchor" || !loupeCenter) return null;
+    const sn = snapToCenterline(result.centerline, loupeCenter);
+    const r = sn ? localRadiusPx(result.centerline, result.edgeOffsets, sn.s) : 0;
+    const half = Math.max(14, Math.min(40, 3 * Math.max(2, 2 * r)));
+    const zoom = Math.max(LOUPE_MIN_ZOOM, Math.floor(LOUPE_PX / (2 * half)));
+    const winPx = LOUPE_PX / zoom;
+    return { zoom, winPx, x0: loupeCenter[0] - winPx / 2, y0: loupeCenter[1] - winPx / 2 };
+  }, [mode, loupeCenter, result]);
+
+  useEffect(() => {
+    const canvas = loupeRef.current;
+    if (!canvas || !loupe || !grayWindow) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    canvas.width = LOUPE_PX;
+    canvas.height = LOUPE_PX;
+    const { lo, hi } = grayWindow;
+    const img = ctx.createImageData(LOUPE_PX, LOUPE_PX);
+    for (let v = 0; v < LOUPE_PX; v++) {
+      for (let u = 0; u < LOUPE_PX; u++) {
+        const ix = Math.max(0, Math.min(width - 1, Math.floor(loupe.x0 + u / loupe.zoom)));
+        const iy = Math.max(0, Math.min(height - 1, Math.floor(loupe.y0 + v / loupe.zoom)));
+        const g = Math.max(0, Math.min(255, Math.round(((pixels[iy * width + ix] - lo) / (hi - lo)) * 255)));
+        const k = (v * LOUPE_PX + u) * 4;
+        img.data[k] = g;
+        img.data[k + 1] = g;
+        img.data[k + 2] = g;
+        img.data[k + 3] = 255;
+      }
+    }
+    ctx.putImageData(img, 0, 0);
+    const sx = (x: number) => (x - loupe.x0) * loupe.zoom;
+    const sy = (y: number) => (y - loupe.y0) * loupe.zoom;
+    const stroke = (pts: readonly (readonly [number, number])[], color: string) => {
+      if (pts.length < 2) return;
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(sx(pts[0][0]), sy(pts[0][1]));
+      for (let i = 1; i < pts.length; i++) ctx.lineTo(sx(pts[i][0]), sy(pts[i][1]));
+      ctx.stroke();
+    };
+    if (showEdges) {
+      stroke(result.edges.map((e) => e.left), "#4fc3f7");
+      stroke(result.edges.map((e) => e.right), "#4fc3f7");
+    }
+    stroke(result.centerline, "#7fd1b9");
+    drawAnchorLines(ctx, result, anchorList, selAnchor, (x, y) => [sx(x), sy(y)], 1.4);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loupe, grayWindow, pixels, width, height, result, showEdges, anchors, selAnchor]);
+
+  /** 点 p から線分 a–b への距離。 */
+  const distToSegment = (p: [number, number], a: readonly [number, number], b: readonly [number, number]): number => {
+    const dx = b[0] - a[0];
+    const dy = b[1] - a[1];
+    const l2 = dx * dx + dy * dy;
+    const t = l2 === 0 ? 0 : Math.max(0, Math.min(1, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / l2));
+    return Math.hypot(p[0] - (a[0] + t * dx), p[1] - (a[1] + t * dy));
+  };
+
+  /** アンカーを掴む・足す・消す（本画面とルーペで共通）。scale はその画面の「画面 px / 画像 px」。 */
+  const onAnchorPointerDown = (
+    ev: React.PointerEvent<HTMLCanvasElement>,
+    p: [number, number],
+    scale: number,
+    where: "main" | "loupe",
+  ): void => {
+    if (!onAnchorsChange) return;
+    const tol = GRAB_PX / scale;
+    let hit = -1;
+    let bd = tol;
+    anchorList.forEach((a, k) => {
+      const sn = snapToCenterline(result.centerline, [a.x, a.y]);
+      if (!sn) return;
+      const r = localRadiusPx(result.centerline, result.edgeOffsets, sn.s);
+      const l = anchorLine(result.centerline, a, Math.max(3, r * (1 + ANCHOR_LINE_MARGIN)));
+      if (!l) return;
+      const d = distToSegment(p, l.p0, l.p1);
+      if (d < bd) {
+        bd = d;
+        hit = k;
+      }
+    });
+    if (hit >= 0) {
+      // 右クリック / Alt クリックは削除。
+      if (ev.button === 2 || ev.altKey) {
+        onAnchorsChange(removeAnchor(anchorList, hit));
+        setSelAnchor(null);
+        return;
+      }
+      setSelAnchor(hit);
+      setAnchorDrag(where);
+      return;
+    }
+    // 何も掴まなければ、中心線の上のクリックで足す（上限・間隔を破らない範囲で）。
+    const sn = snapToCenterline(result.centerline, p);
+    if (!sn || sn.distance > tol * 2) return;
+    const added = insertAnchorAt(result.centerline, anchorList, p);
+    if (!added) return;
+    onAnchorsChange(added.anchors);
+    setSelAnchor(added.index);
+  };
+
+  const onAnchorKeyDown = (ev: React.KeyboardEvent<HTMLDivElement>): void => {
+    if (mode !== "anchor" || !onAnchorsChange || selAnchor == null) return;
+    const step = ev.shiftKey ? 5 : 1;
+    if (ev.key === "ArrowRight" || ev.key === "ArrowDown") {
+      ev.preventDefault();
+      onAnchorsChange(stepAnchor(result.centerline, anchorList, selAnchor, step));
+    } else if (ev.key === "ArrowLeft" || ev.key === "ArrowUp") {
+      ev.preventDefault();
+      onAnchorsChange(stepAnchor(result.centerline, anchorList, selAnchor, -step));
+    } else if (ev.key === "Delete" || ev.key === "Backspace") {
+      ev.preventDefault();
+      onAnchorsChange(removeAnchor(anchorList, selAnchor));
+      setSelAnchor(null);
+    } else if (ev.key === "Enter") {
+      ev.preventDefault();
+      onAnchorsChange(confirmAnchor(anchorList, selAnchor));
+    }
+  };
+
+  const toLoupeImage = (ev: { clientX: number; clientY: number }): [number, number] | null => {
+    const canvas = loupeRef.current;
+    if (!canvas || !loupe) return null;
+    const rect = canvas.getBoundingClientRect();
+    if (!(rect.width > 0)) return null;
+    return [
+      loupe.x0 + ((ev.clientX - rect.left) / rect.width) * loupe.winPx,
+      loupe.y0 + ((ev.clientY - rect.top) / rect.height) * loupe.winPx,
+    ];
+  };
 
   // ── 掴む対象を決める ─────────────────────────────────────────────
   const hitWaypoint = (p: [number, number]): number => {
@@ -671,6 +950,10 @@ export function QcaEditor({
     const p = toImage(ev);
     if (!p || mode === "none") return;
     ev.currentTarget.setPointerCapture(ev.pointerId);
+    if (mode === "anchor") {
+      onAnchorPointerDown(ev, p, view?.scale ?? 1, "main");
+      return;
+    }
     if (mode === "waypoint") {
       const hit = hitWaypoint(p);
       // 右クリック / Alt クリックは削除。
@@ -687,6 +970,11 @@ export function QcaEditor({
   };
 
   const onPointerMove = (ev: React.PointerEvent<HTMLCanvasElement>) => {
+    if (anchorDrag === "main" && selAnchor != null && onAnchorsChange) {
+      const pa = toImage(ev);
+      if (pa) onAnchorsChange(moveAnchorTo(result.centerline, anchorsRef.current, selAnchor, pa));
+      return;
+    }
     if (!drag) return;
     const p = toImage(ev);
     if (!p) return;
@@ -736,8 +1024,25 @@ export function QcaEditor({
   };
 
   const endDrag = (ev: React.PointerEvent<HTMLCanvasElement>) => {
-    if (drag) ev.currentTarget.releasePointerCapture(ev.pointerId);
+    if (drag || anchorDrag) ev.currentTarget.releasePointerCapture(ev.pointerId);
     setDrag(null);
+    setAnchorDrag(null);
+  };
+
+  const onLoupePointerDown = (ev: React.PointerEvent<HTMLCanvasElement>) => {
+    const p = toLoupeImage(ev);
+    if (!p || !loupe) return;
+    ev.currentTarget.setPointerCapture(ev.pointerId);
+    onAnchorPointerDown(ev, p, loupe.zoom, "loupe");
+  };
+  const onLoupePointerMove = (ev: React.PointerEvent<HTMLCanvasElement>) => {
+    if (anchorDrag !== "loupe" || selAnchor == null || !onAnchorsChange) return;
+    const p = toLoupeImage(ev);
+    if (p) onAnchorsChange(moveAnchorTo(result.centerline, anchorsRef.current, selAnchor, p));
+  };
+  const endLoupeDrag = (ev: React.PointerEvent<HTMLCanvasElement>) => {
+    if (anchorDrag) ev.currentTarget.releasePointerCapture(ev.pointerId);
+    setAnchorDrag(null);
   };
 
   /* ── ストレート像の上の操作 ─────────────────────────────────── */
@@ -814,6 +1119,30 @@ export function QcaEditor({
     const hit = toStrip(ev);
     if (!hit || mode === "none") return;
     ev.currentTarget.setPointerCapture(ev.pointerId);
+    if (mode === "anchor") {
+      // 帯のアンカーは縦線。横方向の近さだけで掴む（縦は全高なので見ない）。
+      if (!onAnchorsChange || !straight || !stripView) return;
+      let near = -1;
+      let bd = GRAB_PX / stripView.scale;
+      anchorList.forEach((a, k) => {
+        const col = anchorStripColumn(result.centerline, straight.indexToCol, a);
+        if (col === null) return;
+        const d = Math.abs(col - hit.col);
+        if (d < bd) {
+          bd = d;
+          near = k;
+        }
+      });
+      if (near < 0) return;
+      if (ev.button === 2 || ev.altKey) {
+        onAnchorsChange(removeAnchor(anchorList, near));
+        setSelAnchor(null);
+        return;
+      }
+      setSelAnchor(near);
+      setStripDrag({ kind: "anchor" });
+      return;
+    }
     if (mode === "waypoint") {
       // 帯で「上下に動かす」＝中心線をその場所で法線方向へ寄せる、という意味になる。
       const near = nearestWaypointOnStrip(hit.col);
@@ -843,6 +1172,14 @@ export function QcaEditor({
     if (!stripDrag) return;
     const hit = toStrip(ev);
     if (!hit) return;
+    if (stripDrag.kind === "anchor") {
+      // 帯の列 → 中心線上の位置 → 同じ移動（本画面・拡大窓と同じ `moveAnchorTo`）。
+      if (!straight || selAnchor == null || !onAnchorsChange) return;
+      const fi = straight.colToIndex[Math.round(hit.col)] ?? 0;
+      const p = pointAtFractionalIndex(result.centerline, result.normals, fi);
+      onAnchorsChange(moveAnchorTo(result.centerline, anchorsRef.current, selAnchor, [p.x, p.y]));
+      return;
+    }
     if (stripDrag.kind === "waypoint") {
       const p = stripToImage(hit.col, hit.offset);
       if (!p) return;
@@ -887,8 +1224,10 @@ export function QcaEditor({
   if (!view) return null;
   const editedCount = result.provenance.editedEdges.length;
 
+  const confirmedCount = anchorList.filter((a) => a.confirmed).length;
+
   return (
-    <div>
+    <div tabIndex={mode === "anchor" ? 0 : undefined} onKeyDown={onAnchorKeyDown} style={{ outline: "none" }}>
       <canvas
         ref={canvasRef}
         data-testid="qca-editor-canvas"
@@ -906,6 +1245,87 @@ export function QcaEditor({
         onPointerCancel={endDrag}
         onContextMenu={(e) => e.preventDefault()}
       />
+      {/* アンカー（3D QCA の目印）。拡大窓と操作。確認済みだけが 3D へ渡る。 */}
+      {mode === "anchor" && onAnchorsChange ? (
+        <div style={{ marginTop: 6 }} data-testid="qca-anchor-panel">
+          <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", marginBottom: 4 }}>
+            <button
+              style={anchorBtn}
+              data-testid="xa-anchor-add"
+              disabled={anchorList.length >= MAX_ANCHORS}
+              onClick={() => {
+                const next = addAnchor(result.centerline, anchorList);
+                onAnchorsChange(next);
+                // 足したものを選ぶ（直前の一覧に無い位置のもの）。
+                const idx = next.findIndex((a) => !anchorList.some((o) => o.x === a.x && o.y === a.y));
+                setSelAnchor(idx >= 0 ? idx : null);
+              }}
+            >
+              {t("xa.anchor.add")}
+            </button>
+            <button
+              style={anchorBtn}
+              data-testid="xa-anchor-remove"
+              disabled={selAnchor == null}
+              onClick={() => {
+                if (selAnchor == null) return;
+                onAnchorsChange(removeAnchor(anchorList, selAnchor));
+                setSelAnchor(null);
+              }}
+            >
+              {t("xa.anchor.remove")}
+            </button>
+            <button
+              style={anchorBtn}
+              data-testid="xa-anchor-confirm"
+              disabled={selAnchor == null || anchorList[selAnchor ?? 0]?.confirmed === true}
+              onClick={() => selAnchor != null && onAnchorsChange(confirmAnchor(anchorList, selAnchor))}
+            >
+              {t("xa.anchor.confirm")}
+            </button>
+            <button
+              style={anchorBtn}
+              data-testid="xa-anchor-confirm-all"
+              disabled={anchorList.length === 0 || confirmedCount === anchorList.length}
+              onClick={() => onAnchorsChange(anchorList.map((a) => ({ ...a, confirmed: true })))}
+            >
+              {t("xa.anchor.confirmAll")}
+            </button>
+            <span style={{ fontSize: 11, color: "#44586a" }} data-testid="xa-anchor-count">
+              {t("xa.anchor.count", { n: String(anchorList.length), c: String(confirmedCount), max: String(MAX_ANCHORS) })}
+            </span>
+          </div>
+          {confirmedCount < 3 ? (
+            <div style={warn} data-testid="xa-anchor-need3">
+              {t("xa.anchor.need3")}
+            </div>
+          ) : null}
+          {loupe ? (
+            <div>
+              <div style={stripLabel}>{t("xa.anchor.loupe", { zoom: String(loupe.zoom) })}</div>
+              <canvas
+                ref={loupeRef}
+                data-testid="qca-anchor-loupe"
+                style={{
+                  width: LOUPE_PX,
+                  height: LOUPE_PX,
+                  borderRadius: 4,
+                  background: "#000",
+                  cursor: anchorDrag ? "grabbing" : "crosshair",
+                  touchAction: "none",
+                }}
+                onPointerDown={onLoupePointerDown}
+                onPointerMove={onLoupePointerMove}
+                onPointerUp={endLoupeDrag}
+                onPointerCancel={endLoupeDrag}
+                onContextMenu={(e) => e.preventDefault()}
+              />
+            </div>
+          ) : (
+            <div style={hint}>{t("xa.anchor.none")}</div>
+          )}
+        </div>
+      ) : null}
       {/* ストレート像（§8.9）。本画面と同じ `result` を描き、同じコールバックへ書くので、
           どちらで直しても**必ず両方に反映される**（別々の状態を持たない）。 */}
       {straight && stripView ? (
@@ -960,7 +1380,9 @@ export function QcaEditor({
               ? t("xa.qca.hintBrush")
               : mode === "smooth"
                 ? t("xa.qca.hintSmooth")
-                : t("xa.qca.hintNone")}
+                : mode === "anchor"
+                  ? t("xa.anchor.hint")
+                  : t("xa.qca.hintNone")}
       </div>
       {Object.keys(edgeEdits).length > 0 && result.warnings.includes("edgeEditsDropped") && (
         <div style={warn}>{t("xa.qca.edgeEditsDropped")}</div>
@@ -985,3 +1407,11 @@ const stripLabel: React.CSSProperties = {
   marginBottom: 2,
 };
 const warn: React.CSSProperties = { fontSize: 11, color: "#a5642a", marginTop: 4 };
+const anchorBtn: React.CSSProperties = {
+  fontSize: 11,
+  padding: "2px 8px",
+  borderRadius: 4,
+  border: "1px solid #b6c3d1",
+  background: "#f4f7fa",
+  cursor: "pointer",
+};

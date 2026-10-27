@@ -44,6 +44,9 @@ class AutomatorServiceResetTest {
     RoiDocumentRepository roiRepo;
 
     @Autowired
+    com.vis.graphynext.roi.RoiMaskDocumentRepository maskRepo;
+
+    @Autowired
     PluginDocumentService pluginService;
 
     @Autowired
@@ -92,6 +95,17 @@ class AutomatorServiceResetTest {
         assertEquals(0, importWatchRepo.count(), "台帳が消える");
         assertNull(settings.getAll().get(SettingsService.IMPORT_WATCH_PREFIX + "enabled"));
         assertNull(settings.getAll().get(SettingsService.IMPORT_WATCH_PREFIX + "folder"));
+    }
+
+    @Test
+    void reset_deletesSavedPaintedRoiMasks() {
+        // 塗り ROI（別テーブル）も初期化の対象。残すと次の実行の復元に前回のマスクが混ざる。
+        maskRepo.save(new com.vis.graphynext.roi.RoiMaskDocument("m-reset", "PAT-RESET", "1.2.3", "{\"patientKey\":\"PAT-RESET\"}", new byte[] {1}, 1));
+        assertEquals(1, maskRepo.count(), "前提: 塗り ROI の保存がある");
+
+        automator.reset();
+
+        assertEquals(0, maskRepo.count(), "塗り ROI の保存が消えている");
     }
 
     @Test

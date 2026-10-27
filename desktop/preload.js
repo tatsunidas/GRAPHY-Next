@@ -89,11 +89,21 @@ contextBridge.exposeInMainWorld("graphyDesktop", {
   assistantViewerCmd: (sessionId, cmd) => ipcRenderer.invoke("graphy:assistant-viewer-cmd", sessionId, cmd),
   // マクロの保存（アシスタント窓以外は main が forbidden）。
   assistantJournalList: () => ipcRenderer.invoke("graphy:assistant-journal-list"),
+  // AI への要求の記録（本文なし）。アシスタント窓以外は main が forbidden。
+  assistantRequestLogSummary: () => ipcRenderer.invoke("graphy:assistant-requestlog-summary"),
+  assistantRequestLogClear: () => ipcRenderer.invoke("graphy:assistant-requestlog-clear"),
+  // 回帰評価（固定質問セット）の結果の保存と一覧。アシスタント窓以外は main が forbidden。
+  assistantEvalAppend: (run) => ipcRenderer.invoke("graphy:assistant-eval-append", run),
+  assistantEvalList: () => ipcRenderer.invoke("graphy:assistant-eval-list"),
   assistantPluginToolsList: () => ipcRenderer.invoke("graphy:assistant-plugin-tools-list"),
   assistantPluginToolsSet: (pluginId, on) => ipcRenderer.invoke("graphy:assistant-plugin-tools-set", pluginId, on),
   assistantMacrosList: () => ipcRenderer.invoke("graphy:assistant-macros-list"),
   assistantMacrosSave: (macro) => ipcRenderer.invoke("graphy:assistant-macros-save", macro),
   assistantMacrosDelete: (id) => ipcRenderer.invoke("graphy:assistant-macros-delete", id),
+  assistantPluginSkillsList: () => ipcRenderer.invoke("graphy:assistant-plugin-skills-list"),
+  assistantSkillsList: () => ipcRenderer.invoke("graphy:assistant-skills-list"),
+  assistantSkillsSave: (skill) => ipcRenderer.invoke("graphy:assistant-skills-save", skill),
+  assistantSkillsDelete: (id) => ipcRenderer.invoke("graphy:assistant-skills-delete", id),
   // 2D ビューア窓側: main が中継してきた命令を受け、結果を返す。受けた命令は 2D 窓が許可リストで再検証する。
   onViewerCmd: (cb) => {
     const handler = (_e, cmd) => cb(cmd);

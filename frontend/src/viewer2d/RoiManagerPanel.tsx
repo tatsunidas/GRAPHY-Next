@@ -11,7 +11,7 @@
  *  - 計測: 長さ・角度・プローブなど（ROI ではない）。
  * 設計: `fw/roi-manager-design.md` / `fw/roi-mask-model.md` §10。
  */
-import { toggleRoiSelection } from "../viewer/roiInteriorGrab";
+import { selectRois, toggleRoiSelection } from "../viewer/roiInteriorGrab";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { eventTarget, getRenderingEngine, Enums as csEnums } from "@cornerstonejs/core";
 import {
@@ -34,7 +34,8 @@ import { isRoiLocked, setRoiLocked } from "../viewer/roiLock";
 import { emitSeriesRefresh } from "../viewer/viewerRefresh";
 import { emitDbChanged } from "../dbEvents";
 import { combineRois, splitMask, roiToMask, withTempMask, isAreaRoi, resolveRoiStack, type BoolOp, type RoiOperand, type SplitConnectivity } from "../viewer/roiBooleanOps";
-import { buildRoiPanelModel, type MeasureRow, type PaintedRoiRow, type RoiPanelModel, type RoiRowEnv, type ShapeRoiRow } from "../viewer/roiRows";
+import { nextGroupNumber, planGroup, unresolvedMembers } from "../viewer/roiGroups";
+import { buildRoiPanelModel, type MeasureRow, type PaintedRoiRow, type RoiPanelModel, type RoiRow, type RoiRowEnv, type RowOwner, type ShapeRoiRow, type SphereRoiRow } from "../viewer/roiRows";
 import { sphereFromCircleRoi, createSphere3DFromCircleRoi, bakeSphere3D, splitMaskToSlices, maskVolumeStats, type MaskVolumeStats } from "../viewer/roi3d";
 import { listSpheres3D, updateSphere3D, deleteSphere3D, subscribeSphere3D, type Sphere3D } from "../viewer/sphere3dStore";
 import { annotationsToImageJDtos } from "../viewer/imagejExport";
@@ -44,6 +45,7 @@ import { saveRoiNow, scheduleRoiSave, subscribeRoiSave } from "../viewer/roiSave
 import { RoiMetaEditDialog } from "./RoiMetaEditDialog";
 import { RoiStatsDialog, type RoiStatsTarget } from "./RoiStatsDialog";
 import { useI18n } from "../i18n/i18n";
+import { useDateFormat, formatClockTime } from "../i18n/dateFormat";
 import { useFusionMeasure } from "../viewer/fusionMeasureContext";
 import { NumField } from "./WandDialog";
 import { formatNumber, valueUnitLabel } from "../viewer/roiStatsText";
@@ -73,16 +75,42 @@ function scopeText(itemId: string): string {
   return formatScope(getRoiMaskMeta(itemId)?.scope);
 }
 
+/** ROI マネージャが一覧に出す、画面上のシリーズ（タイル）。 */
+export interface PanelSeries {
+  patientKey: string;
+  patientName: string;
+  seriesUid: string;
+  /** 見出しに出すシリーズの名前。 */
+  label: string;
+}
+
+/** 一覧の見出しの鍵。患者 `p:<患者>`、シリーズ `s:<患者>|<シリーズ>`。 */
+const patientSec = (pk: string) => `p:${pk}`;
+const groupSec = (groupId: string) => `g:${groupId}`;
+const seriesSec = (pk: string, uid: string) => `s:${pk}|${uid}`;
+function inSection(o: RowOwner, sec: string): boolean {
+  if (sec.startsWith("g:")) return !!o.groupId && o.groupId === sec.slice(2);
+  if (sec.startsWith("p:")) return o.patientKey === sec.slice(2);
+  return !!o.patientKey && !!o.seriesUid && seriesSec(o.patientKey, o.seriesUid) === sec;
+}
+
 export function RoiManagerPanel({
   activePatientKey,
+  shownSeries,
   isDemo,
   mode,
   onRevealRoi,
   onDuplicateRoi,
+  onCopyRoi,
   onConvertToRoi,
   onClose,
 }: {
   activePatientKey: string;
+  /**
+   * 画面に出ているシリーズ。あれば、このシリーズに属する ROI だけを患者→シリーズの見出しで並べる
+   * （全患者表示）。無ければ `activePatientKey` の患者だけを、見出し無しで出す。
+   */
+  shownSeries?: ReadonlyArray<PanelSeries>;
   /** 公開デモ（backendが該当APIを403にする）。IJインポート/IJ・RTエクスポートを隠す。 */
   isDemo: boolean;
   /** `AppStatus.mode`（"standalone"/"web"）。SEG 再書き出し時の旧シリーズ自動削除の可否判定に使う。 */
@@ -91,32 +119,39 @@ export function RoiManagerPanel({
   onRevealRoi?: (roiUid: string) => void;
   /** ROI を複製する（貼り付け先は現在表示中のスライス）。 */
   onDuplicateRoi?: (roiUid: string) => void;
+  /** ROI をコピーする（貼り付けは対象タイルを選んでから）。 */
+  onCopyRoi?: (roiUid: string) => void;
   /** 計測（Length / Probe）を ROI に変える。 */
   onConvertToRoi?: (roiUid: string) => void;
   onClose: () => void;
 }) {
   const { t } = useI18n();
+  useDateFormat(); // 書式の設定が変わったら再描画する
   const fusionMeasure = useFusionMeasure();
   const [model, setModel] = useState<RoiPanelModel>({ rois: [], measures: [] });
   const [editId, setEditId] = useState<string | null>(null);
   // 計測結果ダイアログ。null=閉。{focus} は開いた直後に詳細を出す ROI（ヘッダから開くと未指定）。
-  const [statsOpen, setStatsOpen] = useState<{ focus?: string } | null>(null);
+  // section は一覧の見出し（患者 `p:<患者>` / シリーズ `s:<患者>|<シリーズ>`）。指定があればその見出し配下の ROI だけを集計する。
+  const [statsOpen, setStatsOpen] = useState<{ focus?: string; section?: string } | null>(null);
   // ⚠ ダイアログの `targets` は毎レンダで作り直さない。参照が変わるたびに統計の再計算
   // （非同期ループ）が最初からやり直しになり、表がちらつく。保存通知などで
   // このパネルは頻繁に再レンダされる。
   const statsTargets = useMemo<RoiStatsTarget[]>(
     () => {
+      const sec = statsOpen?.section;
+      const inSec = (o: RowOwner) => !sec || inSection(o, sec);
       const roiTargets: RoiStatsTarget[] = [];
       for (const r of model.rois) {
+        if (!inSec(r)) continue;
         if (r.rowKind === "shape") roiTargets.push({ uid: r.uid, tool: r.tool });
         // 塗りの ROI は segment ごとに 1 件。uid は一意にし、マスクと segment は別フィールドで持つ（文字列を分解しない）。
         else if (r.rowKind === "painted") {
           roiTargets.push({ uid: r.key, tool: "mask", kind: "mask", label: r.name, maskId: r.maskId, segmentIndex: segFilterOf(r) });
         }
       }
-      return [...roiTargets, ...model.measures.map((m) => ({ uid: m.uid, tool: m.tool }))];
+      return [...roiTargets, ...model.measures.filter(inSec).map((m) => ({ uid: m.uid, tool: m.tool }))];
     },
-    [model],
+    [model, statsOpen?.section],
   );
   const [selected, setSelected] = useState<Set<string>>(new Set());
   /** 一覧で選んでいる ROI（ハイライト＋スライス移動の対象）。マスクの選択チェックとは別物。 */
@@ -146,23 +181,43 @@ export function RoiManagerPanel({
   }, []);
   const importInputRef = useRef<HTMLInputElement>(null);
 
+  // 画面に出ているシリーズ。参照が毎回変わっても再計算しないよう、中身の文字列をキーにする。
+  const shownKey = (shownSeries ?? []).map((x) => `${x.patientKey}\u0001${x.seriesUid}`).join("\u0000");
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const shown = useMemo(() => (shownSeries ? shownSeries.map((x) => ({ patientKey: x.patientKey, seriesUid: x.seriesUid })) : undefined), [shownKey]);
+  // 保存・購読の対象にする患者（全患者表示なら表示中の全員。そうでなければフォーカス患者だけ）。
+  const shownPatients = useMemo(() => (shown ? [...new Set(shown.map((x) => x.patientKey))] : [activePatientKey]), [shown, activePatientKey]);
+  // Cornerstone で選択中の ROI（行のハイライトに使う）。パネルの focusedRoi とは別に、画像上・Ctrl クリックでの選択も映す。
+  const [selUids, setSelUids] = useState<ReadonlySet<string>>(new Set());
+  const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
+  useEffect(() => {
+    const sync = () => {
+      try { setSelUids(new Set(csAnnotation.selection.getAnnotationsSelected() ?? [])); } catch { /* ignore */ }
+    };
+    sync();
+    const ev = csToolsEnums.Events.ANNOTATION_SELECTION_CHANGE;
+    if (!ev) return;
+    eventTarget.addEventListener(ev, sync);
+    return () => eventTarget.removeEventListener(ev, sync);
+  }, []);
+
   // ROI の明示保存（自動保存は Viewer2DScreen が変更契機で走らせる）。
   // 最終保存の時刻・件数を出して「本当に書けたか」を人が確認できるようにする。
   const [saving, setSaving] = useState(false);
   const [lastSave, setLastSave] = useState<{ ok: boolean; at: string; count?: number; error?: string } | null>(null);
   useEffect(() => subscribeRoiSave((pk, r) => {
-    if (pk !== activePatientKey) return;
+    if (!shownPatients.includes(pk)) return;
     setLastSave({
       ok: r.ok,
-      at: new Date().toLocaleTimeString(),
+      at: formatClockTime(new Date(), { seconds: true }),
       count: r.roiCount,
       error: r.error,
     });
-  }), [activePatientKey]);
+  }), [shownPatients]);
   const runSaveRois = async () => {
     setSaving(true);
     try {
-      await saveRoiNow(activePatientKey);
+      await Promise.all(shownPatients.map((pk) => saveRoiNow(pk)));
     } finally {
       setSaving(false);
     }
@@ -176,6 +231,7 @@ export function RoiManagerPanel({
   const refresh = useCallback(() => {
     const env: RoiRowEnv = {
       patientKey: activePatientKey,
+      shown,
       metaOf: getRoiMaskMeta,
       isAnnotationVisible: (uid) => csAnnotation.visibility.isAnnotationVisible(uid) ?? true,
       isLocked: isRoiLocked,
@@ -197,8 +253,8 @@ export function RoiManagerPanel({
     } catch {
       setModel({ rois: [], measures: [] });
     }
-    setSpheres(allSpheres.filter((s) => !s.patientKey || s.patientKey === activePatientKey));
-  }, [activePatientKey]);
+    setSpheres(allSpheres);
+  }, [activePatientKey, shown]);
 
   useEffect(() => {
     refresh();
@@ -225,10 +281,12 @@ export function RoiManagerPanel({
 
   const deleteRoi = (uid: string) => {
     if (isRoiLocked(uid)) return;
+    // 全患者表示では、消す ROI の持ち主の患者へ保存を予約する（フォーカス患者とは限らない）。
+    const owner = getRoiMaskMeta(uid)?.patientKey || activePatientKey;
     try { csAnnotation.state.removeAnnotation(uid); } catch { /* ignore */ }
     deleteRoiMaskMeta(uid);
     // 削除も保存対象。イベント購読でも拾えるが、経路ごとの発火差に依存しないよう明示的に予約する。
-    scheduleRoiSave(activePatientKey);
+    scheduleRoiSave(owner);
     refresh();
   };
   // マスク色: そのセグメンテーションを表示中の全ビューポートで、対象 segment の色を変更。
@@ -323,7 +381,12 @@ export function RoiManagerPanel({
     return [...set];
   };
   // 選択行 → 演算の入力。球は対象外。
-  const selectedRows = model.rois.filter((r) => selected.has(r.key) && r.rowKind !== "sphere");
+  const focusRois = useMemo(
+    () => model.rois.filter((r) => !r.patientKey || r.patientKey === activePatientKey),
+    [model, activePatientKey],
+  );
+  // 形の行は注釈の選択（画像上・Ctrl+クリック・描画直後と同じ）、塗り ROI は行のチェックで選ぶ。
+  const selectedRows = model.rois.filter((r) => (r.rowKind === "shape" ? selUids.has(r.uid) : selected.has(r.key)) && r.rowKind !== "sphere");
   const operands: RoiOperand[] = selectedRows.map((r) =>
     r.rowKind === "painted" ? { kind: "painted", maskId: r.maskId, segIndex: segFilterOf(r) } : { kind: "shape", uid: (r as { uid: string }).uid },
   );
@@ -417,8 +480,8 @@ export function RoiManagerPanel({
     if (busy) return;
     setBusy(true);
     try {
-      const shapeUids = only ? [] : model.rois.flatMap((r) => (r.rowKind === "shape" ? [r.uid] : []));
-      const maskRefs = (only ? [only] : model.rois.filter((r): r is PaintedRoiRow => r.rowKind === "painted"))
+      const shapeUids = only ? [] : focusRois.flatMap((r) => (r.rowKind === "shape" ? [r.uid] : []));
+      const maskRefs = (only ? [only] : focusRois.filter((r): r is PaintedRoiRow => r.rowKind === "painted"))
         .map((r) => ({ maskId: r.maskId, segIndex: segFilterOf(r) }));
       const res = await exportRoisAsRtStruct(shapeUids, maskRefs);
       if (res) {
@@ -590,11 +653,13 @@ export function RoiManagerPanel({
     }
   };
 
-  const shapeRows = model.rois.filter((r): r is ShapeRoiRow => r.rowKind === "shape");
-  const paintedRows = model.rois.filter((r): r is PaintedRoiRow => r.rowKind === "painted");
+  // 書き出し（IJ・RT）は**フォーカス患者の ROI だけ**。患者をまたぐと 1 つのファイルに別の患者が混ざる。
+  const ofFocus = (o: RowOwner) => !o.patientKey || o.patientKey === activePatientKey;
+  const shapeRows = focusRois.filter((r): r is ShapeRoiRow => r.rowKind === "shape");
+  const paintedRows = focusRois.filter((r): r is PaintedRoiRow => r.rowKind === "painted");
   const shapeCount = shapeRows.length;
   // IJ RoiSet に書ける annotation（形の ROI と計測。Length 等は線として書き出せる）。
-  const annotationUids = [...shapeRows.map((r) => r.uid), ...model.measures.map((m) => m.uid)];
+  const annotationUids = [...shapeRows.map((r) => r.uid), ...model.measures.filter(ofFocus).map((m) => m.uid)];
 
   // 行の**余白**を押したら「この ROI を見せる」。
   //
@@ -634,17 +699,31 @@ export function RoiManagerPanel({
     </button>
   );
 
+  // 行の「コピー」。貼り付けは、貼り付け先のタイルを 1 度クリックしてから ROI メニュー／Ctrl+V。
+  const copyButton = (uid: string) =>
+    onCopyRoi ? (
+      <button
+        onClick={(e) => { e.stopPropagation(); onCopyRoi(uid); }}
+        disabled={busy}
+        style={editBtn}
+        title={t("roiMgr.copy")}
+        data-testid="roi-mgr-copy"
+      >
+        ⎘
+      </button>
+    ) : null;
+
   // 形の ROI（面積・線・点）。
   const renderShapeRow = (r: ShapeRoiRow) => (
     <div key={r.key} data-testid="roi-row" data-kind="shape" data-roi-key={r.key}>
       <div
-        style={focusedRoi === r.uid ? { ...row, ...focusedRowBox } : row}
+        style={focusedRoi === r.uid || selUids.has(r.uid) ? { ...row, ...focusedRowBox } : row}
         onClick={(e) => onAnnotationRowClick(e, r.uid)}
         data-testid="roi-mgr-row"
         data-roi-uid={r.uid}
       >
         {annotationBasics(r)}
-        <input type="checkbox" checked={selected.has(r.key)} onClick={(e) => e.stopPropagation()} onChange={() => toggleSelect(r.key)} title={t("roiMgr.select")} data-testid="roi-row-select" />
+        <input type="checkbox" checked={selUids.has(r.uid)} onClick={(e) => e.stopPropagation()} onChange={() => toggleRoiSelection(r.uid)} title={t("roiMgr.select")} data-testid="roi-row-select" />
         <span title={t("roiMgr.iconShape")} style={{ color: "#5a6672" }}>{r.kind === "area" ? "▭" : r.kind === "line" ? "╱" : "•"}</span>
         <input
           type="text" style={name} title={r.tool}
@@ -679,6 +758,7 @@ export function RoiManagerPanel({
             ⧉
           </button>
         )}
+        {copyButton(r.uid)}
         {/circle/i.test(r.tool) && <button onClick={(e) => { e.stopPropagation(); runDefineSphere(r.uid); }} disabled={busy} style={editBtn} title={t("roiMgr.defineSphere")} data-testid="roi-mgr-define-sphere">◎</button>}
         {/circle/i.test(r.tool) && <button onClick={(e) => { e.stopPropagation(); runSphere(r.uid); }} disabled={busy} style={editBtn} title={t("roiMgr.toSphere")}>⬤</button>}
         <button onClick={(e) => { e.stopPropagation(); setStatsOpen({ focus: r.uid }); }} style={editBtn} title={t("roiMgr.statsRoi")}>Σ</button>
@@ -692,7 +772,7 @@ export function RoiManagerPanel({
   const renderMeasureRow = (m: MeasureRow) => (
     <div
       key={m.key}
-      style={focusedRoi === m.uid ? { ...row, ...focusedRowBox } : row}
+      style={focusedRoi === m.uid || selUids.has(m.uid) ? { ...row, ...focusedRowBox } : row}
       onClick={(e) => onAnnotationRowClick(e, m.uid)}
       data-testid="measure-row"
       data-roi-uid={m.uid}
@@ -705,6 +785,18 @@ export function RoiManagerPanel({
         onChange={(e) => renameAnnotation(m.uid, e.target.value)}
       />
       <input type="color" defaultValue="#ffff00" onClick={(e) => e.stopPropagation()} onChange={(e) => setRoiStyle(m.uid, { color: hexToRgb(e.target.value) })} title={t("roiMgr.color")} style={colorInput} />
+      {onDuplicateRoi && (
+        <button
+          onClick={(e) => { e.stopPropagation(); setFocusedRoi(m.uid); onDuplicateRoi(m.uid); }}
+          disabled={busy}
+          style={editBtn}
+          title={t("roiMgr.duplicate")}
+          data-testid="roi-mgr-duplicate"
+        >
+          ⧉
+        </button>
+      )}
+      {copyButton(m.uid)}
       {onConvertToRoi && canConvertMeasureToRoi(m.tool) && (
         <button
           onClick={(e) => { e.stopPropagation(); setFocusedRoi(m.uid); onConvertToRoi(m.uid); }}
@@ -828,6 +920,7 @@ export function RoiManagerPanel({
     return (
       <div key={s.id} style={row} data-testid="roi-row" data-kind="sphere" data-roi-key={s.id}>
         <button onClick={() => updateSphere3D(s.id, { visible: !s.visible })} style={eyeBtn} title={t("roiMgr.visible")} data-testid="roi-row-visible">{s.visible ? "👁" : "🚫"}</button>
+        <input type="checkbox" checked={selected.has(s.id)} onChange={() => toggleSelect(s.id)} title={t("roiMgr.select")} data-testid="roi-row-select" />
         <span title={t("roiMgr.iconSphere")} style={{ color: s.color }}>◍</span>
         <input type="text" style={name} defaultValue={s.label ?? "Sphere"} onChange={(e) => updateSphere3D(s.id, { label: e.target.value })} />
         <input type="color" defaultValue={s.color} onChange={(e) => updateSphere3D(s.id, { color: e.target.value })} title={t("roiMgr.color")} style={colorInput} />
@@ -850,6 +943,200 @@ export function RoiManagerPanel({
       </div>
     );
   };
+
+  // ── ROI グループ ──
+  // メンバーは、形の ROI・計測＝注釈 uid（`a:`）、塗り ROI＝マスク（`m:`。同じマスクの segment は同じグループ）、球＝球 id（`s:`）。
+  // 所属は各メンバーが持つ（形の ROI・計測・球は `/api/rois`、塗り ROI は `/api/roi-masks` のメタ）。患者が分からない塗り ROI は保存されず、再読み込みで外れる。
+  const annUids = new Set([...model.rois.flatMap((r) => (r.rowKind === "shape" ? [r.uid] : [])), ...model.measures.map((m) => m.uid)]);
+  const selectedAnnUids = [...selUids].filter((u) => annUids.has(u));
+  const selectedPaintedMasks = [...new Set(model.rois.flatMap((r) => (r.rowKind === "painted" && selected.has(r.key) ? [r.maskId] : [])))];
+  const selectedSphereIds = model.rois.flatMap((r) => (r.rowKind === "sphere" && selected.has(r.key) ? [r.id] : []));
+  const selectedMembers = [
+    ...selectedAnnUids.map((u) => `a:${u}`),
+    ...selectedPaintedMasks.map((m) => `m:${m}`),
+    ...selectedSphereIds.map((i) => `s:${i}`),
+  ];
+  const patientOfMember = (k: string): string | undefined =>
+    k[0] === "s" ? spheres.find((x) => x.id === k.slice(2))?.patientKey : getRoiMaskMeta(k.slice(2))?.patientKey;
+  const setMemberGroup = (k: string, patch: { groupId?: string; groupName?: string }) => {
+    if (k[0] === "s") updateSphere3D(k.slice(2), patch);
+    else setRoiMaskMeta(k.slice(2), patch);
+  };
+  const groupRowsOf = (gid: string) => ({
+    rois: model.rois.filter((r) => r.groupId === gid),
+    measures: model.measures.filter((m) => m.groupId === gid),
+  });
+  const groupMembers = (gid: string): string[] => {
+    const g = groupRowsOf(gid);
+    return [...new Set([
+      ...g.rois.map((r) => (r.rowKind === "shape" ? `a:${r.uid}` : r.rowKind === "painted" ? `m:${r.maskId}` : `s:${r.id}`)),
+      ...g.measures.map((m) => `a:${m.uid}`),
+    ])];
+  };
+  const groupAnnUids = (gid: string) => groupMembers(gid).filter((k) => k[0] === "a").map((k) => k.slice(2));
+  const groupNames = [...model.rois, ...model.measures].map((r) => r.groupName);
+  // メンバーが 2 件に満たないグループは見出しを出さない（再読み込みで塗り ROI・球が外れた残りなど）。
+  const groupSizes = new Map<string, number>();
+  for (const r of [...model.rois, ...model.measures]) if (r.groupId) groupSizes.set(r.groupId, (groupSizes.get(r.groupId) ?? 0) + 1);
+  const isRealGroup = (gid: string | undefined): gid is string => !!gid && (groupSizes.get(gid) ?? 0) >= 2;
+  const makeGroup = () => {
+    if (unresolvedMembers(selectedMembers, patientOfMember).length > 0) { emitToast(t("roiMgr.group.unknownPatient")); return; }
+    const prefix = t("roiMgr.groupPrefix");
+    const plan = planGroup(
+      selectedMembers,
+      patientOfMember,
+      () => crypto.randomUUID(),
+      `${prefix} ${nextGroupNumber(groupNames, prefix)}`,
+    );
+    if (!plan.ok) { emitToast(t(plan.reason === "crossPatient" ? "roiMgr.group.crossPatient" : "roiMgr.group.tooFew")); return; }
+    for (const k of selectedMembers) setMemberGroup(k, { groupId: plan.groupId, groupName: plan.name });
+    emitToast(t("roiMgr.group.made", { n: selectedMembers.length, name: plan.name }));
+    refresh();
+  };
+  const renameGroup = (gid: string, name: string) => { for (const k of groupMembers(gid)) setMemberGroup(k, { groupName: name }); };
+  const ungroup = (gid: string) => { for (const k of groupMembers(gid)) setMemberGroup(k, { groupId: undefined, groupName: undefined }); refresh(); };
+  // 錠があるのは形の ROI・計測だけ（塗り ROI・球には無い）。
+  const lockGroup = (gid: string) => {
+    const uids = groupAnnUids(gid);
+    const allLocked = uids.length > 0 && uids.every(isRoiLocked);
+    for (const u of uids) setRoiLocked(u, !allLocked);
+    refresh();
+  };
+  const selectGroup = (gid: string) => {
+    const g = groupRowsOf(gid);
+    selectRois(groupAnnUids(gid));
+    setSelected(new Set(g.rois.filter((r) => r.rowKind !== "shape").map((r) => r.key)));
+  };
+  const deleteGroup = (gid: string, name: string) => {
+    const g = groupRowsOf(gid);
+    const uids = groupAnnUids(gid).filter((u) => !isRoiLocked(u));
+    const painted = g.rois.filter((r): r is PaintedRoiRow => r.rowKind === "painted");
+    const sphereRows = g.rois.filter((r): r is SphereRoiRow => r.rowKind === "sphere");
+    const n = uids.length + painted.length + sphereRows.length;
+    if (n === 0) return;
+    if (!window.confirm(t("roiMgr.group.deleteConfirm", { name, n }))) return;
+    const owners = new Set(uids.map((u) => getRoiMaskMeta(u)?.patientKey || activePatientKey));
+    for (const u of uids) {
+      try { csAnnotation.state.removeAnnotation(u); } catch { /* ignore */ }
+      deleteRoiMaskMeta(u);
+    }
+    for (const r of painted) removeMaskSegment(r.maskId, r.segIndex);
+    for (const r of sphereRows) deleteSphere3D(r.id);
+    for (const pk of owners) scheduleRoiSave(pk);
+    renderAll();
+    refresh();
+  };
+  const groupHead = (gid: string, name: string) => {
+    const g = groupRowsOf(gid);
+    const uids = groupAnnUids(gid);
+    const allLocked = uids.length > 0 && uids.every(isRoiLocked);
+    const anyVisible = g.rois.some(roiVisible) || g.measures.some((m) => m.visible);
+    // 塗り ROI・球はロックの対象ではない。グループ全体がロック中でも、これらを含むグループは削除できる。
+    const tempOnly = g.rois.some((r) => r.rowKind !== "shape");
+    const sec = groupSec(gid);
+    return (
+      <div key={`h:${sec}:${gid}`} style={groupHeadStyle} data-testid="roi-group-head" data-group-id={gid}>
+        <button onClick={() => toggleCollapsed(sec)} style={eyeBtn} title={t("roiMgr.sectionFold")} aria-expanded={!collapsed.has(sec)}>
+          {collapsed.has(sec) ? "▸" : "▾"}
+        </button>
+        <input
+          type="text" style={{ ...name_, fontWeight: 600, flex: "1 1 80px" }} defaultValue={name} title={t("roiMgr.group.rename")}
+          onChange={(e) => renameGroup(gid, e.target.value)}
+          data-testid="roi-group-name"
+        />
+        <span style={countBadge}>{g.rois.length + g.measures.length}</span>
+        <button onClick={() => setRowsVisible(g.rois, g.measures, !anyVisible)} style={eyeBtn} title={t("roiMgr.sectionEye")} data-testid="roi-group-visible">
+          {anyVisible ? "👁" : "🚫"}
+        </button>
+        <button onClick={() => lockGroup(gid)} disabled={uids.length === 0} style={eyeBtn} title={t("roiMgr.group.lock")} aria-pressed={allLocked} data-testid="roi-group-lock">
+          {allLocked ? "🔒" : "🔓"}
+        </button>
+        <button onClick={() => selectGroup(gid)} style={editBtn} title={t("roiMgr.group.select")} data-testid="roi-group-select">◎</button>
+        <button onClick={() => setStatsOpen({ section: sec })} style={editBtn} title={t("roiMgr.sectionStats")} data-testid="roi-group-stats">Σ</button>
+        <button onClick={() => ungroup(gid)} style={editBtn} title={t("roiMgr.group.ungroup")} data-testid="roi-group-ungroup">⛓</button>
+        <button onClick={() => deleteGroup(gid, name)} disabled={allLocked && !tempOnly} style={allLocked && !tempOnly ? { ...delBtn, opacity: 0.35, cursor: "not-allowed" } : delBtn} title={t("roiMgr.group.delete")} data-testid="roi-group-delete">🗑</button>
+      </div>
+    );
+  };
+
+  // ── 患者→シリーズの見出し（全患者表示）──
+  // 1 患者・1 シリーズだけで、グループも無いときは見出しを出さない（従来の見た目のまま）。
+  const anyGroup = [...groupSizes.keys()].some((gid) => isRealGroup(gid));
+  const grouping = !!shownSeries && (new Set(shownSeries.map((x) => x.patientKey)).size > 1 || shownSeries.length > 1 || anyGroup);
+  const toggleCollapsed = (k: string) =>
+    setCollapsed((c) => { const n = new Set(c); if (n.has(k)) n.delete(k); else n.add(k); return n; });
+  const roiVisible = (r: RoiRow): boolean =>
+    r.rowKind === "sphere" ? (spheres.find((x) => x.id === r.id)?.visible ?? true) : r.visible;
+  // 見出し配下をまとめて表示・非表示（1 つでも見えていれば隠す、全部隠れていれば出す）。
+  const setRowsVisible = (rois: RoiRow[], measures: MeasureRow[], vis: boolean) => {
+    for (const r of rois) {
+      if (r.rowKind === "shape") { try { csAnnotation.visibility.setAnnotationVisibility(r.uid, vis); } catch { /* ignore */ } }
+      else if (r.rowKind === "painted") setSegmentVisible(r.maskId, r.segIndex, vis);
+      else updateSphere3D(r.id, { visible: vis });
+    }
+    for (const m of measures) { try { csAnnotation.visibility.setAnnotationVisibility(m.uid, vis); } catch { /* ignore */ } }
+    renderAll();
+    refresh();
+  };
+  const sectionHead = (sec: string, title: string, level: 0 | 1, rois: RoiRow[], measures: MeasureRow[], isFocus = false) => {
+    const n = rois.length + measures.length;
+    const anyVisible = rois.some(roiVisible) || measures.some((m) => m.visible);
+    return (
+      <div key={`h:${sec}`} style={level === 0 ? patientHead : seriesHead} data-testid="roi-section-head" data-section={sec}>
+        <button onClick={() => toggleCollapsed(sec)} style={eyeBtn} title={t("roiMgr.sectionFold")} aria-expanded={!collapsed.has(sec)}>
+          {collapsed.has(sec) ? "▸" : "▾"}
+        </button>
+        <span style={headTitle} title={title}>{title}</span>
+        {isFocus && <span style={focusBadge} title={t("roiMgr.focusPatient")}>●</span>}
+        <span style={countBadge}>{n}</span>
+        {n > 0 && (
+          <>
+            <button onClick={() => setRowsVisible(rois, measures, !anyVisible)} style={eyeBtn} title={t("roiMgr.sectionEye")} data-testid="roi-section-visible">
+              {anyVisible ? "👁" : "🚫"}
+            </button>
+            <button onClick={() => setStatsOpen({ section: sec })} style={editBtn} title={t("roiMgr.sectionStats")} data-testid="roi-section-stats">Σ</button>
+          </>
+        )}
+      </div>
+    );
+  };
+  /** 行を患者→シリーズの見出しで並べる。見出しの無い（患者不明の）行は先頭に素のまま出す。 */
+  function renderGrouped<T extends RowOwner & ({ rowKind: RoiRow["rowKind"] } | { uid: string })>(
+    rows: T[],
+    render: (r: T) => React.ReactNode,
+    asRois: (rs: T[]) => RoiRow[],
+    asMeasures: (rs: T[]) => MeasureRow[],
+  ): React.ReactNode[] {
+    if (!grouping || !shownSeries) return rows.map(render);
+    const out: React.ReactNode[] = rows.filter((r) => !r.patientKey).map(render);
+    const patients = [...new Map(shownSeries.map((x) => [x.patientKey, x.patientName])).entries()];
+    for (const [pk, pname] of patients) {
+      const prow = rows.filter((r) => r.patientKey === pk);
+      const psec = patientSec(pk);
+      out.push(sectionHead(psec, pname || pk, 0, asRois(prow), asMeasures(prow), pk === activePatientKey));
+      if (collapsed.has(psec)) continue;
+      // グループ: 所属 ROI はグループ見出しの下にだけ出す（シリーズ区画には重複させない）。
+      for (const gid of [...new Set(prow.map((r) => r.groupId).filter(isRealGroup))]) {
+        const grow = prow.filter((r) => r.groupId === gid);
+        out.push(groupHead(gid, grow[0].groupName ?? ""));
+        if (!collapsed.has(groupSec(gid))) out.push(...grow.map(render));
+      }
+      const ungrouped = prow.filter((r) => !isRealGroup(r.groupId));
+      const seriesOf = shownSeries.filter((x) => x.patientKey === pk);
+      const known = new Set(seriesOf.map((x) => x.seriesUid));
+      out.push(...ungrouped.filter((r) => !r.seriesUid || !known.has(r.seriesUid)).map(render));
+      for (const se of seriesOf) {
+        const srow = ungrouped.filter((r) => r.seriesUid === se.seriesUid);
+        if (seriesOf.length > 1) {
+          const ssec = seriesSec(pk, se.seriesUid);
+          out.push(sectionHead(ssec, se.label, 1, asRois(srow), asMeasures(srow)));
+          if (collapsed.has(ssec)) continue;
+        }
+        out.push(...srow.map(render));
+      }
+    }
+    return out;
+  }
 
   return (
     <div style={panel}>
@@ -909,13 +1196,19 @@ export function RoiManagerPanel({
       </div>
       <div style={{ ...row, justifyContent: "flex-start" }}>
         <button onClick={addNewPainted} disabled={busy} style={editBtn} title={t("roiMgr.newMask")} data-testid="roi-new-painted">＋{t("roiMgr.newMaskShort")}</button>
+        <button onClick={makeGroup} disabled={selectedMembers.length < 2} style={editBtn} title={t("roiMgr.group.make")} data-testid="roi-group-make">🗂 {t("roiMgr.groupPrefix")} ({selectedMembers.length})</button>
       </div>
       {model.rois.length === 0 && <div style={empty}>{t("roiMgr.empty")}</div>}
-      {model.rois.map((r) => {
-        if (r.rowKind === "shape") return renderShapeRow(r);
-        if (r.rowKind === "painted") return renderPaintedRow(r);
-        return renderSphereRow(r.id);
-      })}
+      {renderGrouped<RoiRow>(
+        model.rois,
+        (r) => {
+          if (r.rowKind === "shape") return renderShapeRow(r);
+          if (r.rowKind === "painted") return renderPaintedRow(r);
+          return renderSphereRow(r.id);
+        },
+        (rs) => rs,
+        () => [],
+      )}
 
       {shapeCount + paintedRows.length > 0 && (
         <div style={opsBar}>
@@ -934,7 +1227,7 @@ export function RoiManagerPanel({
 
       <div style={section} title={t("roiMgr.measuresNote")}>{t("roiMgr.measures")} ({model.measures.length})</div>
       {model.measures.length === 0 && <div style={empty}>{t("roiMgr.empty")}</div>}
-      {model.measures.map((m) => renderMeasureRow(m))}
+      {renderGrouped<MeasureRow>(model.measures, renderMeasureRow, () => [], (ms) => ms)}
 
       <div style={note}>{t("roiMgr.m1note")}</div>
       {editId && <RoiMetaEditDialog itemId={editId} onClose={() => { setEditId(null); refresh(); }} />}
@@ -942,6 +1235,12 @@ export function RoiManagerPanel({
         <RoiStatsDialog
           targets={statsTargets}
           initialUid={statsOpen.focus}
+          groupTitle={
+            statsOpen.section?.startsWith("g:")
+              ? [...model.rois, ...model.measures].find((r) => r.groupId === statsOpen.section!.slice(2))?.groupName ?? ""
+              : undefined
+          }
+          skippedSpheres={model.rois.filter((r) => r.rowKind === "sphere" && (!statsOpen.section || inSection(r, statsOpen.section))).length}
           onClose={() => setStatsOpen(null)}
         />
       )}
@@ -955,6 +1254,25 @@ const panel: React.CSSProperties = {
 };
 const head: React.CSSProperties = { display: "flex", alignItems: "center", gap: 4, padding: "6px 8px", borderBottom: "1px solid #e6eaee", background: "#fff" };
 const hbtn: React.CSSProperties = { border: "1px solid #cdd5de", borderRadius: 5, background: "#fff", cursor: "pointer", fontSize: 13, padding: "1px 7px" };
+const groupHeadStyle: React.CSSProperties = {
+  display: "flex", flexWrap: "wrap", alignItems: "center", gap: 4, padding: "2px 8px 2px 14px", background: "#f1eefb",
+  borderLeft: "3px solid #8a6fd1", color: "#4a3a7a",
+};
+const name_: React.CSSProperties = {
+  flex: 1, minWidth: 0, color: "#33404d", fontSize: 12,
+  border: "1px solid transparent", borderRadius: 4, background: "transparent", padding: "2px 4px",
+};
+const patientHead: React.CSSProperties = {
+  display: "flex", alignItems: "center", gap: 4, padding: "4px 8px", background: "#eaf0f6",
+  borderTop: "1px solid #dde4ea", borderBottom: "1px solid #dde4ea", fontWeight: 600, color: "#33404d",
+};
+const seriesHead: React.CSSProperties = {
+  display: "flex", alignItems: "center", gap: 4, padding: "2px 8px 2px 18px", background: "#f3f6f9",
+  fontWeight: 500, color: "#5a6672",
+};
+const headTitle: React.CSSProperties = { flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" };
+const countBadge: React.CSSProperties = { fontSize: 10, color: "#5a6672", background: "#fff", border: "1px solid #dde4ea", borderRadius: 8, padding: "0 6px" };
+const focusBadge: React.CSSProperties = { fontSize: 8, color: "#2b8aef" };
 const section: React.CSSProperties = { padding: "6px 8px 2px", fontWeight: 600, color: "#5a6672" };
 const row: React.CSSProperties = { display: "flex", flexWrap: "wrap", alignItems: "center", gap: 6, padding: "3px 8px" };
 const name: React.CSSProperties = {

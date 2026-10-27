@@ -17,6 +17,8 @@ import {
   openContour,
   splineTypeFor,
   supportsSplineFit,
+  cancelContourDrawing,
+  limitPreviewToDrawnAnnotation,
 } from "./roiContourTools";
 import { hasShapeCalipers } from "./roiRead";
 import { buildAnnotationData, toSavedRoi } from "./roiPersistence";
@@ -378,5 +380,86 @@ describe("開いた輪郭でも統計の textBox を描かせる差し替え", (
 
   it("差し替え先が無いツールでは false を返す（上流の版が変わったら気付ける）", () => {
     expect(forceTextBoxOnOpenContour({})).toBe(false);
+  });
+});
+
+describe("追従線を描いている注釈だけに引く", () => {
+  /** 上流の renderAnnotationInstance を模す。呼ばれた時点の lastCanvasPoint を記録する。 */
+  function fakeTool(editData: Record<string, unknown> | null) {
+    const seen: { uid: string; last: unknown }[] = [];
+    const tool = {
+      editData,
+      renderAnnotationInstance(ctx: { annotation: { annotationUID: string } }) {
+        seen.push({ uid: ctx.annotation.annotationUID, last: this.editData?.lastCanvasPoint });
+        return true;
+      },
+    };
+    return { tool, seen };
+  }
+  const drawn = { annotationUID: "drawn" };
+  const other = { annotationUID: "other" };
+
+  it("描いている注釈では lastCanvasPoint を渡し、他の注釈では隠す", () => {
+    const { tool, seen } = fakeTool({ annotation: drawn, lastCanvasPoint: [5, 6] });
+    limitPreviewToDrawnAnnotation(tool);
+    tool.renderAnnotationInstance({ annotation: drawn });
+    tool.renderAnnotationInstance({ annotation: other });
+    expect(seen).toEqual([
+      { uid: "drawn", last: [5, 6] },
+      { uid: "other", last: undefined },
+    ]);
+    expect(tool.editData?.lastCanvasPoint).toEqual([5, 6]); // 隠したあとで戻る
+  });
+
+  it("上流が例外を投げても lastCanvasPoint は戻る", () => {
+    const { tool } = fakeTool({ annotation: drawn, lastCanvasPoint: [1, 2] });
+    tool.renderAnnotationInstance = () => {
+      throw new Error("boom");
+    };
+    limitPreviewToDrawnAnnotation(tool);
+    expect(() => tool.renderAnnotationInstance({ annotation: other })).toThrow("boom");
+    expect(tool.editData?.lastCanvasPoint).toEqual([1, 2]);
+  });
+
+  it("描画中でない（editData なし）ときはそのまま上流を呼ぶ", () => {
+    const { tool, seen } = fakeTool(null);
+    limitPreviewToDrawnAnnotation(tool);
+    tool.renderAnnotationInstance({ annotation: other });
+    expect(seen).toEqual([{ uid: "other", last: undefined }]);
+  });
+});
+
+describe("ビューポートを壊す前の描画中ツールの後始末", () => {
+  function group(tools: Record<string, unknown>) {
+    return { getToolInstance: (n: string) => tools[n] };
+  }
+
+  it("このビューポートで描画中のツールだけ cancel する", () => {
+    const calls: string[] = [];
+    const mk = (id: string, vp: string, drawing = true) => ({
+      isDrawing: drawing,
+      editData: { viewportIdsToRender: [vp] },
+      cancel: () => calls.push(id),
+    });
+    const g = group({
+      [CONTOUR_TOOL_NAMES.polyline]: mk("polyline", "vp1"),
+      [CONTOUR_TOOL_NAMES.polygon]: mk("polygon", "vp2"), // 別ビューポート
+      [CONTOUR_TOOL_NAMES.freehand]: mk("freehand", "vp1", false), // 描画中でない
+    });
+    cancelContourDrawing(g, "vp1", {} as HTMLDivElement);
+    expect(calls).toEqual(["polyline"]);
+  });
+
+  it("cancel が失敗しても描画状態を戻す", () => {
+    const tool = {
+      isDrawing: true,
+      editData: { viewportIdsToRender: ["vp1"] } as unknown,
+      cancel: () => {
+        throw new Error("element is not enabled");
+      },
+    };
+    cancelContourDrawing(group({ [CONTOUR_TOOL_NAMES.polyline]: tool }), "vp1", {} as HTMLDivElement);
+    expect(tool.isDrawing).toBe(false);
+    expect(tool.editData).toBeNull();
   });
 });

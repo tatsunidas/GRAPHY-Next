@@ -31,16 +31,24 @@ public class DicomStoreScp extends BasicCStoreSCP {
     private final Path tempDir;
     /** 受信時の匿名化。null なら何もしない（従来どおり）。 */
     private final ReceiveAnonymizer anonymizer;
+    /** 受信時の可逆圧縮（匿名化の後）。null なら何もしない。 */
+    private final ReceiveCompressor compressor;
 
     public DicomStoreScp(DicomStorageService storage, Path tempDir) {
-        this(storage, tempDir, null);
+        this(storage, tempDir, null, null);
     }
 
     public DicomStoreScp(DicomStorageService storage, Path tempDir, ReceiveAnonymizer anonymizer) {
+        this(storage, tempDir, anonymizer, null);
+    }
+
+    public DicomStoreScp(DicomStorageService storage, Path tempDir, ReceiveAnonymizer anonymizer,
+                         ReceiveCompressor compressor) {
         super("*"); // 任意の Storage SOP Class を受け付ける
         this.storage = storage;
         this.tempDir = tempDir;
         this.anonymizer = anonymizer;
+        this.compressor = compressor;
     }
 
     @Override
@@ -64,6 +72,9 @@ public class DicomStoreScp extends BasicCStoreSCP {
             if (anonymizer != null) {
                 // 原本は保管庫に入れない。匿名化できない・断るものは失敗を返す（一時ファイルは anonymizer が消す）。
                 toIngest = anonymizer.process(temp, as.getCallingAET());
+            }
+            if (compressor != null) {
+                toIngest = compressor.process(toIngest); // 失敗・対象外は元のまま（受信は失敗させない）
             }
             storage.ingest(toIngest);
         } catch (ReceiveAnonymizer.Rejected e) {

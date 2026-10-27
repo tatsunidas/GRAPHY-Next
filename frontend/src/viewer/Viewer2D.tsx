@@ -22,6 +22,7 @@ import {
   PlanarFreehandROITool,
   BrushTool,
   annotation as csAnnotation,
+  segmentation as csSeg,
   utilities as csToolsUtilities,
   Enums as csToolsEnums,
 } from "@cornerstonejs/tools";
@@ -34,8 +35,9 @@ import { ToolIcon } from "../icons/ToolIcon";
 import { UI_ICON_FILES, ACTIVE_ICON_STYLE } from "../icons/toolIcons";
 import { emitToast } from "./toast";
 import { isRoiLocked, partitionByLock } from "./roiLock";
+import { forgetLabelVolume, isLabelVolumeOf } from "./labelVolumeOrigin";
 import type { SavedRoi } from "./roiPersistence";
-import { buildRoiHandles, maxExtentFromImage, sliceToleranceFromStack } from "./roiCreate";
+import { buildContourVertices, buildRoiHandles, isContourCreateTool, maxExtentFromImage, sliceToleranceFromStack, type RoiCreateGeometry } from "./roiCreate";
 import { installTrueMagnification } from "./magnifier";
 import { ERASER_TOOL_ID, WAND2D_TOOL_ID, WAND3D_TOOL_ID, LEVELSET2D_TOOL_ID, SCISSORS_TOOL_ID } from "./toolIds";
 import { commitThreshold } from "./thresholdTool";
@@ -43,11 +45,13 @@ import { getScissors, setScissorsActive, subscribeScissors, scissorsToolName, sc
 import { setViewerContext, clearViewerContext, getViewerContext, type ViewerContext } from "./viewerContext";
 import { deleteRoiMaskMeta, getRoiMaskMeta, setRoiMaskMeta, subscribeRoiMaskStore } from "./roiMaskStore";
 import { noteFocusedTile } from "./focusedTile";
-import { copyRoiToClipboard, duplicateRoi as duplicateRoiEntry, hasClipboardRoi, makePixelToWorld, ownsImage, pasteRoiInto } from "./roiClipboard";
+import { type PasteContext, copyRoisToClipboard, duplicateRoi as duplicateRoiEntry, hasClipboardRoi, makePixelToWorld, ownsImage, pasteRoisInto } from "./roiClipboard";
 import { emitRoiReveal } from "./roiReveal";
 import { reconcileGlobalAnnotations } from "./globalRoiSync";
 import { loadRoisCached, scheduleRoiSave } from "./roiSaveStore";
 import { addSavedRoiToViewport, restoreRoisIntoStack } from "./roiRestore";
+import { restoreSpheresIntoStack } from "./sphereRestore";
+import { restoreMasks } from "./maskSaveStore";
 import { listSpheres3D, sphereCanvasCircle, subscribeSphere3D, type SphereCanvasCircle } from "./sphere3dStore";
 import { ensureCornerstoneInitialized } from "./cornerstoneSetup";
 import { applyTransform, isPanned, readTransform, type ViewTransform, FIT_TRANSFORM } from "./transform";
@@ -68,7 +72,7 @@ import { getOrCreateCameraSync, getOrCreateVoiSync, getOrCreatePresentationSync,
 import { registerReferenceSource, bumpReference, subscribeReference, computeReferenceSegments, type RefSegment } from "./referenceLines";
 import { registerViewerCommands, requestTool, type ViewerCommands, type ViewerDerivedSeriesRequest, type ViewerDerivedSeriesResult, type ViewerOverlay, type ViewerPixelData, type ViewerSrRequest, type ViewerSrResult, type ViewerPixelDataOptions, type ViewerAngioReportRequest, type ViewerPresentationStateRequest, type ViewerRoi, type ViewerSpatialCalibration, type ViewerTargetInfo, type ViewerViewState, type ViewerXaState, type ViewerXaCine, ViewerLabelVolume, ViewerLabelVolumeResult } from "./viewerCommands";
 import { buildPluginMeta, computeCalipers, hasShapeCalipers, pickPluginMeta, readRoiStats, roiPointsPx } from "./roiRead";
-import { CONTOUR_TOOL_NAMES } from "./roiContourTools";
+import { CONTOUR_TOOL_NAMES, SPLINE_TYPE_LINEAR, cancelContourDrawing } from "./roiContourTools";
 import { POINT_ROI_TOOL_NAME } from "./pointRoiTool";
 import { annotationRoiKind } from "./roiKind";
 import { convertMeasureToRoi } from "./measureToRoi";
@@ -80,6 +84,7 @@ import { buildRoiStatsCornerRows, sameCornerRows, type RoiStatsCornerRow } from 
 import { subscribeSuvStore, suvForImageId, seriesUidOf } from "./suvStore";
 import {
   getFusionProbeData,
+  getLayerProbes,
   hasFusionProbe,
   sampleFusionValue,
   subscribeFusionProbe,
@@ -95,10 +100,13 @@ import {
   apiBase,
   createPluginAngioSr,
   createPluginXaPresentationState,
+  fetchInstances,
   fetchLutData,
+  fetchSeries,
   type AngioPluginSrRequest,
   type LutData,
 } from "../api";
+import { firstSopOutsideStudy } from "../plugins/pluginSopScope";
 import { frameOfImageId, sopFromImageId, sopUidFromImageId } from "./imageId";
 import { buildPluginAnalysisRecord, type PluginAnalysisInput } from "../report/analysisResults";
 import { publishAnalysisResult } from "../report/analysisResultStore";
@@ -108,10 +116,13 @@ import { LoadingSpinner } from "./LoadingSpinner";
 import { calibrationForImageId } from "./xaCalibrationProvider";
 import { toViewerSpatialCalibration } from "./xaCalibration";
 import { dsaNativeImageId, dsaStateForImageId, readXaDsaTags } from "./dsaLoader";
+import { readXaViewGeometry } from "./xaViewGeometryProvider";
+import type { ViewerXaGeometry } from "./viewerCommands";
 // H40: シネの時間軸。**決定そのものは既存の単一入口に委譲する**（規則を 2 か所に持たない）。
 import { readXaCineSource } from "./xaCine";
 import { frameStartTimesMs, isUniformFrameTime, resolveXaFps } from "./xaCineTiming";
 import { worldSpacingOf, worldToImageCoords } from "./imageCoords";
+import { useDateFormat } from "../i18n/dateFormat";
 
 type ViewSnapshot = { transform: ViewTransform; voi: { lower: number; upper: number } | null };
 
@@ -624,6 +635,8 @@ export function Viewer2D({
   // `fgSample` はカーソル位置の前景値（前景が無い画素なら null）。
   const [fusionActive, setFusionActive] = useState(false);
   const [fgSample, setFgSample] = useState<FusionProbeSample | null>(null);
+  // フィルタ層（LoG の派生画像の色分け重ね）ごとのカーソル値。層が無ければ空。
+  const [layerSamples, setLayerSamples] = useState<{ label: string; value: number | null }[]>([]);
   const [markers, setMarkers] = useState<OrientationMarkers | null>(null);
   const [scaleBar, setScaleBar] = useState<ScaleBar | null>(null);
   // base 画像の表示矩形（renderOverlay 用）。zoom/pan/fit に追従して更新。
@@ -962,10 +975,16 @@ export function Viewer2D({
           ? sampleFusionValue(probe, s.fx, s.fy, infoRef.current.columns ?? 0, infoRef.current.rows ?? 0)
           : null,
       );
+      const layers = getLayerProbes(viewportId);
+      setLayerSamples(layers.length === 0 ? [] : layers.map(({ data }) => {
+        const v = s && data ? sampleFusionValue(data, s.fx, s.fy, infoRef.current?.columns ?? 0, infoRef.current?.rows ?? 0) : null;
+        return { label: data?.label ?? "", value: v ? v.value : null };
+      }));
     };
     const onLeave = () => {
       setSample(null);
       setFgSample(null);
+      setLayerSamples([]);
     };
     // フォーカス中タイルを記録（ROI マネージャの「＋新規マスク」対象）。
     const onFocusPointerDown = () => {
@@ -1251,7 +1270,10 @@ export function Viewer2D({
             // 判定はツールグループ単位（GridView リンクでは複数タイルで共有）なので、このグループの左ドラッグを見る。
             const measureActive = () => MEASURE_TOOLS.includes(tg.getActivePrimaryMouseButtonTool());
             for (const tn of [...MEASURE_TOOLS, PlanarFreehandROITool.toolName]) {
-              installInteriorGrab(tg.getToolInstance(tn), { isMeasureToolActive: measureActive });
+              installInteriorGrab(tg.getToolInstance(tn), {
+                isMeasureToolActive: measureActive,
+                onCrossPatientSelection: () => emitToast(t("roi.move.crossPatient")),
+              });
             }
             // ROI ブラシ（セグメンテーション編集）。passive で追加。
             tg.addTool(BrushTool.toolName);
@@ -1343,6 +1365,8 @@ export function Viewer2D({
       element.removeEventListener(EVENTS.CAMERA_MODIFIED, onCameraModified);
       element.removeEventListener("pointerdown", onFocusPointerDown);
       removeSelectionGestures?.();
+      // 描画中のまま壊すと全体の描画中フラグが残り、以後どこにも描けなくなる
+      cancelContourDrawing(ToolGroupManager.getToolGroup(syncGroupId ?? toolGroupId), viewportId, element);
       element.removeEventListener(EVENTS.VOI_MODIFIED, onVoiModified);
       element.removeEventListener("mousemove", onMove);
       element.removeEventListener("mouseleave", onLeave);
@@ -1810,6 +1834,22 @@ export function Viewer2D({
     };
   };
 
+  /**
+   * H41: 表示中フレームの投影幾何。DSA 表示中も、ネイティブフレームへ委譲して返す
+   * （合成 imageId からはタグが読めないため。`getXaCine` と同じ理由）。
+   * dataSet が**プリウォーム前**なら `missing: "noDataSet"`（0 で埋めずに理由を返す）。
+   */
+  const getXaGeometry = (): ViewerXaGeometry | null => {
+    const imageId = imageIdsRef.current[indexRef.current];
+    if (!imageId) return null;
+    const modality = (infoRef.current?.modality ?? "").toUpperCase();
+    const dsa = dsaStateForImageId(imageId);
+    if (!dsa && modality !== "XA" && modality !== "XRF") return null;
+    const native = dsaNativeImageId(imageId) ?? imageId;
+    const frameIndex = indexRef.current;
+    return { imageId, frameIndex, ...readXaViewGeometry(native, frameIndex) };
+  };
+
   // colormap の内部登録名 → 公開する LUT 名。`graphy-lut-` は本体の実装詳細なので剥がす
   // （シリーズ Sync で他タイルから伝播した colormap も同じ規則の名前で来る）。
   const lutNameForPlugins = (colormapName: string | null): string | null =>
@@ -2112,7 +2152,7 @@ export function Viewer2D({
   /**
    * H37: アンギオ解析の結果を **本体と同じ SR** として保存する。
    *
-   * <p>🔴 **参照 SOP は「いまこのタイルが開いている並び」の中に無ければ拒否する。**
+   * <p>🔴 **参照 SOP は「このタイルが開いている並び」か「同じスタディ」の中に無ければ拒否する。**
    * 書き手（backend）は参照インスタンスから患者・スタディを継承するので、他患者の SOP を
    * 渡されると**その患者の検査にレポートが生える**。プラグインは本体と同じ権限で動く
    * （サンドボックス未実装）ため、ここで塞ぐ。H10 の「開いているタイルからのみ解決」と同じ考え方。
@@ -2129,10 +2169,17 @@ export function Viewer2D({
       req.kind === "qca3d"
         ? [req.qca3d.viewASopInstanceUid, req.qca3d.viewBSopInstanceUid]
         : [req.kind === "qca" ? req.qca.sopInstanceUid : req.qlv.sopInstanceUid];
-    const bad = firstUnopenedSop(refs);
-    if (bad !== null) {
-      // 3D QCA の方向 B は別シリーズ＝別タイルにある。**そのタイルから呼ぶ**必要がある。
-      return { ok: false, error: `referenced SOP is not open in this tile: ${bad}` };
+    // 開いていない SOP（3D QCA の方向 B など）は、同じスタディに実在すれば通す。
+    if (firstUnopenedSop(refs) !== null) {
+      try {
+        const outside = await firstSopOutsideStudy(refs, ctx.studyUid, {
+          listSeriesUids: async (st) => (await fetchSeries(st)).map((x) => x.seriesInstanceUid),
+          listSopUids: async (st, se) => (await fetchInstances(st, se)).map((x) => x.sopInstanceUid),
+        });
+        if (outside !== null) return { ok: false, error: `referenced SOP is not in this study: ${outside}` };
+      } catch (e) {
+        return { ok: false, error: `could not verify referenced SOPs: ${String(e)}` };
+      }
     }
     const study = ctx.studyUid;
     const body: AngioPluginSrRequest = { kind: req.kind, producer };
@@ -2465,16 +2512,30 @@ export function Viewer2D({
     }
   };
 
+  /** ROI が乗っているスライスの、このタイルのスタック内の番号（乗っていなければ undefined）。 */
+  const stackIndexOfRoi = (roiUid: string): number | undefined => {
+    const refId = (csAnnotation.state as { getAnnotation(uid: string): { metadata?: { referencedImageId?: string } } | undefined })
+      .getAnnotation(roiUid)?.metadata?.referencedImageId;
+    const i = refId ? imageIdsRef.current.indexOf(refId) : -1;
+    return i >= 0 ? i : undefined;
+  };
+
   /**
-   * 選択中（または指定）の ROI をクリップボードへ取る。取れた件数を返す。
+   * ROI をクリップボードへ取る（複数可）。取れた件数を返す。
    *
-   * <p>複数選択されていても**先頭の 1 件だけ**を取る。複数コピーは「貼ったときにどう並ぶか」を
-   * 決めないと使えず、いまその要件が無いので広げない。
+   * <p>貼ったときの並びは、コピー元の位置関係（面内の相対位置・スライス間の枚数差）をそのまま写す
+   * （`roiClipboard.retargetEntries` / `pasteRoisInto`）。宛先の患者・タイルが混ざっていないかの検査は、
+   * 全タイルを知っている呼び出し側（Viewer2DScreen）が先に済ませる。
    */
+  const copyRois = (roiUids: string[]): number =>
+    copyRoisToClipboard(roiUids, roiContextRef.current?.patientKey, stackIndexOfRoi);
+
+  /** 指定の 1 件、省略なら**選択中のうちこのタイルの ROI すべて**。取れたら true。 */
   const copyRoi = (roiUid?: string): boolean => {
-    const uid = roiUid ?? csAnnotation.selection.getAnnotationsSelected()?.[0];
-    if (!uid) return false;
-    return copyRoiToClipboard(uid, roiContextRef.current?.patientKey);
+    const uids = roiUid
+      ? [roiUid]
+      : (csAnnotation.selection.getAnnotationsSelected() ?? []).filter((u) => stackIndexOfRoi(u) !== undefined);
+    return uids.length > 0 && copyRois(uids) > 0;
   };
 
   const ownsRoi = (roiUid: string): boolean => {
@@ -2484,33 +2545,34 @@ export function Viewer2D({
   };
 
   /** 貼り付け/複製で共通の宛先情報。現在表示中のスライスへ置く。 */
-  const pasteContext = () => {
+  const pasteContext = (sliceIndex: number = indexRef.current) => {
     const v = vp();
-    const imageId = imageIdsRef.current[indexRef.current];
+    const imageId = imageIdsRef.current[sliceIndex];
     if (!v || !imageId) return null;
     const ctx = getViewerContext(viewportIdRef.current);
     return {
       imageId,
-      viewport: v as unknown as Parameters<typeof pasteRoiInto>[0]["viewport"],
-      sliceIndex: indexRef.current,
+      viewport: v as unknown as PasteContext["viewport"],
+      sliceIndex,
       patientKey: roiContextRef.current?.patientKey ?? "",
       seriesLabel: roiContextRef.current?.seriesLabel,
       // 🔴 貼り付け先スライスの **local** scope。global(z:"all") を引き継がない。
       scope: ctx
-        ? { studyUid: ctx.studyUid, seriesUid: ctx.seriesUid, z: indexRef.current, c: ctx.c, t: ctx.t }
+        ? { studyUid: ctx.studyUid, seriesUid: ctx.seriesUid, z: sliceIndex, c: ctx.c, t: ctx.t }
         : undefined,
       labelFor: (label: string | undefined, tool: string) => `${label || tool} ${t("roi.copySuffix")}`,
     };
   };
 
   /** 貼り付け後の後始末（描画・選択・保存予約・「どこへ行ったか」の通知）。 */
-  const afterPaste = (uid: string, imageId: string): void => {
+  const afterPaste = (uids: string[], imageId: string): void => {
     try {
       csToolsUtilities.triggerAnnotationRenderForViewportIds([viewportIdRef.current]);
     } catch {
       /* 破棄途中は無視 */
     }
-    selectRoi(uid);
+    // 貼ったものを選択状態にする（そのまま続けて動かしたり、コピーし直したりできる）。
+    uids.forEach((u, i) => selectRoi(u, i === 0));
     // 一覧から複製したときは「今どのスライスを見ているか」が視野の外にあるので、
     // 複製先を必ず見せる（押したのに何も起きていないように見えるのを防ぐ）。
     emitRoiReveal({
@@ -2539,17 +2601,25 @@ export function Viewer2D({
    * <p>🔴 **失敗を黙って落とさない。** 「押したのに何も起きない」は、この機能で最も質の悪い
    * 出方（利用者は押せていないのかコピーできていないのか判断できない）。
    */
-  const pasteRoi = (): string | null => {
-    if (!hasClipboardRoi()) return null;
-    if (roiEditBlocked()) return null; // 理由は roiEditBlocked が出す
+  const pasteRoi = (): string[] => {
+    if (!hasClipboardRoi()) return [];
+    if (roiEditBlocked()) return []; // 理由は roiEditBlocked が出す
     const ctx = pasteContext();
-    const res = ctx ? pasteRoiInto(ctx) : null;
-    if (!res?.uid || !ctx) {
+    // 基準（コピーした ROI のうち最も若いスライス）を現在のスライスに置き、枚数の差を保って他を置く。
+    const res = ctx
+      ? pasteRoisInto((offset) => {
+          const i = indexRef.current + offset;
+          return i >= 0 && i < imageIdsRef.current.length ? pasteContext(i) : null;
+        })
+      : null;
+    if (!res?.uids.length || !ctx) {
       emitToast(t(res?.reason === "outOfImage" ? "roi.paste.outOfImage" : "roi.paste.failed"));
-      return null;
+      return [];
     }
-    afterPaste(res.uid, ctx.imageId);
-    return res.uid;
+    afterPaste(res.uids, ctx.imageId);
+    if (res.skipped > 0) emitToast(t("roi.paste.partial", { n: res.uids.length, m: res.skipped }));
+    else if (res.uids.length > 1) emitToast(t("roi.paste.doneN", { n: res.uids.length }));
+    return res.uids;
   };
 
   /** ROI をその場で複製する（クリップボードの中身を壊さない）。 */
@@ -2561,7 +2631,7 @@ export function Viewer2D({
       emitToast(t(res?.reason === "outOfImage" ? "roi.paste.outOfImage" : "roi.paste.failed"));
       return null;
     }
-    afterPaste(res.uid, ctx.imageId);
+    afterPaste([res.uid], ctx.imageId);
     return res.uid;
   };
 
@@ -2590,7 +2660,21 @@ export function Viewer2D({
     const maxExtent = maxExtentFromImage(plane?.rows, plane?.columns, plane?.rowPixelSpacing, plane?.columnPixelSpacing);
     if (tol === null || maxExtent === null || !cam.focalPoint || !cam.viewPlaneNormal) return { ok: false, reason: "no-geometry" };
     let creq = req;
-    if (req.centerView !== undefined) {
+    const contour = isContourCreateTool(req.tool);
+    if (contour && req.verticesView !== undefined) {
+      // 割合 → LPS（表示の見たまま）。他の頂点指定との併用は bad-request
+      const vv = req.verticesView;
+      const canvas = v.getCanvas();
+      if (req.verticesLps !== undefined || req.verticesPx !== undefined || !Array.isArray(vv) || !canvas.clientWidth || !canvas.clientHeight) return { ok: false, reason: "bad-request" };
+      const lps: [number, number, number][] = [];
+      for (const p of vv) {
+        if (!Array.isArray(p) || p.length !== 2 || !p.every((n) => typeof n === "number" && Number.isFinite(n) && n >= 0 && n <= 1)) return { ok: false, reason: "bad-request" };
+        const w = v.canvasToWorld([p[0] * canvas.clientWidth, p[1] * canvas.clientHeight] as Types.Point2);
+        if (!w || !w.every((n) => Number.isFinite(n))) return { ok: false, reason: "no-geometry" };
+        lps.push([w[0], w[1], w[2]]);
+      }
+      creq = { tool: req.tool, label: req.label, verticesLps: lps };
+    } else if (req.centerView !== undefined) {
       const cv = req.centerView;
       const canvas = v.getCanvas();
       if (req.centerLps !== undefined || req.centerPx !== undefined || !Array.isArray(cv) || cv.length !== 2 || !cv.every((n) => typeof n === "number" && Number.isFinite(n) && n >= 0 && n <= 1) || !canvas.clientWidth || !canvas.clientHeight) {
@@ -2600,7 +2684,7 @@ export function Viewer2D({
       if (!w || !w.every((n) => Number.isFinite(n))) return { ok: false, reason: "no-geometry" };
       creq = { tool: req.tool, radiiMm: req.radiiMm, label: req.label, centerLps: [w[0], w[1], w[2]] };
     }
-    const handles = buildRoiHandles(creq, {
+    const geom: RoiCreateGeometry = {
       worldToCanvas: (p) => {
         const c = v.worldToCanvas(p as Types.Point3);
         return c && Number.isFinite(c[0]) && Number.isFinite(c[1]) ? [c[0], c[1]] : null;
@@ -2614,7 +2698,8 @@ export function Viewer2D({
       pixelToWorld: makePixelToWorld(ctx.imageId),
       sliceToleranceMm: tol,
       maxExtentMm: maxExtent,
-    });
+    };
+    const handles = contour ? buildContourVertices(creq, geom) : buildRoiHandles(creq, geom);
     if (!handles.ok) return handles;
     const sop = sopFromImageId(ctx.imageId);
     if (!sop) return { ok: false, reason: "failed" };
@@ -2629,6 +2714,17 @@ export function Viewer2D({
       label,
       custom: buildPluginMeta(by.pluginId, { created: "1" }),
     };
+    // 輪郭系は本体の手描きと同じツール名・保存形にする（復元・統計・ROI マネージャが同じ経路で扱う）
+    if (req.tool === "PolygonROI") {
+      saved.tool = CONTOUR_TOOL_NAMES.polygon;
+      saved.splineType = SPLINE_TYPE_LINEAR;
+      saved.isOpenContour = false;
+    } else if (req.tool === "FreehandROI") {
+      saved.tool = CONTOUR_TOOL_NAMES.freehand;
+      saved.polyline = handles.points;
+      saved.points = [handles.points[0], handles.points[handles.points.length - 1]];
+      saved.isOpenContour = false;
+    }
     if (frame !== null) saved.frame = frame;
     if (ctx.scope) {
       saved.scope = ctx.scope;
@@ -2641,7 +2737,7 @@ export function Viewer2D({
     if (!addSavedRoiToViewport(saved, ctx.imageId, ctx.viewport, { sliceIndex: ctx.sliceIndex, patientKey: ctx.patientKey, seriesLabel: ctx.seriesLabel })) {
       return { ok: false, reason: "failed" };
     }
-    afterPaste(uid, ctx.imageId);
+    afterPaste([uid], ctx.imageId);
     return { ok: true, roiUid: uid, centerLps: handles.centerLps };
   };
 
@@ -2659,6 +2755,21 @@ export function Viewer2D({
     vp()?.render();
     const pk = roiContextRef.current?.patientKey;
     if (pk) scheduleRoiSave(pk);
+    return true;
+  };
+
+  /** そのプラグインが `showLabelVolume` で出した Mask だけを消す（出自が違う・ロック中は false）。 */
+  const removeLabelVolume: ViewerCommands["removeLabelVolume"] = (segmentationId, pluginId) => {
+    if (typeof segmentationId !== "string" || !isLabelVolumeOf(segmentationId, pluginId)) return false;
+    if (isRoiLocked(segmentationId)) return false;
+    try {
+      csSeg.removeSegmentation(segmentationId);
+    } catch {
+      return false;
+    }
+    deleteRoiMaskMeta(segmentationId);
+    forgetLabelVolume(segmentationId);
+    vp()?.render();
     return true;
   };
 
@@ -2704,7 +2815,7 @@ export function Viewer2D({
     }
     const imageId = (csAnnotation.state.getAnnotation(r.uid) as { metadata?: { referencedImageId?: string } } | undefined)
       ?.metadata?.referencedImageId;
-    if (imageId) afterPaste(r.uid, imageId);
+    if (imageId) afterPaste([r.uid], imageId);
     return r.uid;
   };
 
@@ -2721,27 +2832,27 @@ export function Viewer2D({
     fit, reset, rotate90, flipH, flipV, invert: toggleInvert, applyLut, getLutData, setWindowLevel, resetWindow,
     getWindowState, getSuvContext, getTargetInfo, getViewState, getPixelData, showOverlay, clearOverlay,
     importLabelVolume: importLabelVolumeCmd,
-    getSpatialCalibration, getXaState, getXaCine,
+    getSpatialCalibration, getXaState, getXaCine, getXaGeometry,
     getStackImageIds: () => [...imageIdsRef.current],
     validateDerivedSeries, saveDerivedSeries, saveStructuredReport, saveAngioReport, savePresentationState,
     publishAnalysisResult: publishPluginAnalysis,
     setActiveTool, setBrushSize, setWandTolerance,
     getRois, getRoiMeta, setRoiMeta, clearAnnotations, selectRoi,
-    copyRoi, ownsRoi, pasteRoi, duplicateRoi, convertMeasureToRoi: convertMeasureToRoiCmd, createRoi, removeCreatedRoi,
+    copyRoi, copyRois, ownsRoi, pasteRoi, duplicateRoi, convertMeasureToRoi: convertMeasureToRoiCmd, createRoi, removeCreatedRoi, removeLabelVolume,
     undo, redo,
   });
   commandsRef.current = {
     fit, reset, rotate90, flipH, flipV, invert: toggleInvert, applyLut, getLutData, setWindowLevel, resetWindow,
     getWindowState, getSuvContext, getTargetInfo, getViewState, getPixelData, showOverlay, clearOverlay,
     importLabelVolume: importLabelVolumeCmd,
-    getSpatialCalibration, getXaState, getXaCine,
+    getSpatialCalibration, getXaState, getXaCine, getXaGeometry,
     // 重畳・派生シリーズ保存・貸したビューポートが**同じ並び**を見るための入口（H31）。
     getStackImageIds: () => [...imageIdsRef.current],
     validateDerivedSeries, saveDerivedSeries, saveStructuredReport, saveAngioReport, savePresentationState,
     publishAnalysisResult: publishPluginAnalysis,
     setActiveTool, setBrushSize, setWandTolerance,
     getRois, getRoiMeta, setRoiMeta, clearAnnotations, selectRoi,
-    copyRoi, ownsRoi, pasteRoi, duplicateRoi, convertMeasureToRoi: convertMeasureToRoiCmd, createRoi, removeCreatedRoi,
+    copyRoi, copyRois, ownsRoi, pasteRoi, duplicateRoi, convertMeasureToRoi: convertMeasureToRoiCmd, createRoi, removeCreatedRoi, removeLabelVolume,
     undo, redo,
   };
   useEffect(() => {
@@ -2766,6 +2877,7 @@ export function Viewer2D({
       getSpatialCalibration: () => commandsRef.current.getSpatialCalibration(),
       getXaState: () => commandsRef.current.getXaState(),
       getXaCine: () => commandsRef.current.getXaCine(),
+      getXaGeometry: () => commandsRef.current.getXaGeometry(),
       getPixelData: (o) => commandsRef.current.getPixelData(o),
       getStackImageIds: () => commandsRef.current.getStackImageIds(),
       showOverlay: (o) => commandsRef.current.showOverlay(o),
@@ -2787,11 +2899,13 @@ export function Viewer2D({
       clearAnnotations: (s) => commandsRef.current.clearAnnotations(s),
       convertMeasureToRoi: (u) => commandsRef.current.convertMeasureToRoi(u),
       copyRoi: (u) => commandsRef.current.copyRoi(u),
+      copyRois: (u) => commandsRef.current.copyRois(u),
       ownsRoi: (u) => commandsRef.current.ownsRoi(u),
       pasteRoi: () => commandsRef.current.pasteRoi(),
       duplicateRoi: (u) => commandsRef.current.duplicateRoi(u),
       createRoi: (r, b) => commandsRef.current.createRoi(r, b),
       removeCreatedRoi: (u, p) => commandsRef.current.removeCreatedRoi(u, p),
+      removeLabelVolume: (s, p) => commandsRef.current.removeLabelVolume(s, p),
       undo: () => commandsRef.current.undo(),
       redo: () => commandsRef.current.redo(),
     });
@@ -2839,9 +2953,14 @@ export function Viewer2D({
     if (!patientKey || !imageIds.length) return;
     let cancelled = false;
     void loadRoisCached(patientKey).then((parsed) => {
-      if (cancelled || !parsed.rois.length) return;
+      if (cancelled) return;
       const v = vp();
       if (!v) return;
+      // 塗り ROI（マスク）は別テーブル。形の ROI・球が 1 件も無い患者でも戻す。
+      void restoreMasks(patientKey, v);
+      if (!parsed.rois.length && !parsed.spheres.length) return;
+      // 球は Cornerstone の annotation ではなく自前のストア。スタックに参照スライスがある球だけ戻す。
+      restoreSpheresIntoStack(parsed.spheres, imageIdsRef.current, patientKey, seriesLabel);
       const n = restoreRoisIntoStack(parsed.rois, imageIdsRef.current, v, patientKey, seriesLabel);
       if (n > 0) {
         try {
@@ -2865,10 +2984,11 @@ export function Viewer2D({
 
   // DICOM 属性テキストオーバーレイ（4 隅、設定可能）。設定 or スライス変化(info)で再解決。
   const overlayCfg = useOverlayConfig();
+  const dateFmt = useDateFormat(); // 日付・時刻の書式が変わったら再解決する
   const dicomText = useMemo(
     () => (ov.text ? resolveOverlay(overlayCfg, imageIds[imageIndex]) : null),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [ov.text, overlayCfg, imageIds, imageIndex, info],
+    [ov.text, overlayCfg, dateFmt, imageIds, imageIndex, info],
   );
 
   // SUV 校正済み(PET)なら SUV 値・単位・W/L を SUV 空間で表示する（本家準拠）。
@@ -3109,6 +3229,13 @@ export function Viewer2D({
             </span>
           ) : (
             <StatusItem testId="status-value" label={t("viewer.status.value")} value={cursorValue} minWidth="7ch" />
+          )}
+          {layerSamples.length > 0 && (
+            <StatusItem
+              testId="status-value-layers"
+              label={t("viewer.status.valueLayers")}
+              value={layerSamples.map((l) => `${l.label} ${l.value == null ? "—" : fmtValue(l.value)}`).join(" / ")}
+            />
           )}
           <StatusItem testId="status-xy" label={t("viewer.status.xy")} value={cursorXY} minWidth="12ch" />
           </div>

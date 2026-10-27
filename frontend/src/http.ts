@@ -74,6 +74,12 @@ export async function extractErrorMessage(res: Response): Promise<string> {
   return `HTTP ${res.status}`;
 }
 
+/**
+ * `keepalive: true` の fetch の本体の上限（ブラウザは合計 64 KiB まで。超えると要求ごと失敗する）。
+ * 余裕を見て少し下げてある。閉じる・再読み込みの最中でも送れるのは、これ以下の本体だけ。
+ */
+export const KEEPALIVE_MAX_BYTES = 60_000;
+
 export const httpGet = <T>(path: string): Promise<T> => request<T>(path);
 
 export const httpSend = <T = void>(path: string, method: string, body?: unknown): Promise<T> =>

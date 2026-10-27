@@ -17,11 +17,12 @@ import { MODALITY_OPTIONS } from "../mainscreen/SearchPanel";
 import { TriCheckbox } from "../mainscreen/TriCheckbox";
 import { imageCount } from "../imageCount";
 import { isEligible, pickKey, studyState, toResult, toggleSeries, toggleStudy, type PickedSeries } from "./seriesPickLogic";
+import { formatDicomDate } from "../i18n/dateFormat";
 
 const SEARCH_DEBOUNCE_MS = 250;
 
 /** "YYYYMMDD" → "YYYY-MM-DD"（表示用）。形が違えばそのまま。 */
-const showDate = (v: string | null): string => (v && /^\d{8}$/.test(v) ? `${v.slice(0, 4)}-${v.slice(4, 6)}-${v.slice(6, 8)}` : v ?? "");
+const showDate = (v: string | null): string => (v ? formatDicomDate(v) : "");
 const fromInputDate = (v: string) => v.replace(/-/g, "");
 
 export function SeriesPickDialog({
@@ -243,7 +244,7 @@ export function SeriesPickDialog({
   );
 }
 
-const backdrop: React.CSSProperties = { position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 2000 };
+const backdrop: React.CSSProperties = { position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 9000 };
 const panel: React.CSSProperties = { width: 880, maxWidth: "96vw", height: 640, maxHeight: "92vh", background: "#fff", borderRadius: 8, display: "flex", flexDirection: "column", fontSize: 13, color: "#222", boxShadow: "0 10px 40px rgba(0,0,0,0.3)" };
 const titleStyle: React.CSSProperties = { fontSize: 15, fontWeight: 600, padding: "12px 16px", borderBottom: "1px solid #e6eaee" };
 const filterBar: React.CSSProperties = { display: "flex", gap: 8, padding: "8px 16px 0", flexWrap: "wrap", alignItems: "center" };

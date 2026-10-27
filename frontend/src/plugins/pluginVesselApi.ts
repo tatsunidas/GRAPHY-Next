@@ -26,6 +26,7 @@ import {
   getVesselModel as storeGetVesselModel,
   listVesselModels as storeListVesselModels,
   putVesselAnalysis as storePutVesselAnalysis,
+  registerVesselModel as storeRegisterVesselModel,
   type XaVesselAnalysis,
   type XaVesselModel,
 } from "../viewer/xaVesselModelStore";
@@ -110,6 +111,139 @@ export function getVesselModel(runId?: string): XaVesselModel | null {
 }
 
 export type VesselAnalysisResult = { ok: boolean; error?: string };
+
+/** プラグインが渡すモデル。`runId`・`at`・`producer` は host が決めるので含まない。 */
+export type XaVesselModelInput = Omit<XaVesselModel, "runId" | "at" | "producer"> & {
+  /** 同じ鍵で登録し直すと置き換わる（解析し直したら新しいほうが正しい）。1〜200 文字。 */
+  runKey: string;
+};
+
+export type RegisterVesselModelResult = { ok: true; runId: string } | { ok: false; error: string };
+
+/** 1 モデルの総点数の上限（点列の無制限な受け入れを避ける。暫定）。 */
+export const MAX_VESSEL_MODEL_POINTS = 20000;
+
+const MODEL_KINDS = ["xa-qca3d", "xa-bifurcation3d"] as const;
+const TIERS = ["calibrated", "approximate", "uncalibrated"] as const;
+const METHODS = ["half-max", "densitometric", "mixed"] as const;
+
+const isNum = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
+const isStr = (v: unknown): v is string => typeof v === "string";
+
+/**
+ * H73: 外部から来るモデルの形を検査する。**通らないものは理由付きで返す**（黙って直さない・落とさない）。
+ *
+ * <p>🔴 測れなかった点の径は `null`（0 や補間値で埋めない）。未校正（`diameterCalibrated: false`）なら**全点 null**
+ * でなければ拒否する——px の値が mm の顔で FFR の入力に入る事故を、入口で止める。
+ */
+export function validateVesselModelInput(input: XaVesselModelInput | null | undefined): string | null {
+  if (!input || typeof input !== "object") return "model is required";
+  if (!isStr(input.runKey) || input.runKey.length < 1 || input.runKey.length > 200) return "runKey must be 1-200 chars";
+  if (!(MODEL_KINDS as readonly unknown[]).includes(input.kind)) return `unknown kind: ${String(input.kind)}`;
+  if (!isStr(input.label) || input.label.trim() === "") return "label is required";
+  if (input.stableKey !== null && input.stableKey !== undefined && !isStr(input.stableKey)) return "stableKey must be string or null";
+  const o = input.orientation;
+  if (o !== undefined) {
+    if (!o || typeof o !== "object") return "orientation must be an object";
+    if (o.proximalFirst !== true && o.proximalFirst !== null) return "orientation.proximalFirst must be true or null";
+    if (o.source !== "user" && o.source !== null) return "orientation.source must be 'user' or null";
+  }
+
+  const segs = input.segments;
+  if (!Array.isArray(segs) || segs.length < 1) return "segments must be a non-empty array";
+  const ids = new Set<string>();
+  let total = 0;
+  for (const s of segs) {
+    if (!s || typeof s !== "object" || !isStr(s.id) || s.id === "") return "segment.id is required";
+    if (ids.has(s.id)) return `duplicate segment id: ${s.id}`;
+    ids.add(s.id);
+  }
+  const cal = input.calibration;
+  if (!cal || typeof cal !== "object" || typeof cal.diameterCalibrated !== "boolean") return "calibration.diameterCalibrated is required";
+  for (const s of segs) {
+    if (s.parentId !== null && (!isStr(s.parentId) || !ids.has(s.parentId) || s.parentId === s.id)) {
+      return `segment ${s.id}: parentId must be null or another segment's id`;
+    }
+    if (!Array.isArray(s.points) || s.points.length < 2) return `segment ${s.id}: at least 2 points are required`;
+    for (const p of s.points) {
+      if (!Array.isArray(p) || p.length !== 3 || !p.every(isNum)) return `segment ${s.id}: points must be finite [x,y,z]`;
+    }
+    if (!Array.isArray(s.diameterMm) || s.diameterMm.length !== s.points.length) {
+      return `segment ${s.id}: diameterMm must have one entry per point`;
+    }
+    for (const d of s.diameterMm) {
+      if (d !== null && !(isNum(d) && d > 0)) return `segment ${s.id}: diameterMm entries must be null or a positive finite number`;
+      if (d !== null && !cal.diameterCalibrated) return `segment ${s.id}: diameterMm must be all null when diameterCalibrated is false`;
+    }
+    total += s.points.length;
+  }
+  if (total > MAX_VESSEL_MODEL_POINTS) return `too many points (max ${MAX_VESSEL_MODEL_POINTS})`;
+
+  if (!Array.isArray(cal.sources) || !cal.sources.every(isStr)) return "calibration.sources must be strings";
+  if (!Array.isArray(cal.tiers) || !cal.tiers.every((t) => (TIERS as readonly unknown[]).includes(t))) return "calibration.tiers is invalid";
+  if (cal.diameterMethod !== null && !(METHODS as readonly unknown[]).includes(cal.diameterMethod)) return "calibration.diameterMethod is invalid";
+
+  const pv = input.provenance;
+  if (!pv || typeof pv !== "object") return "provenance is required";
+  if (!isStr(pv.studyUid)) return "provenance.studyUid is required";
+  if (!Array.isArray(pv.seriesUids) || !pv.seriesUids.every(isStr)) return "provenance.seriesUids must be strings";
+  if (!Array.isArray(pv.sopUids) || !pv.sopUids.every(isStr)) return "provenance.sopUids must be strings";
+  if (!Array.isArray(pv.angles) || !pv.angles.every((a) => Array.isArray(a) && a.length === 2 && a.every(isNum))) return "provenance.angles must be [primary, secondary] pairs";
+  if (typeof pv.angleCorrected !== "boolean") return "provenance.angleCorrected is required";
+  if (!Array.isArray(pv.visibleFractions) || !pv.visibleFractions.every((v) => v === null || isNum(v))) return "provenance.visibleFractions must be numbers or null";
+  if (!isNum(pv.anchorReprojectionPx)) return "provenance.anchorReprojectionPx must be a finite number";
+  if (!isNum(pv.separationDeg)) return "provenance.separationDeg must be a finite number";
+  if (!Array.isArray(pv.frameIndices) || !pv.frameIndices.every((v) => isNum(v) && Number.isInteger(v) && v >= 0)) return "provenance.frameIndices must be non-negative integers";
+  return null;
+}
+
+/**
+ * H73: プラグインが作った 3D 血管モデルを登録する。出自（プラグイン）と `runId` は host が入れる。
+ * 同じ `runKey` は置き換える。登録はセッション限り（`xaVesselModelStore` と同じ）。
+ */
+export function registerPluginVesselModel(
+  input: XaVesselModelInput,
+  producer: PluginProducer,
+): RegisterVesselModelResult {
+  const error = validateVesselModelInput(input);
+  if (error) return { ok: false, error };
+  const runId = `plugin:${producer.id}:${input.runKey}`;
+  // 参照を持ち回らない（プラグインが後から書き換えると、登録済みのモデルが黙って変わる）。
+  const model: XaVesselModel = {
+    runId,
+    stableKey: input.stableKey ?? null,
+    orientation: input.orientation ?? { proximalFirst: null, source: null },
+    kind: input.kind,
+    label: input.label.trim(),
+    segments: input.segments.map((s) => ({
+      id: s.id,
+      points: s.points.map((p) => [p[0], p[1], p[2]] as [number, number, number]),
+      diameterMm: [...s.diameterMm],
+      parentId: s.parentId,
+    })),
+    calibration: {
+      diameterCalibrated: input.calibration.diameterCalibrated,
+      sources: [...input.calibration.sources],
+      tiers: [...input.calibration.tiers],
+      diameterMethod: input.calibration.diameterMethod,
+    },
+    provenance: {
+      studyUid: input.provenance.studyUid,
+      seriesUids: [...input.provenance.seriesUids],
+      sopUids: [...input.provenance.sopUids],
+      angles: input.provenance.angles.map((a) => [a[0], a[1]] as [number, number]),
+      angleCorrected: input.provenance.angleCorrected,
+      visibleFractions: [...input.provenance.visibleFractions],
+      anchorReprojectionPx: input.provenance.anchorReprojectionPx,
+      separationDeg: input.provenance.separationDeg,
+      frameIndices: [...input.provenance.frameIndices],
+    },
+    producer: { pluginId: producer.id, pluginName: producer.name, version: producer.version },
+    at: Date.now(),
+  };
+  storeRegisterVesselModel(model);
+  return { ok: true, runId };
+}
 
 /**
  * 入力の形を検査する。**通らないものは理由付きで返す**（黙って直さない・黙って落とさない）。

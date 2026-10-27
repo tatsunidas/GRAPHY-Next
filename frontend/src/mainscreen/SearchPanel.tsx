@@ -5,6 +5,18 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { type StudyFilters } from "../api";
 import { useI18n } from "../i18n/i18n";
+import { fetchSettings, saveSettings } from "../settings/settingsApi";
+import {
+  addDays,
+  buildSavedSearch,
+  extractSavedSearches,
+  resolveFilters,
+  sameFilters,
+  SAVED_SEARCH_PREFIX,
+  ymd,
+  type SavedDateMode,
+  type SavedSearch,
+} from "./savedSearch";
 
 /** チェックボックスグリッドに出すモダリティ候補（放射線でよく使うもの）。 */
 export const MODALITY_OPTIONS = [
@@ -12,16 +24,6 @@ export const MODALITY_OPTIONS = [
   "MG", "NM", "PT", "OT", "SC", "ES", "SM", "PR",
 ];
 
-/** Date → "YYYYMMDD"（ローカル日付）。 */
-function ymd(d: Date): string {
-  const p = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}`;
-}
-function addDays(base: Date, days: number): Date {
-  const d = new Date(base.getFullYear(), base.getMonth(), base.getDate());
-  d.setDate(d.getDate() + days);
-  return d;
-}
 /** "YYYYMMDD" ⇄ <input type=date> の "YYYY-MM-DD"。 */
 const toInputDate = (v: string) => (v.length === 8 ? `${v.slice(0, 4)}-${v.slice(4, 6)}-${v.slice(6, 8)}` : "");
 const fromInputDate = (v: string) => v.replace(/-/g, "");
@@ -51,6 +53,15 @@ export function SearchPanel({
   const [onlyMissing, setOnlyMissing] = useState(false);
   const [showModalityGrid, setShowModalityGrid] = useState(false);
 
+  // 保存した検索（設定ストアの search.saved.<id>）
+  const [savedList, setSavedList] = useState<SavedSearch[]>([]);
+  const [savedDropped, setSavedDropped] = useState(0);
+  const [savedId, setSavedId] = useState("");
+  const [saveOpen, setSaveOpen] = useState(false);
+  const [saveName, setSaveName] = useState("");
+  const [saveMode, setSaveMode] = useState<SavedDateMode>("absolute");
+  const [saveError, setSaveError] = useState("");
+
   const filters: StudyFilters = useMemo(() => {
     const f: StudyFilters = {};
     if (patientId.trim()) f.patientId = patientId.trim();
@@ -63,8 +74,31 @@ export function SearchPanel({
     return f;
   }, [patientId, patientName, dateFrom, dateTo, modalities, accession, onlyMissing]);
 
+  useEffect(() => {
+    let alive = true;
+    fetchSettings()
+      .then((map) => {
+        if (!alive) return;
+        const { items, dropped } = extractSavedSearches(map);
+        setSavedList(items);
+        setSavedDropped(dropped);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, []);
+
   const isEmpty = Object.keys(filters).length === 0;
   const filterKey = JSON.stringify(filters);
+  // 保存した検索を選んだまま、入力欄の条件がその内容から変わったら（「クリア」・手入力・期間ボタンなど）、
+  // 選択を「選択してください」に戻す。戻さないと、同じ項目を選び直しても値が変わらず、条件が戻らない。
+  useEffect(() => {
+    if (!savedId) return;
+    const s = savedList.find((x) => x.id === savedId);
+    if (!s || !sameFilters(filters, resolveFilters(s, new Date()))) setSavedId("");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filterKey]);
 
   // 入力を随時検知してリストを更新（デバウンス）。ただし無条件のときは自動検索しない
   //（無条件検索は明示の「検索」ボタンで確認を取ってから）。
@@ -115,6 +149,55 @@ export function SearchPanel({
   const toggleModality = (m: string) =>
     setModalities((prev) => (prev.includes(m) ? prev.filter((x) => x !== m) : [...prev, m]));
 
+  // 選んだ保存検索の条件で入力欄を全部置き換える（保存に無い項目は空に戻す）。相対の日付は今日を基準にする。
+  const applySaved = (id: string) => {
+    setSavedId(id);
+    const s = savedList.find((x) => x.id === id);
+    if (!s) return;
+    const f = resolveFilters(s, new Date());
+    setPatientId(f.patientId ?? "");
+    setPatientName(f.patientName ?? "");
+    setDateFrom(f.studyDateFrom ?? "");
+    setDateTo(f.studyDateTo ?? "");
+    setModalities(f.modality ? f.modality.split(",") : []);
+    setAccession(f.accessionNumber ?? "");
+    setOnlyMissing(f.missingPatientInfo === true);
+    if (Object.keys(f).length > 0) onSearchRef.current(f);
+  };
+
+  const saveCurrent = async () => {
+    const r = buildSavedSearch(saveName, saveMode, filters, new Date());
+    if (!r.ok) {
+      setSaveError(t(r.error === "name" ? "main.search.saved.errName" : "main.search.saved.errTooLong"));
+      return;
+    }
+    try {
+      await saveSettings({ [r.key]: r.value });
+    } catch {
+      setSaveError(t("main.search.saved.errSave"));
+      return;
+    }
+    setSavedList((prev) => [...prev, r.saved].sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id)));
+    setSavedId(r.saved.id);
+    setSaveOpen(false);
+    setSaveName("");
+    setSaveError("");
+  };
+
+  const deleteSaved = async () => {
+    if (!savedId) return;
+    try {
+      // 設定ストアに削除 API が無いので、空文字で上書きする（読む側は空を「無い」として扱う）。
+      await saveSettings({ [SAVED_SEARCH_PREFIX + savedId]: "" });
+    } catch {
+      setSaveError(t("main.search.saved.errSave"));
+      return;
+    }
+    setSavedList((prev) => prev.filter((x) => x.id !== savedId));
+    setSavedId("");
+    setSaveError("");
+  };
+
   const clear = () => {
     setPatientId("");
     setPatientName("");
@@ -128,6 +211,87 @@ export function SearchPanel({
   return (
     <div style={panel}>
       <h3 style={{ fontSize: 14, margin: "0 0 10px" }}>{t("main.search.title")}</h3>
+
+      <Field label={t("main.search.saved.title")}>
+        <div style={{ display: "flex", gap: 6 }}>
+          <select
+            data-testid="saved-search-select"
+            value={savedId}
+            onChange={(e) => applySaved(e.target.value)}
+            style={{ ...input, flex: 1, minWidth: 0 }}
+          >
+            <option value="">{t("main.search.saved.none")}</option>
+            {savedList.map((s) => (
+              <option key={s.id} value={s.id}>{s.name}</option>
+            ))}
+          </select>
+          <button
+            type="button"
+            data-testid="saved-search-delete"
+            disabled={!savedId}
+            onClick={deleteSaved}
+            style={{ ...btn, padding: "6px 8px" }}
+          >
+            {t("common.delete")}
+          </button>
+        </div>
+        <button
+          type="button"
+          data-testid="saved-search-save-open"
+          onClick={() => {
+            setSaveOpen((v) => !v);
+            setSaveError("");
+          }}
+          style={{ ...btn, width: "100%", marginTop: 6 }}
+        >
+          {t("main.search.saved.save")}
+        </button>
+        {saveOpen && (
+          <div style={saveBox}>
+            <input
+              data-testid="saved-search-name"
+              value={saveName}
+              onChange={(e) => setSaveName(e.target.value)}
+              placeholder={t("main.search.saved.name")}
+              style={input}
+            />
+            <select
+              data-testid="saved-search-mode"
+              value={saveMode}
+              onChange={(e) => setSaveMode(e.target.value as SavedDateMode)}
+              style={{ ...input, marginTop: 6 }}
+            >
+              <option value="absolute">{t("main.search.saved.mode.absolute")}</option>
+              <option value="today">{t("main.search.saved.mode.today")}</option>
+              <option value="last7">{t("main.search.saved.mode.last7")}</option>
+              <option value="last30">{t("main.search.saved.mode.last30")}</option>
+            </select>
+            {(filters.patientId || filters.patientName) && (
+              <div data-testid="saved-search-phi" style={{ fontSize: 11, color: "#a15c00", marginTop: 6 }}>
+                {t("main.search.saved.phi")}
+              </div>
+            )}
+            <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+              <button type="button" data-testid="saved-search-save" onClick={saveCurrent} style={{ ...btn, flex: 1 }}>
+                {t("common.save")}
+              </button>
+              <button type="button" onClick={() => setSaveOpen(false)} style={btn}>
+                {t("common.cancel")}
+              </button>
+            </div>
+          </div>
+        )}
+        {saveError && (
+          <div data-testid="saved-search-error" style={{ fontSize: 11, color: "#b42318", marginTop: 6 }}>
+            {saveError}
+          </div>
+        )}
+        {savedDropped > 0 && (
+          <div data-testid="saved-search-dropped" style={{ fontSize: 11, color: "#a15c00", marginTop: 6 }}>
+            {t("main.search.saved.dropped", { n: savedDropped })}
+          </div>
+        )}
+      </Field>
 
       <Field label={t("field.patientId")}>
         <input
@@ -270,6 +434,13 @@ const btn: React.CSSProperties = {
   background: "#fff",
   cursor: "pointer",
   fontSize: 13,
+};
+const saveBox: React.CSSProperties = {
+  marginTop: 6,
+  padding: 8,
+  border: "1px solid #d6dde4",
+  borderRadius: 6,
+  background: "#fff",
 };
 const chip: React.CSSProperties = {
   flex: 1,

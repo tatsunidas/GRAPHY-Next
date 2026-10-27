@@ -20,6 +20,8 @@ import type { UiAction, UiProposal } from "./chatState";
 import { isPluginToolName, validatePluginArgs, type PluginToolEntry, type PluginToolResult } from "./pluginTools";
 import { PLAN_TOOL, validatePlan } from "./robot/planModel";
 import type { MacroStep } from "./macros/macroModel";
+import type { Skill } from "./skills/skillModel";
+import { PROPOSE_SKILL_TOOL, START_SKILL_TOOL, validateSkillDraft, validateStartSkill } from "./skills/skillTools";
 
 /**
  * 1 質問あたりの往復の上限。暴走（同じ操作を延々と繰り返す）を止めるための目安で、データから決めた値ではない。
@@ -39,6 +41,14 @@ export interface LoopDeps {
   onProposal(p: UiProposal): void;
   /** ロボットモード: 検証済みの計画（実行は利用者の承認後。ここでは何も実行しない）。 */
   onPlan?(p: { id: string; title: string; steps: MacroStep[] }): void;
+  /** チャット: 今回モデルへ見せたスキル（検証済み）。無ければ start_skill / propose_skill は実行しない。 */
+  skills?: readonly Skill[];
+  /** 利用者のスキルの id（下書きの衝突検査用）。 */
+  skillIds?: readonly string[];
+  /** 開始の提案（実行はしない。利用者が［スキル］パネルで［開始］を押したときだけ）。 */
+  onSkillStart?(p: { id: string; skillId: string; inputs: Record<string, unknown> }): void;
+  /** スキルの下書き（検証済み。保存は利用者が［保存］を押したときだけ）。 */
+  onSkillDraft?(p: { id: string; skill: Skill }): void;
   /** "robot" のとき操作を直接実行せず、計画だけ受け付ける。 */
   mode?: "chat" | "robot";
   onRoundDone(text?: string): void;
@@ -86,6 +96,19 @@ async function runOne(call: AiToolCall, deps: LoopDeps): Promise<string> {
     if (!v.ok) return JSON.stringify({ ok: false, error: v.error });
     deps.onProposal({ id: call.id, title: v.title, steps: v.steps });
     return JSON.stringify({ ok: true, note: "shown to the user; nothing was executed" });
+  }
+  if (call.name === START_SKILL_TOOL || call.name === PROPOSE_SKILL_TOOL) {
+    if (!deps.skills) return JSON.stringify({ ok: false, error: "unknown-tool" });
+    if (call.name === START_SKILL_TOOL) {
+      const v = validateStartSkill(call.args, deps.skills);
+      if (!v.ok) return JSON.stringify({ ok: false, error: v.error });
+      deps.onSkillStart?.({ id: call.id, skillId: v.skillId, inputs: v.inputs });
+      return JSON.stringify({ ok: true, note: "suggestion shown to the user; nothing runs until they press Start in the Skills panel" });
+    }
+    const d = validateSkillDraft(call.args, deps.skillIds ?? deps.skills.map((s) => s.id), deps.pluginTools);
+    if (!d.ok) return JSON.stringify({ ok: false, error: d.error });
+    deps.onSkillDraft?.({ id: call.id, skill: d.skill });
+    return JSON.stringify({ ok: true, note: "draft shown to the user; nothing is saved until they press Save" });
   }
   if (isPluginToolName(call.name)) return runPluginTool(call, deps);
   if (!isActionId(call.name)) return JSON.stringify({ ok: false, error: "unknown-tool" });

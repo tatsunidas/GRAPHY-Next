@@ -26,13 +26,15 @@ import type {
 import type { Vec3 } from "../viewer/reslice";
 import type { PluginCurvedMprResult, PluginCurvedMprSpec } from "./pluginCurvedMprApi";
 import type { PluginSeriesPanelHandle, PluginSeriesPanelOptions } from "./pluginSeriesPanelApi";
-import type { ViewerDerivedSeriesRequest, ViewerDerivedSeriesResult, ViewerOverlay, ViewerPixelDataOptions, ViewerRoiMeasurements, ViewerTarget, ViewerAngioReportRequest, ViewerPresentationStateRequest, ViewerTilePixelData, ViewerTileSpatialCalibration, ViewerTileXaState, ViewerTileXaCine, ViewerTileRoi, ViewerTileViewState, ViewerSrMeasurementGroup, ViewerSrRequest, ViewerSrResult, ViewerLabelVolume, ViewerLabelVolumeResult } from "../viewer/viewerCommands";
+import type { ViewerDerivedSeriesRequest, ViewerDerivedSeriesResult, ViewerOverlay, ViewerPixelDataOptions, ViewerRoiMeasurements, ViewerTarget, ViewerAngioReportRequest, ViewerPresentationStateRequest, ViewerTilePixelData, ViewerTileSpatialCalibration, ViewerTileXaState, ViewerTileXaCine, ViewerTileXaGeometry, ViewerTileRoi, ViewerTileViewState, ViewerSrMeasurementGroup, ViewerSrRequest, ViewerSrResult, ViewerLabelVolume, ViewerLabelVolumeResult } from "../viewer/viewerCommands";
 
 export type { PluginStoreDoc, PluginStoreSaveResult };
 
 import type {
+  RegisterVesselModelResult,
   VesselAnalysisResult,
   XaVesselAnalysisInput,
+  XaVesselModelInput,
   XaVesselModel,
   XaVesselModelSummary,
 } from "./pluginVesselApi";
@@ -65,6 +67,8 @@ export type {
   XaVesselProvenance,
   XaVesselSegment,
   VesselAnalysisResult,
+  RegisterVesselModelResult,
+  XaVesselModelInput,
 } from "./pluginVesselApi";
 export type { PluginSeriesPanelHandle, PluginSeriesPanelOptions } from "./pluginSeriesPanelApi";
 export type { AiGenerationOptions, AiGenerationOutcome } from "./pluginAiApi";
@@ -230,6 +234,8 @@ export interface PluginAiToolSpec {
   description: string;
   effect: "read" | "display" | "write";
   parameters: Record<string, unknown>;
+  /** 1 回の実行待ち（秒、5〜900）。省略時は 30 秒。backend が範囲を検査する。 */
+  timeoutSec?: number;
 }
 
 interface PluginHostBase {
@@ -704,6 +710,39 @@ export interface Viewer2DPluginHost extends PluginHostBase {
    */
   getXaCine: (tileId?: string) => ViewerTileXaCine | null;
   /**
+   * 対象タイルの **XA 投影幾何**（撮影角度・SID・SOD・検出器のピクセル間隔・主点）（H41）。
+   * XA / XRF でなければ null。`tileId` 省略時は対象の先頭タイル。
+   *
+   * <p>2 方向のアンギオを対応付ける・3D に再構成するのに要る値。**読めないときは `geometry` が null で、
+   * 理由が `missing` に入る**（`noDataSet` / `noAngles` / `noDistances` / `noImagerSpacing` / `noImageSize`）。
+   * 0 や既定値で埋めない——埋めた角度は、もっともらしい線を引いてしまう。
+   *
+   * <p>🔴 `imagerSpacingMm` は**検出器面**の値で、`getSpatialCalibration` の校正済み mm/px とは別物
+   * （3D 再構成は校正値を使わない。二重補正になる）。
+   *
+   * <p>⚠️ 主点は**画像中心と仮定**している（`FieldOfView*` による切り出しや装置側の回転・反転があるとずれる）。
+   * dataSet が**プリウォーム前**なら `noDataSet`。シネを一度開けば温まる。
+   */
+  getXaGeometry: (tileId?: string) => ViewerTileXaGeometry | null;
+  /**
+   * **開いていない XA シリーズ**の幾何・フレーム数・画像サイズ（H42）。2 方向（A・B）を 1 つのプラグイン窓で
+   * 同時に扱うための口。`getXaGeometry` はタイル単位、こちらはシリーズ単位。
+   *
+   * <p>読めない部分は null（理由は `missing`）。0 や既定値で埋めない。対象は**先頭インスタンス**
+   * （XA のシネは 1 インスタンスのマルチフレーム）で、複数あれば `instanceCount` が 1 を超える。
+   * `studyUid` 省略時は開いているタイルから解決。患者をまたぐ参照は拒否。
+   */
+  readXaSeries: (ref: PluginSeriesRef) => Promise<import("./pluginXaSeriesApi").PluginXaSeriesInfo | null>;
+  /**
+   * **開いていない XA シリーズの 1 フレーム**の校正済み画素（H42）。`frameIndex` は 0 起点。
+   * 範囲外は null（黙って別フレームにならない）。DSA（差分）は掛けない＝ネイティブのフレーム。
+   * `loadVolume` は IPP の無い XA シネに使えない（1 フレーム分しか返らない）ので、これを使う。
+   */
+  readXaSeriesFrame: (
+    ref: PluginSeriesRef,
+    frameIndex: number,
+  ) => Promise<import("./pluginXaSeriesApi").PluginXaSeriesFrame | null>;
+  /**
    * **再構成済み 3D 血管モデルの一覧**（H11）。新しい順。まだ 1 件も無ければ空配列。
    *
    * <p>点列を含まない要約だけを返す（モデル本体は `getVesselModel()` で取る）。
@@ -745,6 +784,18 @@ export interface Viewer2DPluginHost extends PluginHostBase {
    * host が凡例の脇に必ず出す。
    */
   putVesselAnalysis: (runId: string, result: XaVesselAnalysisInput) => VesselAnalysisResult;
+  /**
+   * **プラグインが作った 3D 血管モデルを登録する**（H73）。本体の 3D 表示と、`listVesselModels` /
+   * `getVesselModel`（QFR など他の解析）が読む登録簿へ入る。同じ `runKey` は置き換える。
+   * 登録はセッション限り。`runId`（`plugin:<プラグイン id>:<runKey>`）・登録時刻・出自（プラグインの id・名前・版）は
+   * **host が入れる**（プラグインに名乗らせない）。
+   *
+   * <p>🔴 **壊れた入力は理由つきで拒否する**（登録されない）。測れなかった点の径は `null`（0 や補間値で埋めない）。
+   * `diameterCalibrated: false`（未校正）のモデルは**全点 `null`** でなければ拒否する——px の値が mm の顔で
+   * FFR の入力に入る事故を入口で止める。点は有限、セグメントは 1 つ以上・各 2 点以上、`diameterMm` は点と同数、
+   * `parentId` は他のセグメントの id、総点数は 20000 以下。
+   */
+  registerVesselModel: (model: XaVesselModelInput) => RegisterVesselModelResult;
   /**
    * 処理結果（値マップ）を対象タイルの**表示中スライスへ重ねて見せる**（H4a）。
    * `tileId` 省略時は対象の先頭タイル。rows/cols が現在スライスと不一致なら false。
@@ -899,6 +950,9 @@ export interface Viewer2DPluginHost extends PluginHostBase {
    * LPS の中心は表示中のスライスの面内であること（面外は `off-slice` で拒否。別のスライスへは作らない）。成功すると、作った ROI の中心（LPS）も返る。
    * 半径（矩形は半幅）は**表示の水平・垂直方向**の mm。作った ROI には本体が出自の印（このプラグイン）とラベルを付け、
    * ROI マネージャで見分けられる。保存は本体が予約する。AI ツール（`effect: "write"`）から呼ぶときは、その実行前に本体が利用者の確認を出す。
+   * **多角形・自由曲線も作れる**（`tool: "PolygonROI" | "FreehandROI"`）。頂点を `verticesLps`（LPS mm）か `verticesPx`（表示中スライスの画素座標）の
+   * **どちらか一方**で順に渡す（閉じるので始点を繰り返さない。多角形 3〜64 点、自由曲線 3〜256 点）。全頂点が表示中のスライスの面内であること。
+   * 自己交差・面積ゼロの形は `self-intersecting` / `degenerate` で拒否する。`radiiMm` / `centerLps` / `centerPx` は使わない。
    */
   createRoi: (
     tileId: string | undefined,
@@ -906,6 +960,8 @@ export interface Viewer2DPluginHost extends PluginHostBase {
   ) => { ok: true; roiUid: string; centerLps: [number, number, number] } | { ok: false; reason: import("../viewer/roiCreate").CreateRoiFailure };
   /** `createRoi` で**このプラグインが作った** ROI だけを消す（本体や他プラグインの ROI・ロック中は消えず false）。 */
   removeCreatedRoi: (roiUid: string) => boolean;
+  /** `showLabelVolume` で**このプラグインが出した** Mask（返った `segmentationId`）だけを消す（本体・他プラグイン・利用者の Mask、ロック中は消えず false）。 */
+  removeLabelVolume: (segmentationId: string) => boolean;
   /**
    * **表示位置を移動する**（H14）。結果の一覧から「その ROI のスライス」へ飛ぶ用途。
    *
@@ -1196,7 +1252,8 @@ export interface PluginModule {
   /**
    * AI アシスタントから呼ばれるツールの実装（`plugin.json` の `aiTools` と同じ名前）。2D 窓が呼び出し時にだけ読み込み、
    * `activate` は呼ばない。引数は宣言した仕様で検証済み。戻り値は JSON にできる値（4 KB を超える分は切り捨てられ、
-   * 外部の AI へ渡るときは利用者の確認が入る）。
+   * 外部の AI へ渡るときは利用者の確認が入る）。宣言した `effect` を超える `host` の呼び出し（`read` / `display` のツールが書き込み系に
+   * 触れる）は `effect-violation` で止まる（`hostEffects.ts`）。
    */
   aiTools?: Record<string, (args: Record<string, unknown>, host: PluginHost) => unknown | Promise<unknown>>;
 }

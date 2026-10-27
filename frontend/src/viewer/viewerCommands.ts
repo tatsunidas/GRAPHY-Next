@@ -21,6 +21,8 @@ import type {
   QlvSrRequest,
 } from "../api";
 import type { XaFpsSource } from "./xaCineTiming";
+import type { XaViewGeometry } from "./xaGeometry";
+import type { XaGeometryMissing } from "./xaViewGeometryProvider";
 
 /**
  * タイル 1 枚が「いま何を表示しているか」（プラグイン host API の H1・fw/plugin-architecture.md §7）。
@@ -582,6 +584,30 @@ export interface ViewerTileXaCine extends ViewerXaCine {
   tileId: string;
 }
 
+/**
+ * XA の**投影幾何**（撮影角度・SID・SOD・検出器のピクセル間隔・主点）（プラグイン host API の H41）。
+ *
+ * <p>2 方向の対応付け・3D 再構成に要る値。読み出しは `viewer/xaViewGeometryProvider.ts` の
+ * `readXaViewGeometry()` に委譲する（**幾何の単一入口**）。
+ *
+ * <p>🔴 **読めないときは `geometry` が null で、理由が `missing` に入る。** 0 や既定値で埋めない
+ * （埋めた角度は、もっともらしい線を引く）。`ImagerPixelSpacing` は検出器面の値で、
+ * 校正済みの mm/px（`getSpatialCalibration`）とは別物。
+ */
+export interface ViewerXaGeometry {
+  imageId: string;
+  /** 読んだフレーム（0 origin）。 */
+  frameIndex: number;
+  geometry: XaViewGeometry | null;
+  missing: XaGeometryMissing | null;
+  /** 角度がフレームごとに変わる収集（回転 DSA など）か。 */
+  perFrameAngles: boolean;
+}
+
+export interface ViewerTileXaGeometry extends ViewerXaGeometry {
+  tileId: string;
+}
+
 export interface ViewerTileXaState extends ViewerXaState {
   tileId: string;
 }
@@ -623,6 +649,11 @@ export interface ViewerCommands {
    * `viewer/xaCineTiming.ts` の `resolveXaFps()` に委譲する（**規則の単一入口**）。
    */
   getXaCine(): ViewerXaCine | null;
+  /**
+   * XA の投影幾何（H41）。XA / XRF でなければ null。
+   * 読み出しは `viewer/xaViewGeometryProvider.ts` に委譲する。
+   */
+  getXaGeometry(): ViewerXaGeometry | null;
   /**
    * スライス 1 枚の校正済み画素。プラグイン host API の H3。取得不能・範囲外なら null。
    * 読み出しは `pixelCalibration.readModalitySlice()` に委譲する（校正の単一入口）。
@@ -738,13 +769,15 @@ export interface ViewerCommands {
    * 描き直すと形が変わり、形が変われば値も変わる。
    */
   copyRoi(roiUid?: string): boolean;
+  /** 指定の ROI を**まとめて**クリップボードへ取る。取れた件数（0 なら前の内容を残す）。 */
+  copyRois(roiUids: string[]): number;
   /** その ROI が、このタイルの表示スタックの画像に付いているか（コピー・複製の宛先タイルを ROI から決める）。 */
   ownsRoi(roiUid: string): boolean;
   /**
    * クリップボードの ROI を**現在表示中のスライス**へ、面内の同じ位置に貼る。
    * 作った annotationUID（失敗は null）。ThickSlab 中は貼れない（新規作成と同じ理由）。
    */
-  pasteRoi(): string | null;
+  pasteRoi(): string[];
   /** ROI をその場で複製する（クリップボードの中身は変えない）。 */
   duplicateRoi(roiUid: string): string | null;
   /**
@@ -758,6 +791,8 @@ export interface ViewerCommands {
    * 消せたら true。
    */
   removeCreatedRoi(roiUid: string, pluginId: string): boolean;
+  /** そのプラグインが `showLabelVolume` で出した Mask だけを消す（他の Mask・ロック中は消えず false）。 */
+  removeLabelVolume(segmentationId: string, pluginId: string): boolean;
   undo(): void;
   redo(): void;
 }

@@ -61,16 +61,19 @@ public class DimseQrService {
     private final com.vis.graphynext.dicom.DicomLocalAeService localAe;
     private final com.vis.graphynext.dicom.DicomTlsService tlsService;
     private final org.springframework.beans.factory.ObjectProvider<com.vis.graphynext.anonymize.ReceiveAnonymizer> anonymizer;
+    private final org.springframework.beans.factory.ObjectProvider<com.vis.graphynext.dicom.store.ReceiveCompressor> compressor;
 
     public DimseQrService(Dcm4cheTools tools, DicomStorageService storage,
                           com.vis.graphynext.dicom.DicomLocalAeService localAe,
                           com.vis.graphynext.dicom.DicomTlsService tlsService,
-                          org.springframework.beans.factory.ObjectProvider<com.vis.graphynext.anonymize.ReceiveAnonymizer> anonymizer) {
+                          org.springframework.beans.factory.ObjectProvider<com.vis.graphynext.anonymize.ReceiveAnonymizer> anonymizer,
+                          org.springframework.beans.factory.ObjectProvider<com.vis.graphynext.dicom.store.ReceiveCompressor> compressor) {
         this.tools = tools;
         this.storage = storage;
         this.localAe = localAe;
         this.tlsService = tlsService;
         this.anonymizer = anonymizer;
+        this.compressor = compressor;
     }
 
     /**
@@ -161,6 +164,10 @@ public class DimseQrService {
                     // 受信時の匿名化がオンなら、C-STORE と同じく保管前に匿名化する（拒否・失敗したものは取り込まない）。
                     var anon = anonymizer.getIfAvailable();
                     Path toIngest = anon == null ? f : anon.process(f, calledAet);
+                    var comp = compressor.getIfAvailable();
+                    if (comp != null) {
+                        toIngest = comp.process(toIngest); // 匿名化の後に 1 回だけ。失敗・対象外は元のまま
+                    }
                     storage.ingest(toIngest);
                     count++;
                 } catch (Exception e) {

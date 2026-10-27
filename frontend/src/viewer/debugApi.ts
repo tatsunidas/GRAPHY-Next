@@ -366,6 +366,8 @@ export interface QcaDebugSnapshot {
   referenceLast: number;
   unit: string;
   warnings: string[];
+  /** アンカー（画像 px・血管に沿った順）。まだ無ければ未設定。 */
+  anchors?: { x: number; y: number; confirmed: boolean }[];
   /** 拡大パネルの座標変換（画面 px = (画像 px − c0) × scale）。パネル未表示なら null。 */
   view: { cx0: number; cy0: number; cw: number; ch: number; scale: number; dw: number; dh: number } | null;
   /**
@@ -1000,6 +1002,17 @@ function probeUserCalibration(mmPerPx: number) {
   }
 }
 
+/** 存在する segmentation の id 一覧（Mask が出た・消えたの検証用）。 */
+function getSegmentationIds(): string[] {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const cs = csSegmentation as any;
+  try {
+    return ((cs.state.getSegmentations?.() ?? []) as Array<{ segmentationId: string }>).map((s) => s.segmentationId);
+  } catch {
+    return [];
+  }
+}
+
 /** アクティブ segmentation の labelmap を数える（スライスごと・segment 値ごと）。Scissors などの塗り範囲の検証用。 */
 export interface SegCounts {
   viewportId: string;
@@ -1170,6 +1183,7 @@ declare global {
       probeUserCalibration: typeof probeUserCalibration;
       getRoiStatsPair: typeof getRoiStatsPair;
       getAnnotationCanvasPoints: typeof getAnnotationCanvasPoints;
+      getSegmentationIds: typeof getSegmentationIds;
       getImagePixelRange: typeof getImagePixelRange;
       getPixelStats: typeof getPixelStats;
       getRender3dStats: typeof getRender3dStats;
@@ -1343,6 +1357,7 @@ export function installDebugApi(): void {
     probeUserCalibration,
     getRoiStatsPair,
     getAnnotationCanvasPoints,
+    getSegmentationIds,
     getImagePixelRange,
     getPixelStats,
     getRender3dStats,

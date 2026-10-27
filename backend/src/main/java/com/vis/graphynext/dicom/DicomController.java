@@ -4,8 +4,6 @@
  */
 package com.vis.graphynext.dicom;
 
-import com.fasterxml.jackson.core.type.TypeReference;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.vis.graphynext.dicom.qr.DimseQrService;
 import com.vis.graphynext.dicom.qr.QrRetrieveService;
 import com.vis.graphynext.dicom.qr.QrSeriesRow;
@@ -13,7 +11,6 @@ import com.vis.graphynext.dicom.qr.QrStudyRow;
 import com.vis.graphynext.dicom.store.DicomStorageService;
 import com.vis.graphynext.dicom.store.DicomSendService;
 import com.vis.graphynext.dicom.web.WebDicomDataService;
-import com.vis.graphynext.settings.SettingsService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -48,17 +45,17 @@ public class DicomController {
     private final QrRetrieveService qrRetrieve;
     private final DicomSendService send;
     private final DicomStorageService storage;
-    private final SettingsService settings;
-    private final ObjectMapper mapper;
     private final org.springframework.beans.factory.ObjectProvider<WebDicomDataService> webProvider;
     private final DicomScpLifecycle scp; // scp.enabled=false のとき null
+    private final DicomRemoteAeService remoteAeService;
+    private final DicomQrAccess qrAccess;
 
     public DicomController(DicomEchoScu echoScu, DicomProperties props, DicomLocalAeService localAe,
                            DicomTlsService tlsService, DimseQrService qr,
                            QrRetrieveService qrRetrieve, DicomSendService send, DicomStorageService storage,
-                           SettingsService settings, ObjectMapper mapper,
                            org.springframework.beans.factory.ObjectProvider<WebDicomDataService> webProvider,
-                           org.springframework.beans.factory.ObjectProvider<DicomScpLifecycle> scpProvider) {
+                           org.springframework.beans.factory.ObjectProvider<DicomScpLifecycle> scpProvider,
+                           DicomRemoteAeService remoteAeService, DicomQrAccess qrAccess) {
         this.echoScu = echoScu;
         this.props = props;
         this.localAe = localAe;
@@ -67,10 +64,10 @@ public class DicomController {
         this.qrRetrieve = qrRetrieve;
         this.send = send;
         this.storage = storage;
-        this.settings = settings;
-        this.mapper = mapper;
         this.webProvider = webProvider;
         this.scp = scpProvider.getIfAvailable();
+        this.remoteAeService = remoteAeService;
+        this.qrAccess = qrAccess;
     }
 
     /** リモート AE へ C-ECHO（callingAet 省略時は自局 AE。tls=true で TLS 接続）。 */
@@ -103,7 +100,12 @@ public class DicomController {
                 "enabled", enabled,
                 "running", enabled && scp.getServer().isRunning(),
                 "aeTitle", enabled ? scp.getServer().getAeTitle() : localAe.aeTitle(),
-                "port", enabled ? scp.getServer().getPort() : localAe.scpPort());
+                "port", enabled ? scp.getServer().getPort() : localAe.scpPort(),
+                // enabled=設定上の ON/OFF、active=いまのリスナーが実際に応答するか（設定の変更は再起動後に反映）
+                "queryRetrieve", Map.of(
+                        "enabled", qrAccess.enabled(),
+                        "active", enabled && scp.isQueryRetrieveActive(),
+                        "allowAll", qrAccess.allowAll()));
     }
 
     /** C-FIND: リモート PACS をクエリしてスタディ一覧を返す。 */
@@ -192,27 +194,7 @@ public class DicomController {
      */
     @GetMapping("/remote-aes")
     public List<RemoteAeDto> remoteAes() {
-        java.util.LinkedHashMap<String, RemoteAeDto> byAet = new java.util.LinkedHashMap<>();
-        for (DicomProperties.RemoteAe a : props.getRemoteAes()) {
-            if (a.getAeTitle() != null && !a.getAeTitle().isBlank()) {
-                byAet.put(a.getAeTitle(), new RemoteAeDto(a.getAeTitle(), a.getHost(), a.getPort(), a.isTls()));
-            }
-        }
-        String json = settings.getAll().get(REMOTE_AES_KEY);
-        if (json != null && !json.isBlank()) {
-            try {
-                List<RemoteAeDto> stored = mapper.readValue(json, new TypeReference<List<RemoteAeDto>>() {
-                });
-                for (RemoteAeDto a : stored) {
-                    if (a.aeTitle() != null && !a.aeTitle().isBlank()) {
-                        byAet.put(a.aeTitle(), a); // Settings 保存分が YAML を上書き
-                    }
-                }
-            } catch (Exception e) {
-                log.warn("Settings の {} を解析できませんでした（無視）: {}", REMOTE_AES_KEY, e.toString());
-            }
-        }
-        return new java.util.ArrayList<>(byAet.values());
+        return remoteAeService.list();
     }
 
     /**
@@ -227,7 +209,28 @@ public class DicomController {
                 .stream()
                 .map(s -> new DicomSendService.Selection(s.studyUid(), s.seriesUids()))
                 .toList();
-        return send.send(selections, req.host(), req.port(), req.calledAet(), callingAet, req.tls());
+        com.vis.graphynext.dicom.store.DicomStoreScu.TsPolicy policy;
+        try {
+            policy = req.transferSyntax() == null || req.transferSyntax().isBlank()
+                    ? com.vis.graphynext.dicom.store.DicomStoreScu.TsPolicy.STORED
+                    : com.vis.graphynext.dicom.store.DicomStoreScu.TsPolicy.valueOf(req.transferSyntax());
+        } catch (IllegalArgumentException e) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    org.springframework.http.HttpStatus.BAD_REQUEST, "transferSyntax が不正です: " + req.transferSyntax());
+        }
+        var options = new DicomSendService.Options(policy, req.keyImagesOnly(),
+                req.includeKeyObject() == null || req.includeKeyObject());
+        return send.send(selections, req.host(), req.port(), req.calledAet(), callingAet, req.tls(), options);
+    }
+
+    /** 「キー画像のみ」送信が使えるか: スタディの確定済みレポートが参照するキー画像の数と、KO の数。 */
+    @GetMapping("/send/key-images")
+    public KeyImageAvailability sendKeyImages(@org.springframework.web.bind.annotation.RequestParam String studyUid) {
+        var ki = send.sendableKeyImages(studyUid);
+        return new KeyImageAvailability(ki.imageSopUids().size(), ki.koSopUids().size());
+    }
+
+    public record KeyImageAvailability(int keyImages, int keyObjects) {
     }
 
     public record EchoRequest(String host, int port, String calledAet, String callingAet, boolean tls) {
@@ -240,7 +243,8 @@ public class DicomController {
     }
 
     public record SendRequest(List<SendSelection> selections, String host, int port, String calledAet,
-                              String callingAet, boolean tls) {
+                              String callingAet, boolean tls, String transferSyntax, boolean keyImagesOnly,
+                              Boolean includeKeyObject) {
     }
 
     public record QrFindRequest(String host, int port, String calledAet, Map<String, String> matchKeys, boolean tls) {

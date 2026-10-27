@@ -147,7 +147,8 @@ public class InboxIngestService {
                 errors.add(f.path() + ": " + e.getMessage());
             }
         }
-        RelatedData.ApplyResult rel = related.apply(m.related());
+        RelatedData.ApplyResult rel = related.apply(m.related(), pkg);
+        errors.addAll(rel.errors());
         if (!rel.conflicts().isEmpty()) {
             Path dir = inbox.resolve("conflicts").resolve(m.id());
             Files.createDirectories(dir);
@@ -163,6 +164,9 @@ public class InboxIngestService {
         mapper.writeValue(pkg.resolve("result.json").toFile(), r);
         if (errors.isEmpty()) {
             DbTransferService.deleteTree(pkg.resolve("dicom"));
+            if (rel.conflicts().isEmpty()) {
+                DbTransferService.deleteTree(pkg.resolve("masks")); // 衝突の解決用にだけ残す
+            }
         }
         Path done = inbox.resolve("done");
         Files.createDirectories(done);

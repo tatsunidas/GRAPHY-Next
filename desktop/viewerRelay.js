@@ -21,6 +21,16 @@ const DEFAULT_TIMEOUT_MS = 5000;
 
 /** プラグインのツールの実行は、プラグインのコード（外部由来）が動くので表示操作より長く待つ。暫定値。 */
 const PLUGIN_TOOL_TIMEOUT_MS = 30000;
+/**
+ * ツール別の待ち時間（`aiTools[].timeoutSec`）。台帳の値（main が backend の宣言から作った）だけを使い、レンダラ供給の値は見ない。
+ * 2D 窓の実行器が同じ時間で先に切れて理由を返せるよう、中継はその 5 秒後まで待つ（既定の 30 秒は従来どおり）。
+ */
+const MAX_PLUGIN_TOOL_TIMEOUT_MS = 900000;
+function pluginToolTimeoutMs(entry) {
+  const t = entry && entry.timeoutMs;
+  if (!Number.isInteger(t) || t < 5000) return PLUGIN_TOOL_TIMEOUT_MS;
+  return Math.min(t, MAX_PLUGIN_TOOL_TIMEOUT_MS) + 5000;
+}
 const MAX_PLUGIN_ARGS_BYTES = 2000;
 /** 書き込みの確認ダイアログに出す引数の長さ。 */
 const MAX_WRITE_ARGS_PREVIEW = 300;
@@ -58,7 +68,7 @@ const MAX_MEASUREMENTS_BYTES = 20000;
  * 🔴 実行のたびに main が利用者の承認を取る。承認の関門は**ここ（main の描くダイアログ）**で、レンダラが渡す値は信用しない:
  *    承認フラグ `approved` は main が承認後にだけ付け、レンダラが付けてきた値は捨てる。
  */
-const WRITE_ACTIONS = new Set(["clearMeasurements", "createRoi"]);
+const WRITE_ACTIONS = new Set(["clearMeasurements", "createRoi", "createContourRoi"]);
 
 /** ジャーナルの上限。1 世代だけ残して上書きする。暫定値（利用実績で見直す）。 */
 const DEFAULT_JOURNAL_MAX_BYTES = 1024 * 1024;
@@ -202,7 +212,7 @@ function createRelay({ resolveTarget, journal = () => {}, timeoutMs = DEFAULT_TI
         return { ok: false, error: "declined" };
       }
     }
-    const res = await relayInner(sid, { kind: "pluginTool", pluginId: entry.pluginId, tool: entry.tool, params }, isWrite, PLUGIN_TOOL_TIMEOUT_MS);
+    const res = await relayInner(sid, { kind: "pluginTool", pluginId: entry.pluginId, tool: entry.tool, params }, isWrite, pluginToolTimeoutMs(entry));
     if (!res || res.ok !== true) return { ok: false, error: typeof (res && res.error) === "string" ? res.error.slice(0, 80) : "plugin-error" };
     const r = sanitizeResult(res.data);
     if (pt.external) {
@@ -274,7 +284,7 @@ function createRelay({ resolveTarget, journal = () => {}, timeoutMs = DEFAULT_TI
     };
     const c = opts.capture;
     if (!c || c.imageModelOk !== true) return fail("image-model-not-set");
-    const res = await relayInner(sid, { kind: "captureView", withRoi: cmd.withRoi === true }, false, CAPTURE_TIMEOUT_MS);
+    const res = await relayInner(sid, { kind: "captureView", withRoi: cmd.withRoi === true, crop: cmd.crop === true }, false, CAPTURE_TIMEOUT_MS);
     if (!res || res.ok !== true) return fail(typeof (res && res.error) === "string" ? res.error.slice(0, 80) : "no-viewer");
     const image = sanitizeCapturedImage(res.image);
     if (!image) return fail("bad-result");
@@ -323,7 +333,7 @@ function createRelay({ resolveTarget, journal = () => {}, timeoutMs = DEFAULT_TI
         const payload =
           cmd.kind === "pluginTool"
             ? { reqId, kind: cmd.kind, pluginId: cmd.pluginId, tool: cmd.tool, params: cmd.params, approved: approved === true }
-            : { reqId, kind: cmd.kind, id: cmd.id, params: cmd.params, includeLabels: cmd.includeLabels === true, withRoi: cmd.withRoi === true, approved: approved === true, ...(dryRun ? { dryRun: true } : {}) };
+            : { reqId, kind: cmd.kind, id: cmd.id, params: cmd.params, includeLabels: cmd.includeLabels === true, withRoi: cmd.withRoi === true, ...(cmd.crop === true ? { crop: true } : {}), approved: approved === true, ...(dryRun ? { dryRun: true } : {}) };
         target.send("graphy:viewer-cmd", payload);
       } catch {
         pending.delete(reqId);
@@ -346,4 +356,4 @@ function createRelay({ resolveTarget, journal = () => {}, timeoutMs = DEFAULT_TI
   return { relay, handleResult, pendingCount: () => pending.size };
 }
 
-module.exports = { sanitizeCapturedImage, WRITE_ACTIONS, createRelay, createJournal, journalParams, readJournal, DEFAULT_TIMEOUT_MS };
+module.exports = { pluginToolTimeoutMs, sanitizeCapturedImage, WRITE_ACTIONS, createRelay, createJournal, journalParams, readJournal, DEFAULT_TIMEOUT_MS };

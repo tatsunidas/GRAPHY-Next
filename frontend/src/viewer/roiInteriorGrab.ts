@@ -26,6 +26,7 @@
 import { AnnotationTool, Enums as csToolsEnums, annotation as csAnnotation, state as csToolsState } from "@cornerstonejs/tools";
 import { getAnnotationNearPoint, triggerAnnotationRenderForViewportIds } from "@cornerstonejs/tools/utilities";
 import { getEnabledElement, getRenderingEngines } from "@cornerstonejs/core";
+import { getRoiMaskMeta } from "./roiMaskStore";
 
 type Vec2 = [number, number] | number[];
 type Vec3 = [number, number, number] | number[];
@@ -93,6 +94,21 @@ export function isInsideClosedRoi(annotation: Any, toCanvas: (w: Vec3) => Vec2, 
 export interface InteriorGrabOptions {
   /** 左ドラッグに計測・ROI 系のツールが割り当たっているか。W/L・Pan 中は内側を掴まない。 */
   isMeasureToolActive: () => boolean;
+  /**
+   * 選択が複数の患者にまたがったまま掴まれたとき（移動はしない）。別の患者の ROI は動かせないので、
+   * 黙って一部だけ動かすのでなく、理由を出して何も動かさない。
+   */
+  onCrossPatientSelection?: () => void;
+}
+
+/** 選択が 2 人以上の患者にまたがっているか（患者不明の ROI は数えない）。純関数。 */
+export function spansPatients(uids: readonly string[], patientOf: (uid: string) => string | undefined): boolean {
+  const set = new Set<string>();
+  for (const u of uids) {
+    const pk = patientOf(u);
+    if (pk) set.add(pk);
+  }
+  return set.size > 1;
 }
 
 function isSelected(uid: string): boolean {
@@ -226,6 +242,11 @@ export function installInteriorGrab(tool: Any, opts: InteriorGrabOptions): void 
       const wasSelected = keepSelectionIfGrabbedSelected(annotation?.annotationUID);
       // フリーハンドの線を掴んだら、従来どおり描き直し編集（上流 `PlanarFreehandROITool.toolSelectedCallback`）。
       if (isFreehand && onLine) return originalSelected.call(tool, evt, annotation, ...rest);
+      if (wasSelected && spansPatients(selectionAtPress, (u) => getRoiMaskMeta(u)?.patientKey)) {
+        opts.onCrossPatientSelection?.();
+        evt.preventDefault();
+        return;
+      }
       if (wasSelected) {
         const vp = getEnabledElement(element)?.viewport;
         const group = groupMembers(selectionAtPress, allAnnotations(), vp?.getCurrentImageId?.());
@@ -377,6 +398,22 @@ export function toggleRoiSelection(uid: string): void {
   try {
     const on = !csAnnotation.selection.isAnnotationSelected(uid);
     csAnnotation.selection.setAnnotationSelected(uid, on, true);
+    const ids = (getRenderingEngines() ?? []).flatMap((re) => re.getViewports().map((v) => v.id));
+    triggerAnnotationRenderForViewportIds(ids);
+  } catch {
+    /* 選択できなくても致命的ではない */
+  }
+}
+
+/** 指定の ROI を選択状態にする（ほかの選択は外す）。グループの「選択」用。 */
+export function selectRois(uids: readonly string[]): void {
+  try {
+    for (const u of csAnnotation.selection.getAnnotationsSelected() ?? []) {
+      if (!uids.includes(u)) csAnnotation.selection.setAnnotationSelected(u, false);
+    }
+    for (const u of uids) {
+      if (csAnnotation.state.getAnnotation(u)) csAnnotation.selection.setAnnotationSelected(u, true, true);
+    }
     const ids = (getRenderingEngines() ?? []).flatMap((re) => re.getViewports().map((v) => v.id));
     triggerAnnotationRenderForViewportIds(ids);
   } catch {

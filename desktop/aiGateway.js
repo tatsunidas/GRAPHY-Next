@@ -41,6 +41,15 @@ function setPrepareHook(fn) {
   prepareHook = typeof fn === "function" ? fn : null;
 }
 
+/**
+ * 会話 1 ターンごとの記録の受け口（本文なしの 1 件。`aiRequestLog.createRequestLog().append`）。electron に依存させないため、結線は main.js が行う。
+ * 無ければ何もしない。フックの例外で会話を止めない。
+ */
+let requestLogHook = null;
+function setRequestLogHook(fn) {
+  requestLogHook = typeof fn === "function" ? fn : null;
+}
+
 /** 同時実行は 1 本に限る。誤操作や暴走ループで課金が積み上がるのを防ぐ。 */
 let inFlight = false;
 
@@ -520,9 +529,13 @@ async function chat(req, opts) {
   const onEvent = (opts && opts.onEvent) || (() => {});
   const primary = resolved.chain[0].provider;
   let lastFailure = null;
+  const startedAt = Date.now();
+  let usedProvider = primary;
+  let finalAttempt = null;
   try {
     for (let i = 0; i < resolved.chain.length; i++) {
       let { provider } = resolved.chain[i];
+      usedProvider = provider;
       let attempt;
       const prep = prepareHook ? await prepareHook(provider, controller.signal) : { ok: true };
       if (prep && prep.ok === false) {
@@ -530,6 +543,7 @@ async function chat(req, opts) {
       } else {
         // 起動のたびにポートが変わるので、準備のあとで保存済みの宛先を引き直す
         provider = aiProviders.byId(provider.id) || provider;
+        usedProvider = provider;
         attempt = await chatOnce(req, provider, controller.signal, onEvent);
       }
       if (attempt.ok) {
@@ -537,16 +551,49 @@ async function chat(req, opts) {
           attempt.degraded = true;
           attempt.provenance.fallbackFrom = primary.id;
         }
+        finalAttempt = attempt;
         return attempt;
       }
       lastFailure = attempt;
       // 差分を既に画面へ流したあとの切り替えは、同じ文が二重に出るので行わない。
       if (attempt.streamed || controller.signal.aborted || !isRetriable(attempt)) break;
     }
+    finalAttempt = lastFailure;
     const { streamed, verdict, ...failure } = lastFailure;
     return failure;
   } finally {
     chatSessions.delete(req.sessionId);
+    recordChat(req, usedProvider, finalAttempt, Date.now() - startedAt);
+  }
+}
+
+/**
+ * 会話 1 ターンの記録を渡す。🔴 本文・ツール引数・画像・エラーの自由文は渡さない（件数・名前・コードだけ）。
+ * 宛先の種別は main の判定（`isLocalProvider`）で、レンダラの申告ではない。
+ */
+function recordChat(req, provider, attempt, latencyMs) {
+  if (!requestLogHook || !attempt) return;
+  try {
+    const images = req.messages.flatMap((m) => (Array.isArray(m.images) ? m.images : []));
+    const prov = attempt.provenance;
+    requestLogHook({
+      sessionId: req.sessionId,
+      provider: prov ? prov.providerId : provider.id,
+      kind: prov ? prov.kind : provider.kind,
+      modelId: prov ? prov.model : provider.models && provider.models["text-to-text"],
+      modelVersion: attempt.modelVersion,
+      destination: aiProviders.isLocalProvider(provider) ? "local" : "external",
+      fallbackFrom: prov ? prov.fallbackFrom : undefined,
+      temperature: req.temperature,
+      usage: attempt.usage,
+      latencyMs,
+      outcome: attempt.ok ? "ok" : /^[a-z0-9-]{1,40}$/.test(String(attempt.error)) ? attempt.error : attempt.verdict,
+      toolsOffered: Array.isArray(req.tools) ? req.tools.length : 0,
+      toolCalls: Array.isArray(attempt.toolCalls) ? attempt.toolCalls.map((t) => t && t.name) : [],
+      attachments: { images: { count: images.length, bytes: images.reduce((n, im) => n + Math.floor((im.base64.length * 3) / 4), 0) } },
+    });
+  } catch {
+    /* 記録できなくても会話は止めない */
   }
 }
 
@@ -821,6 +868,7 @@ async function listModels(args) {
 
 module.exports = {
   setPrepareHook,
+  setRequestLogHook,
   generate,
   chat,
   transcribe,

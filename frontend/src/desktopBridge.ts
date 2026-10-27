@@ -302,6 +302,8 @@ export type AiChatResult =
       droppedImages?: number;
       degraded?: boolean;
       provenance: AiProvenance;
+      /** 応答側が名乗ったモデルの版（あれば）。 */
+      modelVersion?: string;
     }
   | { ok: false; error: string; status?: number; kind?: string };
 
@@ -519,7 +521,7 @@ export interface GraphyDesktop {
    */
   assistantViewerCmd?: (
     sessionId: string,
-    cmd: { kind: "action" | "getState" | "getMeasurements"; id?: string; params?: unknown } | { kind: "captureView"; withRoi?: boolean } | { kind: "pluginTool"; name: string; params?: unknown },
+    cmd: { kind: "action" | "getState" | "getMeasurements"; id?: string; params?: unknown } | { kind: "captureView"; withRoi?: boolean; crop?: boolean } | { kind: "pluginTool"; name: string; params?: unknown },
   ) => Promise<import("./assistant/actions/registry").ActionResult | import("./assistant/pluginTools").PluginToolResult>;
   /** プラグインが宣言した AI ツールの一覧（main が組み直したもの）とオン/オフ。 */
   assistantPluginToolsList?: () => Promise<{ ok: boolean; tools?: import("./assistant/pluginTools").PluginToolEntry[]; error?: string }>;
@@ -530,12 +532,36 @@ export interface GraphyDesktop {
     entries?: { ts: string; id: string; params?: Record<string, unknown>; ok: boolean; error?: string }[];
     error?: string;
   }>;
+  /** AI への要求の記録（本文なし）。件数・モデル別の合計・直近の記録。取れなかった値は null（0 で埋めない）。アシスタント窓だけ。 */
+  assistantRequestLogSummary?: () => Promise<{
+    ok: boolean;
+    count?: number;
+    byModel?: { provider: string | null; model: string | null; requests: number; tokensIn: number; tokensOut: number; unknownUsage: number }[];
+    recent?: Record<string, unknown>[];
+    error?: string;
+  }>;
+  assistantRequestLogClear?: () => Promise<{ ok: boolean; error?: string }>;
+  /** 回帰評価の結果の保存と一覧（質問 id と一致/不一致だけ。本文は保存しない）。アシスタント窓だけ。 */
+  assistantEvalAppend?: (run: {
+    suiteVersion: number;
+    meta: { provider: string | null; modelId: string | null; modelVersion: string | null };
+    cases: { id: string; pass: boolean }[];
+  }) => Promise<{ ok: boolean; error?: string }>;
+  assistantEvalList?: () => Promise<{
+    ok: boolean;
+    runs?: { ts: string; suiteVersion: number; provider: string | null; modelId: string | null; modelVersion: string | null; total: number; passed: number; cases: { id: string; pass: boolean }[] }[];
+    error?: string;
+  }>;
   assistantMacrosList?: () => Promise<{ ok: boolean; macros?: import("./assistant/macros/macroModel").Macro[]; error?: string }>;
   assistantMacrosSave?: (macro: {
     name: string;
     steps: import("./assistant/macros/macroModel").MacroStep[];
   }) => Promise<{ ok: boolean; macro?: import("./assistant/macros/macroModel").Macro; error?: string }>;
   assistantMacrosDelete?: (id: string) => Promise<{ ok: boolean; error?: string }>;
+  assistantPluginSkillsList?: () => Promise<{ ok: boolean; skills?: import("./assistant/skills/skillModel").PluginSkillEntry[]; error?: string }>;
+  assistantSkillsList?: () => Promise<{ ok: boolean; skills?: import("./assistant/skills/skillModel").Skill[]; error?: string }>;
+  assistantSkillsSave?: (skill: import("./assistant/skills/skillModel").Skill) => Promise<{ ok: boolean; skill?: import("./assistant/skills/skillModel").Skill; error?: string }>;
+  assistantSkillsDelete?: (id: string) => Promise<{ ok: boolean; error?: string }>;
   /** 2D 窓側: main が中継してきた命令を受ける。購読解除の関数を返す。 */
   onViewerCmd?: (
     cb: (cmd: {
@@ -543,6 +569,7 @@ export interface GraphyDesktop {
       kind: "action" | "getState" | "getMeasurements" | "captureView" | "pluginTool";
       id?: string;
       withRoi?: boolean;
+      crop?: boolean;
       params?: unknown;
       includeLabels?: boolean;
       approved?: boolean;

@@ -9,11 +9,16 @@ import com.vis.graphynext.dicom.DicomProperties;
 import org.dcm4che3.data.Attributes;
 import org.dcm4che3.data.Tag;
 import org.dcm4che3.data.UID;
+import org.dcm4che3.data.VR;
 import org.dcm4che3.imageio.codec.Decompressor;
+import org.dcm4che3.io.DicomInputStream;
+import org.dcm4che3.io.DicomOutputStream;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
+import java.io.IOException;
+import java.io.OutputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Set;
@@ -195,6 +200,58 @@ public class PixelCodec {
                 // 静的な Decompressor.decompress() は ImageReader を解放しない。件数が多いと効く。
                 d.dispose();
             }
+        }
+    }
+
+    /** 圧縮ファイルを非圧縮（Explicit VR Little Endian）にした FMI とデータセット。 */
+    public record Uncompressed(Attributes fmi, Attributes ds) {
+    }
+
+    /**
+     * 圧縮 DICOM ファイルを復号して、Explicit VR Little Endian の FMI・データセットにする。
+     * 元から非圧縮のとき、読めないとき、復号できない（ネイティブ無効など）ときは null
+     * （呼び出し元は圧縮のまま扱わず、できないと答える）。画素はヒープに載る。
+     */
+    public Uncompressed toUncompressed(Path src) throws IOException {
+        Attributes fmi;
+        Attributes ds;
+        String ts;
+        try (DicomInputStream in = new DicomInputStream(src.toFile())) {
+            in.setIncludeBulkData(DicomInputStream.IncludeBulkData.URI);
+            fmi = in.readFileMetaInformation();
+            ds = in.readDataset(-1, -1);
+            ts = in.getTransferSyntax();
+        }
+        if (isUncompressed(ts)) {
+            return null;
+        }
+        byte[] px = decompress(ds, ts);
+        if (px == null) {
+            return null;
+        }
+        // 復号後は元ファイルへの参照ではなく、実体の画素を持たせる
+        ds.setBytes(Tag.PixelData, ds.getInt(Tag.BitsAllocated, 16) <= 8 ? VR.OB : VR.OW, px);
+        if (fmi == null) {
+            fmi = ds.createFileMetaInformation(UID.ExplicitVRLittleEndian);
+        }
+        fmi.setString(Tag.TransferSyntaxUID, VR.UI, UID.ExplicitVRLittleEndian);
+        return new Uncompressed(fmi, ds);
+    }
+
+    /** {@link #toUncompressed} の結果を一時ファイルへ書く（ImageJ など、ファイルしか受けない読み手向け）。呼び出し元が消す。 */
+    public Path toUncompressedTempFile(Path src) throws IOException {
+        Uncompressed u = toUncompressed(src);
+        if (u == null) {
+            return null;
+        }
+        Path tmp = Files.createTempFile("graphy-unc-", ".dcm");
+        try (OutputStream os = Files.newOutputStream(tmp);
+                DicomOutputStream dos = new DicomOutputStream(os, UID.ExplicitVRLittleEndian)) {
+            dos.writeDataset(u.fmi(), u.ds());
+            return tmp;
+        } catch (IOException | RuntimeException e) {
+            Files.deleteIfExists(tmp);
+            throw e;
         }
     }
 }

@@ -4,7 +4,7 @@
  */
 import { describe, expect, it } from "vitest";
 import { LengthTool, RectangleROITool } from "@cornerstonejs/tools";
-import { groupMembers, interiorHit, installInteriorGrab, isInsideClosedRoi, pointInPolygon, shiftAnnotation } from "./roiInteriorGrab";
+import { spansPatients, groupMembers, interiorHit, installInteriorGrab, isInsideClosedRoi, pointInPolygon, shiftAnnotation } from "./roiInteriorGrab";
 import { CONTOUR_TOOL_NAMES, FreehandRoiTool } from "./roiContourTools";
 
 // world の x,y をそのまま canvas とみなす（z は捨てる）。
@@ -190,5 +190,18 @@ describe("isInsideClosedRoi: circle", () => {
   it("半径 0 は内側を持たない", () => {
     const dot = { metadata: { toolName: "CircleROI" }, data: { handles: { points: [[3, 3, 0], [3, 3, 0]] } } };
     expect(isInsideClosedRoi(dot, id, [3, 3])).toBe(false);
+  });
+});
+
+describe("spansPatients（患者をまたぐ選択）", () => {
+  const owner: Record<string, string | undefined> = { a: "P1", b: "P1", c: "P2", d: undefined };
+  const of = (u: string) => owner[u];
+  it("同じ患者だけなら偽、2 人以上なら真", () => {
+    expect(spansPatients(["a", "b"], of)).toBe(false);
+    expect(spansPatients(["a", "c"], of)).toBe(true);
+  });
+  it("患者不明は数えない・空は偽", () => {
+    expect(spansPatients(["a", "d"], of)).toBe(false);
+    expect(spansPatients([], of)).toBe(false);
   });
 });

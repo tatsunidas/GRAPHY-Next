@@ -31,7 +31,9 @@ const secretStore = require("./secretStore");
 const aiGateway = require("./aiGateway");
 const { isAssistantSender } = require("./assistantSender");
 const { createRelay, createJournal, readJournal } = require("./viewerRelay");
+const { createRequestLog, createEvalStore } = require("./aiRequestLog");
 const { createStore: createMacroStore } = require("./assistantMacros");
+const { createStore: createSkillStore } = require("./assistantSkills");
 const assistantPluginTools = require("./assistantPluginTools");
 const { createGate: createAiEgressGate } = require("./aiEgressGate");
 const aiProviders = require("./aiProviders");
@@ -1331,6 +1333,10 @@ const WRITE_CONFIRM_TEXT = {
     message: "2D ビューアの表示中のスライスに、ROI（楕円または矩形）を 1 つ追加します。",
     detail: "アシスタントの「元に戻す」で、この ROI だけを消せます。追加しますか？",
   },
+  createContourRoi: {
+    message: "2D ビューアの表示中のスライスに、ROI（多角形または自由曲線）を 1 つ追加します。",
+    detail: "アシスタントの「元に戻す」で、この ROI だけを消せます。追加しますか？",
+  },
 };
 const viewerRelay = createRelay({
   resolveTarget: () => {
@@ -1469,6 +1475,14 @@ async function refreshPluginToolEntries() {
   pluginToolEntries = assistantPluginTools.buildEntries(list);
   return { ok: true };
 }
+// プラグインが宣言したスキル（検査して組み直したもの。assistantPluginTools.buildSkills）。実行できるかどうかは、利用者がそのプラグインの
+// ツールをオンにしているか（フロントの validateSkill が有効なツールだけを通す）で決まる。
+ipcMain.handle("graphy:assistant-plugin-skills-list", async (e) => {
+  if (!isAssistantSender(e)) return { ok: false, error: "forbidden" };
+  const list = await fetchPluginList();
+  if (!list) return { ok: false, error: "backend" };
+  return { ok: true, skills: assistantPluginTools.buildSkills(list) };
+});
 async function listPluginTools() {
   const r = await refreshPluginToolEntries();
   if (!r.ok) return r;
@@ -1483,6 +1497,19 @@ ipcMain.handle("graphy:assistant-plugin-tools-set", async (e, pluginId, on) => {
 });
 // マクロ（表示操作の並び）の保存。形と大きさだけ main が見る（assistantMacros.js）。再生時の検証は 2D 窓が毎回行う。
 const macroStore = createMacroStore({ file: path.join(app.getPath("userData"), "assistant-macros.json") });
+// スキル（検証済み操作を入力・確認つきで並べたもの）の保存。形と大きさだけ main が見る（assistantSkills.js）。実行時の検証はアシスタント窓と 2D 窓が毎回行う。
+const skillStore = createSkillStore({ file: path.join(app.getPath("userData"), "assistant-skills.json") });
+ipcMain.handle("graphy:assistant-skills-list", (e) => (isAssistantSender(e) ? skillStore.list() : { ok: false, error: "forbidden" }));
+ipcMain.handle("graphy:assistant-skills-save", (e, s) => (isAssistantSender(e) ? skillStore.save(s) : { ok: false, error: "forbidden" }));
+ipcMain.handle("graphy:assistant-skills-delete", (e, id) => (isAssistantSender(e) ? skillStore.remove(id) : { ok: false, error: "forbidden" }));
+// AI への要求の記録（本文なし。aiRequestLog.js）。会話の完了ごとに gateway が 1 件書く。読み取りと消去はアシスタント窓だけ。
+const aiRequestLog = createRequestLog({ file: path.join(app.getPath("userData"), "ai-requests.jsonl") });
+aiGateway.setRequestLogHook((record) => aiRequestLog.append(record));
+ipcMain.handle("graphy:assistant-requestlog-summary", (e) => (isAssistantSender(e) ? aiRequestLog.summary() : { ok: false, error: "forbidden" }));
+const aiEvalStore = createEvalStore({ file: path.join(app.getPath("userData"), "ai-eval.jsonl") });
+ipcMain.handle("graphy:assistant-eval-append", (e, run) => (isAssistantSender(e) ? aiEvalStore.append(run) : { ok: false, error: "forbidden" }));
+ipcMain.handle("graphy:assistant-eval-list", (e) => (isAssistantSender(e) ? aiEvalStore.list() : { ok: false, error: "forbidden" }));
+ipcMain.handle("graphy:assistant-requestlog-clear", (e) => (isAssistantSender(e) ? aiRequestLog.clear() : { ok: false, error: "forbidden" }));
 ipcMain.handle("graphy:assistant-journal-list", (e) =>
   isAssistantSender(e) ? readJournal({ file: path.join(app.getPath("userData"), "assistant-journal.jsonl") }) : { ok: false, error: "forbidden" },
 );

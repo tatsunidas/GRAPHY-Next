@@ -50,7 +50,12 @@ public record PluginDescriptor(
          * {@link AiToolSpec#sanitize} を通したものだけが配信される。{@code permissions} に
          * {@code ai-tools} が要る。
          */
-        List<Map<String, Object>> aiTools) {
+        List<Map<String, Object>> aiTools,
+        /**
+         * AI アシスタントに渡すスキルの宣言（{@link SkillSpec}）。{@code permissions} に {@code ai-tools} が要る。
+         * {@link SkillSpec#sanitize} を通したものだけが配信される。
+         */
+        List<Map<String, Object>> skills) {
 
     /**
      * 互換宣言。
