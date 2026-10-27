@@ -6,6 +6,7 @@ package com.vis.graphynext.dbtransfer;
 
 import com.vis.graphynext.dbtransfer.TransferManifest.GlamItem;
 import com.vis.graphynext.dbtransfer.TransferManifest.KeyImageItem;
+import com.vis.graphynext.dbtransfer.TransferManifest.MaskItem;
 import com.vis.graphynext.dbtransfer.TransferManifest.ParticipantItem;
 import com.vis.graphynext.dbtransfer.TransferManifest.PatientDocItem;
 import com.vis.graphynext.dbtransfer.TransferManifest.PluginDocItem;
@@ -28,10 +29,15 @@ import com.vis.graphynext.report.ReportType;
 import com.vis.graphynext.report.StaffRole;
 import com.vis.graphynext.roi.RoiDocument;
 import com.vis.graphynext.roi.RoiDocumentRepository;
+import com.vis.graphynext.roi.RoiMaskDocument;
+import com.vis.graphynext.roi.RoiMaskDocumentRepository;
 import com.vis.graphynext.settings.SettingsService;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -54,16 +60,18 @@ public class RelatedData {
     private final ReportRepository reports;
     private final GlamAnalysisDocumentRepository glam;
     private final RoiDocumentRepository rois;
+    private final RoiMaskDocumentRepository masks;
     private final RegistrationDocumentRepository registrations;
     private final PluginDocumentRepository plugins;
     private final SettingsService settings;
 
     public RelatedData(ReportRepository reports, GlamAnalysisDocumentRepository glam, RoiDocumentRepository rois,
-                       RegistrationDocumentRepository registrations, PluginDocumentRepository plugins,
+                       RoiMaskDocumentRepository masks, RegistrationDocumentRepository registrations, PluginDocumentRepository plugins,
                        SettingsService settings) {
         this.reports = reports;
         this.glam = glam;
         this.rois = rois;
+        this.masks = masks;
         this.registrations = registrations;
         this.plugins = plugins;
         this.settings = settings;
@@ -85,7 +93,8 @@ public class RelatedData {
     }
 
     @Transactional(readOnly = true)
-    public Related collect(Collection<String> studyUids, Collection<String> seriesUids, Collection<String> patientKeys) {
+    public Related collect(Collection<String> studyUids, Collection<String> seriesUids, Collection<String> patientKeys,
+                           Path packageDir) throws IOException {
         List<ReportItem> rep = new ArrayList<>();
         List<GlamItem> gl = new ArrayList<>();
         for (String s : studyUids) {
@@ -115,21 +124,42 @@ public class RelatedData {
                 pl.add(new PluginDocItem(d.getId().getPluginId(), d.getId().getPatientKey(), d.getJson()));
             }
         }
-        return new Related(rep, gl, cal, roi, reg, pl);
+        return new Related(rep, gl, cal, roi, reg, pl, collectMasks(seriesUids, packageDir));
     }
 
+    /**
+     * 移すシリーズの塗り ROI。フレームは目録に埋めず {@code masks/} のファイルに書く
+     * （最大 64 MB を 1 つの JSON に詰めない）。ファイル名は連番にし、{@code maskUid} をパスに使わない。
+     */
+    private List<MaskItem> collectMasks(Collection<String> seriesUids, Path packageDir) throws IOException {
+        List<MaskItem> out = new ArrayList<>();
+        if (seriesUids.isEmpty()) {
+            return out;
+        }
+        int n = 0;
+        for (RoiMaskDocument d : masks.findBySeriesUidIn(seriesUids)) {
+            String rel = String.format("masks/%05d.frames", ++n);
+            Path dest = packageDir.resolve(rel);
+            Files.createDirectories(dest.getParent());
+            Files.write(dest, d.getFrames());
+            out.add(new MaskItem(d.getMaskUid(), d.getPatientKey(), d.getSeriesUid(), d.getMeta(), d.getFrameCount(),
+                    d.getFrameBytes(), rel, Files.size(dest), DbTransferService.sha256(dest)));
+        }
+        return out;    }
+
     /** 取り込みの結果。conflicts は種類とキー、実体（呼び出し側がファイルに残す）。 */
-    public record ApplyResult(int inserted, int same, List<Conflict> conflicts) {
+    public record ApplyResult(int inserted, int same, List<Conflict> conflicts, List<String> errors) {
     }
 
     public record Conflict(String kind, String key, Object incoming) {
     }
 
     @Transactional
-    public ApplyResult apply(Related rel) {
+    public ApplyResult apply(Related rel, Path packageDir) {
         int inserted = 0;
         int same = 0;
         List<Conflict> conflicts = new ArrayList<>();
+        List<String> errors = new ArrayList<>();
         for (ReportItem r : nz(rel.reports())) {
             var cur = reports.findById(r.id());
             if (cur.isEmpty()) {
@@ -207,7 +237,37 @@ public class RelatedData {
                 conflicts.add(new Conflict("plugin", d.pluginId() + "/" + d.patientKey(), d));
             }
         }
-        return new ApplyResult(inserted, same, conflicts);
+        for (MaskItem m : nz(rel.masks())) {
+            byte[] frames;
+            try {
+                frames = readMaskFrames(packageDir, m);
+            } catch (IOException e) {
+                errors.add("塗り ROI を読めません: " + m.path() + " (" + e.getMessage() + ")");
+                continue;
+            }
+            var cur = masks.findById(m.maskUid());
+            if (cur.isEmpty()) {
+                masks.save(new RoiMaskDocument(m.maskUid(), m.patientKey(), m.seriesUid(), m.meta(), frames,
+                        m.frameCount()));
+                inserted++;
+            } else if (java.util.Arrays.equals(cur.get().getFrames(), frames)
+                    && Objects.equals(cur.get().getMeta(), m.meta())) {
+                same++;
+            } else {
+                conflicts.add(new Conflict("roiMask", m.maskUid(), m));
+            }
+        }
+        return new ApplyResult(inserted, same, conflicts, errors);
+    }
+
+    /** 荷物のフレームを、サイズ・sha256 を目録と照合して読む（荷物の外を指すパスは受けない）。 */
+    private static byte[] readMaskFrames(Path pkg, MaskItem m) throws IOException {
+        Path p = pkg.resolve(m.path()).normalize();
+        if (!p.startsWith(pkg.resolve("masks")) || !Files.isRegularFile(p) || Files.size(p) != m.size()
+                || !DbTransferService.sha256(p).equals(m.sha256())) {
+            throw new IOException("照合に失敗");
+        }
+        return Files.readAllBytes(p);
     }
 
     /**
@@ -222,6 +282,9 @@ public class RelatedData {
             glam.deleteAll(glam.findByStudyInstanceUidOrderBySavedAtDesc(s));
         }
         settings.deleteKeys(seriesUids.stream().map(RelatedData::calibrationKey).toList());
+        if (!seriesUids.isEmpty()) {
+            masks.deleteBySeriesUidIn(seriesUids); // 運んだ（照合済みの）塗り ROI。運べていない物は呼ばれない
+        }
         for (String pk : patientKeysWithoutStudies) {
             rois.findById(pk).ifPresent(rois::delete);
             registrations.findById(pk).ifPresent(registrations::delete);
