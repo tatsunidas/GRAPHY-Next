@@ -1709,6 +1709,21 @@ export interface RemoteAe {
   tls: boolean;
 }
 
+/** mDNS（_dicom._tcp）で見つかった機器。認証されていない（同じ LAN の誰でも名前を名乗れる）。 */
+export interface DiscoveredDevice {
+  name: string;
+  aeTitle: string;
+  /** TXT に aet が無く、サービス名を AE タイトルの候補にしたもの。 */
+  aeTitleFromName: boolean;
+  host: string;
+  port: number;
+  tls: boolean;
+  tlsPort: number;
+}
+
+/** 同じ LAN の DICOM 機器を約 3 秒探す（利用者が押したときだけ。自局は含まれない）。 */
+export const scanNetworkDevices = () => httpSend<DiscoveredDevice[]>("/api/dicom/discovery/scan", "POST", {});
+
 /** 設定済みリモート AE 一覧を取得する。 */
 export const fetchRemoteAes = () => httpGet<RemoteAe[]>("/api/dicom/remote-aes");
 
