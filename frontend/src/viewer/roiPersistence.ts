@@ -19,7 +19,6 @@
  */
 import type { DimScope, RoiScope } from "./roiMaskStore";
 import { isContourTool } from "./roiContourTools";
-import { dropAnalysesFor, mergeAnalyses, sanitizeAnalysis, type SavedQcaAnalysis } from "./qcaAnalysisState";
 
 /** 保存フォーマットの版。互換性を壊す変更をしたら上げ、読み込み側で分岐する。 */
 export const ROI_SCHEMA_VERSION = 1;
@@ -129,14 +128,13 @@ export interface RoiSaveFile {
   /** 削除済み ROI の墓標。 */
   deleted?: RoiTombstone[];
   /**
-   * QCA / QVA の解析状態（`qcaAnalysisState.ts`。`fw/angio-design.md` §14.5）。
+   * 旧版が書いた QCA / QVA の解析状態。**中身は読まず、そのまま持ち越す**（2D QCA は本体から外れたが、
+   * 古い保存ファイルを上書きしても失わないため。プラグイン側が使う余地も残す）。
    *
-   * <p>🔴 **これを足すために `schema` を上げていない。** {@link parseSaveFile} は
-   * 「自分より新しい版は読まない」ので、版を上げると**古いアプリがその患者の ROI を
-   * 丸ごと空として読む**（＝画面から注釈が消える）。知らないキーは無視される、という
-   * 形に留めてある。古いアプリが上書き保存すると解析状態だけは失われるが、ROI は無傷。
+   * <p>🔴 これを足すために `schema` を上げていない。{@link parseSaveFile} は「自分より新しい版は読まない」ので、
+   * 版を上げると古いアプリがその患者の ROI を丸ごと空として読む（＝画面から注釈が消える）。
    */
-  analyses?: SavedQcaAnalysis[];
+  analyses?: unknown[];
   /**
    * 3D 球 ROI。🔴 **これを足すために `schema` を上げていない**（`analyses` と同じ理由）。
    * 古いアプリは無視して読む（ROI は無傷）。古いアプリが上書き保存すると球だけは失われる。
@@ -148,8 +146,8 @@ export interface RoiSaveFile {
 export interface ParsedRoiFile {
   rois: SavedRoi[];
   deleted: RoiTombstone[];
-  /** 解析状態（無ければ空配列）。 */
-  analyses: SavedQcaAnalysis[];
+  /** 旧版の解析状態（中身は読まない。無ければ空配列）。 */
+  analyses: unknown[];
   /** 3D 球 ROI（無ければ空配列）。 */
   spheres: SavedSphere[];
 }
@@ -269,13 +267,12 @@ export function buildSaveFile(
   rois: SavedRoi[],
   deleted: RoiTombstone[] = [],
   writer?: string,
-  analyses: SavedQcaAnalysis[] = [],
+  analyses: unknown[] = [],
   spheres: SavedSphere[] = [],
 ): RoiSaveFile {
   const trimmed = [...deleted]
     .sort((a, b) => (a.at < b.at ? 1 : a.at > b.at ? -1 : 0))
     .slice(0, MAX_TOMBSTONES);
-  // 元の計測が消えた解析は道連れにする（残しても復元先が無い）。
   const buried = new Set(trimmed.map((t) => t.roiUid));
   const liveSpheres = spheres.filter((sp) => !buried.has(sp.uid));
   return {
@@ -283,7 +280,7 @@ export function buildSaveFile(
     writer,
     rois,
     deleted: trimmed,
-    analyses: dropAnalysesFor(analyses, buried),
+    analyses,
     // 球が無いときはキー自体を出さない（球を使わない患者の保存内容を変えない）。
     ...(liveSpheres.length ? { spheres: liveSpheres } : {}),
   };
@@ -354,14 +351,9 @@ export function parseSaveFile(json: string | null | undefined): ParsedRoiFile {
     if (s.isLocked === true) item.isLocked = true;
     out.push(item);
   }
-  // 解析状態（`fw/angio-design.md` §14.5）。壊れた要素は個別に落とす。
-  const analyses: SavedQcaAnalysis[] = [];
-  if (Array.isArray((file as { analyses?: unknown }).analyses)) {
-    for (const a of (file as { analyses: unknown[] }).analyses) {
-      const parsed = sanitizeAnalysis(a);
-      if (parsed && !buried.has(parsed.pickUid)) analyses.push(parsed);
-    }
-  }
+  // 旧版の解析状態は中身を検証せず素通しにする（読めない形でも失わない。墓標との突き合わせもしない）。
+  const analysesRaw = (file as { analyses?: unknown }).analyses;
+  const analyses: unknown[] = Array.isArray(analysesRaw) ? analysesRaw : [];
   const spheres: SavedSphere[] = [];
   if (Array.isArray((file as { spheres?: unknown }).spheres)) {
     const seen = new Set<string>();
@@ -548,9 +540,9 @@ export function mergeSaveFiles(remote: ParsedRoiFile, local: ParsedRoiFile): Par
   for (const uid of tombs.keys()) byUid.delete(uid);
 
   const cmp = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
-  // 🔴 解析状態は**和集合ではなく新しい方**を採る（同じ計測の解析は上書きしていくもの）。
-  //    元の計測が墓標に載っていれば道連れに落とす。
-  const analyses = dropAnalysesFor(mergeAnalyses(remote.analyses, local.analyses), tombs.keys());
+  // 旧版の解析状態は中身を読まないので突き合わせられない。いまの保存内容（remote）を正とし、
+  // 空のときだけローカルが持ち越したものを使う。
+  const analyses = remote.analyses.length ? remote.analyses : local.analyses;
   // 球も `uid` で和集合（同じ uid はローカル）。墓標に載った球は落とす。
   const sphereByUid = new Map<string, SavedSphere>();
   for (const sp of remote.spheres) sphereByUid.set(sp.uid, sp);

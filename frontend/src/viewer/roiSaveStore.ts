@@ -25,7 +25,6 @@ import {
   type SavedSphere,
 } from "./roiPersistence";
 import { fetchRoiDocument, saveRoiDocument } from "./roiPersistenceApi";
-import { mergeAnalyses, upsertAnalysis, type SavedQcaAnalysis } from "./qcaAnalysisState";
 
 /** 保存 1 回分の結果。UI が「保存済み」表示や失敗通知に使う。 */
 export interface RoiSaveResult {
@@ -61,14 +60,11 @@ interface PatientState {
    */
   loaded: SavedRoi[];
   /**
-   * QCA / QVA の解析状態（`fw/angio-design.md` §14.5）。
-   *
-   * <p>ROI と違い**収集関数を持たない**——解析ダイアログは開いている時しか存在せず、
-   * 閉じたあとに「いま何があるか」を聞ける相手がいない。読み込んだものをここに持ち越し、
-   * 保存のたびにそのまま書き戻す。持ち越さないと、**ダイアログを閉じた次の ROI 保存で
-   * 解析状態が消える**。
+   * 旧版が書いた QCA / QVA の解析状態。**中身は読まない**。ROI と違い収集関数を持たないので、
+   * 読み込んだものをここに持ち越し、保存のたびにそのまま書き戻す。持ち越さないと、
+   * 次の ROI 保存で古い解析状態が消える。
    */
-  analyses: SavedQcaAnalysis[];
+  analyses: unknown[];
   /**
    * 直近に読み込んだ／保存した球。ROI の `loaded` と同じ理由で持つ
    * （開いていないシリーズの球を保存で落とさないため）。
@@ -176,11 +172,9 @@ export async function loadRois(patientKey: string): Promise<ParsedRoiFile> {
     for (const sp of parsed.spheres) s.known.add(sp.uid);
     s.loaded = parsed.rois;
     s.spheres = parsed.spheres;
-    // 🔴 読み込みで**未保存の解析を捨てない**（ダイアログが保存した直後に別の読み込みが
-    //    走ることがある）。同じ id は新しい方を採る。
-    s.analyses = mergeAnalyses(parsed.analyses, s.analyses);
+    s.analyses = parsed.analyses;
     for (const t of parsed.deleted) s.pendingTombstones.set(t.roiUid, t);
-    return { ...parsed, analyses: s.analyses };
+    return parsed;
   } catch (e) {
     log.warn("roi load failed", patientKey, e);
     // 読めなかったときは版を未確定のままにする（未確定だと保存を試みない＝上書き事故を避ける）。
@@ -341,30 +335,6 @@ export function getLoadedRois(patientKey: string): SavedRoi[] {
 /** 直近に読み込んだ／保存した球（収集側が、開いていないシリーズの球を持ち越すために読む）。 */
 export function getLoadedSpheres(patientKey: string): SavedSphere[] {
   return states.get(patientKey)?.spheres ?? [];
-}
-
-/**
- * 直近に読み込んだ／保存した解析状態。
- *
- * <p>復元はここから引く（`XaAnalysisDialog`）。読み込み前は空なので、
- * 呼ぶ側は `loadRoisCached()` を先に通しておくこと。
- */
-export function getQcaAnalyses(patientKey: string): SavedQcaAnalysis[] {
-  return states.get(patientKey)?.analyses ?? [];
-}
-
-/**
- * 解析状態を 1 件保存する（同じ計測の解析は差し替え）。
- *
- * <p>🔴 **ROI の収集関数が無いと保存できない**（`doSave` の仕様）。ビューアが開いていれば
- * 登録されているので実運用では問題ないが、無い場合は状態にだけ残して `ok:false` を返す。
- * 黙って成功と言うと、利用者は保存できたと思って閉じる。
- */
-export function upsertQcaAnalysis(patientKey: string, analysis: SavedQcaAnalysis): Promise<RoiSaveResult> {
-  if (!patientKey) return Promise.resolve({ ok: false, error: "no patient key" });
-  const s = stateOf(patientKey);
-  s.analyses = upsertAnalysis(s.analyses, analysis);
-  return saveRoiNow(patientKey);
 }
 
 /** テスト・患者切替用に状態を捨てる。 */

@@ -72,13 +72,13 @@ describe("ANALYSIS_TASKS", () => {
 });
 
 describe("taskAvailability", () => {
-  const qca = ANALYSIS_TASKS.find((d) => d.id === "qca")!;
+  const xaTask = ANALYSIS_TASKS.find((d) => d.id === "qlv")!;
   // 未実装タスクの代表（A5a・A6b を実装したので LV バイプレーンに持ち替えた）。
   const unimplemented = ANALYSIS_TASKS.find((d) => d.id === "qlvBiplane")!;
   const report = ANALYSIS_TASKS.find((d) => d.id === "report")!;
 
   it("実装済み・standalone・XA シリーズ選択済みなら押せる", () => {
-    expect(taskAvailability(qca, READY).enabled).toBe(true);
+    expect(taskAvailability(xaTask, READY).enabled).toBe(true);
   });
 
   it("🚨 未実装は他の条件が揃っていても押せない（フェーズ名を出す）", () => {
@@ -95,16 +95,16 @@ describe("taskAvailability", () => {
   });
 
   it("web モードでは XA の解析タスクが落ちる（A12 未対応）", () => {
-    const av = taskAvailability(qca, { ...READY, standalone: false });
+    const av = taskAvailability(xaTask, { ...READY, standalone: false });
     expect(av.enabled).toBe(false);
     expect(av.reasonKey).toBe("xa.task.reason.standaloneOnly");
   });
 
   it("XA 以外のシリーズを選んでいるときは理由を出す", () => {
-    expect(taskAvailability(qca, { ...READY, seriesModality: "CT" }).reasonKey).toBe(
+    expect(taskAvailability(xaTask, { ...READY, seriesModality: "CT" }).reasonKey).toBe(
       "xa.task.reason.noXaSeries",
     );
-    expect(taskAvailability(qca, { ...READY, seriesModality: null }).reasonKey).toBe(
+    expect(taskAvailability(xaTask, { ...READY, seriesModality: null }).reasonKey).toBe(
       "xa.task.reason.noXaSeries",
     );
   });
@@ -124,8 +124,8 @@ describe("taskAvailability", () => {
 
 describe("xaTaskLaunch", () => {
   const req: XaTaskRequest = {
-    id: "qca:1",
-    target: "xaAnalysis",
+    id: "qlv:1",
+    target: "qlv",
     studyUid: "1.2.3",
     seriesUid: "1.2.3.4",
     at: 1_000_000,

@@ -320,85 +320,6 @@ function getImagePixelRange(): ImagePixelRange[] {
   return out;
 }
 
-/**
- * QCA の現在の状態（手修正の実機検証用。`fw/angio-design.md` §8.6）。
- *
- * <p>エッジや中間点を掴むには**画像ピクセル座標と画面座標の対応**が要る。
- * 画面から推測すると「掴めていないのに操作した気になる」検証になるので、
- * 変換そのものを公開する。
- */
-export interface QcaDebugSnapshot {
-  /**
-   * **どの画像を解析したか**（imageId）。
-   *
-   * <p>フレームを跨いで検証するとき、狙ったフレームを解析できているかは結果の数値からは
-   * 判別できない（別フレームの値がもっともらしく出る）。実際にファントム検証で
-   * 「1 フレーム目の結果が 2 フレーム目の値と一致する」形で踏んだ。
-   */
-  imageId: string;
-  /** 計測点の中心線（画像 px）。 */
-  centerline: [number, number][];
-  /** 計測点のエッジ（画像 px）。 */
-  edges: { left: [number, number]; right: [number, number] }[];
-  pathIndices: number[];
-  centerlineToken: string;
-  provenance: { waypoints: number; editedEdges: number[]; trimmed: boolean; reference: string; edited: boolean };
-  mld: number;
-  rvd: number;
-  percentDiameterStenosis: number;
-  percentAreaStenosis: number;
-  lesionLength: number;
-  /** 径プロファイルの雑音尺度 σ̂（病変長の信用度の目安）。 */
-  profileNoise: number;
-  /**
-   * 径を何で測ったか（§16.5）。**検証側はこれを見て期待値を切り替える**——
-   * 半値法と密度計測では真値との係数が違うので、方式を見ずに 1 つの期待値で
-   * 突き合わせると、退避が起きた瞬間に嘘の失敗（または嘘の合格）になる。
-   */
-  diameterMethod: "half-max" | "densitometric";
-  /** 密度計測に使った μ（半値法なら null）。 */
-  muPerMm: number | null;
-  /** 密度計測を使わなかった理由（使ったなら null）。 */
-  densitometryFallback: string | null;
-  points: number;
-  /** 参照径の両端（1 区間指定なら定数になる＝両端が一致する、を確かめるため）。 */
-  referenceFirst: number;
-  referenceLast: number;
-  unit: string;
-  warnings: string[];
-  /** アンカー（画像 px・血管に沿った順）。まだ無ければ未設定。 */
-  anchors?: { x: number; y: number; confirmed: boolean }[];
-  /** 拡大パネルの座標変換（画面 px = (画像 px − c0) × scale）。パネル未表示なら null。 */
-  view: { cx0: number; cy0: number; cw: number; ch: number; scale: number; dw: number; dh: number } | null;
-  /**
-   * ストレート像（§8.9）の座標系。出していなければ null。
-   *
-   * <p>🔴 **横が弧長で刻まれているか**は画面の見た目では分からない（添字で刻んでも
-   * それらしい帯が出る）。列数を中心線の全長と突き合わせられるように数値で出す。
-   */
-  straight: {
-    cols: number;
-    rows: number;
-    halfWidthPx: number;
-    lengthPx: number;
-    scale: number;
-    dw: number;
-    dh: number;
-  } | null;
-}
-
-let qcaSnapshot: QcaDebugSnapshot | null = null;
-
-/** QCA ダイアログ／拡大パネルから呼ぶ（DEV 以外では読まれない）。 */
-export function publishQcaSnapshot(patch: Partial<QcaDebugSnapshot> | null): void {
-  if (!import.meta.env.DEV) return;
-  qcaSnapshot = patch ? ({ ...(qcaSnapshot ?? {}), ...patch } as QcaDebugSnapshot) : null;
-}
-
-function getQcaState(): QcaDebugSnapshot | null {
-  return qcaSnapshot;
-}
-
 /** QLV（左室造影）の検証用スナップショット。`fw/angio-design.md` §9.2 / A5b。 */
 export interface QlvDebugSnapshot {
   /** ED/ES に選んでいるフレーム（0 origin）。 */
@@ -554,162 +475,6 @@ export function publishTimiSnapshot(patch: Partial<TimiDebugSnapshot> | null): v
 
 function getTimiState(): TimiDebugSnapshot | null {
   return timiSnapshot;
-}
-
-/** 3D QCA（A6a）の検証用スナップショット。`fw/angio-design.md` §10.2。 */
-export interface Xa3dDebugSnapshot {
-  /** 選べている方向の数と、その角度（**タグから読めているか**を数値で確かめる）。 */
-  viewCount: number;
-  anglesA: { primary: number; secondary: number } | null;
-  anglesB: { primary: number; secondary: number } | null;
-  separationDeg: number | null;
-  /** 2 方向の中心線の点数（画像から抽出できているか）。 */
-  pointsA: number;
-  pointsB: number;
-  anchorCount: number;
-  result: {
-    acceptable: boolean;
-    lengthMm: number;
-    anchorReprojectionPx: number;
-    /** 🚨 参考値。品質判定に使ってはいけない（§10.2.2）。 */
-    matchReprojectionPx: number;
-    separationDeg: number;
-    points: number;
-    warnings: { code: string; value: number; threshold: number; blocking: boolean }[];
-    /** 3D 中心線の端点と重心（真値と突き合わせるために出す）。 */
-    firstPoint: [number, number, number];
-    lastPoint: [number, number, number];
-    /** 各方向で見えている長さの割合（短縮）。§10.3.1 の主因。 */
-    visibleFractionA: number | null;
-    visibleFractionB: number | null;
-  } | null;
-  /** 3D 断面。出せないときは `unavailable` に理由が入る。 */
-  section: {
-    unavailable: string | null;
-    minAreaMm2: number | null;
-    minEquivalentDiameterMm: number | null;
-    medianMeasurementAngleDeg: number | null;
-  } | null;
-  /**
-   * 合成した 2 方向の径が**何で測られたか**（§16.5）。半値法と密度計測では
-   * 絶対値が 10% 以上違うので、断面積の期待値もこれで切り替える。
-   * 2 方向で違っていたら `"mixed"`（そのまま数値を信じてはいけない状態）。
-   */
-  diameterMethod: "half-max" | "densitometric" | "mixed" | null;
-  /** 3D の狭窄率。断面が出せなければ null。 */
-  stenosis: {
-    percentDiameterStenosis: number;
-    percentAreaStenosis: number;
-    mldMm: number;
-    rvdMm: number;
-    lesionLengthMm: number;
-    /** 径プロファイルの雑音尺度 σ̂ [mm]。3D は 2D より荒れるので病変長と一緒に見る。 */
-    profileNoiseMm: number;
-  } | null;
-  /** 短縮の少ない撮影角度の候補。 */
-  workingAngles: { primary: number; secondary: number; visibleFraction: number }[];
-  refinement: { beforePx: number; afterPx: number; primary: number; secondary: number } | null;
-  /** ステップ・レールの状態（id → state）。 */
-  steps: Record<string, string>;
-}
-
-/** 分岐部 QCA（A6b）の検証用スナップショット。`fw/angio-design.md` §21.4。 */
-export interface XaBifurcationDebugSnapshot {
-  carina: [number, number, number];
-  /** カリーナの出自（"geometry" ＝ 内接球・"endpoints" ＝ 旧方式への退避）。 */
-  carinaSource: string;
-  /** 内接球の半径 [mm]（"geometry" のときだけ）。 */
-  inscribedRadiusMm: number | null;
-  endpointSpreadMm: number;
-  confluenceRadiusMm: number;
-  branches: {
-    id: string;
-    measuredPoints: number;
-    excludedLengthMm: number;
-    mldMm: number | null;
-    rvdMm: number | null;
-    percentDiameterStenosis: number | null;
-    lesionLengthMm: number | null;
-    referenceAtCarinaMm: number | null;
-  }[];
-  angles: {
-    proximalToDistalDeg: number | null;
-    proximalToSideDeg: number | null;
-    distalToSideDeg: number | null;
-  };
-  consistency: {
-    finet: { expectedMm: number; measuredMm: number; deviationPercent: number } | null;
-    murray: { expectedMm: number; measuredMm: number; deviationPercent: number } | null;
-  };
-  warnings: { code: string; branch: string | null; value: number; threshold: number }[];
-  /** ワーキングアングルの候補（§21.4.4）。上位から。 */
-  workingAngles: {
-    primaryAngleDeg: number;
-    secondaryAngleDeg: number;
-    minVisibleFraction: number;
-    overlapLengthMm: number;
-    overlapPair: string[];
-    edgeAware: boolean;
-    score: number;
-  }[];
-  /** 角度補正が掛からなかった枝（出自）。 */
-  unrefinedBranches: string[];
-  /**
-   * カリーナ付近の 2 方向それぞれの径（切り分け専用）。片方だけ太いなら**投影で重なっている**、
-   * 両方太いなら**本当に太い**。
-   */
-  carinaProfile: {
-    id: string;
-    samples: { fromCarinaMm: number; dA: number; dB: number; equiv: number }[];
-  }[];
-  /** 3 枝が同じ視点ペアを見ていたか（違うとアンカーを束ねられない）。 */
-  viewPairShared: boolean;
-  /**
-   * 3 枝ぶんのアンカーを束ねて視点ペアに 1 回だけ掛けた角度補正（§21.4 の段 3）。
-   * 掛からなかったときは null。
-   */
-  refinement: {
-    /** 門を通って**実際に適用した**か。false なら候補は出したが幾何はタグのまま。 */
-    applied: boolean;
-    beforePx: number;
-    afterPx: number;
-    primaryDeg: number;
-    secondaryDeg: number;
-    anchorCount: number;
-  } | null;
-  /**
-   * 再構成した 3D 中心線（患者 LPS mm・枝ごと）。
-   *
-   * <p>数値が合わないときに**どの段で狂ったか**を切り分けるために出す。角度だけを見ても
-   * 「2D の追跡が汚染された」のか「再構成が歪んだ」のかは区別が付かない
-   * （実機で分岐角が +10° ずれたとき、真値の 2D 点列から回した結果と突き合わせて
-   * 初めて追跡側だと分かった）。
-   */
-  branchPoints: { id: string; points: [number, number, number][] }[];
-}
-
-let xaBifurcationSnapshot: XaBifurcationDebugSnapshot | null = null;
-
-/** 分岐部ダイアログから呼ぶ（DEV 以外では何もしない）。 */
-export function publishXaBifurcationSnapshot(s: XaBifurcationDebugSnapshot | null): void {
-  if (!import.meta.env.DEV) return;
-  xaBifurcationSnapshot = s;
-}
-
-function getXaBifurcationState(): XaBifurcationDebugSnapshot | null {
-  return xaBifurcationSnapshot;
-}
-
-let xa3dSnapshot: Xa3dDebugSnapshot | null = null;
-
-/** 3D QCA ダイアログから呼ぶ（DEV 以外では読まれない）。 */
-export function publishXa3dSnapshot(patch: Partial<Xa3dDebugSnapshot> | null): void {
-  if (!import.meta.env.DEV) return;
-  xa3dSnapshot = patch ? ({ ...(xa3dSnapshot ?? {}), ...patch } as Xa3dDebugSnapshot) : null;
-}
-
-function getXa3dState(): Xa3dDebugSnapshot | null {
-  return xa3dSnapshot;
 }
 
 /**
@@ -1199,12 +964,9 @@ declare global {
       getCanvasPxPerMm: typeof getCanvasPxPerMm;
       getViewportProperties: typeof getViewportProperties;
       getXaCineStats: typeof getXaCineStats;
-      getQcaState: typeof getQcaState;
       getQlvState: typeof getQlvState;
       getIvusSyncState: typeof getIvusSyncState;
       getTimiState: typeof getTimiState;
-      getXa3dState: typeof getXa3dState;
-      getXaBifurcationState: typeof getXaBifurcationState;
       imagePixelsToCanvasFraction: typeof imagePixelsToCanvasFraction;
       getGeometry3dStats: typeof getGeometry3dStats;
       getXaCalibration: typeof getXaCalibration;
@@ -1373,12 +1135,9 @@ export function installDebugApi(): void {
     getCanvasPxPerMm,
     getViewportProperties,
     getXaCineStats,
-    getQcaState,
     getQlvState,
     getIvusSyncState,
     getTimiState,
-    getXa3dState,
-    getXaBifurcationState,
     imagePixelsToCanvasFraction,
     getGeometry3dStats,
     getXaCalibration,

@@ -20,7 +20,6 @@ import { Viewer2DScreen } from "./viewer2d/Viewer2DScreen";
 import { MprScreen } from "./mpr/MprScreen";
 import { Viewer3DScreen } from "./viewer3d/Viewer3DScreen";
 import { Geometry3DScreen } from "./viewer3d/Geometry3DScreen";
-import { ensureQcaRunChannel } from "./viewer/xaRecon3dStore";
 import { ensureVesselModelChannel } from "./viewer/xaVesselModelStore";
 import { ensureAnalysisResultChannel } from "./report/analysisResultStore";
 import { SlicerScreen } from "./slicer/SlicerScreen";
@@ -154,11 +153,10 @@ export function App() {
     void runUpdateCheck(false);
   }, [screen]);
 
-  // 3D QCA（A6a）の登録簿の中継。2D ビューアは 1 ウィンドウを使い回すため、方向を跨いで
+  // 血管モデルと解析値の中継。2D ビューアは 1 ウィンドウを使い回し、3D ウィンドウは後から開くので、
   // 覚えておく役がどこかに要る。常時開いているこのウィンドウが引き受ける。
   useEffect(() => {
-    ensureQcaRunChannel();
-    // A7: 血管モデルと解析値も同じ理由で中継する（3D ウィンドウは後から開く）。
+    // A7: 血管モデルと解析値を中継する。
     ensureVesselModelChannel();
     // レポートへ差し込む解析結果も、解析するウィンドウとレポートを書くウィンドウが別なので
     // 同じく中継する（A14）。

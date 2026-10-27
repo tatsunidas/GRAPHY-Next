@@ -577,3 +577,39 @@ describe("球 ROI の保存（spheres）", () => {
     expect(m.spheres.map((s) => [s.uid, s.label])).toEqual([["a", "Sphere"], ["b", "local"], ["c", "Sphere"]]);
   });
 });
+
+describe("旧版の解析状態（analyses）— 中身を読まずに素通しする", () => {
+  // 2D QCA は本体から外れたが、古い保存ファイルを上書き保存しても解析状態は失わない。
+  // 形は問わない（旧版が書いた形も、壊れた形も、そのまま残す）。
+  const legacy: unknown[] = [
+    { pickUid: "p1", imageId: "img", result: { mld: 1.23, nested: [1, 2, { a: "b" }] } },
+    { pickUid: "gone-roi", note: "墓標に載った ROI に紐づく解析" },
+    "string-element",
+    42,
+    null,
+  ];
+  const roi: SavedRoi = { roiUid: "r1", tool: "Length", sopInstanceUid: SOP, points: [[0, 0, 0], [1, 1, 1]] };
+
+  it("読み込み → 保存 → 再読込で、要素も順序もそのまま残る", () => {
+    const first = parseSaveFile(JSON.stringify({ schema: ROI_SCHEMA_VERSION, rois: [roi], analyses: legacy }));
+    expect(first.analyses).toEqual(legacy);
+    const saved = buildSaveFile(first.rois, first.deleted, "graphy-next", first.analyses, first.spheres);
+    expect(parseSaveFile(JSON.stringify(saved)).analyses).toEqual(legacy);
+  });
+
+  it("墓標に載った ROI に紐づくものも落とさない（中身を読まないので突き合わせない）", () => {
+    const saved = buildSaveFile([], [{ roiUid: "gone-roi", at: "2026-10-27T00:00:00Z" }], "graphy-next", legacy);
+    expect(saved.analyses).toEqual(legacy);
+  });
+
+  it("analyses が無い・配列でないファイルは空配列", () => {
+    expect(parseSaveFile(JSON.stringify({ schema: ROI_SCHEMA_VERSION, rois: [roi] })).analyses).toEqual([]);
+    expect(parseSaveFile(JSON.stringify({ schema: ROI_SCHEMA_VERSION, rois: [roi], analyses: { a: 1 } })).analyses).toEqual([]);
+  });
+
+  it("mergeSaveFiles: 保存済み（remote）を正とし、空のときだけローカルの持ち越しを使う", () => {
+    const base = { rois: [], deleted: [], spheres: [] };
+    expect(mergeSaveFiles({ ...base, analyses: [{ id: "remote" }] }, { ...base, analyses: [{ id: "local" }] }).analyses).toEqual([{ id: "remote" }]);
+    expect(mergeSaveFiles({ ...base, analyses: [] }, { ...base, analyses: [{ id: "local" }] }).analyses).toEqual([{ id: "local" }]);
+  });
+});
