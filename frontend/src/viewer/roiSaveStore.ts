@@ -204,8 +204,19 @@ export function scheduleRoiSave(patientKey: string, debounceMs = ROI_SAVE_DEBOUN
   }, debounceMs);
 }
 
+/**
+ * 閉じる・再読み込みの直前に、保存待ち（デバウンス中）の患者を今すぐ送る。
+ * 🔴 React のアンマウントはページごと閉じるときは走らないので、`pagehide` から呼ぶ（`unloadFlush.ts`）。
+ * `put` → `fetch` は同期で開始されるので、閉じる前に要求が出る。`keepalive` で送信中に閉じても切れない。
+ */
+export function flushRoiSavesForUnload(): void {
+  for (const [patientKey, s] of states) {
+    if (s.timer) void saveRoiNow(patientKey, { keepalive: true });
+  }
+}
+
 /** いま保存する（明示保存・アンマウント時のフラッシュ）。予約済みのデバウンスは取り消す。 */
-export function saveRoiNow(patientKey: string): Promise<RoiSaveResult> {
+export function saveRoiNow(patientKey: string, opts?: { keepalive?: boolean }): Promise<RoiSaveResult> {
   const s = stateOf(patientKey);
   if (s.timer) {
     clearTimeout(s.timer);
@@ -215,7 +226,7 @@ export function saveRoiNow(patientKey: string): Promise<RoiSaveResult> {
     s.dirtyAgain = true;
     return s.inflight;
   }
-  const run = doSave(patientKey).then(async (result) => {
+  const run = doSave(patientKey, opts?.keepalive).then(async (result) => {
     s.inflight = undefined;
     notify(patientKey, result);
     if (s.dirtyAgain && result.ok) {
@@ -229,7 +240,7 @@ export function saveRoiNow(patientKey: string): Promise<RoiSaveResult> {
   return run;
 }
 
-async function doSave(patientKey: string): Promise<RoiSaveResult> {
+async function doSave(patientKey: string, keepalive = false): Promise<RoiSaveResult> {
   const collect = collectors.get(patientKey);
   if (!collect) return { ok: false, error: "no collector" };
   const s = stateOf(patientKey);
@@ -268,7 +279,7 @@ async function doSave(patientKey: string): Promise<RoiSaveResult> {
   };
 
   try {
-    const saved = await put(patientKey, local, s.version);
+    const saved = await put(patientKey, local, s.version, keepalive);
     commit(s, saved.content, saved.version);
     return { ok: true, roiCount: saved.content.rois.length };
   } catch (e) {
@@ -297,9 +308,10 @@ async function put(
   patientKey: string,
   content: ParsedRoiFile,
   version: number | null | undefined,
+  keepalive = false,
 ): Promise<{ content: ParsedRoiFile; version: number | null }> {
   const file = buildSaveFile(content.rois, content.deleted, "graphy-next", content.analyses, content.spheres);
-  const dto = await saveRoiDocument(patientKey, JSON.stringify(file), file.rois.length, version ?? null);
+  const dto = await saveRoiDocument(patientKey, JSON.stringify(file), file.rois.length, version ?? null, keepalive);
   // 上限で切られた墓標を状態にも反映するため、保存した内容（＝切られた後）を返す。
   return {
     content: { rois: file.rois, deleted: file.deleted ?? [], analyses: file.analyses ?? [], spheres: file.spheres ?? [] },

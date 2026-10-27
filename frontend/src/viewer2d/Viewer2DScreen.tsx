@@ -65,6 +65,7 @@ import { getLoadedRois, getLoadedSpheres, registerRoiCollector, scheduleRoiSave 
 import { collectSpheresForPatient } from "../viewer/sphereRestore";
 import { subscribeSphere3D } from "../viewer/sphere3dStore";
 import { startMaskPersistence } from "../viewer/maskSaveStore";
+import { startUnloadFlush } from "../viewer/unloadFlush";
 import { collectRoisForPatient, sopOfImageId } from "../viewer/roiRestore";
 import { emitRoiReveal } from "../viewer/roiReveal";
 import { installRoiRevealReceiver } from "../viewer/roiRevealBridge";
@@ -1199,7 +1200,10 @@ function TileGrid({
     const unsubSphere = subscribeSphere3D(onChange);
     // 塗り ROI（マスク）は別テーブルへ、変更があったものだけを保存する。
     const stopMasks = startMaskPersistence();
+    // 閉じる・再読み込みの直前に、保存待ちを送る。
+    const stopUnload = startUnloadFlush();
     return () => {
+      stopUnload();
       stopMasks();
       for (const name of names) eventTarget.removeEventListener(name, onChange);
       unsubMeta();

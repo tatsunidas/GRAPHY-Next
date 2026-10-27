@@ -15,7 +15,7 @@ vi.mock("./roiPersistenceApi", () => ({
 }));
 vi.mock("../log", () => ({ log: { warn: vi.fn(), error: vi.fn(), info: vi.fn(), debug: vi.fn() } }));
 
-const { loadRois, registerRoiCollector, resetRoiSaveState, saveRoiNow, scheduleRoiSave, subscribeRoiSave } =
+const { flushRoiSavesForUnload, loadRois, registerRoiCollector, resetRoiSaveState, saveRoiNow, scheduleRoiSave, subscribeRoiSave } =
   await import("./roiSaveStore");
 
 const PK = "PAT-1";
@@ -278,5 +278,36 @@ describe("購読", () => {
     const res = await saveRoiNow(PK);
     unsub();
     expect(res.ok).toBe(true);
+  });
+});
+
+describe("flushRoiSavesForUnload（閉じる・再読み込みの直前）", () => {
+  it("保存待ちの患者を、デバウンスを待たずに keepalive で送る", async () => {
+    vi.useFakeTimers();
+    registerRoiCollector(PK, () => [roi("a")]);
+    await loadRois(PK); // 版を確定させる（未確定だと保存は読み込みを待つ）
+    scheduleRoiSave(PK, 60_000);
+    expect(saveRoiDocument).not.toHaveBeenCalled();
+    flushRoiSavesForUnload();
+    // put → fetch は同期で開始される（閉じる前に要求が出ていること）。
+    expect(saveRoiDocument).toHaveBeenCalledTimes(1);
+    expect(saveRoiDocument.mock.calls[0][4]).toBe(true);
+    expect(lastSaved().rois.map((r) => r.roiUid)).toEqual(["a"]);
+    // 取り消されたデバウンスのタイマーが、あとで二重に送らない。
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(saveRoiDocument).toHaveBeenCalledTimes(1);
+  });
+
+  it("保存待ちが無い患者には何も送らない（負例）", async () => {
+    registerRoiCollector(PK, () => [roi("a")]);
+    await loadRois(PK);
+    flushRoiSavesForUnload();
+    expect(saveRoiDocument).not.toHaveBeenCalled();
+  });
+
+  it("通常の保存には keepalive を付けない", async () => {
+    registerRoiCollector(PK, () => [roi("a")]);
+    await saveRoiNow(PK);
+    expect(saveRoiDocument.mock.calls[0][4]).toBeFalsy();
   });
 });
