@@ -16,7 +16,12 @@ import { runToolLoop } from "./toolLoop";
 import { RobotPanel, type RobotPlan } from "./robot/RobotPanel";
 import { buildRobotTools } from "./robot/planModel";
 import { MacroPanel, type MacroApi } from "./macros/MacroPanel";
-import { SkillPanel, type SkillApi } from "./skills/SkillPanel";
+import type { Macro } from "./macros/macroModel";
+import { SkillPanel, type SkillApi, type SkillDraft, type SkillSuggestion } from "./skills/SkillPanel";
+import { mergeSkills } from "./skills/skillView";
+import { buildSkillTools, promptSkills } from "./skills/skillTools";
+import { macroToSkill } from "./skills/macroToSkill";
+import type { Skill } from "./skills/skillModel";
 import { PluginToolPanel } from "./PluginToolPanel";
 import { RequestLogPanel, type RequestLogApi } from "./RequestLogPanel";
 import type { EvalApi } from "./EvalSection";
@@ -83,6 +88,10 @@ export function AssistantScreen() {
   const [note, setNote] = useState<string | null>(null);
   const [macroOpen, setMacroOpen] = useState(false);
   const [skillOpen, setSkillOpen] = useState(false);
+  const [userSkills, setUserSkills] = useState<Skill[]>([]);
+  const [skillsVersion, setSkillsVersion] = useState(0);
+  const [skillSuggest, setSkillSuggest] = useState<SkillSuggestion | null>(null);
+  const [skillDraft, setSkillDraft] = useState<SkillDraft | null>(null);
   const [robot, setRobot] = useState(false);
   const [pluginToolOpen, setPluginToolOpen] = useState(false);
   const [requestLogOpen, setRequestLogOpen] = useState(false);
@@ -233,8 +242,10 @@ export function AssistantScreen() {
       .map((m) => ({ role: m.role, text: m.text }));
     // ツールを送るのは、使える口があり、提供元がツール呼び出しに対応するとき（toolMode:none は案内のみ）。
     const canOperate = !!bridge.assistantViewerCmd && !!resolved?.ok && resolved.toolMode !== "none";
+    // モデルへ見せるスキル: 検証に通ったものだけ（チャットモードで操作ツールが使えるとき）。
+    const offered = promptSkills(mergeSkills(userSkills).map((e) => e.skill), enabledPluginTools);
     const req: AiChatMessage[] = [
-      { role: "system", text: buildSystemPrompt(locale, hits, { canOperate, robot, pluginTools: canOperate && !robot && enabledPluginTools.length > 0, robotPluginTools: canOperate && robot && planEligible(enabledPluginTools).length > 0 }) },
+      { role: "system", text: buildSystemPrompt(locale, hits, { canOperate, robot, skills: canOperate && !robot ? offered : undefined, pluginTools: canOperate && !robot && enabledPluginTools.length > 0, robotPluginTools: canOperate && robot && planEligible(enabledPluginTools).length > 0 }) },
       ...history,
       { role: "user", text: composed.text, images: allImages.length ? allImages.map((i) => ({ base64: i.base64, mimeType: i.mimeType })) : undefined },
     ];
@@ -249,7 +260,17 @@ export function AssistantScreen() {
     const viewer = (cmd: { kind: "action" | "getState" | "getMeasurements"; id?: string; params?: unknown }) =>
       bridge.assistantViewerCmd!(sessionId, cmd);
     if (robot) setPlan(null);
-    const result = await runToolLoop(req, canOperate ? (robot ? buildRobotTools(enabledPluginTools) : [...buildTools(), ...enabledPluginTools.map(toToolDef)]) : [], {
+    const result = await runToolLoop(req, canOperate ? (robot ? buildRobotTools(enabledPluginTools) : [...buildTools(), ...buildSkillTools(), ...enabledPluginTools.map(toToolDef)]) : [], {
+      skills: canOperate && !robot ? offered : undefined,
+      skillIds: userSkills.map((s) => s.id),
+      onSkillStart: (p) => {
+        setSkillSuggest({ nonce: Date.now(), skillId: p.skillId, inputs: p.inputs });
+        setSkillOpen(true);
+      },
+      onSkillDraft: (p) => {
+        setSkillDraft({ nonce: Date.now(), skill: p.skill });
+        setSkillOpen(true);
+      },
       mode: robot ? "robot" : "chat",
       onPlan: (p) => setPlan(p),
       chat: (messages, tools) => bridge.aiChat!({ sessionId, messages, tools: tools.length ? tools : undefined, stream: true }),
@@ -271,7 +292,7 @@ export function AssistantScreen() {
       flush();
     }
     dispatch({ type: "done", result });
-  }, [input, images, attachments, ingesting, resolved, t, state.pending, state.messages, bridge, locale, sessionId, flush, robot, enabledPluginTools]);
+  }, [input, images, attachments, ingesting, resolved, t, state.pending, state.messages, bridge, locale, sessionId, flush, robot, enabledPluginTools, userSkills]);
 
   const stop = useCallback(() => {
     abortedRef.current = true;
@@ -316,6 +337,26 @@ export function AssistantScreen() {
       pluginTool: (cmd) => bridge.assistantViewerCmd!(sessionId, cmd) as Promise<PluginToolResult>,
     };
   }, [bridge, sessionId, enabledPluginTools]);
+  const reloadSkills = useCallback(async () => {
+    const r = await bridge?.assistantSkillsList?.();
+    setUserSkills(r?.ok && r.skills ? r.skills : []);
+    setSkillsVersion((v) => v + 1);
+  }, [bridge]);
+  useEffect(() => {
+    void reloadSkills();
+  }, [reloadSkills]);
+  // マクロ → スキル。マクロは残す。検証に通らなければ理由を返す。
+  const convertMacro = useCallback(
+    async (m: Macro): Promise<{ ok: boolean; error?: string }> => {
+      const c = macroToSkill(m, () => Math.random().toString(16).slice(2, 10));
+      if (!c.ok) return { ok: false, error: c.error };
+      const r = await bridge?.assistantSkillsSave?.(c.skill);
+      if (!r?.ok) return { ok: false, error: r?.error ?? "unavailable" };
+      await reloadSkills();
+      return { ok: true };
+    },
+    [bridge, reloadSkills],
+  );
   const robotApi = useMemo(
     () =>
       bridge?.assistantViewerCmd
@@ -430,8 +471,8 @@ export function AssistantScreen() {
       {robot && robotApi && <RobotPanel plan={plan} api={robotApi} t={t} onDiscard={() => setPlan(null)} />}
       {pluginToolOpen && <PluginToolPanel tools={pluginTools} onToggle={(id, on) => void togglePlugin(id, on)} busy={busy} t={t} />}
       {requestLogOpen && requestLogApi && <RequestLogPanel api={requestLogApi} evalApi={evalApi} busy={busy} t={t} />}
-      {macroOpen && macroApi && <MacroPanel api={macroApi} candidates={macroCandidates} busy={busy} t={t} />}
-      {skillOpen && skillApi && <SkillPanel api={skillApi} busy={busy} t={t} locale={locale} />}
+      {macroOpen && macroApi && <MacroPanel api={macroApi} candidates={macroCandidates} busy={busy} t={t} onConvert={convertMacro} />}
+      {skillOpen && skillApi && <SkillPanel api={skillApi} busy={busy} t={t} locale={locale} suggestion={skillSuggest} draft={skillDraft} onChanged={() => void reloadSkills()} reloadKey={skillsVersion} />}
       {note && <div style={S.note}>{note}</div>}
       {attachments.length > 0 && !(resolved?.ok && resolved.local) && (
         <div style={S.note} data-testid="assistant-attach-dest">
