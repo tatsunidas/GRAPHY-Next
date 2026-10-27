@@ -11,6 +11,7 @@ import {
   sendDicom,
   type RemoteAe,
   type SendSelection,
+  type SendTransferSyntax,
   type Series,
   type Study,
 } from "../api";
@@ -52,6 +53,7 @@ export function SendDialog({
   const [host, setHost] = useState("");
   const [port, setPort] = useState("104");
   const [tls, setTls] = useState(false);
+  const [transferSyntax, setTransferSyntax] = useState<SendTransferSyntax>("STORED");
 
   const [busy, setBusy] = useState(false);
   const [echoing, setEchoing] = useState(false);
@@ -242,6 +244,7 @@ export function SendDialog({
         port: Number(port),
         calledAet: aeTitle.trim(),
         tls,
+        transferSyntax,
       });
       if (r.failed > 0) {
         setError(t("send.result.partial", { sent: r.sent, total: r.total, failed: r.failed }));
@@ -349,6 +352,20 @@ export function SendDialog({
             <button onClick={runEcho} disabled={echoing || !destReady} style={{ ...btn, marginLeft: 8 }}>
               {echoing ? t("send.echo.running") : t("send.echo")}
             </button>
+          </div>
+          <div style={destRow}>
+            <label style={destLabel}>{t("send.ts")}</label>
+            {(["STORED", "EXPLICIT_LE", "IMPLICIT_LE"] as const).map((v) => (
+              <label key={v} style={opt}>
+                <input
+                  type="radio"
+                  name="send-ts"
+                  checked={transferSyntax === v}
+                  onChange={() => setTransferSyntax(v)}
+                />
+                {t(`send.ts.${v}`)}
+              </label>
+            ))}
           </div>
         </div>
 

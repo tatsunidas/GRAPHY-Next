@@ -209,7 +209,16 @@ public class DicomController {
                 .stream()
                 .map(s -> new DicomSendService.Selection(s.studyUid(), s.seriesUids()))
                 .toList();
-        return send.send(selections, req.host(), req.port(), req.calledAet(), callingAet, req.tls());
+        com.vis.graphynext.dicom.store.DicomStoreScu.TsPolicy policy;
+        try {
+            policy = req.transferSyntax() == null || req.transferSyntax().isBlank()
+                    ? com.vis.graphynext.dicom.store.DicomStoreScu.TsPolicy.STORED
+                    : com.vis.graphynext.dicom.store.DicomStoreScu.TsPolicy.valueOf(req.transferSyntax());
+        } catch (IllegalArgumentException e) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    org.springframework.http.HttpStatus.BAD_REQUEST, "transferSyntax が不正です: " + req.transferSyntax());
+        }
+        return send.send(selections, req.host(), req.port(), req.calledAet(), callingAet, req.tls(), policy);
     }
 
     public record EchoRequest(String host, int port, String calledAet, String callingAet, boolean tls) {
@@ -222,7 +231,7 @@ public class DicomController {
     }
 
     public record SendRequest(List<SendSelection> selections, String host, int port, String calledAet,
-                              String callingAet, boolean tls) {
+                              String callingAet, boolean tls, String transferSyntax) {
     }
 
     public record QrFindRequest(String host, int port, String calledAet, Map<String, String> matchKeys, boolean tls) {

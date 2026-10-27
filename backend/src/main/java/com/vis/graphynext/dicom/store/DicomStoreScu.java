@@ -77,6 +77,24 @@ public class DicomStoreScu {
         return codec != null && tsuid != null && LOSSLESS_STORED.contains(tsuid);
     }
 
+    /** 送信時の転送構文の方針。STORED は保存どおり（従来の挙動）、ほかは指定した非圧縮構文だけを相手に提示する。 */
+    public enum TsPolicy {
+        STORED(null),
+        EXPLICIT_LE(UID.ExplicitVRLittleEndian),
+        IMPLICIT_LE(UID.ImplicitVRLittleEndian);
+
+        private final String uid;
+
+        TsPolicy(String uid) {
+            this.uid = uid;
+        }
+
+        /** 指定する転送構文。STORED は null。 */
+        public String uid() {
+            return uid;
+        }
+    }
+
     /** 送るときの転送構文。元の転送構文を相手が受けるならそれ、受けず Explicit VR LE を受けるならそれ、どちらも無ければ null。 */
     private String chooseTs(Association as, String cuid, String tsuid) {
         if (!canFallBack(tsuid)) {
@@ -89,9 +107,14 @@ public class DicomStoreScu {
         return accepted.contains(UID.ExplicitVRLittleEndian) ? UID.ExplicitVRLittleEndian : null;
     }
 
-    /** ファイルから送るデータセットを作る。chosen が元と違うとき（Explicit VR LE）は復号する。復号できなければ null。 */
+    /** 指定した転送構文を相手が受理したときだけそれを返す。受理されなければ null（保存どおりへは戻さない）。 */
+    private String chooseTs(Association as, String cuid, TsPolicy policy) {
+        return as.getTransferSyntaxesFor(cuid).contains(policy.uid()) ? policy.uid() : null;
+    }
+
+    /** ファイルから送るデータセットを作る。chosen が元と違う圧縮画像は復号する。復号できなければ null。 */
     private Attributes datasetFor(Path file, String tsuid, String chosen) throws IOException {
-        if (chosen.equals(tsuid)) {
+        if (chosen.equals(tsuid) || PixelCodec.isUncompressed(tsuid)) {
             try (DicomInputStream din = new DicomInputStream(file.toFile())) {
                 din.readFileMetaInformation();
                 return din.readDataset();
@@ -99,6 +122,23 @@ public class DicomStoreScu {
         }
         PixelCodec.Uncompressed u = codec.toUncompressed(file);
         return u == null ? null : u.ds();
+    }
+
+    /**
+     * 指定した非圧縮構文で送れない理由。送れるなら null。
+     * 保存が非圧縮ならそのまま再符号化できる。可逆圧縮はコーデックがあれば復号できる。有損圧縮などは変換しない。
+     */
+    private String cannotConvertReason(String tsuid) {
+        if (PixelCodec.isUncompressed(tsuid)) {
+            return null;
+        }
+        if (!isLosslessStored(tsuid)) {
+            return "圧縮形式 " + tsuid + " は非圧縮へ変換しません";
+        }
+        if (codec == null || !codec.available()) {
+            return "圧縮画像（" + tsuid + "）を復号できません" + (codec == null ? "" : "（" + codec.unavailableReason() + "）");
+        }
+        return null;
     }
 
     public record StoreResult(boolean success, int status, String message) {
@@ -122,6 +162,12 @@ public class DicomStoreScu {
     /** TLS 付き C-STORE。{@code tls} が null/usable でないときは平文。 */
     public StoreResult store(String host, int port, String calledAet, String callingAet, Path dicomFile,
                              com.vis.graphynext.dicom.DicomProperties.Tls tls) {
+        return store(host, port, calledAet, callingAet, dicomFile, tls, TsPolicy.STORED);
+    }
+
+    /** 転送構文の方針つき C-STORE。STORED 以外は、指定した非圧縮構文だけを提示し、受理されなければ失敗にする。 */
+    public StoreResult store(String host, int port, String calledAet, String callingAet, Path dicomFile,
+                             com.vis.graphynext.dicom.DicomProperties.Tls tls, TsPolicy policy) {
         Attributes fmi;
         Attributes dataset;
         try (DicomInputStream din = new DicomInputStream(dicomFile.toFile())) {
@@ -160,17 +206,27 @@ public class DicomStoreScu {
 
         AAssociateRQ rq = new AAssociateRQ();
         rq.setCalledAET(calledAet);
-        rq.addPresentationContext(new PresentationContext(1, cuid, tsuid));
-        if (canFallBack(tsuid)) {
-            rq.addPresentationContext(new PresentationContext(3, cuid, UID.ExplicitVRLittleEndian));
+        if (policy == TsPolicy.STORED) {
+            rq.addPresentationContext(new PresentationContext(1, cuid, tsuid));
+            if (canFallBack(tsuid)) {
+                rq.addPresentationContext(new PresentationContext(3, cuid, UID.ExplicitVRLittleEndian));
+            }
+        } else {
+            String reason = cannotConvertReason(tsuid);
+            if (reason != null) {
+                return new StoreResult(false, -1, reason);
+            }
+            rq.addPresentationContext(new PresentationContext(1, cuid, policy.uid()));
         }
 
         Association as = null;
         try {
             as = ae.connect(local, remote, rq);
-            String sendTs = chooseTs(as, cuid, tsuid);
+            String sendTs = policy == TsPolicy.STORED ? chooseTs(as, cuid, tsuid) : chooseTs(as, cuid, policy);
             if (sendTs == null) {
-                return new StoreResult(false, -1, "相手が転送構文 " + tsuid + " も Explicit VR Little Endian も受け付けません");
+                return new StoreResult(false, -1, policy == TsPolicy.STORED
+                        ? "相手が転送構文 " + tsuid + " も Explicit VR Little Endian も受け付けません"
+                        : "相手が指定の転送構文 " + policy.uid() + " を受け付けません");
             }
             Attributes toSend = datasetFor(dicomFile, tsuid, sendTs);
             if (toSend == null) {
@@ -209,6 +265,12 @@ public class DicomStoreScu {
      */
     public BatchResult storeAll(String host, int port, String calledAet, String callingAet, List<Path> files,
                                 com.vis.graphynext.dicom.DicomProperties.Tls tls) {
+        return storeAll(host, port, calledAet, callingAet, files, tls, TsPolicy.STORED);
+    }
+
+    /** 転送構文の方針つき一括送信。STORED 以外は指定構文のみ提示し、変換できない・受理されない画像は失敗として数える。 */
+    public BatchResult storeAll(String host, int port, String calledAet, String callingAet, List<Path> files,
+                                com.vis.graphynext.dicom.DicomProperties.Tls tls, TsPolicy policy) {
         int total = files.size();
         List<String> messages = new ArrayList<>();
         if (files.isEmpty()) {
@@ -239,6 +301,20 @@ public class DicomStoreScu {
             if (cuid == null || iuid == null || tsuid == null) {
                 failed++;
                 addMessage(messages, "FMI 不足のため送信不可: " + f.getFileName());
+                continue;
+            }
+            if (policy != TsPolicy.STORED) {
+                String reason = cannotConvertReason(tsuid);
+                if (reason != null) {
+                    failed++;
+                    addMessage(messages, reason + ": " + iuid);
+                    continue;
+                }
+                items.add(new Item(f, cuid, iuid, tsuid));
+                String pKey = cuid + '\t' + policy.uid();
+                if (pcKeys.add(pKey)) {
+                    pcPairs.put(pKey, new String[] { cuid, policy.uid() });
+                }
                 continue;
             }
             items.add(new Item(f, cuid, iuid, tsuid));
@@ -304,10 +380,13 @@ public class DicomStoreScu {
                     // 送信元ファイルは cstore の前に読み切って閉じる。ネットワーク I/O 中にファイルハンドルを
                     // 保持しないことで、受信側が同一パスへ書き戻す構成（自己送信）でも Windows のファイルロックで
                     // 失敗しない（POSIX は開いたまま rename 置換可だが Windows は不可）。
-                    String sendTs = chooseTs(as, it.cuid(), it.tsuid());
+                    String sendTs = policy == TsPolicy.STORED
+                            ? chooseTs(as, it.cuid(), it.tsuid()) : chooseTs(as, it.cuid(), policy);
                     if (sendTs == null) {
                         failed++;
-                        addMessage(messages, "相手が転送構文 " + it.tsuid() + " も Explicit VR Little Endian も受け付けません: " + it.iuid());
+                        addMessage(messages, policy == TsPolicy.STORED
+                                ? "相手が転送構文 " + it.tsuid() + " も Explicit VR Little Endian も受け付けません: " + it.iuid()
+                                : "相手が指定の転送構文 " + policy.uid() + " を受け付けません: " + it.iuid());
                         continue;
                     }
                     Attributes dataset = datasetFor(it.file(), it.tsuid(), sendTs);

@@ -52,13 +52,20 @@ public class DicomSendService {
     public record SendSummary(int total, int sent, int failed, List<String> messages) {
     }
 
+    /** 保存どおりの転送構文で送る。 */
+    public SendSummary send(List<Selection> selections, String host, int port, String calledAet,
+                            String callingAet, boolean tls) {
+        return send(selections, host, port, calledAet, callingAet, tls, DicomStoreScu.TsPolicy.STORED);
+    }
+
     /**
      * 選択スタディ/シリーズをリモート AE へ C-STORE する。
      *
      * @param tls true なら TLS（設定が揃っている場合のみ実効。未整備なら平文）。
+     * @param tsPolicy 転送構文の方針（STORED は保存どおり）。
      */
     public SendSummary send(List<Selection> selections, String host, int port, String calledAet,
-                            String callingAet, boolean tls) {
+                            String callingAet, boolean tls, DicomStoreScu.TsPolicy tsPolicy) {
         List<Path> files = new ArrayList<>();
         for (Selection sel : selections) {
             if (sel == null || sel.studyUid() == null || sel.studyUid().isBlank()) {
@@ -71,7 +78,7 @@ public class DicomSendService {
             return new SendSummary(0, 0, 0, List.of("送信対象が見つかりませんでした"));
         }
         DicomProperties.Tls tlsCfg = tls ? tlsService.effective() : null;
-        DicomStoreScu.BatchResult r = scu.storeAll(host, port, calledAet, callingAet, files, tlsCfg);
+        DicomStoreScu.BatchResult r = scu.storeAll(host, port, calledAet, callingAet, files, tlsCfg, tsPolicy);
         return new SendSummary(r.total(), r.sent(), r.failed(), r.messages());
     }
 }
