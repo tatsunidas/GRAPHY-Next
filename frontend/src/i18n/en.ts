@@ -3415,6 +3415,8 @@ export const en: Record<string, string> = {
   "settings.field.localAePort": "SCP listener port",
   "settings.field.localAePort.help": "Port the local DIMSE listener (C-STORE/C-ECHO receiver) binds to. Requires an app restart to take effect.",
   "settings.field.localAeBindAddress": "SCP bind address",
+  "settings.field.discoveryAdvertise": "Announce this AE on the network",
+  "settings.field.discoveryAdvertise.help": "When on, DICOM devices on the same LAN can find this machine's AE Title, port and whether TLS is offered (mDNS _dicom._tcp). No patient information or images are sent. Off by default. ⚠ Announcing makes this machine easier for other devices on the LAN to find as a destination. The receiver has no allow-list of senders, so use this only on a LAN you trust. Requires an app restart (announced only while DICOM receive is running).",
   "settings.field.localAeBindAddress.help": "Network interface the local DIMSE listener binds to (0.0.0.0 = all interfaces). Requires an app restart to take effect.",
   "settings.sec.scpQr": "Queries and retrieves from other devices",
   "settings.field.scpQrEnabled": "Answer queries and retrieves from other devices",

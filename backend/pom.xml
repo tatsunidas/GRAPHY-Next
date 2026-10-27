@@ -92,6 +92,12 @@
             <artifactId>dcm4che-net</artifactId>
             <version>${dcm4che.version}</version>
         </dependency>
+        <!-- mDNS/DNS-SD（_dicom._tcp の広告と探索）。Apache-2.0、依存は slf4j-api のみ -->
+        <dependency>
+            <groupId>org.jmdns</groupId>
+            <artifactId>jmdns</artifactId>
+            <version>3.6.4</version>
+        </dependency>
         <!-- DICOM imageio: 動画(MP4/H.264)ストリーム解析 MP4Parser（NonDicomImporter の動画 DICOM 化） -->
         <dependency>
             <groupId>org.dcm4che</groupId>
