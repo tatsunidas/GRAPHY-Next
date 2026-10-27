@@ -100,10 +100,13 @@ import {
   apiBase,
   createPluginAngioSr,
   createPluginXaPresentationState,
+  fetchInstances,
   fetchLutData,
+  fetchSeries,
   type AngioPluginSrRequest,
   type LutData,
 } from "../api";
+import { firstSopOutsideStudy } from "../plugins/pluginSopScope";
 import { frameOfImageId, sopFromImageId, sopUidFromImageId } from "./imageId";
 import { buildPluginAnalysisRecord, type PluginAnalysisInput } from "../report/analysisResults";
 import { publishAnalysisResult } from "../report/analysisResultStore";
@@ -2147,7 +2150,7 @@ export function Viewer2D({
   /**
    * H37: アンギオ解析の結果を **本体と同じ SR** として保存する。
    *
-   * <p>🔴 **参照 SOP は「いまこのタイルが開いている並び」の中に無ければ拒否する。**
+   * <p>🔴 **参照 SOP は「このタイルが開いている並び」か「同じスタディ」の中に無ければ拒否する。**
    * 書き手（backend）は参照インスタンスから患者・スタディを継承するので、他患者の SOP を
    * 渡されると**その患者の検査にレポートが生える**。プラグインは本体と同じ権限で動く
    * （サンドボックス未実装）ため、ここで塞ぐ。H10 の「開いているタイルからのみ解決」と同じ考え方。
@@ -2164,10 +2167,17 @@ export function Viewer2D({
       req.kind === "qca3d"
         ? [req.qca3d.viewASopInstanceUid, req.qca3d.viewBSopInstanceUid]
         : [req.kind === "qca" ? req.qca.sopInstanceUid : req.qlv.sopInstanceUid];
-    const bad = firstUnopenedSop(refs);
-    if (bad !== null) {
-      // 3D QCA の方向 B は別シリーズ＝別タイルにある。**そのタイルから呼ぶ**必要がある。
-      return { ok: false, error: `referenced SOP is not open in this tile: ${bad}` };
+    // 開いていない SOP（3D QCA の方向 B など）は、同じスタディに実在すれば通す。
+    if (firstUnopenedSop(refs) !== null) {
+      try {
+        const outside = await firstSopOutsideStudy(refs, ctx.studyUid, {
+          listSeriesUids: async (st) => (await fetchSeries(st)).map((x) => x.seriesInstanceUid),
+          listSopUids: async (st, se) => (await fetchInstances(st, se)).map((x) => x.sopInstanceUid),
+        });
+        if (outside !== null) return { ok: false, error: `referenced SOP is not in this study: ${outside}` };
+      } catch (e) {
+        return { ok: false, error: `could not verify referenced SOPs: ${String(e)}` };
+      }
     }
     const study = ctx.studyUid;
     const body: AngioPluginSrRequest = { kind: req.kind, producer };
