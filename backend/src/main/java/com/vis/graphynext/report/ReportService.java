@@ -213,6 +213,39 @@ public class ReportService {
         return toDto(r);
     }
 
+    /**
+     * DICOM 送信の「キー画像のみ」用: スタディの確定済み（FINAL／ADDENDUM）レポートが参照するキー画像と KO。
+     * 下書きは含めない（KO はまだ作られておらず、参照も編集中）。
+     *
+     * @param imageSopUids    キー画像の SOP Instance UID（重複なし、レポートの並び順）
+     * @param frameRefSopUids imageSopUids のうち、特定フレームを指すもの（インスタンス全体を送るので、利用者へ注記する）
+     * @param koSopUids       確定時に作られた KO の SOP Instance UID
+     */
+    public record SendableKeyImages(List<String> imageSopUids, List<String> frameRefSopUids, List<String> koSopUids) {
+    }
+
+    @Transactional(readOnly = true)
+    public SendableKeyImages sendableKeyImages(String studyUid) {
+        java.util.Set<String> images = new java.util.LinkedHashSet<>();
+        java.util.Set<String> frames = new java.util.LinkedHashSet<>();
+        java.util.Set<String> kos = new java.util.LinkedHashSet<>();
+        for (Report r : repo.findByStudyInstanceUidOrderByCreatedAtDesc(studyUid)) {
+            if (r.getStatus() == ReportStatus.DRAFT) {
+                continue;
+            }
+            for (KeyImageRef k : r.getKeyImages()) {
+                images.add(k.getSopInstanceUid());
+                if (k.getFrameNumber() != null) {
+                    frames.add(k.getSopInstanceUid());
+                }
+            }
+            if (!isBlank(r.getKoSopInstanceUid())) {
+                kos.add(r.getKoSopInstanceUid());
+            }
+        }
+        return new SendableKeyImages(List.copyOf(images), List.copyOf(frames), List.copyOf(kos));
+    }
+
     @Transactional(readOnly = true)
     public List<StudyReportCountDto> studyCounts(List<String> studyUids) {
         if (studyUids == null || studyUids.isEmpty()) {

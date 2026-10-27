@@ -1780,6 +1780,10 @@ export interface SendRequest {
   tls?: boolean;
   /** 送るときの転送構文。省略は保存どおり（STORED）。指定した構文を相手が受けないと、その画像は失敗として数える。 */
   transferSyntax?: SendTransferSyntax;
+  /** true なら、選択スタディの確定済みレポートのキー画像だけを送る（シリーズの選択は問わない）。 */
+  keyImagesOnly?: boolean;
+  /** keyImagesOnly のとき、確定時に作られたキーオブジェクト（KO）も送るか。省略は送る。 */
+  includeKeyObject?: boolean;
 }
 
 export type SendTransferSyntax = "STORED" | "EXPLICIT_LE" | "IMPLICIT_LE";
@@ -1802,7 +1806,13 @@ export const sendDicom = (req: SendRequest) =>
     callingAet: req.callingAet ?? "",
     tls: req.tls ?? false,
     transferSyntax: req.transferSyntax ?? "STORED",
+    keyImagesOnly: req.keyImagesOnly ?? false,
+    includeKeyObject: req.includeKeyObject ?? true,
   });
+
+/** 「キー画像のみ」で送れるキー画像・KO の数（確定済みレポートが参照するもの）。 */
+export const fetchSendKeyImages = (studyUid: string) =>
+  httpGet<{ keyImages: number; keyObjects: number }>(`/api/dicom/send/key-images?studyUid=${encodeURIComponent(studyUid)}`);
 
 // ── Query/Retrieve（QR ウィンドウ） ────────────────────────────
 
