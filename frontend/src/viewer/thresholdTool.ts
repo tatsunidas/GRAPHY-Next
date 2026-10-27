@@ -15,6 +15,7 @@ import { getSegEditTarget } from "./roiMaskStore";
 import { ensureStackSegmentation, getLastSegViewport } from "./segmentation";
 import { getModalityCalibration, resolveValueUnit } from "./pixelCalibration";
 import { valueReaderOf } from "./wandTool";
+import { PriorSnapshots } from "./priorSnapshots";
 import { selectInRange } from "./thresholdLogic";
 import {
   openThresholdSession,
@@ -29,8 +30,8 @@ import { tOutsideReact } from "../i18n/i18n";
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type AnyObj = Record<string, any>;
 
-/** 前回書いたボクセルの元値（globalIndex=z*sliceLen+idx → priorValue）。 */
-let tracked: Map<number, number> | null = null;
+/** 前回書いたスライスの元ラベル（スライス単位。ボクセル単位の Map は 2^24 件で落ちる）。 */
+let tracked: PriorSnapshots | null = null;
 /** 非同期（全スライスの読み込み待ち）の追い越しを防ぐ。最新の実行だけが書く。 */
 let runSeq = 0;
 
@@ -39,17 +40,12 @@ function labelmapIdsOf(segId: string): string[] {
   return ((csSeg as any).getLabelmapImageIds?.(segId) as string[] | undefined) ?? [];
 }
 
-function restoreTracked(labelmapIds: string[], sliceLen: number): Set<number> {
-  const slices = new Set<number>();
-  if (!tracked) return slices;
-  for (const [gi, prior] of tracked) {
-    const z = Math.floor(gi / sliceLen);
+function restoreTracked(labelmapIds: string[]): Set<number> {
+  if (!tracked) return new Set();
+  const slices = tracked.restoreInto((z) => {
     const vm = (cache.getImage(labelmapIds[z]) as AnyObj | undefined)?.voxelManager;
-    if (vm) {
-      vm.setAtIndex(gi - z * sliceLen, prior);
-      slices.add(z);
-    }
-  }
+    return vm ? { read: (i) => vm.getAtIndex(i), write: (i, v) => vm.setAtIndex(i, v) } : undefined;
+  });
   tracked = null;
   return slices;
 }
@@ -73,14 +69,14 @@ export async function runThreshold(s: ThresholdSession): Promise<void> {
     await Promise.all(s.sourceImageIds.map((id) => imageLoader.loadAndCacheImage(id).catch(() => null)));
     if (seq !== runSeq) return;
   }
-  const modified = restoreTracked(labelmapIds, sliceLen);
+  const modified = restoreTracked(labelmapIds);
   const invalid = !(s.lower <= s.upper);
   if (!s.touched || invalid) {
     updateThresholdSession({ count: 0, invalid: s.touched && invalid });
     notifyModified(s, modified);
     return;
   }
-  const next = new Map<number, number>();
+  const next = new PriorSnapshots();
   let count = 0;
   const zs = s.scope === "all" ? s.sourceImageIds.map((_, z) => z) : [s.sliceZ];
   for (const z of zs) {
@@ -88,11 +84,8 @@ export async function runThreshold(s: ThresholdSession): Promise<void> {
     const vm = (cache.getImage(labelmapIds[z]) as AnyObj | undefined)?.voxelManager;
     if (!img || !vm) continue;
     const idxs = selectInRange(valueReaderOf(img, s.sourceImageIds[z]), sliceLen, s.lower, s.upper);
-    for (const idx of idxs) {
-      const gi = z * sliceLen + idx;
-      if (!next.has(gi)) next.set(gi, vm.getAtIndex(idx));
-      vm.setAtIndex(idx, s.segIndex);
-    }
+    if (idxs.length) next.record(z, (i) => vm.getAtIndex(i), sliceLen);
+    for (const idx of idxs) vm.setAtIndex(idx, s.segIndex);
     if (idxs.length) modified.add(z);
     count += idxs.length;
   }
@@ -114,7 +107,7 @@ export function cancelThreshold(): void {
   const s = getThresholdSession();
   if (s) {
     const labelmapIds = labelmapIdsOf(s.segId);
-    if (labelmapIds.length) notifyModified(s, restoreTracked(labelmapIds, s.cols * s.rows));
+    if (labelmapIds.length) notifyModified(s, restoreTracked(labelmapIds));
   }
   tracked = null;
   clearThresholdSession();
