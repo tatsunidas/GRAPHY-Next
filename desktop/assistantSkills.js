@@ -20,9 +20,11 @@ const MAX_PARAM_KEYS = 8;
 const MAX_POINTS = 64;
 const MAX_STRING = 200;
 
-const ID_RE = /^[a-z0-9][a-z0-9-]{0,39}$/;
+/** プラグインのスキルは `<pluginId>--<id>` に名前空間化されるため、上限は 80 字。 */
+const ID_RE = /^[a-z0-9][a-z0-9-]{0,79}$/;
 const KEY_RE = /^[a-z][A-Za-z0-9]{0,23}$/;
-const TOOL_ID_RE = /^[A-Za-z0-9_]{1,64}$/;
+/** 組み込みの操作 id、または `plugin__<pluginId>__<tool>`（プラグイン id は `-` を含み得る）。 */
+const TOOL_ID_RE = /^[A-Za-z0-9_-]{1,160}$/;
 
 function localText(raw, max) {
   if (!raw || typeof raw !== "object") return null;
@@ -187,4 +189,4 @@ function createStore({ file }) {
   };
 }
 
-module.exports = { createStore, sanitizeSkill, MAX_SKILLS, MAX_STEPS, MAX_INPUTS };
+module.exports = { createStore, sanitizeSkill, ID_RE, MAX_SKILLS, MAX_STEPS, MAX_INPUTS };

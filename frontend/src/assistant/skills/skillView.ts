@@ -4,18 +4,24 @@
  */
 // スキルパネルの表示用の純関数（React 無し）。
 import { isPluginToolName, type PluginToolEntry } from "../pluginTools";
-import { checkInputValue, pick, type Skill, type SkillEntry, type SkillInput, type SkillStep } from "./skillModel";
+import { checkInputValue, pick, type PluginSkillEntry, type Skill, type SkillEntry, type SkillInput, type SkillStep } from "./skillModel";
 import { BUNDLED_SKILLS } from "./bundled";
 
 type T = (k: string, v?: Record<string, string | number>) => string;
 
-/** 同梱 + 利用者。同じ id は同梱が優先（利用者のものは隠れる）。 */
-export function mergeSkills(user: readonly Skill[]): SkillEntry[] {
-  const bundledIds = new Set(BUNDLED_SKILLS.map((s) => s.id));
-  return [
-    ...BUNDLED_SKILLS.map((skill) => ({ skill, source: "bundled" as const })),
-    ...user.filter((s) => !bundledIds.has(s.id)).map((skill) => ({ skill, source: "user" as const })),
-  ];
+/** 同梱 + プラグイン + 利用者。同じ id は 同梱 > プラグイン > 利用者 の順に勝つ（下のものは隠れる）。 */
+export function mergeSkills(user: readonly Skill[], plugin: readonly PluginSkillEntry[] = []): SkillEntry[] {
+  const seen = new Set<string>();
+  const out: SkillEntry[] = [];
+  const add = (e: SkillEntry) => {
+    if (seen.has(e.skill.id)) return;
+    seen.add(e.skill.id);
+    out.push(e);
+  };
+  for (const skill of BUNDLED_SKILLS) add({ skill, source: "bundled" });
+  for (const p of plugin) add({ skill: p.skill, source: "plugin", pluginName: p.pluginName });
+  for (const skill of user) add({ skill, source: "user" });
+  return out;
 }
 
 export function stepSummary(t: T, s: SkillStep, skill: Skill, locale: string, pluginTools?: readonly PluginToolEntry[]): string {

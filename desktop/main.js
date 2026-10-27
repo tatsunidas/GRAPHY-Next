@@ -1475,6 +1475,14 @@ async function refreshPluginToolEntries() {
   pluginToolEntries = assistantPluginTools.buildEntries(list);
   return { ok: true };
 }
+// プラグインが宣言したスキル（検査して組み直したもの。assistantPluginTools.buildSkills）。実行できるかどうかは、利用者がそのプラグインの
+// ツールをオンにしているか（フロントの validateSkill が有効なツールだけを通す）で決まる。
+ipcMain.handle("graphy:assistant-plugin-skills-list", async (e) => {
+  if (!isAssistantSender(e)) return { ok: false, error: "forbidden" };
+  const list = await fetchPluginList();
+  if (!list) return { ok: false, error: "backend" };
+  return { ok: true, skills: assistantPluginTools.buildSkills(list) };
+});
 async function listPluginTools() {
   const r = await refreshPluginToolEntries();
   if (!r.ok) return r;

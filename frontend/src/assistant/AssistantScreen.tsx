@@ -21,7 +21,7 @@ import { SkillPanel, type SkillApi, type SkillDraft, type SkillSuggestion } from
 import { mergeSkills } from "./skills/skillView";
 import { buildSkillTools, promptSkills } from "./skills/skillTools";
 import { macroToSkill } from "./skills/macroToSkill";
-import type { Skill } from "./skills/skillModel";
+import type { PluginSkillEntry, Skill } from "./skills/skillModel";
 import { PluginToolPanel } from "./PluginToolPanel";
 import { RequestLogPanel, type RequestLogApi } from "./RequestLogPanel";
 import type { EvalApi } from "./EvalSection";
@@ -90,6 +90,7 @@ export function AssistantScreen() {
   const [skillOpen, setSkillOpen] = useState(false);
   const [userSkills, setUserSkills] = useState<Skill[]>([]);
   const [skillsVersion, setSkillsVersion] = useState(0);
+  const [pluginSkills, setPluginSkills] = useState<PluginSkillEntry[]>([]);
   const [skillSuggest, setSkillSuggest] = useState<SkillSuggestion | null>(null);
   const [skillDraft, setSkillDraft] = useState<SkillDraft | null>(null);
   const [robot, setRobot] = useState(false);
@@ -243,7 +244,7 @@ export function AssistantScreen() {
     // ツールを送るのは、使える口があり、提供元がツール呼び出しに対応するとき（toolMode:none は案内のみ）。
     const canOperate = !!bridge.assistantViewerCmd && !!resolved?.ok && resolved.toolMode !== "none";
     // モデルへ見せるスキル: 検証に通ったものだけ（チャットモードで操作ツールが使えるとき）。
-    const offered = promptSkills(mergeSkills(userSkills).map((e) => e.skill), enabledPluginTools);
+    const offered = promptSkills(mergeSkills(userSkills, pluginSkills).map((e) => e.skill), enabledPluginTools);
     const req: AiChatMessage[] = [
       { role: "system", text: buildSystemPrompt(locale, hits, { canOperate, robot, skills: canOperate && !robot ? offered : undefined, pluginTools: canOperate && !robot && enabledPluginTools.length > 0, robotPluginTools: canOperate && robot && planEligible(enabledPluginTools).length > 0 }) },
       ...history,
@@ -292,7 +293,7 @@ export function AssistantScreen() {
       flush();
     }
     dispatch({ type: "done", result });
-  }, [input, images, attachments, ingesting, resolved, t, state.pending, state.messages, bridge, locale, sessionId, flush, robot, enabledPluginTools, userSkills]);
+  }, [input, images, attachments, ingesting, resolved, t, state.pending, state.messages, bridge, locale, sessionId, flush, robot, enabledPluginTools, userSkills, pluginSkills]);
 
   const stop = useCallback(() => {
     abortedRef.current = true;
@@ -335,11 +336,14 @@ export function AssistantScreen() {
       viewer: (cmd) => bridge.assistantViewerCmd!(sessionId, cmd),
       pluginTools: enabledPluginTools,
       pluginTool: (cmd) => bridge.assistantViewerCmd!(sessionId, cmd) as Promise<PluginToolResult>,
+      pluginSkills,
     };
-  }, [bridge, sessionId, enabledPluginTools]);
+  }, [bridge, sessionId, enabledPluginTools, pluginSkills]);
   const reloadSkills = useCallback(async () => {
     const r = await bridge?.assistantSkillsList?.();
     setUserSkills(r?.ok && r.skills ? r.skills : []);
+    const ps = await bridge?.assistantPluginSkillsList?.();
+    setPluginSkills(ps?.ok && ps.skills ? ps.skills : []);
     setSkillsVersion((v) => v + 1);
   }, [bridge]);
   useEffect(() => {
@@ -446,7 +450,7 @@ export function AssistantScreen() {
           </button>
         )}
         {skillApi && (
-          <button style={S.linkBtn} onClick={() => setSkillOpen((v) => !v)} data-testid="assistant-skill-toggle">
+          <button style={S.linkBtn} onClick={() => { setSkillOpen((v) => !v); void reloadSkills(); }} data-testid="assistant-skill-toggle">
             {t("assistant.skill.button")}
           </button>
         )}

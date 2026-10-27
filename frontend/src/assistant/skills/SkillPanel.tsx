@@ -10,7 +10,7 @@ import { undoRun } from "../macros/runMacro";
 import type { PluginToolEntry, PluginToolResult } from "../pluginTools";
 import { BUNDLED_SKILLS } from "./bundled";
 import { runSkill } from "./runSkill";
-import { exportSkill, parseSkillText, pick, skillEffect, upFrontInputs, validateSkill, type Skill, type SkillEntry, type SkillInput } from "./skillModel";
+import { exportSkill, parseSkillText, pick, skillEffect, upFrontInputs, validateSkill, type PluginSkillEntry, type Skill, type SkillEntry, type SkillInput } from "./skillModel";
 import { initialText, mergeSkills, parseFieldText, stepSummary } from "./skillView";
 
 type T = (k: string, v?: Record<string, string | number>) => string;
@@ -22,6 +22,8 @@ export interface SkillApi {
   viewer: (cmd: { kind: "action"; id: string; params: Record<string, unknown> }) => Promise<ActionResult>;
   pluginTools?: readonly PluginToolEntry[];
   pluginTool?: (cmd: { kind: "pluginTool"; name: string; params: Record<string, unknown> }) => Promise<PluginToolResult>;
+  /** プラグインが宣言したスキル（main が検査して組み直したもの）。 */
+  pluginSkills?: readonly PluginSkillEntry[];
 }
 
 /** アシスタントからの提案・下書き（`nonce` が変わるたびに 1 件として扱う）。 */
@@ -62,6 +64,7 @@ export function SkillPanel({
   const [open, setOpen] = useState<string | null>(null); // 手順を開いているスキルの id
   const [form, setForm] = useState<{ entry: SkillEntry; text: Record<string, string>; suggested?: boolean } | null>(null);
   const [draftSkill, setDraftSkill] = useState<Skill | null>(null);
+  const [results, setResults] = useState<{ step: number; text: string }[]>([]);
   const [running, setRunning] = useState<{ id: string; step: number; total: number } | null>(null);
   const [pending, setPending] = useState<Pending | null>(null);
   const [lastRun, setLastRun] = useState<InverseStep[][] | null>(null);
@@ -76,12 +79,12 @@ export function SkillPanel({
     void reload();
   }, [reload, reloadKey]);
 
-  const entries = mergeSkills(user);
+  const entries = mergeSkills(user, api.pluginSkills);
 
   // アシスタントの開始の提案: 入力欄にモデルの値を入れた状態で出す。自動では開始しない。
   useEffect(() => {
     if (!suggestion) return;
-    const entry = mergeSkills(user).find((e) => e.skill.id === suggestion.skillId);
+    const entry = mergeSkills(user, api.pluginSkills).find((e) => e.skill.id === suggestion.skillId);
     if (!entry) return setMsg({ kind: "err", text: t("assistant.skill.suggestGone") });
     setMsg(null);
     setForm({
@@ -118,6 +121,7 @@ export function SkillPanel({
   const start = async (entry: SkillEntry, values: Record<string, unknown>) => {
     setForm(null);
     setLastRun(null);
+    setResults([]);
     abortRef.current = false;
     const sk = entry.skill;
     setRunning({ id: sk.id, step: 0, total: sk.steps.length });
@@ -128,6 +132,15 @@ export function SkillPanel({
       aborted: () => abortRef.current,
       locale,
       onStep: (i) => setRunning({ id: sk.id, step: i, total: sk.steps.length }),
+      onResult: (i, data) => {
+        let text: string;
+        try {
+          text = JSON.stringify(data) ?? "";
+        } catch {
+          text = "";
+        }
+        setResults((cur) => [...cur, { step: i + 1, text: text.slice(0, 500) }]);
+      },
       ask: (spec) =>
         new Promise((resolve) => {
           resolveRef.current = resolve;
@@ -225,16 +238,20 @@ export function SkillPanel({
           <input type="file" accept=".json,application/json" style={{ display: "none" }} disabled={!idle} data-testid="assistant-skill-import" onChange={(e) => { void importFile(e.target.files?.[0]); e.target.value = ""; }} />
         </label>
       </div>
-      {entries.map(({ skill, source }) => {
+      {entries.map(({ skill, source, pluginName }) => {
         const effect = skillEffect(skill, api.pluginTools);
+        // 実行できない理由: プラグインのツールがオフ（許可していない）／検証に通らない。理由を出して［実行］を止める。
+        const check = validateSkill(skill, api.pluginTools ?? []);
+        const blocked = check.ok ? null : source === "plugin" ? t("assistant.skill.pluginOff") : t("assistant.skill.invalid", { error: check.error });
         return (
           <div key={skill.id} style={P.item} data-testid="assistant-skill-item" data-skill-id={skill.id}>
             <div style={{ flex: "1 1 100%" }}>
               <span data-testid="assistant-skill-name">{pick(skill.title, locale)}</span>{" "}
-              <span style={P.badge}>{t(`assistant.skill.source.${source}`)}</span>
+              <span style={P.badge}>{source === "plugin" ? t("assistant.skill.source.plugin", { name: pluginName ?? "?" }) : t(`assistant.skill.source.${source}`)}</span>
               {effect === "write" && <span style={P.badgeWarn} data-testid="assistant-skill-write">{t("assistant.skill.write")}</span>}{" "}
               <span style={P.dim}>{t("assistant.skill.counts", { steps: skill.steps.length, inputs: skill.inputs.length })}</span>
               <div style={P.dim}>{pick(skill.description, locale)}</div>
+              {blocked && <div style={P.err} data-testid="assistant-skill-blocked">{blocked}</div>}
               {open === skill.id && (
                 <ol style={P.steps} data-testid="assistant-skill-steps">
                   {skill.steps.map((s, i) => (
@@ -247,7 +264,7 @@ export function SkillPanel({
             {running?.id === skill.id ? (
               <button style={P.btn} onClick={abort} data-testid="assistant-skill-abort">{t("assistant.skill.abort")}</button>
             ) : (
-              <button style={P.btnPrimary} disabled={busy || !idle || form !== null} onClick={() => begin({ skill, source })} data-testid="assistant-skill-run">{t("assistant.skill.run")}</button>
+              <button style={P.btnPrimary} disabled={busy || !idle || form !== null || blocked !== null} onClick={() => begin({ skill, source, pluginName })} data-testid="assistant-skill-run">{t("assistant.skill.run")}</button>
             )}
             <button style={P.btn} disabled={!idle} onClick={() => exportOne(skill)} data-testid="assistant-skill-export">{t("assistant.skill.export")}</button>
             {source === "user" && (
@@ -332,6 +349,14 @@ export function SkillPanel({
             <button style={P.btn} autoFocus onClick={() => { const r = resolveRef.current; setPending(null); r?.(false); }} data-testid="assistant-skill-confirm-no">{t("assistant.skill.stop")}</button>
             <button style={P.btnPrimary} onClick={() => { const r = resolveRef.current; setPending(null); r?.(true); }} data-testid="assistant-skill-confirm-yes">{t("assistant.skill.continue")}</button>
           </div>
+        </div>
+      )}
+      {results.length > 0 && (
+        <div style={P.card} data-testid="assistant-skill-results">
+          <span style={P.dim}>{t("assistant.skill.results")}</span>
+          {results.map((r) => (
+            <code key={r.step} style={{ overflowWrap: "anywhere" }} data-testid="assistant-skill-result">{t("assistant.skill.resultLine", { n: r.step })} {r.text}</code>
+          ))}
         </div>
       )}
       {lastRun && idle && (

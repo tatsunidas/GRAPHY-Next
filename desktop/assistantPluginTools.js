@@ -10,6 +10,7 @@
 // 🔴 プラグインの結果は信用できない文字列。大きさと形をここで切り詰め、モデルへは `untrusted` を付けて返す。
 const fs = require("node:fs");
 const path = require("node:path");
+const { sanitizeSkill, ID_RE } = require("./assistantSkills");
 
 const PREFIX = "plugin__";
 /** 全プラグイン合計のツール数。暫定値（利用実績で見直す）。 */
@@ -50,6 +51,65 @@ function buildEntries(plugins) {
       const timeoutMs = Number.isInteger(t.timeoutSec) && t.timeoutSec >= 5 && t.timeoutSec <= 900 ? t.timeoutSec * 1000 : undefined;
       out.push({ name, pluginId: p.id, pluginName, tool: t.name, effect: t.effect, description, parameters: t.parameters, ...(timeoutMs ? { timeoutMs } : {}) });
       if (out.length >= MAX_TOTAL_TOOLS) return out;
+    }
+  }
+  return out;
+}
+
+/** プラグイン 1 つが配るスキルの合計の上限（backend の上限と同じ）。 */
+const MAX_SKILLS_PER_PLUGIN = 4;
+
+function foldText(t) {
+  return t && typeof t === "object" ? { ja: oneLine(t.ja, 400), en: oneLine(t.en, 400) } : t;
+}
+
+/**
+ * backend の /api/plugins の本文からスキル一覧を作る（プラグインが宣言したものを**検査して組み直す**）。
+ * - 手順の tool の id は、組み込みの操作 id か `plugin:<tool>`（そのプラグイン自身の宣言済みツール）だけ。
+ *   後者は `plugin__<pluginId>__<tool>` に書き換える。`plugin__…` を直接書く（他プラグインを指す）・未宣言のツールを指すスキルは丸ごと捨てる。
+ * - 題名・説明・確認文・入力の表示名は `oneLine` で畳む（制御文字・改行を除く。利用者とモデルに出る信用できない文字列）。
+ * - スキル id は `<pluginId>--<id>` に名前空間化する（他プラグイン・同梱・利用者のものと衝突しない）。
+ * @returns {{pluginId: string, pluginName: string, skill: object}[]}
+ */
+function buildSkills(plugins) {
+  const out = [];
+  if (!Array.isArray(plugins)) return out;
+  for (const p of plugins) {
+    if (!p || typeof p.id !== "string" || !Array.isArray(p.skills) || !Array.isArray(p.permissions) || !p.permissions.includes("ai-tools")) continue;
+    const declared = new Set(Array.isArray(p.aiTools) ? p.aiTools.map((t) => t && t.name).filter((n) => typeof n === "string") : []);
+    const pluginName = oneLine(p.name || p.id, 60);
+    let n = 0;
+    for (const s of p.skills) {
+      if (n >= MAX_SKILLS_PER_PLUGIN) break;
+      if (!s || typeof s !== "object" || !Array.isArray(s.steps)) continue;
+      let bad = false;
+      const steps = s.steps.map((st) => {
+        if (!st || typeof st !== "object" || st.kind !== "tool" || typeof st.id !== "string") return st;
+        if (st.id.startsWith(PREFIX)) {
+          bad = true;
+          return st;
+        }
+        if (st.id.startsWith("plugin:")) {
+          const tool = st.id.slice("plugin:".length);
+          if (!declared.has(tool)) bad = true;
+          return { ...st, id: `${PREFIX}${p.id}__${tool}` };
+        }
+        return st;
+      });
+      if (bad) continue;
+      const id = `${p.id}--${s.id}`;
+      if (typeof s.id !== "string" || !ID_RE.test(id)) continue;
+      const clean = sanitizeSkill({
+        schemaVersion: 1,
+        id,
+        title: foldText(s.title),
+        description: foldText(s.description),
+        inputs: Array.isArray(s.inputs) ? s.inputs.map((i) => (i && typeof i === "object" ? { ...i, label: foldText(i.label) } : i)) : s.inputs,
+        steps: steps.map((st) => (st && st.kind === "confirm" ? { ...st, message: foldText(st.message) } : st)),
+      });
+      if (!clean) continue;
+      out.push({ pluginId: p.id, pluginName, skill: clean });
+      n++;
     }
   }
   return out;
@@ -116,4 +176,4 @@ function createToggleStore({ file }) {
   };
 }
 
-module.exports = { PREFIX, MAX_TOTAL_TOOLS, MAX_RESULT_BYTES, oneLine, buildEntries, sanitizeResult, createToggleStore };
+module.exports = { PREFIX, MAX_TOTAL_TOOLS, MAX_RESULT_BYTES, oneLine, buildEntries, buildSkills, sanitizeResult, createToggleStore };

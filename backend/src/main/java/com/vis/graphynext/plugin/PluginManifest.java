@@ -37,12 +37,20 @@ public record PluginManifest(
          */
         String category,
         /** AI アシスタントに渡すツール（検査済み。無ければ null）。 */
-        List<AiToolSpec> aiTools) {
+        List<AiToolSpec> aiTools,
+        /** AI アシスタントに渡すスキル（backend が形・大きさを検査済み。無ければ null）。手順の中身は main とアシスタント窓が検査する。 */
+        List<java.util.Map<String, Object>> skills) {
+
+    /** skills を持たないマニフェスト（既存の呼び出し側・テスト用）。 */
+    public PluginManifest(String id, String name, String version, Frontend frontend, Backend backend,
+                          List<String> permissions, String category, List<AiToolSpec> aiTools) {
+        this(id, name, version, frontend, backend, permissions, category, aiTools, null);
+    }
 
     /** aiTools を持たないマニフェスト（既存の呼び出し側・テスト用）。 */
     public PluginManifest(String id, String name, String version, Frontend frontend, Backend backend,
                           List<String> permissions, String category) {
-        this(id, name, version, frontend, backend, permissions, category, null);
+        this(id, name, version, frontend, backend, permissions, category, null, null);
     }
 
     /** 本体が束ね方を知っている category。足すときはフロントの {@code PluginCategory} も足す。 */
