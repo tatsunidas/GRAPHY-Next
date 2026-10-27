@@ -5,6 +5,7 @@
 package com.vis.graphynext.dicom;
 
 import org.dcm4che3.data.Attributes;
+import org.dcm4che3.data.ElementDictionary;
 import org.dcm4che3.data.Tag;
 import org.dcm4che3.data.VR;
 
@@ -17,8 +18,9 @@ import java.util.regex.Pattern;
  * <ul>
  *   <li>キーが空（値なし）: 全一致（そのタグは「戻してほしい属性」を表すだけ）</li>
  *   <li>文字列: {@code *}（0 文字以上）・{@code ?}（1 文字）のワイルドカード。無ければ完全一致。
- *       PatientName だけ大文字小文字を区別しない（他は区別する）。</li>
+ *       人名（PN: PatientName・ReferringPhysicianName）だけ大文字小文字を区別しない（他は区別する）。</li>
  *   <li>日付（DA）: {@code a-b}（両端含む）・{@code a-}・{@code -b} の範囲。無ければ完全一致。</li>
+ *   <li>時刻（TM）: 同じ範囲。キーの桁数が少ないときは、値をその桁数に切って比べる（{@code 0900-1000} は 10:00:30 も含む）。</li>
  *   <li>複数値（UID リスト {@code \}・ModalitiesInStudy）: キーの値のどれかが候補の値のどれかに一致すれば一致。</li>
  *   <li>候補がそのタグを持たない（索引にない属性）: キーを無視する。DICOM は任意キーの未対応を許す。</li>
  *   <li>候補がタグを持つが値がない（索引に空）: キーが空でなければ不一致。</li>
@@ -39,7 +41,7 @@ final class DicomMatcher {
                 continue; // 索引にない属性: 無視（戻りでは空で返す）
             }
             VR vr = keys.getVR(tag);
-            if (!matchesValue(keys.getStrings(tag), candidate.getStrings(tag), vr, tag == Tag.PatientName)) {
+            if (!matchesValue(keys.getStrings(tag), candidate.getStrings(tag), vr, isPersonName(tag))) {
                 return false;
             }
         }
@@ -111,6 +113,9 @@ final class DicomMatcher {
         if (vr == VR.DA && key.indexOf('-') >= 0) {
             return dateInRange(key, value);
         }
+        if (vr == VR.TM && key.indexOf('-') >= 0) {
+            return timeInRange(key, value);
+        }
         if (key.indexOf('*') >= 0 || key.indexOf('?') >= 0) {
             return wildcard(key, ignoreCase).matcher(value).matches();
         }
@@ -129,6 +134,29 @@ final class DicomMatcher {
             return false;
         }
         return to.isEmpty() || value.compareTo(to) <= 0;
+    }
+
+    /** {@code a-b}（両端含む）。片側が空なら開区間。各端は、その桁数まで値を切って比べる。 */
+    static boolean timeInRange(String range, String value) {
+        int dash = range.indexOf('-');
+        String from = range.substring(0, dash).trim();
+        String to = range.substring(dash + 1).trim();
+        if (value.isEmpty()) {
+            return false;
+        }
+        if (!from.isEmpty() && prefix(value, from.length()).compareTo(from) < 0) {
+            return false;
+        }
+        return to.isEmpty() || prefix(value, to.length()).compareTo(to) <= 0;
+    }
+
+    private static String prefix(String s, int n) {
+        return s.length() <= n ? s : s.substring(0, n);
+    }
+
+    /** 人名（PN）のタグか。照合で大文字小文字を区別しない。 */
+    private static boolean isPersonName(int tag) {
+        return ElementDictionary.getStandardElementDictionary().vrOf(tag) == VR.PN;
     }
 
     static Pattern wildcard(String key, boolean ignoreCase) {

@@ -29,7 +29,7 @@ import java.util.Set;
  * <p>レベルは上から順に絞り込む（スタディ→シリーズ→画像）。下のレベルの候補には上のレベルの属性
  * （PatientID・StudyDate など）も載せるので、下のレベルの問い合わせでも上位の属性を戻せ、
  * 上位のキーでも絞れる。重い下位の問い合わせ（画像）は、上位で残ったものだけについて索引を引く。
- * 索引に無い属性（StudyTime・StudyID など）は候補に載せない＝キーは無視、戻りは空。
+ * 索引に無い属性（InstitutionName など）は候補に載せない＝キーは無視、戻りは空。
  */
 @Service
 public class DicomFindQuery {
@@ -137,6 +137,9 @@ public class DicomFindQuery {
             put(a, Tag.StudyDate, VR.DA, h.getStudyDate());
             put(a, Tag.StudyDescription, VR.LO, h.getStudyDescription());
             put(a, Tag.AccessionNumber, VR.SH, h.getAccessionNumber());
+            put(a, Tag.StudyTime, VR.TM, h.getStudyTime());
+            put(a, Tag.StudyID, VR.SH, h.getStudyId());
+            put(a, Tag.ReferringPhysicianName, VR.PN, h.getReferringPhysicianName());
             a.setInt(Tag.NumberOfStudyRelatedSeries, VR.IS, (int) h.getNumberOfSeries());
             a.setInt(Tag.NumberOfStudyRelatedInstances, VR.IS, (int) h.getNumberOfInstances());
             if (wantModalities) {

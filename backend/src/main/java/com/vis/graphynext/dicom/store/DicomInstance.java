@@ -45,6 +45,15 @@ public class DicomInstance {
     private String studyDescription;
     private String accessionNumber;
 
+    /**
+     * StudyTime／StudyID／ReferringPhysicianName（他端末からの検索の照合と戻り用）。値が無いファイルは null でなく
+     * 空文字を入れる。<b>studyTime が null＝まだ読んでいない行</b>（この列を足す前に保存した行。起動時に
+     * {@link DicomStorageService#backfillStudyExtras()} が埋める。読めない行は null のまま）。
+     */
+    private String studyTime;
+    private String studyId;
+    private String referringPhysicianName;
+
     // シリーズ
     private String seriesInstanceUid;
     private String modality;
@@ -164,6 +173,30 @@ public class DicomInstance {
 
     public void setAccessionNumber(String v) {
         this.accessionNumber = v;
+    }
+
+    public String getStudyTime() {
+        return studyTime;
+    }
+
+    public void setStudyTime(String v) {
+        this.studyTime = v;
+    }
+
+    public String getStudyId() {
+        return studyId;
+    }
+
+    public void setStudyId(String v) {
+        this.studyId = v;
+    }
+
+    public String getReferringPhysicianName() {
+        return referringPhysicianName;
+    }
+
+    public void setReferringPhysicianName(String v) {
+        this.referringPhysicianName = v;
     }
 
     public String getSeriesInstanceUid() {
