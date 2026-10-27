@@ -123,6 +123,7 @@ export function Viewer2DMenuBar({
     getSpatialCalibration: (tileId) => actions.getSpatialCalibration(tileId),
     getXaState: (tileId) => actions.getXaState(tileId),
     getXaCine: (tileId) => actions.getXaCine(tileId),
+    getXaGeometry: (tileId) => actions.getXaGeometry(tileId),
     // H11 / H12: 3D 血管モデルの受け渡しと、解析値の書き戻し（A7）。
     // タイルに紐付かない（再構成はセッション単位の登録簿）ので actions を経由しない。
     // 🔴 出自は host が入れる。**本体は FFR を計算しない**（fw/angio-design.md §11.1）。
@@ -162,6 +163,8 @@ export function Viewer2DMenuBar({
     // （位置合わせの答えが 2 つになるのを避ける。fw/registration-design.md）。
     loadVolume: (ref, onProgress) => actions.loadVolume(ref, onProgress),
     estimateVolume: (ref) => actions.estimateVolume(ref),
+    readXaSeries: (ref) => actions.readXaSeries(ref),
+    readXaSeriesFrame: (ref, frameIndex) => actions.readXaSeriesFrame(ref, frameIndex),
     registerVolumes: (req, onProgress) => actions.registerVolumes(req, onProgress),
     resampleVolume: (source, transform, target) => actions.resampleVolume(source, transform, target),
     goTo: (tileId, dims) => actions.goTo(tileId, dims),

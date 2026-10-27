@@ -113,6 +113,8 @@ import { LoadingSpinner } from "./LoadingSpinner";
 import { calibrationForImageId } from "./xaCalibrationProvider";
 import { toViewerSpatialCalibration } from "./xaCalibration";
 import { dsaNativeImageId, dsaStateForImageId, readXaDsaTags } from "./dsaLoader";
+import { readXaViewGeometry } from "./xaViewGeometryProvider";
+import type { ViewerXaGeometry } from "./viewerCommands";
 // H40: シネの時間軸。**決定そのものは既存の単一入口に委譲する**（規則を 2 か所に持たない）。
 import { readXaCineSource } from "./xaCine";
 import { frameStartTimesMs, isUniformFrameTime, resolveXaFps } from "./xaCineTiming";
@@ -1827,6 +1829,22 @@ export function Viewer2D({
     };
   };
 
+  /**
+   * H41: 表示中フレームの投影幾何。DSA 表示中も、ネイティブフレームへ委譲して返す
+   * （合成 imageId からはタグが読めないため。`getXaCine` と同じ理由）。
+   * dataSet が**プリウォーム前**なら `missing: "noDataSet"`（0 で埋めずに理由を返す）。
+   */
+  const getXaGeometry = (): ViewerXaGeometry | null => {
+    const imageId = imageIdsRef.current[indexRef.current];
+    if (!imageId) return null;
+    const modality = (infoRef.current?.modality ?? "").toUpperCase();
+    const dsa = dsaStateForImageId(imageId);
+    if (!dsa && modality !== "XA" && modality !== "XRF") return null;
+    const native = dsaNativeImageId(imageId) ?? imageId;
+    const frameIndex = indexRef.current;
+    return { imageId, frameIndex, ...readXaViewGeometry(native, frameIndex) };
+  };
+
   // colormap の内部登録名 → 公開する LUT 名。`graphy-lut-` は本体の実装詳細なので剥がす
   // （シリーズ Sync で他タイルから伝播した colormap も同じ規則の名前で来る）。
   const lutNameForPlugins = (colormapName: string | null): string | null =>
@@ -2802,7 +2820,7 @@ export function Viewer2D({
     fit, reset, rotate90, flipH, flipV, invert: toggleInvert, applyLut, getLutData, setWindowLevel, resetWindow,
     getWindowState, getSuvContext, getTargetInfo, getViewState, getPixelData, showOverlay, clearOverlay,
     importLabelVolume: importLabelVolumeCmd,
-    getSpatialCalibration, getXaState, getXaCine,
+    getSpatialCalibration, getXaState, getXaCine, getXaGeometry,
     getStackImageIds: () => [...imageIdsRef.current],
     validateDerivedSeries, saveDerivedSeries, saveStructuredReport, saveAngioReport, savePresentationState,
     publishAnalysisResult: publishPluginAnalysis,
@@ -2815,7 +2833,7 @@ export function Viewer2D({
     fit, reset, rotate90, flipH, flipV, invert: toggleInvert, applyLut, getLutData, setWindowLevel, resetWindow,
     getWindowState, getSuvContext, getTargetInfo, getViewState, getPixelData, showOverlay, clearOverlay,
     importLabelVolume: importLabelVolumeCmd,
-    getSpatialCalibration, getXaState, getXaCine,
+    getSpatialCalibration, getXaState, getXaCine, getXaGeometry,
     // 重畳・派生シリーズ保存・貸したビューポートが**同じ並び**を見るための入口（H31）。
     getStackImageIds: () => [...imageIdsRef.current],
     validateDerivedSeries, saveDerivedSeries, saveStructuredReport, saveAngioReport, savePresentationState,
@@ -2847,6 +2865,7 @@ export function Viewer2D({
       getSpatialCalibration: () => commandsRef.current.getSpatialCalibration(),
       getXaState: () => commandsRef.current.getXaState(),
       getXaCine: () => commandsRef.current.getXaCine(),
+      getXaGeometry: () => commandsRef.current.getXaGeometry(),
       getPixelData: (o) => commandsRef.current.getPixelData(o),
       getStackImageIds: () => commandsRef.current.getStackImageIds(),
       showOverlay: (o) => commandsRef.current.showOverlay(o),

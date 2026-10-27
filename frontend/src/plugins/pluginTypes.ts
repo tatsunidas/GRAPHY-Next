@@ -26,7 +26,7 @@ import type {
 import type { Vec3 } from "../viewer/reslice";
 import type { PluginCurvedMprResult, PluginCurvedMprSpec } from "./pluginCurvedMprApi";
 import type { PluginSeriesPanelHandle, PluginSeriesPanelOptions } from "./pluginSeriesPanelApi";
-import type { ViewerDerivedSeriesRequest, ViewerDerivedSeriesResult, ViewerOverlay, ViewerPixelDataOptions, ViewerRoiMeasurements, ViewerTarget, ViewerAngioReportRequest, ViewerPresentationStateRequest, ViewerTilePixelData, ViewerTileSpatialCalibration, ViewerTileXaState, ViewerTileXaCine, ViewerTileRoi, ViewerTileViewState, ViewerSrMeasurementGroup, ViewerSrRequest, ViewerSrResult, ViewerLabelVolume, ViewerLabelVolumeResult } from "../viewer/viewerCommands";
+import type { ViewerDerivedSeriesRequest, ViewerDerivedSeriesResult, ViewerOverlay, ViewerPixelDataOptions, ViewerRoiMeasurements, ViewerTarget, ViewerAngioReportRequest, ViewerPresentationStateRequest, ViewerTilePixelData, ViewerTileSpatialCalibration, ViewerTileXaState, ViewerTileXaCine, ViewerTileXaGeometry, ViewerTileRoi, ViewerTileViewState, ViewerSrMeasurementGroup, ViewerSrRequest, ViewerSrResult, ViewerLabelVolume, ViewerLabelVolumeResult } from "../viewer/viewerCommands";
 
 export type { PluginStoreDoc, PluginStoreSaveResult };
 
@@ -705,6 +705,39 @@ export interface Viewer2DPluginHost extends PluginHostBase {
    * <p>⚠️ dataSet が**プリウォーム前**なら null。シネを一度再生すれば温まる。
    */
   getXaCine: (tileId?: string) => ViewerTileXaCine | null;
+  /**
+   * 対象タイルの **XA 投影幾何**（撮影角度・SID・SOD・検出器のピクセル間隔・主点）（H41）。
+   * XA / XRF でなければ null。`tileId` 省略時は対象の先頭タイル。
+   *
+   * <p>2 方向のアンギオを対応付ける・3D に再構成するのに要る値。**読めないときは `geometry` が null で、
+   * 理由が `missing` に入る**（`noDataSet` / `noAngles` / `noDistances` / `noImagerSpacing` / `noImageSize`）。
+   * 0 や既定値で埋めない——埋めた角度は、もっともらしい線を引いてしまう。
+   *
+   * <p>🔴 `imagerSpacingMm` は**検出器面**の値で、`getSpatialCalibration` の校正済み mm/px とは別物
+   * （3D 再構成は校正値を使わない。二重補正になる）。
+   *
+   * <p>⚠️ 主点は**画像中心と仮定**している（`FieldOfView*` による切り出しや装置側の回転・反転があるとずれる）。
+   * dataSet が**プリウォーム前**なら `noDataSet`。シネを一度開けば温まる。
+   */
+  getXaGeometry: (tileId?: string) => ViewerTileXaGeometry | null;
+  /**
+   * **開いていない XA シリーズ**の幾何・フレーム数・画像サイズ（H42）。2 方向（A・B）を 1 つのプラグイン窓で
+   * 同時に扱うための口。`getXaGeometry` はタイル単位、こちらはシリーズ単位。
+   *
+   * <p>読めない部分は null（理由は `missing`）。0 や既定値で埋めない。対象は**先頭インスタンス**
+   * （XA のシネは 1 インスタンスのマルチフレーム）で、複数あれば `instanceCount` が 1 を超える。
+   * `studyUid` 省略時は開いているタイルから解決。患者をまたぐ参照は拒否。
+   */
+  readXaSeries: (ref: PluginSeriesRef) => Promise<import("./pluginXaSeriesApi").PluginXaSeriesInfo | null>;
+  /**
+   * **開いていない XA シリーズの 1 フレーム**の校正済み画素（H42）。`frameIndex` は 0 起点。
+   * 範囲外は null（黙って別フレームにならない）。DSA（差分）は掛けない＝ネイティブのフレーム。
+   * `loadVolume` は IPP の無い XA シネに使えない（1 フレーム分しか返らない）ので、これを使う。
+   */
+  readXaSeriesFrame: (
+    ref: PluginSeriesRef,
+    frameIndex: number,
+  ) => Promise<import("./pluginXaSeriesApi").PluginXaSeriesFrame | null>;
   /**
    * **再構成済み 3D 血管モデルの一覧**（H11）。新しい順。まだ 1 件も無ければ空配列。
    *

@@ -591,6 +591,72 @@ export interface XaCine {
   uniform: boolean;
 }
 
+/**
+ * XA の**投影幾何**。`host.getXaGeometry()` の戻り。**H41**。
+ *
+ * <p>2 方向のアンギオを対応付ける・3D に再構成するのに要る。座標系は患者 LPS（mm）。
+ * 角度は DICOM の `PositionerPrimaryAngle (0018,1510)` / `PositionerSecondaryAngle (0018,1511)` のまま（度）。
+ *
+ * <p>🔴 **読めないときは `geometry` が null で、理由が `missing` に入る。** 0 や既定値で埋めない。
+ * `imagerSpacingMm` は**検出器面**の値で、`SpatialCalibration` の校正済み mm/px とは別物
+ * （3D 再構成は校正値を使わない）。
+ *
+ * <p>⚠️ 主点は**画像中心と仮定**している（`FieldOfView*` による切り出しや装置側の回転・反転があるとずれる）。
+ * dataSet が**プリウォーム前**なら `missing` は `"noDataSet"`。シネを一度開けば温まる。
+ */
+export interface XaGeometry {
+  tileId: string;
+  imageId: string;
+  /** 読んだフレーム（0 origin）。 */
+  frameIndex: number;
+  geometry: XaViewGeometry | null;
+  missing: "noDataSet" | "noAngles" | "noDistances" | "noImagerSpacing" | "noImageSize" | null;
+  /** 角度がフレームごとに変わる収集（回転 DSA など）か。 */
+  perFrameAngles: boolean;
+}
+
+/** `host.readXaSeries()` の戻り。**H42**。 */
+export interface XaSeriesInfo {
+  seriesUid: string;
+  studyUid: string;
+  sopInstanceUid: string;
+  /** 1 を超えるとき、ここで扱うのは先頭インスタンスだけ。 */
+  instanceCount: number;
+  /** 先頭インスタンスのフレーム数。タグから読めなければ null（1 で埋めない）。 */
+  frameCount: number | null;
+  rows: number | null;
+  cols: number | null;
+  geometry: XaViewGeometry | null;
+  missing: "noDataSet" | "noAngles" | "noDistances" | "noImagerSpacing" | "noImageSize" | null;
+  perFrameAngles: boolean;
+}
+
+/** `host.readXaSeriesFrame()` の戻り。**H42**。 */
+export interface XaSeriesFrame {
+  seriesUid: string;
+  frameIndex: number;
+  rows: number;
+  cols: number;
+  /** 校正済みの画素（行優先）。表示 W/L は掛かっていない。 */
+  data: Float32Array;
+  unit: string;
+}
+
+export interface XaViewGeometry {
+  /** 一次角 [度]（LAO/RAO）。 */
+  primaryAngleDeg: number;
+  /** 二次角 [度]（CRA/CAU）。 */
+  secondaryAngleDeg: number;
+  /** 線源〜検出器 [mm]。 */
+  sidMm: number;
+  /** 線源〜等中心 [mm]。 */
+  sodMm: number;
+  /** 検出器面のピクセル間隔 [行, 列] [mm]。 */
+  imagerSpacingMm: [number, number];
+  /** 主点 [x, y] [px]。 */
+  principalPoint: [number, number];
+}
+
 /** `getPixelData` の任意指定。**0.1.9 以降**。 */
 export interface PixelDataOptions {
   /**
@@ -1965,6 +2031,21 @@ export interface Viewer2DPluginHost extends PluginHostBase {
    * 🔴 **`fpsSource` を必ず見ること**——`"default"` は測定値ではない。
    */
   getXaCine: (tileId?: string) => XaCine | null;
+  /**
+   * 対象タイルの **XA 投影幾何**（撮影角度・SID・SOD・検出器のピクセル間隔・主点）（**H41**）。
+   * XA / XRF でなければ null。読めないときは `geometry` が null で理由が `missing` に入る。
+   */
+  getXaGeometry: (tileId?: string) => XaGeometry | null;
+  /**
+   * **開いていない XA シリーズ**の幾何・フレーム数・画像サイズ（**H42**）。2 方向（A・B）を 1 つのプラグイン窓で
+   * 同時に扱うための口。読めない部分は null（理由は `missing`）。対象は**先頭インスタンス**。
+   */
+  readXaSeries: (ref: PluginSeriesRef) => Promise<XaSeriesInfo | null>;
+  /**
+   * **開いていない XA シリーズの 1 フレーム**の校正済み画素（**H42**）。`frameIndex` は 0 起点、範囲外は null。
+   * `loadVolume` は IPP の無い XA シネに使えないので、こちらを使う。
+   */
+  readXaSeriesFrame: (ref: PluginSeriesRef, frameIndex: number) => Promise<XaSeriesFrame | null>;
   /**
    * **再構成済み 3D 血管モデルの一覧**（**H11**）。新しい順。まだ無ければ空配列。
    * 点列を含まない要約だけを返す（本体は `getVesselModel()` で取る）。
