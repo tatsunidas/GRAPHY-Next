@@ -410,6 +410,10 @@ export interface GraphyDesktop {
   pickDirectory?: () => Promise<string | null>;
   /** 2d/3d/mpr/slicer 等の独立ビューアを新規ウィンドウで開く。 */
   openViewer?: (screen: string) => Promise<void>;
+  /** 外部（RIS など）から「この検査を開く」を受ける（main が検証した要求だけ）。購読を外す関数を返す。メインウィンドウだけが使う。 */
+  onExternalOpen?: (cb: (parsed: unknown) => void) => () => void;
+  /** 受け取れる状態になったと main に知らせる（それまでに溜まった要求が届く）。 */
+  externalOpenReady?: () => void;
   /** 接続中の全ディスプレイ情報を取得（モニター診断、デスクトップのみ）。 */
   listDisplays?: () => Promise<DisplayInfo[]>;
   /** 指定モニターに目視テストパターンをフルスクリーン表示する（デスクトップのみ）。 */
