@@ -16,6 +16,7 @@ import { runToolLoop } from "./toolLoop";
 import { RobotPanel, type RobotPlan } from "./robot/RobotPanel";
 import { buildRobotTools } from "./robot/planModel";
 import { MacroPanel, type MacroApi } from "./macros/MacroPanel";
+import { SkillPanel, type SkillApi } from "./skills/SkillPanel";
 import { PluginToolPanel } from "./PluginToolPanel";
 import { RequestLogPanel, type RequestLogApi } from "./RequestLogPanel";
 import type { EvalApi } from "./EvalSection";
@@ -81,6 +82,7 @@ export function AssistantScreen() {
   const confirmedRef = useRef(false);
   const [note, setNote] = useState<string | null>(null);
   const [macroOpen, setMacroOpen] = useState(false);
+  const [skillOpen, setSkillOpen] = useState(false);
   const [robot, setRobot] = useState(false);
   const [pluginToolOpen, setPluginToolOpen] = useState(false);
   const [requestLogOpen, setRequestLogOpen] = useState(false);
@@ -302,6 +304,18 @@ export function AssistantScreen() {
       viewer: (cmd) => bridge.assistantViewerCmd!(sessionId, cmd),
     };
   }, [bridge, sessionId]);
+  // スキルの口。保存は main（形と大きさの検証）、実行は send と同じ viewer 中継（2D 窓が毎回検証）。
+  const skillApi = useMemo<SkillApi | null>(() => {
+    if (!bridge?.assistantSkillsList || !bridge.assistantSkillsSave || !bridge.assistantSkillsDelete || !bridge.assistantViewerCmd) return null;
+    return {
+      list: () => bridge.assistantSkillsList!(),
+      save: (s) => bridge.assistantSkillsSave!(s),
+      remove: (id) => bridge.assistantSkillsDelete!(id),
+      viewer: (cmd) => bridge.assistantViewerCmd!(sessionId, cmd),
+      pluginTools: enabledPluginTools,
+      pluginTool: (cmd) => bridge.assistantViewerCmd!(sessionId, cmd) as Promise<PluginToolResult>,
+    };
+  }, [bridge, sessionId, enabledPluginTools]);
   const robotApi = useMemo(
     () =>
       bridge?.assistantViewerCmd
@@ -390,6 +404,11 @@ export function AssistantScreen() {
             {t("assistant.macro.button")}
           </button>
         )}
+        {skillApi && (
+          <button style={S.linkBtn} onClick={() => setSkillOpen((v) => !v)} data-testid="assistant-skill-toggle">
+            {t("assistant.skill.button")}
+          </button>
+        )}
         <button style={S.linkBtn} disabled={busy || !state.messages.length} onClick={() => dispatch({ type: "clear" })}>
           {t("assistant.clear")}
         </button>
@@ -412,6 +431,7 @@ export function AssistantScreen() {
       {pluginToolOpen && <PluginToolPanel tools={pluginTools} onToggle={(id, on) => void togglePlugin(id, on)} busy={busy} t={t} />}
       {requestLogOpen && requestLogApi && <RequestLogPanel api={requestLogApi} evalApi={evalApi} busy={busy} t={t} />}
       {macroOpen && macroApi && <MacroPanel api={macroApi} candidates={macroCandidates} busy={busy} t={t} />}
+      {skillOpen && skillApi && <SkillPanel api={skillApi} busy={busy} t={t} locale={locale} />}
       {note && <div style={S.note}>{note}</div>}
       {attachments.length > 0 && !(resolved?.ok && resolved.local) && (
         <div style={S.note} data-testid="assistant-attach-dest">
