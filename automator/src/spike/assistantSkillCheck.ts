@@ -219,11 +219,11 @@ async function main(): Promise<void> {
     await win.getByTestId("assistant-skill-toggle").click();
     await item("slip").waitFor({ state: "visible", timeout: 10_000 });
     const invB = await viewer.evaluate(`(function(){ var p = window.__graphyDebug.getViewportProperties()[0]; return p && p.invert; })()`);
-    await item("slip").getByTestId("assistant-skill-run").click();
-    await win.getByTestId("assistant-skill-msg").filter({ hasText: /invalid-skill/ }).waitFor({ state: "visible", timeout: 10_000 });
+    const blockedMsg = (await item("slip").getByTestId("assistant-skill-blocked").textContent()) ?? "";
+    check(await item("slip").getByTestId("assistant-skill-run").isDisabled() && /unknown-action/.test(blockedMsg), "🔴 検証に通らないスキルは理由つきで［実行］が止まっている", blockedMsg);
     await viewer.waitForTimeout(500);
     const flippedAfter = await viewer.evaluate(`(function(){ var p = window.__graphyDebug.getViewportProperties()[0]; return p && p.invert; })()`);
-    check(flippedAfter === invB, "🔴 実行が拒否され、先頭の正しい操作（flipH）も実行されない", { invB, flippedAfter });
+    check(flippedAfter === invB, "先頭の正しい操作（flipH）も実行されていない", { invB, flippedAfter });
     await win.screenshot({ path: path.join(OUT_DIR, "6-rejected.png") });
 
     // --- 7. forbidden ---

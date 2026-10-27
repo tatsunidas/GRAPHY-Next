@@ -195,3 +195,74 @@ describe("runSkill", () => {
     expect(calls).toHaveLength(0);
   });
 });
+
+describe("プラグインのスキル", () => {
+  const plug = (id: string): import("./skillModel").PluginSkillEntry => ({ pluginId: "vis-monai", pluginName: "Vis Monai", skill: base({ id }) });
+  it("優先順位は 同梱 > プラグイン > 利用者（同じ id は上が勝つ）", () => {
+    const m = mergeSkills([base({ id: "vis-monai--a" }), base({ id: "mine" }), base({ id: "ct-window-tour" })], [plug("vis-monai--a"), plug("ct-window-tour")]);
+    expect(m.map((e) => `${e.skill.id}:${e.source}`)).toEqual(["ct-window-tour:bundled", "slice-review:bundled", "vis-monai--a:plugin", "mine:user"]);
+    expect(m.find((e) => e.source === "plugin")?.pluginName).toBe("Vis Monai");
+  });
+  it("名前空間化した id（80 字まで）を受け付け、81 字は落とす", () => {
+    expect(validateSkill(base({ id: `vis-monai--${"a".repeat(60)}` })).ok).toBe(true);
+    expect(validateSkill(base({ id: "a".repeat(81) })).ok).toBe(false);
+  });
+  const entry: PluginToolEntry = {
+    name: "plugin__vis-monai__segment_run", pluginId: "vis-monai", pluginName: "M", tool: "segment_run", effect: "write", description: "d", enabled: true,
+    parameters: { type: "object", properties: { organs: { type: "string", maxLength: 40 } }, required: ["organs"] },
+  };
+  const sk = (): Skill => base({
+    id: "vis-monai--organ",
+    inputs: [{ key: "organs", label: lt("o"), type: "string", maxLength: 40 }],
+    steps: [{ kind: "ask", input: "organs" }, { kind: "tool", id: entry.name, params: { organs: { $input: "organs" } } }],
+  });
+  it("プラグインのツールの結果は onResult にだけ渡り、後続の引数にはならない", async () => {
+    const seen: unknown[] = [];
+    const sent: unknown[] = [];
+    const { deps } = harness({
+      pluginTools: [entry],
+      pluginTool: async (cmd) => { sent.push(cmd.params); return { ok: true, source: "plugin", untrusted: true, data: { volumeMl: 12 } }; },
+      ask: async () => "liver",
+      onResult: (i, d) => seen.push([i, d]),
+    });
+    const out = await runSkill(sk(), {}, deps);
+    expect(out.status).toBe("done");
+    expect(sent).toEqual([{ organs: "liver" }]);
+    expect(seen).toEqual([[1, { volumeMl: 12 }]]);
+  });
+  it("負例: ツールがオフ（pluginTools に無い／無効）なら 1 つも実行しない", async () => {
+    for (const pluginTools of [undefined, [{ ...entry, enabled: false }]]) {
+      const sent: unknown[] = [];
+      const { deps } = harness({ pluginTools, pluginTool: async (c) => { sent.push(c); return { ok: true, source: "p", untrusted: true, data: 1 }; } });
+      const out = await runSkill(sk(), {}, deps);
+      expect(out.status).toBe("failed");
+      expect(out.error).toMatch(/^invalid-skill:step-2:unknown-tool/);
+      expect(sent).toEqual([]);
+    }
+  });
+});
+
+describe("プラグインのツールが {ok:false} を返したとき", () => {
+  const entry: PluginToolEntry = {
+    name: "plugin__p__go", pluginId: "p", pluginName: "P", tool: "go", effect: "display", description: "d", enabled: true,
+    parameters: { type: "object", properties: {}, required: [] },
+  };
+  const sk = base({ id: "p--x", steps: [{ kind: "tool", id: entry.name, params: {} }, { kind: "confirm", message: lt("続けますか") }, { kind: "tool", id: "flipH", params: {} }] });
+  it("🔴 そこで止まり、後続の確認・操作は実行されない（理由は画面用に残る）", async () => {
+    let asked = 0;
+    const { calls, deps } = harness({
+      pluginTools: [entry],
+      pluginTool: async () => ({ ok: true, source: "p", untrusted: true, data: { ok: false, error: "organ-not-found" } }),
+      confirm: async () => { asked++; return true; },
+    });
+    const out = await runSkill(sk, {}, deps);
+    expect(out).toMatchObject({ status: "failed", failedAt: 0, error: "tool-error:organ-not-found" });
+    expect(asked).toBe(0);
+    expect(calls).toEqual([]);
+  });
+  it("正例: ok:true の値なら進む", async () => {
+    const { calls, deps } = harness({ pluginTools: [entry], pluginTool: async () => ({ ok: true, source: "p", untrusted: true, data: { ok: true } }) });
+    expect((await runSkill(sk, {}, deps)).status).toBe("done");
+    expect(calls).toEqual([{ id: "flipH", params: {} }]);
+  });
+});

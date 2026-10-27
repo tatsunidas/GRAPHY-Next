@@ -558,6 +558,7 @@ export interface GraphyDesktop {
     steps: import("./assistant/macros/macroModel").MacroStep[];
   }) => Promise<{ ok: boolean; macro?: import("./assistant/macros/macroModel").Macro; error?: string }>;
   assistantMacrosDelete?: (id: string) => Promise<{ ok: boolean; error?: string }>;
+  assistantPluginSkillsList?: () => Promise<{ ok: boolean; skills?: import("./assistant/skills/skillModel").PluginSkillEntry[]; error?: string }>;
   assistantSkillsList?: () => Promise<{ ok: boolean; skills?: import("./assistant/skills/skillModel").Skill[]; error?: string }>;
   assistantSkillsSave?: (skill: import("./assistant/skills/skillModel").Skill) => Promise<{ ok: boolean; skill?: import("./assistant/skills/skillModel").Skill; error?: string }>;
   assistantSkillsDelete?: (id: string) => Promise<{ ok: boolean; error?: string }>;

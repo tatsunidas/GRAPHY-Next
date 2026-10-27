@@ -89,5 +89,38 @@
         "required": []
       }
     }
+  ],
+  "skills": [
+    {
+      "id": "mask-flow",
+      "title": {
+        "ja": "マスクの表示と取り消し",
+        "en": "マスクの表示と取り消し"
+      },
+      "description": {
+        "ja": "合成マスクを出し、確認してから消す",
+        "en": "合成マスクを出し、確認してから消す"
+      },
+      "inputs": [],
+      "steps": [
+        {
+          "kind": "tool",
+          "id": "plugin:show_mask",
+          "params": {}
+        },
+        {
+          "kind": "confirm",
+          "message": {
+            "ja": "マスクを表示しました。消しますか？",
+            "en": "マスクを表示しました。消しますか？"
+          }
+        },
+        {
+          "kind": "tool",
+          "id": "plugin:remove_mine",
+          "params": {}
+        }
+      ]
+    }
   ]
 }

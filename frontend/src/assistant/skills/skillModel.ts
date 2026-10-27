@@ -48,13 +48,22 @@ export interface Skill {
   steps: SkillStep[];
 }
 
-export type SkillSource = "bundled" | "user";
+export type SkillSource = "bundled" | "plugin" | "user";
 export interface SkillEntry {
   skill: Skill;
   source: SkillSource;
+  /** source が plugin のときの、宣言したプラグインの表示名（main が整形済み）。 */
+  pluginName?: string;
+}
+/** main が返すプラグイン宣言のスキル（検査して組み直したもの）。 */
+export interface PluginSkillEntry {
+  pluginId: string;
+  pluginName: string;
+  skill: Skill;
 }
 
-const ID_RE = /^[a-z0-9][a-z0-9-]{0,39}$/;
+/** プラグインのスキルは `<pluginId>--<id>` に名前空間化されるため、上限は 80 字（desktop/assistantSkills.js と同じ）。 */
+const ID_RE = /^[a-z0-9][a-z0-9-]{0,79}$/;
 const KEY_RE = /^[a-z][A-Za-z0-9]{0,23}$/;
 
 export function pick(t: LocalText, locale: string): string {

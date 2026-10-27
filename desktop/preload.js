@@ -100,6 +100,7 @@ contextBridge.exposeInMainWorld("graphyDesktop", {
   assistantMacrosList: () => ipcRenderer.invoke("graphy:assistant-macros-list"),
   assistantMacrosSave: (macro) => ipcRenderer.invoke("graphy:assistant-macros-save", macro),
   assistantMacrosDelete: (id) => ipcRenderer.invoke("graphy:assistant-macros-delete", id),
+  assistantPluginSkillsList: () => ipcRenderer.invoke("graphy:assistant-plugin-skills-list"),
   assistantSkillsList: () => ipcRenderer.invoke("graphy:assistant-skills-list"),
   assistantSkillsSave: (skill) => ipcRenderer.invoke("graphy:assistant-skills-save", skill),
   assistantSkillsDelete: (id) => ipcRenderer.invoke("graphy:assistant-skills-delete", id),
