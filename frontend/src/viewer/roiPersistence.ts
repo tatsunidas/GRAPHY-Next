@@ -49,6 +49,15 @@ export interface SavedRoi {
    * 今見ているフレーム番号を書く**（`t` を保存していないのも同じ理由）。
    */
   frame?: number;
+  /**
+   * 保存時の world の基準の画素間隔 `[row, col]`（mm/px）。**患者位置（IPP）を持たない画像（XA など）の ROI にだけ付く。**
+   *
+   * <p>🚨 IPP の無い画像の world は「画像が作られたときの画素間隔 × 画素位置」で決まり、空間校正の有無で変わる
+   * （未校正 0.214 → 校正済み 0.0371 など）。座標だけ保存すると、校正した回を再読込したとき線が 5.8 倍ずれる。
+   * 復元時に今の基準との比で座標を換算する（{@link rescaleRoiToSpacing}）。
+   * 無い（この項目を持たない旧保存・IPP のある画像）は換算しない。
+   */
+  worldSpacing?: [number, number];
   /** ハンドル座標（患者座標 LPS mm）。 */
   points: number[][];
   /** 輪郭系ツールの polyline（患者座標 LPS mm）。無いツールでは省略。 */
@@ -182,6 +191,11 @@ export interface RoiSaveContext {
    * 省略するとフレームを記録しない＝マルチフレームで復元先を誤る。
    */
   frameOf?: (imageId: string) => number | null;
+  /**
+   * annotation の referencedImageId → world の基準の画素間隔 `[row, col]`。IPP のある画像は null（換算が要らない）。
+   * 省略すると記録しない。
+   */
+  worldSpacingOf?: (imageId: string) => [number, number] | null;
   /** annotationUID → ROI マネージャのメタ。 */
   metaOf: (roiUid: string) => {
     label?: string;
@@ -204,6 +218,26 @@ const points3 = (arr: unknown): number[][] => {
   // 3 要素へ切り詰める（Cornerstone は Point3 だが余分が付くことがある）。
   return arr.filter(isPoint3).map((p) => [p[0], p[1], p[2]]);
 };
+
+const isSpacing = (v: unknown): v is [number, number] =>
+  Array.isArray(v) && v.length === 2 && v.every((n) => typeof n === "number" && Number.isFinite(n) && n > 0);
+
+/**
+ * 保存時の world の基準（{@link SavedRoi.worldSpacing}）と今の基準が違うとき、座標を今の基準へ換算した ROI を返す（純関数）。
+ * world は x = 列 × 列間隔・y = 行 × 行間隔（z は変えない）。基準を持たない・同じ・今の基準が不明なら元のまま。
+ */
+export function rescaleRoiToSpacing(roi: SavedRoi, current: [number, number] | null): SavedRoi {
+  const old = roi.worldSpacing;
+  if (!old || !current || !isSpacing(current)) return roi;
+  // 画素位置を保つ: 画素 = world ÷ 保存時の間隔、新しい world = 画素 × 今の間隔。
+  const fx = current[1] / old[1];
+  const fy = current[0] / old[0];
+  if (Math.abs(fx - 1) < 1e-9 && Math.abs(fy - 1) < 1e-9) return roi;
+  const scale = (pts: number[][]) => pts.map((p) => [p[0] * fx, p[1] * fy, p[2]]);
+  const out: SavedRoi = { ...roi, points: scale(roi.points), worldSpacing: [current[0], current[1]] };
+  if (roi.polyline) out.polyline = scale(roi.polyline);
+  return out;
+}
 
 /**
  * annotation → 保存形（純関数）。**保存できない ROI は null**（黙って壊れた形で保存しない）。
@@ -234,6 +268,8 @@ export function toSavedRoi(ann: AnnotationLike, ctx: RoiSaveContext): SavedRoi |
   // マルチフレームの復元先。**その ROI 自身の imageId** から取る（表示中の値ではない）。
   const frame = ctx.frameOf?.(refId);
   if (typeof frame === "number" && Number.isFinite(frame) && frame >= 0) out.frame = frame;
+  const spacing = ctx.worldSpacingOf?.(refId);
+  if (isSpacing(spacing)) out.worldSpacing = [spacing[0], spacing[1]];
   // スプライン系は補間方法も保存する（復元時に同じ形へ戻すため）
   const splineType = (ann.data as { spline?: { type?: string } } | undefined)?.spline?.type;
   if (typeof splineType === "string" && splineType) out.splineType = splineType;
@@ -338,6 +374,7 @@ export function parseSaveFile(json: string | null | undefined): ParsedRoiFile {
     if (typeof s.c === "number") item.c = s.c;
     if (typeof s.t === "number") item.t = s.t;
     if (typeof s.frame === "number" && Number.isFinite(s.frame) && s.frame >= 0) item.frame = s.frame;
+    if (isSpacing(s.worldSpacing)) item.worldSpacing = [s.worldSpacing[0], s.worldSpacing[1]];
     if (typeof s.label === "string") item.label = s.label;
     if (typeof s.description === "string") item.description = s.description;
     if (s.scope && typeof s.scope === "object") item.scope = sanitizeScope(s.scope);

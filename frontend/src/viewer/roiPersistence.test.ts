@@ -11,6 +11,7 @@ import {
   buildSaveFile,
   mergeSaveFiles,
   parseSaveFile,
+  rescaleRoiToSpacing,
   selectRestorable,
   toSavedRoi,
   tombstonesFor,
@@ -611,5 +612,56 @@ describe("旧版の解析状態（analyses）— 中身を読まずに素通し�
     const base = { rois: [], deleted: [], spheres: [] };
     expect(mergeSaveFiles({ ...base, analyses: [{ id: "remote" }] }, { ...base, analyses: [{ id: "local" }] }).analyses).toEqual([{ id: "remote" }]);
     expect(mergeSaveFiles({ ...base, analyses: [] }, { ...base, analyses: [{ id: "local" }] }).analyses).toEqual([{ id: "local" }]);
+  });
+});
+
+describe("worldSpacing — IPP の無い画像の world の基準（校正で変わる）", () => {
+  const ann: AnnotationLike = {
+    annotationUID: "r1",
+    metadata: { toolName: "Length", referencedImageId: IMAGE_ID },
+    data: { handles: { points: [[10, 20, 0], [40, 20, 0]] } },
+  };
+
+  it("保存: worldSpacingOf が値を返すと記録し、null・省略では記録しない", () => {
+    expect(toSavedRoi(ann, ctx({ worldSpacingOf: () => [0.214, 0.2] }))?.worldSpacing).toEqual([0.214, 0.2]);
+    expect(toSavedRoi(ann, ctx({ worldSpacingOf: () => null }))?.worldSpacing).toBeUndefined();
+    expect(toSavedRoi(ann, ctx())?.worldSpacing).toBeUndefined();
+  });
+
+  it("読み込み: 正の有限数 2 つだけ通し、壊れた値は捨てる（ROI 自体は残す）", () => {
+    const mk = (ws: unknown) => parseSaveFile(JSON.stringify({ schema: ROI_SCHEMA_VERSION, rois: [{ roiUid: "r", tool: "Length", sopInstanceUid: SOP, points: [[0, 0, 0]], worldSpacing: ws }] })).rois;
+    expect(mk([0.214, 0.214])[0].worldSpacing).toEqual([0.214, 0.214]);
+    for (const bad of [[0, 1], [-1, 1], [1], [1, "a"], "x", null]) {
+      const r = mk(bad);
+      expect(r).toHaveLength(1);
+      expect(r[0].worldSpacing).toBeUndefined();
+    }
+  });
+
+  it("換算: 保存時 0.214・今 0.0371 の基準なら、画素位置を保つよう x・y を 0.0371/0.214 倍にし z は変えない", () => {
+    const roi: SavedRoi = { roiUid: "r", tool: "Length", sopInstanceUid: SOP, worldSpacing: [0.214, 0.214], points: [[10, 20, 3], [40, 20, 3]], polyline: [[1, 2, 3]] };
+    const out = rescaleRoiToSpacing(roi, [0.0371, 0.0371]);
+    const k = 0.0371 / 0.214;
+    expect(out.points[1][0]).toBeCloseTo(40 * k, 9);
+    expect(out.points[1][1]).toBeCloseTo(20 * k, 9);
+    expect(out.points[1][2]).toBe(3);
+    expect(out.polyline?.[0][0]).toBeCloseTo(k, 9);
+    expect(out.worldSpacing).toEqual([0.0371, 0.0371]);
+    expect(roi.points[1][0]).toBe(40); // 元は変えない
+  });
+
+  it("換算: 行と列の間隔が違えば軸ごとに換算する（x は列、y は行）", () => {
+    const roi: SavedRoi = { roiUid: "r", tool: "Length", sopInstanceUid: SOP, worldSpacing: [0.2, 0.1], points: [[10, 10, 0]] };
+    const out = rescaleRoiToSpacing(roi, [0.1, 0.4]);
+    // x: 10 ÷ 0.1(列)=100 画素 → ×0.4 = 40。y: 10 ÷ 0.2(行)=50 画素 → ×0.1 = 5。
+    expect(out.points[0]).toEqual([40, 5, 0]);
+  });
+
+  it("換算しない: 基準を持たない旧保存・今の基準が不明・同じ基準は元のまま（同一オブジェクト）", () => {
+    const old: SavedRoi = { roiUid: "r", tool: "Length", sopInstanceUid: SOP, points: [[10, 20, 0]] };
+    expect(rescaleRoiToSpacing(old, [0.1, 0.1])).toBe(old);
+    const withWs: SavedRoi = { ...old, worldSpacing: [0.214, 0.214] };
+    expect(rescaleRoiToSpacing(withWs, null)).toBe(withWs);
+    expect(rescaleRoiToSpacing(withWs, [0.214, 0.214])).toBe(withWs);
   });
 });
