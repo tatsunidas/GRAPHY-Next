@@ -104,10 +104,18 @@ export function addMaskSegment(segmentationId: string, index: number): number[] 
   return next;
 }
 
-function notify(): void {
+function notify(itemId?: string): void {
   for (const l of [...listeners]) {
     try {
       l();
+    } catch {
+      /* ignore */
+    }
+  }
+  if (itemId === undefined) return;
+  for (const l of [...changedListeners]) {
+    try {
+      l(itemId);
     } catch {
       /* ignore */
     }
@@ -122,13 +130,13 @@ export function getRoiMaskMeta(itemId: string): RoiMaskMeta | undefined {
 export function setRoiMaskMeta(itemId: string, patch: Partial<RoiMaskMeta>): void {
   const cur = metaById.get(itemId) ?? {};
   metaById.set(itemId, { ...cur, ...patch, custom: { ...cur.custom, ...patch.custom } });
-  notify();
+  notify(itemId);
 }
 
 export function deleteRoiMaskMeta(itemId: string): void {
   const cur = metaById.get(itemId);
   if (!metaById.delete(itemId)) return;
-  notify();
+  notify(itemId);
   for (const l of [...deletedListeners]) {
     try {
       l(itemId, cur);
@@ -149,6 +157,19 @@ export function subscribeRoiMaskDeleted(l: (itemId: string, meta: RoiMaskMeta | 
   deletedListeners.add(l);
   return () => {
     deletedListeners.delete(l);
+  };
+}
+
+const changedListeners = new Set<(itemId: string) => void>();
+
+/**
+ * どの項目が変わったかを知りたい購読者用（`subscribeRoiMaskStore` は項目を伝えない）。
+ * 形の ROI の保存は、形の ROI のメタが変わったときだけ予約したいので、塗り ROI の項目を除くのに使う。
+ */
+export function subscribeRoiMaskChanged(l: (itemId: string) => void): () => void {
+  changedListeners.add(l);
+  return () => {
+    changedListeners.delete(l);
   };
 }
 

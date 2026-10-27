@@ -61,6 +61,11 @@ function allMaskIds(): string[] {
   }
 }
 
+/** この ID は塗り ROI（マスク）か。形の ROI の注釈 UID とは区別される（メタストアは両方を持つ）。 */
+export function isMaskId(id: string): boolean {
+  return allMaskIds().includes(id);
+}
+
 function schedule(): void {
   if (timer) clearTimeout(timer);
   timer = setTimeout(() => {
