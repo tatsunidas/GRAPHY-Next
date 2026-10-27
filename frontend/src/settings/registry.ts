@@ -662,6 +662,13 @@ export const SETTINGS_REGISTRY: CategoryDef[] = [
             default: "0.0.0.0",
             helpKey: "settings.field.localAeBindAddress.help",
           },
+          {
+            key: "dicom.discovery.advertise",
+            labelKey: "settings.field.discoveryAdvertise",
+            type: "toggle",
+            default: false,
+            helpKey: "settings.field.discoveryAdvertise.help",
+          },
         ],
       },
       {

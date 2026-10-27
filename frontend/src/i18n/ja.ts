@@ -3407,6 +3407,8 @@ export const ja: Record<string, string> = {
   "settings.field.localAePort": "SCP 待受ポート",
   "settings.field.localAePort.help": "ローカル DIMSE リスナー（C-STORE/C-ECHO 受信）が待ち受けるポート。反映にはアプリの再起動が必要。",
   "settings.field.localAeBindAddress": "SCP バインドアドレス",
+  "settings.field.discoveryAdvertise": "ネットワーク上で自分の AE を知らせる",
+  "settings.field.discoveryAdvertise.help": "オンにすると、同じ LAN の DICOM 機器が、この端末の AE タイトル・ポート・TLS の有無（mDNS の _dicom._tcp）を見つけられるようになります。患者情報や画像は流れません。既定はオフ。⚠ 知らせると、同じ LAN の機器がこの端末を送信先として見つけやすくなります。受信側には送信元の許可リストが無いので、LAN を信頼できるときだけ使ってください。反映にはアプリの再起動が必要（DICOM 受信が動いているときだけ知らせます）。",
   "settings.field.localAeBindAddress.help": "ローカル DIMSE リスナーがバインドするネットワークインタフェース（0.0.0.0=全 NIC）。反映にはアプリの再起動が必要。",
   "settings.sec.scpQr": "他端末からの検索・取得",
   "settings.field.scpQrEnabled": "他端末からの検索・取得を受け付ける",
