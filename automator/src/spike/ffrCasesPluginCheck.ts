@@ -288,6 +288,85 @@ async function waypointCheck(page: Page, label: string): Promise<Record<string, 
   return out;
 }
 
+/**
+ * 2 方向窓の区間の連動・アンカーの付け直しの確認（FFR_EDITCHECK=range。仮想血管）。
+ *  1. 経由点を足して 12 px 動かし、中心線を更新する → アンカーの数が A・B とも保たれる（以前は離れたものが捨てられた）。置き直したものは未確認
+ *  2. 解析区間を A で 2 点指定して切り詰める → B も対応する範囲に切り詰まる（端が真値の対応点の近く）
+ *  3. ［元に戻す］で A・B の切り詰めが一緒に外れる
+ *  4. 負例: 連動を切ると、A だけ切り詰まる
+ */
+async function rangeAnchorCheck(page: Page, label: string): Promise<Record<string, unknown>> {
+  const out: Record<string, unknown> = {};
+  const attrOf = async (key: "A" | "B", n: string) => JSON.parse((await page.getByTestId(`dual-canvas-${key}`).getAttribute(`data-${n}`)) ?? "null");
+  const anchors = async (key: "A" | "B"): Promise<[number, number, boolean][]> => (await attrOf(key, "anchors")) ?? [];
+  const trimmed = async (key: "A" | "B") => !!(await attrOf(key, "range"))?.trimmed;
+  const clickAt = async (key: "A" | "B", p: Pt) => {
+    const c = await toClient(page, key, p);
+    await page.mouse.click(c.x, c.y);
+    await page.waitForTimeout(500);
+  };
+  const dist = (a: Pt, b: Pt) => Math.hypot(a[0] - b[0], a[1] - b[1]);
+  const truth = JSON.parse(fs.readFileSync(path.join(VV_DIR, "truth.json"), "utf8")).views as Record<string, { centerlinePx: Pt[] }>;
+  const nearestIdx = (pts: Pt[], p: Pt) => pts.reduce((bi, q, i) => (dist(q, p) < dist(pts[bi], p) ? i : bi), 0);
+
+  // 1. 経由点で中心線を更新
+  await page.getByTestId("dual-mode").selectOption("waypoint");
+  const clA0: Pt[] = await attrOf("A", "clpts");
+  const aBefore = await anchors("A");
+  const bBefore = await anchors("B");
+  await clickAt("A", clA0[Math.floor(clA0.length / 2)]);
+  const wA: Pt = (await attrOf("A", "waypoints"))[0];
+  const c0 = await toClient(page, "A", wA);
+  const c1 = await toClient(page, "A", [wA[0] + 12, wA[1]]);
+  await page.mouse.move(c0.x, c0.y);
+  await page.mouse.down();
+  for (let i = 1; i <= 10; i++) await page.mouse.move(c0.x + ((c1.x - c0.x) * i) / 10, c0.y + ((c1.y - c0.y) * i) / 10);
+  await page.mouse.up();
+  await page.waitForTimeout(800);
+  const aAfter = await anchors("A");
+  const bAfter = await anchors("B");
+  out.anchorCounts = { before: [aBefore.length, bBefore.length], after: [aAfter.length, bAfter.length], unconfirmedA: aAfter.filter((a) => !a[2]).length };
+  await page.screenshot({ path: path.join(OUT_DIR, `${label}-anchors-replaced.png`) });
+  check("[R1] ★中心線を更新しても、アンカーの数が A・B とも保たれる（捨てない）", aAfter.length === aBefore.length && bAfter.length === bBefore.length && aBefore.length >= 3, out.anchorCounts);
+  check("[R2] 置き直したアンカーは未確認になっている（A で 1 つ以上）", aAfter.filter((a) => !a[2]).length >= 1, out.anchorCounts);
+
+  // 2. 区間の連動（切り詰め）
+  await page.getByTestId("dual-mode").selectOption("range");
+  await page.getByTestId("dual-range-tool").selectOption("trim");
+  const clA: Pt[] = await attrOf("A", "clpts");
+  const p1 = clA[Math.floor(clA.length * 0.3)];
+  const p2 = clA[Math.floor(clA.length * 0.6)];
+  await clickAt("A", p1);
+  await clickAt("A", p2);
+  const tA = await trimmed("A");
+  const tB = await trimmed("B");
+  const clBt: Pt[] = await attrOf("B", "clpts");
+  const t1 = nearestIdx(truth.Case1_A.centerlinePx, p1);
+  const t2 = nearestIdx(truth.Case1_A.centerlinePx, p2);
+  const e1 = truth.Case1_B.centerlinePx[t1];
+  const e2 = truth.Case1_B.centerlinePx[t2];
+  const bEnds: Pt[] = [clBt[0], clBt[clBt.length - 1]];
+  const errEnds = Math.min(dist(bEnds[0], e1) + dist(bEnds[1], e2), dist(bEnds[0], e2) + dist(bEnds[1], e1)) / 2;
+  out.rangeSync = { trimmedA: tA, trimmedB: tB, bEndErrPx: +errEnds.toFixed(2), bPoints: clBt.length };
+  await page.screenshot({ path: path.join(OUT_DIR, `${label}-range-synced.png`) });
+  check("[R3] A で切り詰めると、B も切り詰まる（連動）", tA && tB, out.rangeSync);
+  check("[R4] B の切り詰めの両端は、真値の対応点から 12 px 以内（平均）", errEnds <= 12, out.rangeSync);
+
+  // 3. 元に戻す
+  await page.getByTestId("dual-undo").click();
+  await page.waitForTimeout(700);
+  out.afterUndo = { trimmedA: await trimmed("A"), trimmedB: await trimmed("B") };
+  check("[R5] ［元に戻す］で A・B の切り詰めが一緒に外れる", !(out.afterUndo as { trimmedA: boolean }).trimmedA && !(out.afterUndo as { trimmedB: boolean }).trimmedB, out.afterUndo);
+
+  // 4. 負例: 連動を切る
+  await page.getByTestId("dual-sync").uncheck();
+  await clickAt("A", p1);
+  await clickAt("A", p2);
+  out.syncOff = { trimmedA: await trimmed("A"), trimmedB: await trimmed("B") };
+  check("[R6] ★負例: 連動を切ると、A だけ切り詰まる", (out.syncOff as { trimmedA: boolean }).trimmedA && !(out.syncOff as { trimmedB: boolean }).trimmedB, out.syncOff);
+  return out;
+}
+
 /** アンカー i を掴んで target へドラッグする。 */
 async function dragAnchor(page: Page, key: string, i: number, target: Pt): Promise<void> {
   const cur = (await anchorsOf(page, key))[i];
@@ -584,7 +663,10 @@ async function main(): Promise<void> {
     await viewer.screenshot({ path: path.join(OUT_DIR, `${spec.label}-1-centerlines.png`) });
     if (process.env.FFR_EDITCHECK) {
       // 2 方向窓の編集操作の実機確認（仮想血管）。アンカー・再構成には進まない。1 = エッジ、wp = 経由点の移動と A/B の連動。
-      report.editCheck = process.env.FFR_EDITCHECK === "wp" ? await waypointCheck(viewer, spec.label) : await editCheck(viewer, spec.label);
+      report.editCheck =
+        process.env.FFR_EDITCHECK === "wp" ? await waypointCheck(viewer, spec.label)
+        : process.env.FFR_EDITCHECK === "range" ? await rangeAnchorCheck(viewer, spec.label)
+        : await editCheck(viewer, spec.label);
       fs.writeFileSync(path.join(OUT_DIR, `${spec.label}.json`), JSON.stringify({ ...report, checks: results }, null, 1));
       return;
     }
