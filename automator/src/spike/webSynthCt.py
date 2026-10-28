@@ -13,14 +13,19 @@ from pydicom.dataset import Dataset, FileMetaDataset
 from pydicom.uid import CTImageStorage, ExplicitVRLittleEndian, generate_uid
 
 out = sys.argv[1]
+# 任意: 枚数・患者名・患者 ID・シリーズ説明（マニュアルの画面撮影で複数の検査を作るため。省略時は web 検査と同じ）。
+D = int(sys.argv[2]) if len(sys.argv) > 2 else 120
+PNAME = sys.argv[3] if len(sys.argv) > 3 else "SYNTH^WEBVIEWS"
+PID = sys.argv[4] if len(sys.argv) > 4 else "SYNTHWEBVIEWS"
+SDESC = sys.argv[5] if len(sys.argv) > 5 else "synthetic web views phantom"
+STDESC = sys.argv[6] if len(sys.argv) > 6 else "synthetic web views"
 W = H = 64
-D = 120
 SPACING = [0.8, 0.8]
 THICK = 2.5
 study, series, forr = (generate_uid() for _ in range(3))
 rng = np.random.default_rng(20261028)
 zz, yy, xx = np.meshgrid(np.arange(D), np.arange(H), np.arange(W), indexing="ij")
-sphere = (np.hypot(np.hypot(xx - 32, yy - 32), (zz - 60) * THICK / SPACING[0]) < 22) * 600
+sphere = (np.hypot(np.hypot(xx - 32, yy - 32), (zz - D // 2) * THICK / SPACING[0]) < 22) * 600
 slope = zz * 4 + xx * 2
 vol = (rng.integers(0, 40, (D, H, W)) + sphere + slope).astype(np.uint16)
 
@@ -35,8 +40,8 @@ for z in range(D):
     d.file_meta = fm
     d.SOPClassUID = CTImageStorage
     d.SOPInstanceUID = sop
-    d.PatientName = "SYNTH^WEBVIEWS"
-    d.PatientID = "SYNTHWEBVIEWS"
+    d.PatientName = PNAME
+    d.PatientID = PID
     d.PatientBirthDate = "19010203"
     d.PatientSex = "O"
     d.StudyInstanceUID = study
@@ -44,8 +49,8 @@ for z in range(D):
     d.Modality = "CT"
     d.SeriesNumber = 1
     d.InstanceNumber = z + 1
-    d.StudyDescription = "synthetic web views"
-    d.SeriesDescription = "synthetic web views phantom"
+    d.StudyDescription = STDESC
+    d.SeriesDescription = SDESC
     d.FrameOfReferenceUID = forr
     d.ImageOrientationPatient = [1, 0, 0, 0, 1, 0]
     d.ImagePositionPatient = [0.0, 0.0, z * THICK]
