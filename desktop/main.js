@@ -9,6 +9,7 @@
 // 設定: 既定値は config.json。以下の環境変数で個別に上書きできる。
 //   GRAPHY_DEV=1               … フロントを Vite dev(config.devServerUrl) から読む
 //   GRAPHY_BACKEND_EXTERNAL=1  … backend を spawn せず、既に起動済みのものに接続
+//   GRAPHY_SINGLE_INSTANCE=1   … 単一インスタンスを有効にする（パッケージ版は常に有効。開発版・automator は既定で無効）
 //   GRAPHY_BACKEND_PORT        … backend ポート（既定 config.backend.port）
 //   GRAPHY_BACKEND_PROFILE     … backend プロファイル（既定 config.backend.profile）
 //   GRAPHY_DEV_SERVER_URL      … Vite dev サーバの URL（既定 config.devServerUrl の 5173）
@@ -23,6 +24,28 @@ const fs = require("node:fs");
 const readline = require("node:readline");
 
 const PROGRESS_PREFIX = "__GRAPHY_PROGRESS__";
+
+const externalOpen = require("./externalOpen");
+
+// --- 単一インスタンス（外部から検査を開く入口の前提。fw/external-open.md） ---
+// 外部（RIS など）が `graphynext://open?...` や `GRAPHY-Next --open-study <UID>` を呼ぶと、2 つ目の起動は、先に動いている
+// アプリへ要求を渡して終わる。**パッケージ版か GRAPHY_SINGLE_INSTANCE=1 のときだけ**（開発版・automator は既定で無効。
+// 開発機で実アプリが動いていると、同じ userData の鍵でぶつかって開発版が起動できなくなるため）。
+// 再起動（app.relaunch・AppImage の起動し直し・GPU 設定の起動し直し）は、前のプロセスの終了と少し重なることがあるので、
+// その印があるときは鍵が空くのをしばらく待つ。
+let secondaryInstance = false;
+if (app.isPackaged || process.env.GRAPHY_SINGLE_INSTANCE === "1") {
+  const restarting = process.env.GRAPHY_RELAUNCHED === "1" || process.env.GRAPHY_RENDER_REEXEC === "1";
+  let gotLock = app.requestSingleInstanceLock();
+  for (let waited = 0; !gotLock && restarting && waited < 15000; waited += 200) {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 200);
+    gotLock = app.requestSingleInstanceLock();
+  }
+  if (!gotLock) {
+    secondaryInstance = true;
+    app.exit(0);
+  }
+}
 
 const cfg = require("./config.json");
 const { createWindowStateKeeper } = require("./windowState");
@@ -503,6 +526,58 @@ function closeSplash() {
   splashWin = null;
 }
 
+// --- 外部から検査を開く（graphynext://open?... ・ --open-study）---
+// 要求は main で厳密に解釈し（externalOpen.js）、メインウィンドウの画面が受け取れる状態になってから渡す。
+// 画面側（frontend/src/externalOpen）が、検査を探し、設定（受け付ける・確認する）に従って 2D ビューアを開く。
+// 🔴 UID・患者情報はログに出さない（件数だけ）。
+let mainWin = null;
+let externalReady = false;
+const externalQueue = [];
+
+function flushExternal() {
+  if (!externalReady || !mainWin || mainWin.isDestroyed()) return;
+  while (externalQueue.length) mainWin.webContents.send("graphy:external-open", externalQueue.shift());
+}
+
+function enqueueExternal(parsed) {
+  if (!parsed) return;
+  console.log(`[external-open] request received (valid=${parsed.ok ? "yes" : "no"})`);
+  externalQueue.push(parsed);
+  flushExternal();
+}
+
+function showMainWindow() {
+  if (mainWin && !mainWin.isDestroyed()) {
+    if (mainWin.isMinimized()) mainWin.restore();
+    mainWin.show();
+    mainWin.focus();
+  } else if (app.isReady()) {
+    createWindow();
+  }
+}
+
+ipcMain.on("graphy:external-open-ready", (e) => {
+  if (!mainWin || mainWin.isDestroyed() || e.sender !== mainWin.webContents) return; // メインウィンドウの画面だけ
+  externalReady = true;
+  flushExternal();
+});
+
+if (!secondaryInstance) {
+  // 2 つ目の起動（Windows・Linux）。引数に要求があれば渡し、なければ先のウィンドウを前面に出すだけ。
+  app.on("second-instance", (_e, argv) => {
+    enqueueExternal(externalOpen.parseArgv(argv));
+    showMainWindow();
+  });
+  // macOS は URL を open-url で渡す（起動前に来ることがあるので ready より前に登録する）。
+  app.on("open-url", (e, url) => {
+    e.preventDefault();
+    enqueueExternal(externalOpen.parseUrl(url));
+    showMainWindow();
+  });
+  // この起動自身の引数（`--open-study` を付けた最初の起動、URL から起動された場合）
+  enqueueExternal(externalOpen.parseArgv(process.argv));
+}
+
 function createWindow() {
   const keeper = createWindowStateKeeper("main", {
     width: WINDOW.width,
@@ -523,6 +598,17 @@ function createWindow() {
     },
   });
   keeper.track(win); // 移動/リサイズ/最大化/閉じるを追従して位置を保存
+  mainWin = win;
+  externalReady = false; // 新しい画面は、読み込んで受け取れると知らせてくるまで、外部からの要求を渡さない
+  win.webContents.on("did-start-loading", () => {
+    if (mainWin === win) externalReady = false; // 再読み込みのあとも同じ
+  });
+  win.on("closed", () => {
+    if (mainWin === win) {
+      mainWin = null;
+      externalReady = false;
+    }
+  });
 
   // 外部 URL は既定ブラウザで開き、新規ウィンドウは生成しない。
   win.webContents.setWindowOpenHandler(({ url }) => {
@@ -2542,6 +2628,15 @@ function offerDefaultDbAfterFailure(e) {
 }
 
 app.whenReady().then(async () => {
+  if (secondaryInstance) return; // 2 つ目の起動は、何もせず終わる（上の app.exit）
+  // 外部から検査を開く URL（graphynext://）の登録。パッケージ版だけ（開発版は起動の引数が違うので登録しない）。
+  if (app.isPackaged) {
+    try {
+      app.setAsDefaultProtocolClient(externalOpen.SCHEME);
+    } catch (e) {
+      console.warn("[external-open] could not register the URL scheme:", e && e.message);
+    }
+  }
   // マイクを許すのはアシスタント窓のメインフレームの音声だけ（プラグインに録音させない）。mediaPermission.js
   require("./mediaPermission").install(session.defaultSession);
   // 秘密情報の置き場は backend の CWD（H2・DICOM 保管庫と同じ場所）に揃える。
@@ -2713,7 +2808,7 @@ function applyRenderPrefsAtStartup() {
     console.error("[render-prefs] 適用できませんでした（OS の既定で起動します）:", e && e.message);
   }
 }
-applyRenderPrefsAtStartup();
+if (!secondaryInstance) applyRenderPrefsAtStartup();
 
 // GPU を付けて起動したあとの見張り（フェイルセーフ）。軽い処理だけ行う（状態ファイルを書いて起動し直すだけ）。
 //   - GPU プロセスが使えなくなったら、failed を書いて 1 回だけ OS の既定で起動し直す（起動し直した側は failed を見て付けない）
@@ -2745,7 +2840,7 @@ app.on("child-process-gone", (_e, details) => {
   relaunchApp();
 });
 app.whenReady().then(() => {
-  if (!renderGpuIsHigh()) return;
+  if (secondaryInstance || !renderGpuIsHigh()) return;
   setTimeout(() => {
     if (!renderGpuFailureHandled) clearRenderTrying();
   }, RENDER_GPU_CONFIRM_MS).unref();

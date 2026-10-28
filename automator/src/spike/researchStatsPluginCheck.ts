@@ -11,6 +11,8 @@
  *   (4) 重複した患者 ID・0/1 でないイベントは、結合せずに理由を出して止まる（負例）
  *   [10] 予後モデル（R5）: 最終の Cox・見かけの C・Schoenfeld の検定を statsmodels と突き合わせ、補正 C の再現
  *   [11] P4 の LASSO: 最終モデルの特徴量を同じ λ の scikit-learn と突き合わせ、テスト集合で評価
+ *   [12] P4 のランダムフォレスト・SVM・勾配ブースティング: 画面が書き出した外側の分割で scikit-learn と突き合わせる
+ *        （SVM・勾配ブースティングは症例ごとの予測、ランダムフォレストは 20 シードの分布）、テスト集合で評価
  *
  * 画面の見た目はスクリーンショットで目視する（DOM の有無だけで判定しない）。
  */
@@ -40,6 +42,20 @@ function write(name: string, text: string): string {
   const p = path.join(OUT_DIR, name);
   fs.writeFileSync(p, text);
   return p;
+}
+/** CSV の 1 行（引用符で囲んだ値の中のカンマ・二重の引用符を扱う）。 */
+function csvLine(line: string): string[] {
+  const out: string[] = [];
+  let cur = "", q = false;
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i];
+    if (q) { if (c === '"') { if (line[i + 1] === '"') { cur += '"'; i++; } else q = false; } else cur += c; }
+    else if (c === '"') q = true;
+    else if (c === ",") { out.push(cur); cur = ""; }
+    else cur += c;
+  }
+  out.push(cur);
+  return out;
 }
 const sha = (p: string) => crypto.createHash("sha256").update(fs.readFileSync(p)).digest("hex");
 
@@ -710,6 +726,99 @@ async function main(): Promise<void> {
     await page.getByTestId("rs-save-method").click();
     const mL = await downloaded("research-stats-method.txt", nmL);
     check(mL.includes("L1 罰則つきロジスティック回帰") && mL.includes("偏差で最小のものを選んだ"), "「方法」の文に LASSO と λ の選び方が書かれる", mL.slice(0, 160));
+
+    console.log("\n[12] P4 のランダムフォレスト・SVM・勾配ブースティング: 同じ分割で scikit-learn と突き合わせ");
+    type MlRef = { n: number; repeats: { foldAuc: number[]; pred: number[] | null; maxAbsDiff?: number; invariant: boolean | null; pooled: number | null; pooledRange?: number[]; pooledDist: number[] | null; appPooled: number }[] };
+    // 候補を 1 つにした実行の、分割ごとの予測・特徴量を書き出して参照を計算する
+    const mlRun = async (kind: "svm" | "gbm" | "rf", params: Record<string, number | string>): Promise<{ ref: MlRef; foldScores: number[][]; record: { steps: { id: string; summary: Record<string, unknown> }[] } }> => {
+      await page.getByTestId("rs-run").click();
+      await page.getByTestId("rs-p4-cv").waitFor({ state: "visible", timeout: 600_000 });
+      const n0 = await count();
+      await page.getByTestId("rs-save-p4-pred").click();
+      const predText = await downloaded("research-stats-p4-predictions.csv", n0);
+      await page.getByTestId("rs-save-p4-folds").click();
+      const foldText = await downloaded("research-stats-p4-folds.csv", n0 + 1);
+      await page.getByTestId("rs-save-record").click();
+      const record = JSON.parse(await downloaded("research-stats-record.json", n0 + 2) || "{}");
+      const fl = foldText.trim().split("\r\n").map(csvLine);
+      const fcol = (nm: string) => fl[0].indexOf(nm);
+      const feats = fl[1][fcol("features")].split(" + ");
+      const foldScores: number[][] = [];
+      for (const l of fl.slice(1)) { const r = Number(l[fcol("repeat")]) - 1; (foldScores[r] ??= []).push(Number(l[fcol("score")])); }
+      const predPath = write(`p4_${kind}_pred.csv`, predText), parPath = write(`p4_${kind}_params.json`, JSON.stringify(params)), out = path.join(OUT_DIR, `p4_${kind}_reference.json`);
+      execFileSync(refPy, ["-I", path.join(AUTOMATOR_ROOT, "src", "spike", "researchStatsModelsReference.py"), kind, p4Feat, p4Clin, predPath, feats.join(","), parPath, out]);
+      return { ref: JSON.parse(fs.readFileSync(out, "utf8")) as MlRef, foldScores, record };
+    };
+    // 固定ファイルは [11] で評価して回数 1 になったもの（画面が持っている）をそのまま使う
+    check((await page.getByTestId("rs-p4-lock").inputValue()) === "use" && (await page.getByTestId("rs-lock-loaded").count()) === 1, "テスト集合の固定ファイルは [11] のものを使ったまま");
+    await page.getByTestId("rs-p4-model").selectOption("svm");
+    check((await page.getByTestId("rs-p4-k").count()) === 0 && (await page.getByTestId("rs-p4-svm-c").inputValue()) === "" && (await page.getByTestId("rs-p4-svm-gamma").inputValue()) === "", "SVM では k の欄が消え、C・γ の欄は空で始まる（既定値なし）");
+    check((await page.getByTestId("rs-p4-ml-examples").innerText()).includes("scikit-learn 1.9 の既定は C=1・γ=scale"), "SVM の使用例として scikit-learn の既定が出る");
+    check((await page.getByTestId("rs-p4-fits").innerText()).includes("設定がそろうと"), "設定がそろうまで、当てはめの回数は出ない");
+    await page.getByTestId("rs-run").click();
+    await page.getByTestId("rs-errors").waitFor({ state: "visible", timeout: 20_000 });
+    check(/C の候補/.test(await page.getByTestId("rs-errors").innerText()), "C を入れずに実行すると、理由を出して止まる（負例）");
+    await setNum("rs-p4-svm-c", "1");
+    await setNum("rs-p4-svm-gamma", "scale");
+    const fitsText = await page.getByTestId("rs-p4-fits").innerText();
+    check(fitsText.includes("55 回"), "当てはめの回数が出る（2 反復 × 5 分割 ×（1 × 4 ＋ 1）＋ 1 × 4 ＋ 1 = 55）", fitsText);
+    const sv = await mlRun("svm", { C: 1, gamma: "scale" });
+    for (const [r, rp] of sv.ref.repeats.entries()) {
+      check((rp.maxAbsDiff ?? 1) < 1e-4, `SVM 反復 ${r + 1}: 症例ごとの決定値が、同じ分割の scikit-learn SVC と一致（差 ${rp.maxAbsDiff?.toExponential(2)}。libsvm のカーネルは float32）`);
+      check(rp.foldAuc.every((v, q) => Math.abs(v - sv.foldScores[r][q]) < 1e-9), `SVM 反復 ${r + 1}: 分割ごとの AUC が scikit-learn と一致（1e-9）`, { app: sv.foldScores[r], ref: rp.foldAuc });
+    }
+    check((await page.getByTestId("rs-p4-fold-params").allInnerTexts()).every((x) => x === "C=1, gamma=scale"), "分割ごとの選んだ値が表に出る");
+    check((await page.getByTestId("rs-p4-cal-na").innerText()).includes("確率ではありません") && (await page.getByTestId("rs-p4-cal-svg").count()) === 0, "SVM では較正の図を出さず、理由を出す");
+    check(/gamma=0\.\d+/.test(await page.getByTestId("rs-p4-final-params").innerText()), "最終モデルの γ（scale を数に直した値）が出る", await page.getByTestId("rs-p4-final-params").innerText());
+    check((await page.getByTestId("rs-p4-final-note").innerText()).startsWith("選んだ値は、"), "最終モデルの注記が、特徴量の数ではなく選んだ値について書かれる", await page.getByTestId("rs-p4-final-note").innerText());
+    await page.getByTestId("rs-p4").screenshot({ path: path.join(OUT_DIR, "27-p4-svm.png") });
+    await page.getByTestId("rs-p4-evaluate").click();
+    await page.getByTestId("rs-p4-test").waitFor({ state: "visible", timeout: 300_000 });
+    check(/AUC [0-9.]+/.test(await page.getByTestId("rs-p4-test-value").innerText()) && (await page.getByTestId("rs-p4-test-count").innerText()).includes("2 回目"), "SVM の最終モデルをテスト集合で評価でき、回数が続きから数えられる（LASSO の 1 回目の次）");
+    const nmS = await count();
+    await page.getByTestId("rs-save-method").click();
+    const mS = await downloaded("research-stats-method.txt", nmS);
+    check(mS.includes("SVM（C-SVC・RBF カーネル") && mS.includes("較正は示していない"), "「方法」の文に SVM と、較正を示さない理由が書かれる", mS.slice(0, 200));
+
+    await page.getByTestId("rs-p4-model").selectOption("gbm");
+    await setNum("rs-p4-gbm-stages", "30");
+    await setNum("rs-p4-gbm-depth", "2");
+    await setNum("rs-p4-gbm-rate", "0.1");
+    await setNum("rs-p4-gbm-sub", "1");
+    const gb = await mlRun("gbm", { stages: 30, depth: 2, learningRate: 0.1, subsample: 1 });
+    for (const [r, rp] of gb.ref.repeats.entries()) {
+      if (rp.invariant) check((rp.maxAbsDiff ?? 1) < 1e-9 && rp.foldAuc.every((v, q) => Math.abs(v - gb.foldScores[r][q]) < 1e-9), `勾配ブースティング 反復 ${r + 1}: 症例ごとの確率と分割ごとの AUC が scikit-learn と一致（差 ${rp.maxAbsDiff?.toExponential(2)}）`);
+      else check(rp.appPooled >= rp.pooledRange![0] - 1e-12 && rp.appPooled <= rp.pooledRange![1] + 1e-12, `勾配ブースティング 反復 ${r + 1}: 分岐の同点が効く分割があり、束ねた AUC が scikit-learn の random_state の範囲内`, { app: rp.appPooled, range: rp.pooledRange });
+    }
+    // 候補を複数にすると、分割ごとに選ばれた値が表に出る。重要度の表と CSV
+    await setNum("rs-p4-gbm-stages", "10, 30");
+    await setNum("rs-p4-gbm-depth", "1, 2");
+    await page.getByTestId("rs-run").click();
+    await page.getByTestId("rs-p4-cv").waitFor({ state: "visible", timeout: 600_000 });
+    const gparams = await page.getByTestId("rs-p4-fold-params").allInnerTexts();
+    check(gparams.length === 10 && gparams.every((x) => /^stages=(10|30), depth=(1|2), learningRate=0\.1, subsample=1$/.test(x)), "候補を複数にすると、分割ごとに選んだ組が出る", gparams);
+    const ni = await count();
+    await page.getByTestId("rs-save-p4-imp").click();
+    const imp = (await downloaded("research-stats-p4-importance.csv", ni)).trim().split("\r\n").slice(1).map(csvLine);
+    const impSum = imp.filter((l) => l[0] !== "params").reduce((a, l) => a + Number(l[1]), 0);
+    check(Math.abs(impSum - 1) < 1e-9 && ["f_a"].includes(imp[0][0]), "重要度の CSV は合計 1 で、最上位は f_a", imp.slice(0, 3));
+    await page.getByTestId("rs-p4-importance").screenshot({ path: path.join(OUT_DIR, "28-p4-gbm-importance.png") });
+    await page.getByTestId("rs-p4-folds").screenshot({ path: path.join(OUT_DIR, "29-p4-gbm-folds.png") });
+
+    await page.getByTestId("rs-p4-model").selectOption("rf");
+    await setNum("rs-p4-rf-trees", "200");
+    await setNum("rs-p4-rf-mtry", "sqrt");
+    const rf = await mlRun("rf", { trees: 200, mtry: "sqrt" });
+    for (const [r, rp] of rf.ref.repeats.entries()) {
+      const d = rp.pooledDist!, mu = d.reduce((a, b) => a + b, 0) / d.length, sd = Math.sqrt(d.reduce((a, b) => a + (b - mu) ** 2, 0) / (d.length - 1));
+      check(Math.abs(rp.appPooled - mu) < 3 * sd + 1e-9, `ランダムフォレスト 反復 ${r + 1}: 束ねた AUC が、同じ分割の scikit-learn（20 シード）の平均 ± 3SD の内`, { app: rp.appPooled.toFixed(4), mean: mu.toFixed(4), sd: sd.toFixed(4) });
+    }
+    check((await page.getByTestId("rs-p4-importance").count()) === 1 && (await page.getByTestId("rs-p4-cal-svg").count()) === 1, "ランダムフォレストでは重要度と較正の図が出る");
+    await page.getByTestId("rs-p4").screenshot({ path: path.join(OUT_DIR, "30-p4-rf.png") });
+    await page.getByTestId("rs-p4-kind").selectOption("survival");
+    await page.getByTestId("rs-run").click();
+    await page.getByTestId("rs-errors").waitFor({ state: "visible", timeout: 20_000 });
+    check(/二値の結果だけ/.test(await page.getByTestId("rs-errors").innerText()), "生存の結果では選べず、理由を出して止まる（負例）", await page.getByTestId("rs-errors").innerText());
   } finally {
     await driver.stop();
     fs.rmSync(path.join(PLUGINS_DIR, PLUGIN_ID), { recursive: true, force: true });

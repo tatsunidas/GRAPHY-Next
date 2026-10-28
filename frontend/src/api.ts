@@ -1709,6 +1709,21 @@ export interface RemoteAe {
   tls: boolean;
 }
 
+/** mDNS（_dicom._tcp）で見つかった機器。認証されていない（同じ LAN の誰でも名前を名乗れる）。 */
+export interface DiscoveredDevice {
+  name: string;
+  aeTitle: string;
+  /** TXT に aet が無く、サービス名を AE タイトルの候補にしたもの。 */
+  aeTitleFromName: boolean;
+  host: string;
+  port: number;
+  tls: boolean;
+  tlsPort: number;
+}
+
+/** 同じ LAN の DICOM 機器を約 3 秒探す（利用者が押したときだけ。自局は含まれない）。 */
+export const scanNetworkDevices = () => httpSend<DiscoveredDevice[]>("/api/dicom/discovery/scan", "POST", {});
+
 /** 設定済みリモート AE 一覧を取得する。 */
 export const fetchRemoteAes = () => httpGet<RemoteAe[]>("/api/dicom/remote-aes");
 
@@ -1780,6 +1795,10 @@ export interface SendRequest {
   tls?: boolean;
   /** 送るときの転送構文。省略は保存どおり（STORED）。指定した構文を相手が受けないと、その画像は失敗として数える。 */
   transferSyntax?: SendTransferSyntax;
+  /** true なら、選択スタディの確定済みレポートのキー画像だけを送る（シリーズの選択は問わない）。 */
+  keyImagesOnly?: boolean;
+  /** keyImagesOnly のとき、確定時に作られたキーオブジェクト（KO）も送るか。省略は送る。 */
+  includeKeyObject?: boolean;
 }
 
 export type SendTransferSyntax = "STORED" | "EXPLICIT_LE" | "IMPLICIT_LE";
@@ -1802,7 +1821,13 @@ export const sendDicom = (req: SendRequest) =>
     callingAet: req.callingAet ?? "",
     tls: req.tls ?? false,
     transferSyntax: req.transferSyntax ?? "STORED",
+    keyImagesOnly: req.keyImagesOnly ?? false,
+    includeKeyObject: req.includeKeyObject ?? true,
   });
+
+/** 「キー画像のみ」で送れるキー画像・KO の数（確定済みレポートが参照するもの）。 */
+export const fetchSendKeyImages = (studyUid: string) =>
+  httpGet<{ keyImages: number; keyObjects: number }>(`/api/dicom/send/key-images?studyUid=${encodeURIComponent(studyUid)}`);
 
 // ── Query/Retrieve（QR ウィンドウ） ────────────────────────────
 

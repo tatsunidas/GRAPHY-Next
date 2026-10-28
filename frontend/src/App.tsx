@@ -2,6 +2,7 @@
  * Copyright (c) Visionary Imaging Services, Inc. All rights reserved.
  * Author: Tatsuaki Kobayashi
  */
+import { ExternalOpenHost } from "./externalOpen/ExternalOpenHost";
 import { useEffect, useRef, useState } from "react";
 import { fetchStatus, fetchStudies, fetchSeries, type AppStatus, type Study, type Series } from "./api";
 import { pollStatus } from "./statusPoll";
@@ -250,6 +251,7 @@ export function App() {
         <QRScreen status={status} />
       ) : (
         <>
+        <ExternalOpenHost />
         <MainScreen
           status={status}
           error={error}
