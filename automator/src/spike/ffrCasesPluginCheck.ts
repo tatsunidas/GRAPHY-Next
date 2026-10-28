@@ -587,6 +587,71 @@ async function redefineCheck(page: Page, label: string): Promise<Record<string, 
   return out;
 }
 
+/**
+ * 窓の大きさへの追従の確認（FFR_EDITCHECK=resize。仮想血管）。
+ *  R1 窓を小さくすると、方向 A・B の画面が同じだけ小さくなる
+ *  R2 窓を大きくすると、画面が大きくなる
+ *  R3 画面の実寸（canvas の幅）が CSS の幅 × devicePixelRatio に一致する
+ *  R4 どの大きさでも、クリック位置が画像の座標へ正しく写る（経由点を置いて、押した画像座標との差 ≤ 画面 1.5 px ぶん）
+ *  R5 ★負例: 比較用に、押した位置を画面の 20 px ずらして置いた経由点は、許容を超える（検出器が差を見られる）
+ */
+async function resizeCheck(page: Page, label: string): Promise<Record<string, unknown>> {
+  const out: Record<string, unknown> = {};
+  const dlg = page.getByRole("dialog", { name: /アンギオ 3D/ });
+  const box = async (k: "A" | "B") => (await page.getByTestId(`dual-canvas-${k}`).boundingBox())!;
+  const dim = async () => ({ a: Math.round((await box("A")).width), b: Math.round((await box("B")).width), aH: Math.round((await box("A")).height) });
+  const setWin = async (w: number, h: number) => {
+    await dlg.evaluate((el, [ww, hh]) => { const e = el as HTMLElement; e.style.left = "0px"; e.style.top = "0px"; e.style.width = ww + "px"; e.style.height = hh + "px"; }, [w, h]);
+    await page.waitForTimeout(700);
+  };
+  const lay = async () => JSON.parse((await page.getByTestId("dual-panel").getAttribute("data-layout")) ?? "null");
+  out.layout0 = await lay();
+  const d0 = await dim();
+  await page.screenshot({ path: path.join(OUT_DIR, `${label}-resize-0-initial.png`) });
+  await setWin(560, 640);
+  const d1 = await dim();
+  await page.screenshot({ path: path.join(OUT_DIR, `${label}-resize-1-small.png`) });
+  check("[R1] 窓を小さくすると、A・B の画面が同じだけ小さくなる", d1.a < d0.a && d1.a === d1.b && d1.a === d1.aH, { d0, d1 });
+  const [iw, ih] = await page.evaluate(() => [window.innerWidth, window.innerHeight]);
+  out.viewport = [iw, ih];
+  const big: [number, number] = [Math.min(1500, iw - 20), Math.min(1000, ih - 20)];
+  await setWin(big[0], big[1]);
+  const d2 = await dim();
+  out.layout2 = await lay();
+  await page.screenshot({ path: path.join(OUT_DIR, `${label}-resize-2-large.png`) });
+  check("[R2] 窓を大きくすると、画面が大きくなる", d2.a > d1.a && d2.a === d2.b, { d1, d2 });
+  const dpr = await page.evaluate(() => window.devicePixelRatio || 1);
+  // 枠線（border）は CSS の幅に含まれないので、clientWidth（枠線を除く）と比べる。
+  const bk = await page.getByTestId("dual-canvas-A").evaluate((el) => ({ backing: (el as HTMLCanvasElement).width, client: el.clientWidth }));
+  check("[R3] canvas の実寸 = CSS の幅 × devicePixelRatio", Math.abs(bk.backing - bk.client * dpr) <= 1, { ...bk, dpr });
+
+  await page.getByTestId("dual-mode").selectOption("waypoint");
+  const tolFor = async () => (IMG / (await box("A")).width) * 1.5;
+  const place = async (frac: number, shiftPx: number) => {
+    const cl: Pt[] = JSON.parse((await page.getByTestId("dual-canvas-A").getAttribute("data-clpts")) ?? "[]");
+    const target = cl[Math.floor(cl.length * frac)];
+    const c = await toClient(page, "A", target);
+    const before: Pt[] = JSON.parse((await page.getByTestId("dual-canvas-A").getAttribute("data-waypoints")) ?? "[]");
+    await page.mouse.click(c.x + shiftPx, c.y);
+    await page.waitForTimeout(600);
+    const after: Pt[] = JSON.parse((await page.getByTestId("dual-canvas-A").getAttribute("data-waypoints")) ?? "[]");
+    const added = after.find((w) => !before.some((o) => Math.hypot(o[0] - w[0], o[1] - w[1]) < 0.05));
+    const err = added ? Math.hypot(added[0] - (target[0] + (shiftPx * IMG) / (await box("A")).width), added[1] - target[1]) : null;
+    return { target, added, errImgPx: err === null ? null : +err.toFixed(2), tol: +(await tolFor()).toFixed(2), n: after.length };
+  };
+  const r4 = await place(0.3, 0);
+  check("[R4] 大きい窓でも、クリック位置が画像の座標へ正しく写る", r4.errImgPx !== null && r4.errImgPx <= r4.tol, r4);
+  await setWin(560, 640);
+  const r4b = await place(0.7, 0);
+  check("[R4b] 小さい窓でも、クリック位置が画像の座標へ正しく写る", r4b.errImgPx !== null && r4b.errImgPx <= r4b.tol, r4b);
+  // 負例: 押した位置を 20 px ずらすと、期待（ずらす前の位置）との差は許容を超える。
+  const r5 = await place(0.5, 20);
+  const miss = r5.added ? Math.hypot(r5.added[0] - r5.target[0], r5.added[1] - r5.target[1]) : null;
+  check("[R5] ★負例: 20 px ずらして押すと、ずれが許容を超えて見える（検出器が差を見られる）", miss !== null && miss > r5.tol * 2, { miss, tol: r5.tol });
+  out.sizes = { d0, d1, d2, dpr };
+  return out;
+}
+
 /** アンカー i を掴んで target へドラッグする。 */
 async function dragAnchor(page: Page, key: string, i: number, target: Pt): Promise<void> {
   const cur = (await anchorsOf(page, key))[i];
@@ -889,6 +954,7 @@ async function main(): Promise<void> {
         : process.env.FFR_EDITCHECK === "end" ? await endpointCheck(viewer, spec.label)
         : process.env.FFR_EDITCHECK === "erase" ? await eraseCheck(viewer, spec.label)
         : process.env.FFR_EDITCHECK === "redef" ? await redefineCheck(viewer, spec.label)
+        : process.env.FFR_EDITCHECK === "resize" ? await resizeCheck(viewer, spec.label)
         : await editCheck(viewer, spec.label);
       fs.writeFileSync(path.join(OUT_DIR, `${spec.label}.json`), JSON.stringify({ ...report, checks: results }, null, 1));
       return;
