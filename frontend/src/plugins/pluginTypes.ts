@@ -731,6 +731,9 @@ export interface Viewer2DPluginHost extends PluginHostBase {
    * <p>読めない部分は null（理由は `missing`）。0 や既定値で埋めない。対象は**先頭インスタンス**
    * （XA のシネは 1 インスタンスのマルチフレーム）で、複数あれば `instanceCount` が 1 を超える。
    * `studyUid` 省略時は開いているタイルから解決。患者をまたぐ参照は拒否。
+   *
+   * <p>`pixelIntensityRelationship` は `PixelIntensityRelationship (0028,1040)`（LIN / LOG。無ければ null）。
+   * 径の測り方（対数変換の要否）を決めるのに要る。古い本体はこのフィールドを返さない（undefined）。
    */
   readXaSeries: (ref: PluginSeriesRef) => Promise<import("./pluginXaSeriesApi").PluginXaSeriesInfo | null>;
   /**
