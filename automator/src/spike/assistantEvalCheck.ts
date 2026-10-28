@@ -14,8 +14,8 @@
  *      記録パネルの中央値/p95 が、記録ファイルの生の値から別に手計算した値と一致する（v2 は中央値が上がる＝負例）。
  *      n<20 の行（記録に直接足した 5 件）は「参考値」と出る
  *   6. 第 2 組（プラグイン・位置・曖昧な依頼）を k=5 で流す: 送信は 10 問×5 回=50 件（セッション ID 50 個）。偽モデルは mk-center の
- *      3 回目だけ別のマスに置く（決定的）ので、mk-center は 4/5（予測値）で不合格、他は 5/5。画面の合格率と 95% 区間は、
- *      保存された passes/n から別に手計算（Wilson）した値と一致する。保存行に suite と passes/n が入り、第 1 組とは比較されない
+ *      3 回目だけ別のマスに置く（決定的）ので、mk-center は 4/5（予測値）で不合格、他は 5/5。画面の合格率（質問単位 9/10）と
+ *      95% 区間は、別に手計算（Wilson）した値と一致し、反復の合計 49/50 と揺れた質問 1 問が添えられる。保存行に suite と passes/n が入り、第 1 組とは比較されない
  * 偽モデルが確かめるのは「流す・採点する・保存する・比べる・表示する」。実クラウドモデルの一致率は確かめない（未達）。
  */
 import fs from "node:fs";
@@ -252,14 +252,17 @@ async function main(): Promise<void> {
     const newRows = lines(reqFile).slice(reqBefore).map((l) => JSON.parse(l));
     const sids = new Set(newRows.map((r) => String(r.sessionId)));
     check(sids.size === 50 && [...sids].every((x) => x.startsWith("eval-")), "🔴 送信は 問数 10 × 反復 5 = 50 件（別セッション ID 50 個）", sids.size);
-    // 手計算: 49/50 の Wilson 95%（z=1.959964）
+    // 手計算: 質問単位 9/10 の Wilson 95%（z=1.959964）。反復の合計 49/50 には区間を付けない
     const wil = (k: number, n: number) => {
       const z = 1.959964, p = k / n, d = 1 + (z * z) / n, c = (p + (z * z) / (2 * n)) / d, h = (z * Math.sqrt((p * (1 - p)) / n + (z * z) / (4 * n * n))) / d;
       return [Math.round(p * 100), Math.round(Math.max(0, c - h) * 100), Math.round(Math.min(1, c + h) * 100)];
     };
-    const [pc, lo, hi] = wil(49, 50);
+    const [pc, lo, hi] = wil(9, 10);
     const rateTxt = (await win.getByTestId("assistant-eval-rate").textContent()) ?? "";
-    check(rateTxt.includes(`${pc}%`) && rateTxt.includes("49/50") && rateTxt.includes(`${lo}–${hi}%`) && !/参考値|reference/.test(rateTxt), `🔴 画面の合格率が 手計算の 49/50 = ${pc}%（95% 区間 ${lo}–${hi}%）と一致（n=50≥20 で参考値でない）`, rateTxt);
+    check(rateTxt.includes(`${pc}%`) && rateTxt.includes("9/10") && rateTxt.includes(`${lo}–${hi}%`) && /参考値|reference/.test(rateTxt), `🔴 画面の合格率が 質問単位の 9/10 = ${pc}%（95% 区間 ${lo}–${hi}%）と一致し、質問が 10 問なので参考値と出る`, rateTxt);
+    check(!rateTxt.includes("49/50") && !/(合格率|Pass rate) 98%/.test(rateTxt), "🔴 反復の合計（49/50・98%）を合格率として出さない（区間の上端 98% とは区別する）", rateTxt);
+    const repsTxt = (await win.getByTestId("assistant-eval-reps").textContent()) ?? "";
+    check(/49\s*\/\s*50/.test(repsTxt) && /1\s*問|: 1\.|changed between repeats: 1/.test(repsTxt), "🔴 反復 49/50 回と、揺れた質問 1 問（mk-center の 4/5）が出る", repsTxt);
     const fr = await win.getByTestId("assistant-eval-failed-row").allTextContents();
     check(fr.length === 1 && fr[0].includes("mk-center") && fr[0].includes("4/5"), "不合格の質問と回数（4/5）が出る", fr);
     check((await win.getByTestId("assistant-eval-diff").count()) === 0, "🔴 第 1 組の記録とは比較されない（前回なし＝差分の欄なし）");

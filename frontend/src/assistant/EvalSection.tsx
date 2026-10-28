@@ -32,14 +32,23 @@ export function evalStartMode(destination: EvalApi["destination"]): "ask" | "run
 export const DEFAULT_REPEATS: Record<EvalSuiteId, number> = { basic: 1, "plugin-pos": 5 };
 export const MAX_REPEATS = 20;
 
-/** 全質問・全反復の合格回数/回数と Wilson 95% 区間の文。反復を独立とみなす近似。回数が 0 なら null（未取得）。n<20 は参考値。 */
-export function rateText(cases: readonly { passes: number; n: number }[], t: T): string | null {
-  const passes = cases.reduce((a, c) => a + c.passes, 0);
-  const n = cases.reduce((a, c) => a + c.n, 0);
-  const w = wilson95(passes, n);
+/**
+ * 合格率の文（質問単位）。全回合格した質問数/質問数と Wilson 95% 区間。質問が 20 未満なら参考値。
+ * 反復は独立とは限らない（temperature 0 では毎回同じ結果になりやすい）ので、反復の合計には区間を付けず、
+ * 反復で結果が揺れた質問の数だけを添える（0 件なら反復は情報を足していない）。質問が 0 件なら null（未取得）。
+ */
+export function rateTexts(cases: readonly { pass: boolean; passes: number; n: number }[], t: T): { head: string; reps: string | null } | null {
+  const q = cases.length;
+  const ok = cases.filter((c) => c.pass).length;
+  const w = wilson95(ok, q);
   if (!w) return null;
   const pct = (x: number) => Math.round(x * 100);
-  return t(n < 20 ? "assistant.eval.rateRef" : "assistant.eval.rate", { passes, n, pct: pct(w.rate), lo: pct(w.lo), hi: pct(w.hi) });
+  const head = t(q < 20 ? "assistant.eval.rateRef" : "assistant.eval.rate", { ok, q, pct: pct(w.rate), lo: pct(w.lo), hi: pct(w.hi) });
+  const passes = cases.reduce((a, c) => a + c.passes, 0);
+  const n = cases.reduce((a, c) => a + c.n, 0);
+  if (n === q) return { head, reps: null };
+  const flaky = cases.filter((c) => c.passes > 0 && c.passes < c.n).length;
+  return { head, reps: t(flaky === 0 ? "assistant.eval.repsSame" : "assistant.eval.repsFlaky", { passes, n, flaky }) };
 }
 
 export function EvalSection({ api, busy, t, onRan }: { api: EvalApi; busy: boolean; t: T; onRan?: () => void }) {
@@ -87,6 +96,7 @@ export function EvalSection({ api, busy, t, onRan }: { api: EvalApi; busy: boole
   const latest = inSuite[0];
   const prev = latest ? inSuite.slice(1).find((r) => r.suiteVersion === latest.suiteVersion) : undefined;
   const cmp = latest && prev ? compareRuns(prev, latest) : null;
+  const rate = latest ? rateTexts(latest.cases, t) : null;
   const failed = last ? last.cases.filter((c) => !c.pass) : [];
   return (
     <div style={S.box} data-testid="assistant-eval">
@@ -154,7 +164,8 @@ export function EvalSection({ api, busy, t, onRan }: { api: EvalApi; busy: boole
               {latest.modelVersion ?? latest.modelId ?? t("assistant.requestlog.unknown")} · {latest.ts.replace("T", " ").slice(0, 19)}
             </span>
           </div>
-          {rateText(latest.cases, t) && <div data-testid="assistant-eval-rate">{rateText(latest.cases, t)}</div>}
+          {rate && <div data-testid="assistant-eval-rate">{rate.head}</div>}
+          {rate?.reps && <div style={S.dim} data-testid="assistant-eval-reps">{rate.reps}</div>}
           <div style={S.dim} data-testid="assistant-eval-total-latency">
             {t("assistant.eval.totalLatency", { v: typeof latest.totalLatencyMs === "number" ? secondsText(latest.totalLatencyMs) : t("assistant.requestlog.notObtained") })}
           </div>
