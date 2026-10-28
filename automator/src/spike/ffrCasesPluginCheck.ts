@@ -120,6 +120,7 @@ async function read2d(page: Page): Promise<Record<"A" | "B", Record<string, unkn
     out[k] = {
       clpts: await attr("clpts"), range: await attr("range"), diameters: await attr("diameters"),
       edgepts: await attr("edgepts"), edgeoffsets: await attr("edgeoffsets"), editedEdges: await attr("edited-edges"), edited: await attr("edited"),
+      anchors: await attr("anchors"), waypoints: await attr("waypoints"),
     };
   }
   return out;
