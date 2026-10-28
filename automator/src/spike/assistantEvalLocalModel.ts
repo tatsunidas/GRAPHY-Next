@@ -3,7 +3,7 @@
  *
  * 実行:  cd automator && LLAMA_SERVER=<llama-server> MODEL_GGUF=<.gguf> MODEL_ID=<manifest の id> \
  *          npx tsx src/spike/assistantEvalLocalModel.ts
- *   任意: EVAL_K（既定 5）、LOCAL_PORT（既定 19430）、CPU_THREADS（既定は製品と同じ defaultThreads）
+ *   任意: SUITES（既定 basic,plugin-pos。basic-b も可）、RUN_TAG（結果ファイル名の接尾辞）、EVAL_K（既定 5）、LOCAL_PORT（既定 19430）、CPU_THREADS（既定は製品と同じ defaultThreads）
  *
  * 製品と同じ起動引数（desktop/localLlm.js の serverArgs。--jinja・文脈長・--reasoning はマニフェストの値）で llama-server を
  * 専用ポートに立て、本物の Electron のアシスタント窓から［評価を実行］を押す。結果は .results/assistant-eval-local/<MODEL_ID>.json。
@@ -37,6 +37,8 @@ const GGUF = need("MODEL_GGUF");
 const MODEL_ID = need("MODEL_ID");
 const K = Number(process.env.EVAL_K ?? 5);
 const LOCAL_PORT = Number(process.env.LOCAL_PORT ?? 19430);
+const SUITES = (process.env.SUITES ?? "basic,plugin-pos").split(",").map((x) => x.trim()).filter(Boolean);
+const TAG = process.env.RUN_TAG ?? "";
 const PORTS = { http: 19490, scp: 19491, vite: 19493 };
 const OUT_DIR = path.join(AUTOMATOR_ROOT, ".results", "assistant-eval-local");
 
@@ -97,7 +99,7 @@ async function main(): Promise<void> {
     await win.getByTestId("assistant-eval").waitFor({ state: "visible", timeout: 10_000 });
 
     const suites: Record<string, unknown> = {};
-    for (const suite of ["basic", "plugin-pos"] as const) {
+    for (const suite of SUITES) {
       console.log(`\n[${suite}] k=${K}`);
       const before = lines(evalFile).length;
       const reqBefore = lines(reqFile).length;
@@ -134,12 +136,12 @@ async function main(): Promise<void> {
         rateText: ((await win.getByTestId("assistant-eval-rate").textContent().catch(() => null)) ?? null),
         failedRows: await win.getByTestId("assistant-eval-failed-row").allTextContents(),
       };
-      await win.screenshot({ path: path.join(OUT_DIR, `${MODEL_ID}-${suite}.png`) });
+      await win.screenshot({ path: path.join(OUT_DIR, `${MODEL_ID}${TAG}-${suite}.png`) });
     }
     result.suites = suites;
   } finally {
     result.finishedAt = new Date().toISOString();
-    fs.writeFileSync(path.join(OUT_DIR, `${MODEL_ID}.json`), JSON.stringify(result, null, 2));
+    fs.writeFileSync(path.join(OUT_DIR, `${MODEL_ID}${TAG}.json`), JSON.stringify(result, null, 2));
     server.kill("SIGTERM");
     await driver.stop();
   }
