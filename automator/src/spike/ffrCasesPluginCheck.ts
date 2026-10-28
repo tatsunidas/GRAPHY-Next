@@ -12,6 +12,7 @@
  *                別の解剖点を指す取り違え）。
  *   spec         FFR_SPEC が指す JSON（ローカル・非コミット）を再生する。実症例用。
  * FFR_COLOR3D=l2|l3  QFR のあと、3D 画面への色表示を確かめる（仮想血管専用。`colorCheck3d` の注記を参照）。
+ * FFR_DUMP2D=1   再構成の後、両方向の 2D の中心線・経路番号・径を .results/ffr-plugin/<label>-2d.json へ書く（試行 E2。ローカルのみ）。
  * FFR_GUIDE=1    補正に使うアンカーを、B を基準に［ガイドに合わせる］で A へ寄せて決める（点の選定用。検算用は寄せない）。
  *                寄せた後の位置は report.finalAnchors に出る（それを ffr-cases-segments-C.json に写して固定する）。
  *                ガイドで選んだ対応点は再投影ゲートが循環になるので、通過は「整合性ゲート通過」としか言えない。
@@ -474,6 +475,18 @@ async function main(): Promise<void> {
     log("検算用アンカー:", held);
     log("径の食い違い:", agree);
     log("モデル登録:", reg);
+    if (process.env.FFR_DUMP2D === "1") {
+      // 試行 E2: 2D の中心線・経路番号・径を、画面の属性から読んでローカルへ書く（座標を含むので .results/ のみ。コミットしない）。
+      const dump: Record<string, unknown> = {};
+      for (const k of ["A", "B"] as const) {
+        const cv = viewer.getByTestId(`dual-canvas-${k}`);
+        const attr = async (n: string) => JSON.parse((await cv.getAttribute(`data-${n}`)) ?? "null");
+        dump[k] = { clpts: await attr("clpts"), range: await attr("range"), diameters: await attr("diameters") };
+      }
+      fs.writeFileSync(path.join(OUT_DIR, `${spec.label}-2d.json`), JSON.stringify(dump));
+      const d = dump as Record<"A" | "B", { clpts: unknown[]; range: { n: number; pi: unknown[] }; diameters: unknown[] }>;
+      log("2D 点列を書き出し（ローカルのみ）: 中心線の点数 A/B =", d.A.clpts.length, d.B.clpts.length, "／ 径 A/B =", d.A.diameters.length, d.B.diameters.length, "／ 経路番号 A/B =", d.A.range.pi.length, d.B.range.pi.length);
+    }
     check("[6] 再構成が結果を出した（ブロック警告なし）", !!rec && !/結果を出しません|再構成できませんでした/.test(rec), rec.slice(0, 160));
     if (spec.heldOut) check("[7] 検算用アンカーの誤差が表示された（数値）", report.heldOutPx !== null, held.slice(0, 160));
     check("[8] 径の食い違いが表示された、または出せない理由が分かる", /2 方向の径の差|断面積・狭窄率は出せません/.test(rec + " " + agree), agree.slice(0, 120));
