@@ -13,6 +13,8 @@
  *   spec         FFR_SPEC が指す JSON（ローカル・非コミット）を再生する。実症例用。
  * FFR_COLOR3D=l2|l3  QFR のあと、3D 画面への色表示を確かめる（仮想血管専用。`colorCheck3d` の注記を参照）。
  * FFR_DUMP2D=1   再構成の後、両方向の 2D の中心線・経路番号・径を .results/ffr-plugin/<label>-2d.json へ書く（試行 E2。ローカルのみ）。
+ * FFR_MANUAL=1   試行 G。［3D に再構成］の手前で止まり、利用者がエッジを手で直して再構成するのを待つ（<label>-manual。完了の合図は .results/ffr-plugin/manual-done、
+ *                最大 FFR_MANUAL_TIMEOUT_S 秒 = 既定 2700）。FFR_MANUAL_AUTO=1 は編集なしでスクリプトが再構成する（ハーネスの確認）。
  * FFR_GUIDE=1    補正に使うアンカーを、B を基準に［ガイドに合わせる］で A へ寄せて決める（点の選定用。検算用は寄せない）。
  *                寄せた後の位置は report.finalAnchors に出る（それを ffr-cases-segments-C.json に写して固定する）。
  *                ガイドで選んだ対応点は再投影ゲートが循環になるので、通過は「整合性ゲート通過」としか言えない。
@@ -107,6 +109,20 @@ async function toClient(page: Page, key: string, p: Pt): Promise<{ x: number; y:
 
 async function anchorsOf(page: Page, key: string): Promise<[number, number, boolean][]> {
   return JSON.parse((await page.getByTestId(`dual-canvas-${key}`).getAttribute("data-anchors")) ?? "[]");
+}
+
+/** 試行 G: 画面の属性から 2 方向の 2D の状態（中心線・径・エッジ・手修正の印）を読む。座標を含むので .results/ のみ。 */
+async function read2d(page: Page): Promise<Record<"A" | "B", Record<string, unknown>>> {
+  const out = {} as Record<"A" | "B", Record<string, unknown>>;
+  for (const k of ["A", "B"] as const) {
+    const cv = page.getByTestId(`dual-canvas-${k}`);
+    const attr = async (n: string) => JSON.parse((await cv.getAttribute(`data-${n}`)) ?? "null");
+    out[k] = {
+      clpts: await attr("clpts"), range: await attr("range"), diameters: await attr("diameters"),
+      edgepts: await attr("edgepts"), edgeoffsets: await attr("edgeoffsets"), editedEdges: await attr("edited-edges"), edited: await attr("edited"),
+    };
+  }
+  return out;
 }
 
 /** アンカー i を掴んで target へドラッグする。 */
@@ -331,6 +347,8 @@ async function main(): Promise<void> {
     spec.proximal = pxEnv === "none" ? "" : (pxEnv as "start" | "end");
     spec.label += `-prox-${pxEnv}`;
   }
+  // 試行 G の手動モード: 試行 C の出力（<label>.json・<label>-2d.json。ベンチが読む）を上書きしないよう、ラベルを分ける。
+  if (process.env.FFR_MANUAL === "1") spec.label += "-manual";
   fs.mkdirSync(OUT_DIR, { recursive: true });
   installPlugin();
   const driver = new DesktopDriver();
@@ -458,8 +476,46 @@ async function main(): Promise<void> {
     await viewer.waitForTimeout(300);
     const reconBtn = viewer.getByTestId("dual-recon");
     check("[5] 再構成ボタンが有効", await reconBtn.isEnabled(), { title: await reconBtn.getAttribute("title") });
-    await reconBtn.click();
-    await viewer.waitForTimeout(2_500);
+    const manual = process.env.FFR_MANUAL === "1";
+    const manualAuto = process.env.FFR_MANUAL_AUTO === "1";
+    if (!manual) {
+      await reconBtn.click();
+      await viewer.waitForTimeout(2_500);
+    } else {
+      // 試行 G: ［3D に再構成］の手前で止まり、利用者がエッジを手で直して［3D に再構成］を押すのを待つ（座標を含むので .results/ のみ）。
+      fs.writeFileSync(path.join(OUT_DIR, `${spec.label}-before-2d.json`), JSON.stringify(await read2d(viewer)));
+      await viewer.screenshot({ path: path.join(OUT_DIR, `${spec.label}-before.png`) });
+      const marker = path.join(OUT_DIR, "manual-done");
+      fs.rmSync(marker, { force: true });
+      const stopHere = (status: string, name: string, detail: unknown) => {
+        results.push({ name, ok: null, detail });
+        report.manual = { status };
+        fs.writeFileSync(path.join(OUT_DIR, `${spec.label}.json`), JSON.stringify({ ...report, checks: results }, null, 1));
+        log(`【未達】${name}`);
+      };
+      if (manualAuto) {
+        // ハーネスの確認用: 編集なしで、スクリプト自身が［3D に再構成］を押す（試行 C と同じ値に戻るはず）。
+        await reconBtn.click();
+        await viewer.waitForTimeout(2_500);
+      } else {
+        const limitS = Number(process.env.FFR_MANUAL_TIMEOUT_S ?? "2700");
+        log(`【手動編集】アプリの窓で、方向 B（必要なら A）のエッジを［操作: エッジを直す］で直し、［3D に再構成］を押してください（経由点は足さない・アンカーは動かさない）。終わったら ${marker} を作ってください（最大 ${limitS} 秒待ちます）。`);
+        const deadline = Date.now() + limitS * 1000;
+        while (!fs.existsSync(marker) && Date.now() < deadline) await new Promise((r) => setTimeout(r, Math.min(5_000, Math.max(100, deadline - Date.now()))));
+        if (!fs.existsSync(marker)) {
+          stopHere("timeout", "[G] 完了の合図が時間内に無かった", { limitS });
+          return;
+        }
+        await viewer.waitForTimeout(1_000);
+      }
+      const t0 = await txt(viewer, "dual-result");
+      if (!/3D 再構成の結果/.test(t0)) {
+        stopHere("no-recon", "[G] ［3D に再構成］の結果が画面に無い", t0.slice(0, 120));
+        return;
+      }
+      fs.writeFileSync(path.join(OUT_DIR, `${spec.label}-after-2d.json`), JSON.stringify(await read2d(viewer)));
+      report.manual = { status: "ok", auto: manualAuto };
+    }
     const rec = await txt(viewer, "dual-result");
     const held = await txt(viewer, "dual-holdout-result");
     const agree = await txt(viewer, "dual-diam-agree");
