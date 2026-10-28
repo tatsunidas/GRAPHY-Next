@@ -125,6 +125,169 @@ async function read2d(page: Page): Promise<Record<"A" | "B", Record<string, unkn
   return out;
 }
 
+/**
+ * 2 方向窓のエッジ編集の実機確認（FFR_EDITCHECK=1。仮想血管の方向 A）。
+ *  - ホバー: 右のエッジの外側にポインターを置くと data-hover が right、左の外側なら left（なぞる／点を動かす の両方）
+ *  - なぞる: 右の内側から押して、血管を横切って左の外側へ線を引く。反対側（左）が追従しないこと（変更前のビルドでは左も動く）
+ * 値は data-edgeoffsets（[左, 右] の組、0.01 px）と data-hover で読み、スクリーンショットも撮る。
+ */
+async function editCheck(page: Page, label: string): Promise<Record<string, unknown>> {
+  const out: Record<string, unknown> = {};
+  const key = "A";
+  const cv = page.getByTestId(`dual-canvas-${key}`);
+  const attr = async (n: string) => JSON.parse((await cv.getAttribute(`data-${n}`)) ?? "null");
+  const edgepts: number[][] = await attr("edgepts");
+  const clpts: number[][] = await attr("clpts");
+  const k = Math.floor(edgepts.length / 3); // 狭窄から離れた、まっすぐに近い所
+  const nrm = (i: number): Pt => {
+    const [lx, ly, rx, ry] = edgepts[i];
+    const l = Math.hypot(rx - lx, ry - ly);
+    return [(rx - lx) / l, (ry - ly) / l]; // 左 → 右（右が正）
+  };
+  const right = (i: number): Pt => [edgepts[i][2], edgepts[i][3]];
+  const left = (i: number): Pt => [edgepts[i][0], edgepts[i][1]];
+  const at = (p: Pt, n: Pt, d: number): Pt => [p[0] + n[0] * d, p[1] + n[1] * d];
+  const mouseTo = async (p: Pt) => {
+    const c = await toClient(page, key, p);
+    await page.mouse.move(c.x, c.y);
+    await page.waitForTimeout(150);
+  };
+
+  await page.getByTestId("dual-mode").selectOption("edge");
+  const snap = page.getByTestId("dual-snap-edge");
+  if (await snap.count()) await snap.uncheck();
+  const toolSel = page.getByTestId("dual-edge-tool");
+  const hover = async () => (await cv.getAttribute("data-hover")) ?? "";
+
+  // ホバー（なぞる・点を動かす）
+  const hovers: Record<string, string> = {};
+  for (const tool of ["trace", "drag"]) {
+    await toolSel.selectOption(tool);
+    await mouseTo(at(right(k), nrm(k), 1.5));
+    hovers[`${tool}:rightOutside`] = await hover();
+    await page.screenshot({ path: path.join(OUT_DIR, `${label}-hover-${tool}-right.png`) });
+    await mouseTo(at(left(k), nrm(k), -1.5));
+    hovers[`${tool}:leftOutside`] = await hover();
+    await mouseTo([5, 5]);
+    hovers[`${tool}:far`] = await hover();
+  }
+  out.hovers = hovers;
+  check("[E1] ホバー: 右のエッジの外側では右、左の外側では左が強調される（なぞる・点を動かす とも）", ["trace", "drag"].every((t) => hovers[`${t}:rightOutside`].startsWith("right") && hovers[`${t}:leftOutside`].startsWith("left")), hovers);
+  check("[E2] 負例: エッジから遠い位置（点を動かす）では何も強調されない", hovers["drag:far"] === "", hovers["drag:far"]);
+
+  // なぞる: 右の内側 → 血管を横切って左の外側（k+10）
+  await toolSel.selectOption("trace");
+  const before: number[][] = await attr("edgeoffsets");
+  const s = at(clpts[k] as Pt, nrm(k), 2);
+  const e = at(left(k + 10), nrm(k + 10), -3);
+  const c0 = await toClient(page, key, s);
+  const c1 = await toClient(page, key, e);
+  await page.mouse.move(c0.x, c0.y);
+  await page.mouse.down();
+  for (let i = 1; i <= 24; i++) await page.mouse.move(c0.x + ((c1.x - c0.x) * i) / 24, c0.y + ((c1.y - c0.y) * i) / 24);
+  await page.screenshot({ path: path.join(OUT_DIR, `${label}-trace-during.png`) });
+  await page.mouse.up();
+  await page.waitForTimeout(400);
+  const after: number[][] = await attr("edgeoffsets");
+  let leftMoved = 0, rightMoved = 0;
+  for (let i = 0; i < before.length; i++) {
+    if (Math.abs(after[i][0] - before[i][0]) > 0.05) leftMoved++;
+    if (Math.abs(after[i][1] - before[i][1]) > 0.05) rightMoved++;
+  }
+  out.trace = { leftMoved, rightMoved, startNearSide: "right" };
+  await page.screenshot({ path: path.join(OUT_DIR, `${label}-trace-after.png`) });
+  log("なぞる: 左が動いた点数", leftMoved, "／ 右が動いた点数", rightMoved);
+  check("[E3] なぞる: 始点に近い側（右）が置き換わる", rightMoved > 0, { rightMoved });
+  check("[E4] ★なぞる: 反対側（左）は追従しない（0 点）", leftMoved === 0, { leftMoved });
+  return out;
+}
+
+/**
+ * 2 方向窓の経由点の確認（FFR_EDITCHECK=wp。仮想血管）。真値（truth.json）で、連動した相手側の点の位置を確かめる。
+ *  1. 方向 A の中心線上をクリックして経由点を足す → B にも対応する経由点が足され、真値の対応点に近い（連動 ON）
+ *  2. A の経由点を中心線の外へ 12 px ドラッグして離す → A の中心線が変わり、B の経由点も動く
+ *  3. ［元に戻す］で A・B が一緒に戻る
+ *  4. 負例: 連動を切ると、A に足しても B は変わらない
+ *  5. 右クリックで A の経由点を消すと、B の対応する点も消える
+ */
+async function waypointCheck(page: Page, label: string): Promise<Record<string, unknown>> {
+  const out: Record<string, unknown> = {};
+  const attrOf = async (key: "A" | "B", n: string) => JSON.parse((await page.getByTestId(`dual-canvas-${key}`).getAttribute(`data-${n}`)) ?? "null");
+  const wps = async (key: "A" | "B"): Promise<Pt[]> => (await attrOf(key, "waypoints")) ?? [];
+  const clKey = async (key: "A" | "B") => JSON.stringify(await attrOf(key, "clpts"));
+  const clickAt = async (key: "A" | "B", p: Pt, button: "left" | "right" = "left") => {
+    const c = await toClient(page, key, p);
+    await page.mouse.click(c.x, c.y, { button });
+    await page.waitForTimeout(500);
+  };
+  const dist = (a: Pt, b: Pt) => Math.hypot(a[0] - b[0], a[1] - b[1]);
+  const truth = JSON.parse(fs.readFileSync(path.join(VV_DIR, "truth.json"), "utf8")).views as Record<string, { centerlinePx: Pt[] }>;
+  const nearestIdx = (pts: Pt[], p: Pt) => pts.reduce((bi, q, i) => (dist(q, p) < dist(pts[bi], p) ? i : bi), 0);
+
+  await page.getByTestId("dual-mode").selectOption("waypoint");
+  const sync = page.getByTestId("dual-sync");
+  check("[W0] 連動のチェックボックスがあり、既定で ON", (await sync.count()) === 1 && (await sync.isChecked()), null);
+  const clA: Pt[] = await attrOf("A", "clpts");
+  const k = Math.floor(clA.length / 2);
+
+  // 1. 足す
+  await clickAt("A", clA[k]);
+  const a1 = await wps("A");
+  const b1 = await wps("B");
+  out.afterAdd = { a: a1.length, b: b1.length };
+  check("[W1] A に経由点を足すと、B にも 1 つ足される（連動）", a1.length === 1 && b1.length === 1, out.afterAdd);
+  const ti = nearestIdx(truth.Case1_A.centerlinePx, a1[0] ?? clA[k]);
+  const errAdd = b1[0] ? dist(b1[0], truth.Case1_B.centerlinePx[ti]) : NaN;
+  out.addPartnerErrPx = Number.isFinite(errAdd) ? +errAdd.toFixed(2) : null;
+  check("[W2] B の経由点は、真値の対応点から 10 px 以内（仮想血管・正確なタグ）", errAdd <= 10, out.addPartnerErrPx);
+  await page.screenshot({ path: path.join(OUT_DIR, `${label}-wp-added.png`) });
+
+  // 2. 動かす（中心線の外へ 12 px）
+  const clBeforeA = await clKey("A");
+  const clBeforeB = await clKey("B");
+  const wA0 = a1[0];
+  const wB0 = b1[0];
+  const c0 = await toClient(page, "A", wA0);
+  const c1 = await toClient(page, "A", [wA0[0] + 12, wA0[1]]);
+  await page.mouse.move(c0.x, c0.y);
+  await page.mouse.down();
+  for (let i = 1; i <= 10; i++) await page.mouse.move(c0.x + ((c1.x - c0.x) * i) / 10, c0.y + ((c1.y - c0.y) * i) / 10);
+  await page.screenshot({ path: path.join(OUT_DIR, `${label}-wp-dragging.png`) });
+  await page.mouse.up();
+  await page.waitForTimeout(700);
+  const a2 = await wps("A");
+  const b2 = await wps("B");
+  out.afterMove = { a: a2, b: b2, aMovedPx: a2[0] ? +dist(a2[0], wA0).toFixed(2) : null, bMovedPx: b2[0] && wB0 ? +dist(b2[0], wB0).toFixed(2) : null };
+  check("[W3] A の経由点をドラッグで動かせる（約 12 px。新しい点は足されない）", a2.length === 1 && Math.abs(dist(a2[0], wA0) - 12) < 1.5, out.afterMove);
+  check("[W4] A の中心線が引き直された", (await clKey("A")) !== clBeforeA, null);
+  check("[W5] B の対応する経由点も動き、B の中心線も更新された（連動）", b2.length === 1 && dist(b2[0], wB0) > 1 && (await clKey("B")) !== clBeforeB, out.afterMove);
+  await page.screenshot({ path: path.join(OUT_DIR, `${label}-wp-moved.png`) });
+
+  // 3. 元に戻す（A・B が一緒に戻る）
+  await page.getByTestId("dual-undo").click();
+  await page.waitForTimeout(700);
+  const a3 = await wps("A");
+  const b3 = await wps("B");
+  out.afterUndo = { a: a3, b: b3 };
+  check("[W6] ［元に戻す］で A・B の経由点が一緒に、動かす前の位置へ戻る", a3.length === 1 && b3.length === 1 && dist(a3[0], wA0) < 0.2 && dist(b3[0], wB0) < 0.2, out.afterUndo);
+
+  // 5. 右クリックで消す（A → B も）
+  await clickAt("A", a3[0], "right");
+  const a5 = await wps("A");
+  const b5 = await wps("B");
+  out.afterDelete = { a: a5.length, b: b5.length };
+  check("[W7] 右クリックで A の経由点を消すと、B の対応する点も消える", a5.length === 0 && b5.length === 0, out.afterDelete);
+
+  // 4. 負例: 連動を切る
+  await sync.uncheck();
+  await clickAt("A", clA[k]);
+  const a4 = await wps("A");
+  const b4 = await wps("B");
+  out.syncOff = { a: a4.length, b: b4.length };
+  check("[W8] ★負例: 連動を切ると、A に足しても B は変わらない", a4.length === 1 && b4.length === 0, out.syncOff);
+  return out;
+}
+
 /** アンカー i を掴んで target へドラッグする。 */
 async function dragAnchor(page: Page, key: string, i: number, target: Pt): Promise<void> {
   const cur = (await anchorsOf(page, key))[i];
@@ -419,6 +582,12 @@ async function main(): Promise<void> {
     const sB = await txt(viewer, "dual-status-B");
     check("[2] 両方向で中心線が引けた", /中心線を引きました/.test(sA) && /中心線を引きました/.test(sB), { sA: sA.slice(0, 120), sB: sB.slice(0, 120) });
     await viewer.screenshot({ path: path.join(OUT_DIR, `${spec.label}-1-centerlines.png`) });
+    if (process.env.FFR_EDITCHECK) {
+      // 2 方向窓の編集操作の実機確認（仮想血管）。アンカー・再構成には進まない。1 = エッジ、wp = 経由点の移動と A/B の連動。
+      report.editCheck = process.env.FFR_EDITCHECK === "wp" ? await waypointCheck(viewer, spec.label) : await editCheck(viewer, spec.label);
+      fs.writeFileSync(path.join(OUT_DIR, `${spec.label}.json`), JSON.stringify({ ...report, checks: results }, null, 1));
+      return;
+    }
 
     // アンカーを 3 → 必要数へ（使う + 検算用）。
     const want = spec.anchors.length + (spec.heldOut ? 1 : 0);
