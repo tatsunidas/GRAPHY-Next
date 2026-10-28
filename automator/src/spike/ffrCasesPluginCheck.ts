@@ -368,6 +368,105 @@ async function rangeAnchorCheck(page: Page, label: string): Promise<Record<strin
   return out;
 }
 
+/**
+ * 2 方向窓の端点（始点・終点）のドラッグの確認（FFR_EDITCHECK=end。仮想血管）。
+ *  1. A の始点を、中心線に沿って内側へドラッグ → A の中心線の端が新しい位置になる。B の対応する端も動き、真値の対応点に近い。アンカー数は保たれる
+ *  2. ［元に戻す］で A・B の端が一緒に戻る
+ *  3. 負例: 連動を切ると、A だけ動く
+ *  4. 負例: 端点から遠い位置を押すと、端点は動かず、経由点が足される
+ */
+async function endpointCheck(page: Page, label: string): Promise<Record<string, unknown>> {
+  const out: Record<string, unknown> = {};
+  const attrOf = async (key: "A" | "B", n: string) => JSON.parse((await page.getByTestId(`dual-canvas-${key}`).getAttribute(`data-${n}`)) ?? "null");
+  const cl = async (key: "A" | "B"): Promise<Pt[]> => (await attrOf(key, "clpts")) ?? [];
+  const anchorsN = async (key: "A" | "B") => ((await attrOf(key, "anchors")) ?? []).length;
+  const dist = (a: Pt, b: Pt) => Math.hypot(a[0] - b[0], a[1] - b[1]);
+  const truth = JSON.parse(fs.readFileSync(path.join(VV_DIR, "truth.json"), "utf8")).views as Record<string, { centerlinePx: Pt[] }>;
+  const nearestIdx = (pts: Pt[], p: Pt) => pts.reduce((bi, q, i) => (dist(q, p) < dist(pts[bi], p) ? i : bi), 0);
+  const drag = async (key: "A" | "B", from: Pt, to: Pt) => {
+    const c0 = await toClient(page, key, from);
+    const c1 = await toClient(page, key, to);
+    await page.mouse.move(c0.x, c0.y);
+    await page.mouse.down();
+    for (let i = 1; i <= 12; i++) await page.mouse.move(c0.x + ((c1.x - c0.x) * i) / 12, c0.y + ((c1.y - c0.y) * i) / 12);
+    await page.screenshot({ path: path.join(OUT_DIR, `${label}-end-dragging.png`) });
+    await page.mouse.up();
+    await page.waitForTimeout(800);
+  };
+  const lenOf = (pts: Pt[]) => pts.reduce((s, q, i) => (i ? s + dist(q, pts[i - 1]) : 0), 0);
+
+  await page.getByTestId("dual-mode").selectOption("waypoint");
+  const a0 = await cl("A");
+  const b0 = await cl("B");
+  const nA0 = await anchorsN("A");
+  const nB0 = await anchorsN("B");
+  const target = a0[Math.floor(a0.length * 0.15)];
+
+  // 1. A の始点を内側へ
+  await drag("A", a0[0], target);
+  const a1 = await cl("A");
+  const b1 = await cl("B");
+  const bMovedStart = dist(b1[0], b0[0]);
+  const bMovedEnd = dist(b1[b1.length - 1], b0[b0.length - 1]);
+  const bEnd: Pt = bMovedStart >= bMovedEnd ? b1[0] : b1[b1.length - 1];
+  const expected = truth.Case1_B.centerlinePx[nearestIdx(truth.Case1_A.centerlinePx, target)];
+  out.moved = {
+    aStartErrPx: +dist(a1[0], target).toFixed(2), aLenBefore: +lenOf(a0).toFixed(1), aLenAfter: +lenOf(a1).toFixed(1),
+    bMovedPx: +Math.max(bMovedStart, bMovedEnd).toFixed(2), bEndVsTruthPx: +dist(bEnd, expected).toFixed(2), anchors: [await anchorsN("A"), await anchorsN("B")],
+  };
+  await page.screenshot({ path: path.join(OUT_DIR, `${label}-end-moved.png`) });
+  const m = out.moved as { aStartErrPx: number; aLenBefore: number; aLenAfter: number; bMovedPx: number; bEndVsTruthPx: number; anchors: number[] };
+  check("[N1] A の始点をドラッグすると、中心線の端が新しい位置（3 px 以内）になり、中心線が短くなる", m.aStartErrPx <= 3 && m.aLenAfter < m.aLenBefore - 20, m);
+  check("[N2] B の対応する端も動き、真値の対応点から 12 px 以内（連動）", m.bMovedPx > 5 && m.bEndVsTruthPx <= 12, m);
+  check("[N3] アンカーの数が A・B とも保たれる", m.anchors[0] === nA0 && m.anchors[1] === nB0, { before: [nA0, nB0], after: m.anchors });
+
+  // 2. 元に戻す
+  await page.getByTestId("dual-undo").click();
+  await page.waitForTimeout(800);
+  const a2 = await cl("A");
+  const b2 = await cl("B");
+  out.afterUndo = { aStartPx: +dist(a2[0], a0[0]).toFixed(2), bEndsPx: +Math.max(dist(b2[0], b0[0]), dist(b2[b2.length - 1], b0[b0.length - 1])).toFixed(2) };
+  const u = out.afterUndo as { aStartPx: number; bEndsPx: number };
+  check("[N4] ［元に戻す］で A・B の端が一緒に元の位置へ戻る", u.aStartPx <= 1.5 && u.bEndsPx <= 1.5, u);
+
+  // 2b. 延長: 内側へ縮めたあと、元の位置まで外へ伸ばし戻す（相手の中心線がまだ届かないので、端を直線で延長した位置を使う）
+  await drag("A", a2[0], target);
+  const aShort = await cl("A");
+  await drag("A", aShort[0], a0[0]);
+  const aExt = await cl("A");
+  const bExt = await cl("B");
+  const expectB = truth.Case1_B.centerlinePx[nearestIdx(truth.Case1_A.centerlinePx, a0[0])];
+  const bExtEnd: Pt = dist(bExt[0], expectB) <= dist(bExt[bExt.length - 1], expectB) ? bExt[0] : bExt[bExt.length - 1];
+  out.extend = { aStartErrPx: +dist(aExt[0], a0[0]).toFixed(2), aLenBefore: +lenOf(a0).toFixed(1), aLenAfter: +lenOf(aExt).toFixed(1), bEndVsTruthPx: +dist(bExtEnd, expectB).toFixed(2), anchors: [await anchorsN("A"), await anchorsN("B")] };
+  await page.screenshot({ path: path.join(OUT_DIR, `${label}-end-extended.png`) });
+  const ex = out.extend as { aStartErrPx: number; aLenBefore: number; aLenAfter: number; bEndVsTruthPx: number; anchors: number[] };
+  check("[N7] A の始点を外へ伸ばすと、中心線が元の長さへ伸びる", ex.aStartErrPx <= 3 && ex.aLenAfter >= ex.aLenBefore - 8, ex);
+  check("[N8] B の対応する端も外へ伸び、真値の対応点から 15 px 以内（曲がりを引き継いだ延長）。アンカー数は保たれる", ex.bEndVsTruthPx <= 15 && ex.anchors[0] === nA0 && ex.anchors[1] === nB0, ex);
+
+  // 3. 負例: 連動を切る
+  await page.getByTestId("dual-sync").uncheck();
+  const aPre = await cl("A");
+  const bPre = await cl("B");
+  await drag("A", aPre[0], target);
+  const b3 = await cl("B");
+  out.syncOff = { aMovedPx: +dist((await cl("A"))[0], aPre[0]).toFixed(2), bMovedPx: +Math.max(dist(b3[0], bPre[0]), dist(b3[b3.length - 1], bPre[bPre.length - 1])).toFixed(2) };
+  const so = out.syncOff as { aMovedPx: number; bMovedPx: number };
+  check("[N5] ★負例: 連動を切ると、A の端だけが動く", so.aMovedPx > 5 && so.bMovedPx <= 1.5, so);
+
+  // 4. 負例: 端点から遠い所を押すと、端点は動かず、経由点が足される
+  const aBefore = await cl("A");
+  const mid = aBefore[Math.floor(aBefore.length * 0.7)];
+  const c = await toClient(page, "A", mid);
+  await page.mouse.click(c.x, c.y);
+  await page.waitForTimeout(700);
+  const aAfter = await cl("A");
+  const wp = (await attrOf("A", "waypoints")) ?? [];
+  out.farClick = { aStartMovedPx: +dist(aAfter[0], aBefore[0]).toFixed(2), waypoints: wp.length };
+  const fc = out.farClick as { aStartMovedPx: number; waypoints: number };
+  check("[N6] ★負例: 端点から遠い所を押すと、端点は動かず、経由点が足される", fc.aStartMovedPx <= 1.5 && fc.waypoints === 1, fc);
+  return out;
+}
+
 /** アンカー i を掴んで target へドラッグする。 */
 async function dragAnchor(page: Page, key: string, i: number, target: Pt): Promise<void> {
   const cur = (await anchorsOf(page, key))[i];
@@ -667,6 +766,7 @@ async function main(): Promise<void> {
       report.editCheck =
         process.env.FFR_EDITCHECK === "wp" ? await waypointCheck(viewer, spec.label)
         : process.env.FFR_EDITCHECK === "range" ? await rangeAnchorCheck(viewer, spec.label)
+        : process.env.FFR_EDITCHECK === "end" ? await endpointCheck(viewer, spec.label)
         : await editCheck(viewer, spec.label);
       fs.writeFileSync(path.join(OUT_DIR, `${spec.label}.json`), JSON.stringify({ ...report, checks: results }, null, 1));
       return;
