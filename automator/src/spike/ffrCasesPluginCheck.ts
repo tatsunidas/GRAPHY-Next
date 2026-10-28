@@ -11,6 +11,7 @@
  *   control-neg  同じ入力で、検算用アンカーの B 側だけ血管に沿って FFR_SHIFT_SAMPLES サンプルずらす（陰性対照:
  *                別の解剖点を指す取り違え）。
  *   spec         FFR_SPEC が指す JSON（ローカル・非コミット）を再生する。実症例用。
+ * FFR_COLOR3D=l2|l3  QFR のあと、3D 画面への色表示を確かめる（仮想血管専用。`colorCheck3d` の注記を参照）。
  * FFR_GUIDE=1    補正に使うアンカーを、B を基準に［ガイドに合わせる］で A へ寄せて決める（点の選定用。検算用は寄せない）。
  *                寄せた後の位置は report.finalAnchors に出る（それを ffr-cases-segments-C.json に写して固定する）。
  *                ガイドで選んだ対応点は再投影ゲートが循環になるので、通過は「整合性ゲート通過」としか言えない。
@@ -196,6 +197,102 @@ async function runQfr(viewer: Page, spec: Spec, outDir: string): Promise<Record<
   return q;
 }
 
+
+interface Geo3dStats { total: number; nonBackground: number; fraction: number; warm: number; cool: number; neutral: number }
+const GEO_CTX_KEY = "graphy-geometry3d-ctx";
+
+async function geo3dStats(page: Page): Promise<Geo3dStats | null> {
+  const raw = (await page.evaluate(`(() => {
+    const g = window.__graphyDebug;
+    const s = g && g.getGeometry3dStats ? g.getGeometry3dStats() : null;
+    return s ? JSON.stringify(s) : null;
+  })()`)) as string | null;
+  return raw ? (JSON.parse(raw) as Geo3dStats) : null;
+}
+
+/**
+ * QFR 窓の「3D に色マップとして送る」→ 本体の 3D 画面（geometry3d）に色が乗るか。仮想血管専用（実症例では使わない）。
+ *   FFR_COLOR3D=l2  送ったあと、3D 画面が開くか（利用者が行ける入口があるか）。ウィンドウ一覧の URL で見る。
+ *   FFR_COLOR3D=l3  検査だけの注入（localStorage の 3D コンテキスト）で 3D 画面を開き、色・凡例を見る。
+ *                   「表示側は動く」ことの確認で、「利用者が行ける」ことの確認ではない。
+ */
+async function colorCheck3d(driver: DesktopDriver, viewer: Page, mode: string): Promise<Record<string, unknown>> {
+  const out: Record<string, unknown> = { mode };
+  const modelRaw = (await viewer.evaluate(`(() => {
+    const g = window.__graphyDebug; const m = g && g.getVesselModel ? g.getVesselModel() : null;
+    return m ? JSON.stringify({ runId: m.runId, pts: (m.segments && m.segments[0] ? m.segments[0].points : []) }) : null;
+  })()`)) as string | null;
+  const model = modelRaw ? (JSON.parse(modelRaw) as { runId: string; pts: number[][] }) : null;
+  check("[C0] 本体のストアに登録済みの血管モデルがある（H73）", !!model && model.pts.length > 10, { runId: model?.runId?.slice(0, 40), points: model?.pts.length });
+  if (!model) return out;
+  out.points = model.pts.length;
+  const put = viewer.getByTestId("qfr-put");
+  check("[C1] 「3D に色マップとして送る」ボタンがある（本体が putVesselAnalysis を持つ）", (await put.count()) === 1);
+  const panelTail = async () => ((await viewer.getByTestId("qfr-panel").textContent()) ?? "").replace(/\s+/g, " ").trim().slice(-220);
+  const urls = () => viewer.context().pages().map((pg) => pg.url().replace(/^.*?#/, "#").slice(0, 40));
+
+  if (mode === "l2") {
+    await put.click();
+    await viewer.waitForTimeout(3_000);
+    out.panelTail = await panelTail();
+    out.windows = urls();
+    log("送信後の表示:", out.panelTail, "| ウィンドウ:", JSON.stringify(out.windows));
+    check("[L2-1] 送信後、窓の表示は「3D ビューへ送りました」", /3D ビューへ送りました/.test(String(out.panelTail)), out.panelTail);
+    check("[L2-2] ★送っても 3D 画面（geometry3d）は開かない＝利用者の入口にならない", !(out.windows as string[]).some((u) => u.includes("geometry3d")), out.windows);
+    return out;
+  }
+
+  const inject = async (runId: string) => {
+    const ctx = { kind: "xa-qca3d", name: "QFR 3D 色表示の検査", runId, centerlineLps: model.pts.map((q) => [q[0], q[1], q[2]]), ts: Date.now() };
+    await viewer.evaluate(`(() => { localStorage.setItem(${JSON.stringify(GEO_CTX_KEY)}, ${JSON.stringify(JSON.stringify(ctx))});
+      const bc = new BroadcastChannel("graphy-geometry3d"); bc.postMessage({ type: "updated" }); bc.close(); })()`);
+  };
+  await inject(model.runId);
+  const geo = await driver.waitForNewPage(
+    () => viewer.evaluate(`window.graphyDesktop.openViewer("geometry3d")`).then(() => undefined),
+    (u) => u.includes("geometry3d"),
+  );
+  await geo.getByTestId("geometry3d-root").waitFor({ state: "visible", timeout: 30_000 });
+  await geo.waitForTimeout(3_000);
+  out.windowsWhenOpen = urls();
+  check("[L3-W] 検出器の確認: 3D 画面を開けば、ウィンドウ一覧に geometry3d が出る（L2-2 は空振りでない）", (out.windowsWhenOpen as string[]).some((u) => u.includes("geometry3d")), out.windowsWhenOpen);
+  const before = await geo3dStats(geo);
+  const legendBefore = await geo.getByTestId("vessel-legend").count();
+  await geo.screenshot({ path: path.join(OUT_DIR, "color3d-1-before.png") }).catch(() => {});
+  check("[L3-0] 3D 画面が描かれている（血管の画素がある）", !!before && before.nonBackground > 0, before);
+  check("[L3-1] ★負例: 送る前は凡例が無く、勾配も無い（neutral 0）", legendBefore === 0 && !!before && before.neutral === 0, { legendBefore, before });
+
+  await put.click();
+  await geo.waitForTimeout(3_500);
+  out.panelTail = await panelTail();
+  const after = await geo3dStats(geo);
+  const legend = geo.getByTestId("vessel-legend");
+  const legendAfter = await legend.count();
+  out.before = before; out.after = after; out.legendAfter = legendAfter;
+  await geo.screenshot({ path: path.join(OUT_DIR, "color3d-2-after.png") }).catch(() => {});
+  // 予測（実行前に決めたもの）: 仮想血管の QFR は 0.88〜1.00、範囲 0.60〜1.00 なので、近位は青（cool）、狭窄の遠位は緑寄り（neutral）。赤（warm）は出ない。
+  check("[L3-2] ★正例: 送ると凡例が出る", legendAfter === 1, { legendAfter });
+  check("[L3-3] ★正例: 送ると勾配が乗る（neutral が立ち、cool も残る。単色シアンから変わった）", !!after && after.neutral > 0 && after.cool > 0, { before, after });
+  // 観測のみ（合否に数えない）。実行前の予測「赤（warm）は出ない」は外れた（warm=20）。warm は r−b>30 で、赤ではなく黄緑も含む:
+  // 遠位端 QFR 0.882 は t=0.705（黄と緑の間、f=0.82）で RGB ≈ (106,199,76)、r−b ≈ 30.5 ＞ 30。画面に赤は無い（color3d-2-after.png）。
+  log("[L3-4 観測] warm 画素", after?.warm, "（遠位端 t=0.705 の黄緑が r−b>30 に入る。赤ではない）");
+  results.push({ name: "[L3-4 観測] 赤の有無（予測は外れた: warm は黄緑の遠位端を含む。画面に赤は無い）", ok: null, detail: { warm: after?.warm } });
+  if (legendAfter === 1) {
+    out.legendLabel = await legend.getAttribute("data-label").catch(() => null);
+    out.legendRange = [await geo.getByTestId("vessel-legend-min").textContent().catch(() => null), await geo.getByTestId("vessel-legend-max").textContent().catch(() => null)];
+    out.legendDisclaimer = ((await geo.getByTestId("vessel-legend-disclaimer").textContent().catch(() => "")) ?? "").trim().slice(0, 80);
+    check("[L3-5] 凡例に量の名前（QFR）と範囲 0.6〜1 が出る", String(out.legendLabel).includes("QFR") && Number((out.legendRange as string[])[0]) === 0.6 && Number((out.legendRange as string[])[1]) === 1, { label: out.legendLabel, range: out.legendRange });
+  }
+  await inject("run-that-does-not-exist");
+  await geo.waitForTimeout(2_500);
+  const neg = await geo3dStats(geo);
+  const legendNeg = await geo.getByTestId("vessel-legend").count();
+  out.negRun = { neg, legendNeg };
+  await geo.screenshot({ path: path.join(OUT_DIR, "color3d-3-otherrun.png") }).catch(() => {});
+  check("[L3-6] ★負例: 別の runId では色も凡例も出ない", legendNeg === 0 && !!neg && neg.neutral === 0, { legendNeg, neg });
+  return out;
+}
+
 async function main(): Promise<void> {
   const spec: Spec =
     MODE === "control-pos" ? controlSpec(0)
@@ -361,6 +458,7 @@ async function main(): Promise<void> {
     if (process.env.FFR_QFR !== "0") {
       const q = await runQfr(viewer, spec, OUT_DIR);
       report.qfr = q;
+      if (process.env.FFR_COLOR3D) report.color3d = await colorCheck3d(driver, viewer, process.env.FFR_COLOR3D);
     }
 
     fs.writeFileSync(path.join(OUT_DIR, `${spec.label}.json`), JSON.stringify({ ...report, checks: results }, null, 1));
