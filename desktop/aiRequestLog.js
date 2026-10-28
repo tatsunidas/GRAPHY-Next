@@ -137,6 +137,8 @@ const EVAL_MAX_BYTES = 512 * 1024;
 const EVAL_ID_RE = /^[a-z0-9-]{1,24}$/;
 const MAX_EVAL_CASES = 200;
 const MAX_EVAL_LATENCY_MS = 60 * 60 * 1000;
+const EVAL_SUITES = ["basic", "plugin-pos"];
+const MAX_EVAL_REPEATS = 20;
 
 /**
  * レンダラから届いた評価結果を保存できる形に整える（許可リスト）。形が違えば null。
@@ -149,15 +151,28 @@ function buildEvalRecord(o) {
     if (!c || typeof c.id !== "string" || !EVAL_ID_RE.test(c.id) || typeof c.pass !== "boolean") return null;
     // 応答時間は任意。範囲外・非整数はこの項目だけ捨てる（質問の合否は残す）
     const ms = natural(c.latencyMs);
-    cases.push(ms !== null && ms <= MAX_EVAL_LATENCY_MS ? { id: c.id, pass: c.pass, latencyMs: ms } : { id: c.id, pass: c.pass });
+    // 反復の集計（passes/n）は任意（無い・古い行は 1 回として扱う）。あるときは pass と矛盾してはならない
+    let n = 1;
+    let passes = c.pass ? 1 : 0;
+    if (c.n !== undefined || c.passes !== undefined) {
+      const nn = natural(c.n);
+      const pp = natural(c.passes);
+      if (nn === null || pp === null || nn < 1 || nn > MAX_EVAL_REPEATS || pp > nn || (pp === nn) !== c.pass) return null;
+      n = nn;
+      passes = pp;
+    }
+    cases.push(ms !== null && ms <= MAX_EVAL_LATENCY_MS ? { id: c.id, pass: c.pass, passes, n, latencyMs: ms } : { id: c.id, pass: c.pass, passes, n });
   }
   // 合計は 1 問でも欠ければ不明（欠けを 0 として足さない）
   const totalLatencyMs = cases.every((c) => c.latencyMs !== undefined) ? cases.reduce((a, c) => a + c.latencyMs, 0) : null;
   const passed = cases.filter((c) => c.pass).length;
   const suiteVersion = natural(o.suiteVersion);
   if (suiteVersion === null || suiteVersion < 1) return null;
+  const suite = o.suite === undefined ? "basic" : o.suite;
+  if (!EVAL_SUITES.includes(suite)) return null;
   const meta = o.meta && typeof o.meta === "object" ? o.meta : {};
   return {
+    suite,
     suiteVersion,
     provider: word(meta.provider, NAME_RE) ?? null,
     modelId: word(meta.modelId, ID_RE) ?? null,
