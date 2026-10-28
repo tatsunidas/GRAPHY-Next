@@ -3,7 +3,7 @@
  * Author: Tatsuaki Kobayashi
  */
 import { describe, expect, it } from "vitest";
-import { diffUids, studyUidsOfCtx, studyUidsOfTiles } from "./useStudyInUse";
+import { diffUids, gateUids, studyUidsOfCtx, studyUidsOfTiles } from "./useStudyInUse";
 
 describe("useStudyInUse の純関数", () => {
   it("差分は追加と削除に分かれる", () => {
@@ -28,5 +28,11 @@ describe("useStudyInUse の純関数", () => {
     expect(studyUidsOfCtx("{not json")).toEqual([]);
     expect(studyUidsOfCtx(null)).toEqual([]);
     expect(studyUidsOfCtx("{}")).toEqual([]);
+  });
+
+  it("standalone だと分かるまで・web では、何も知らせない（空にする）", () => {
+    expect(gateUids(["s1", "s2"], true)).toEqual(["s1", "s2"]);
+    expect(gateUids(["s1", "s2"], false)).toEqual([]);
+    expect(gateUids([], false)).toEqual([]);
   });
 });

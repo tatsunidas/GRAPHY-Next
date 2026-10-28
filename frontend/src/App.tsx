@@ -59,8 +59,8 @@ export function App() {
   const [screen, setScreen] = useState(() => window.location.hash.replace(/^#/, ""));
   const { uiMode, setOverride } = useDeviceClass();
   const mobileView = parseMobileRoute(screen);
-  // 別ウィンドウ（#mpr など）が開いている検査を、自動削除から守る
-  useCtxWindowInUse(screen);
+  // 別ウィンドウ（#mpr など）が開いている検査を、自動削除から守る（standalone のみ。モードが分かってから）
+  useCtxWindowInUse(screen, status?.mode === "standalone");
 
   useEffect(() => {
     const onHash = () => setScreen(window.location.hash.replace(/^#/, ""));
