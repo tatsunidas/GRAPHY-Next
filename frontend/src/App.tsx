@@ -2,6 +2,7 @@
  * Copyright (c) Visionary Imaging Services, Inc. All rights reserved.
  * Author: Tatsuaki Kobayashi
  */
+import { ExternalOpenHost } from "./externalOpen/ExternalOpenHost";
 import { useEffect, useRef, useState } from "react";
 import { fetchStatus, fetchStudies, fetchSeries, type AppStatus, type Study, type Series } from "./api";
 import { pollStatus } from "./statusPoll";
@@ -58,8 +59,8 @@ export function App() {
   const [screen, setScreen] = useState(() => window.location.hash.replace(/^#/, ""));
   const { uiMode, setOverride } = useDeviceClass();
   const mobileView = parseMobileRoute(screen);
-  // 別ウィンドウ（#mpr など）が開いている検査を、自動削除から守る
-  useCtxWindowInUse(screen);
+  // 別ウィンドウ（#mpr など）が開いている検査を、自動削除から守る（standalone のみ。モードが分かってから）
+  useCtxWindowInUse(screen, status?.mode === "standalone");
 
   useEffect(() => {
     const onHash = () => setScreen(window.location.hash.replace(/^#/, ""));
@@ -252,6 +253,7 @@ export function App() {
         <QRScreen status={status} />
       ) : (
         <>
+        <ExternalOpenHost />
         <MainScreen
           status={status}
           error={error}

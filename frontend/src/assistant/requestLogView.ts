@@ -12,7 +12,17 @@ export interface RequestLogModelRow {
   tokensIn: number;
   tokensOut: number;
   unknownUsage: number;
+  /** 成功した要求の応答時間（ms）。1 件も無ければ null＝未取得（0 ではない）。 */
+  latency: { n: number; p50: number; p95: number } | null;
 }
+
+/** 件数がこれ未満の分位数は参考値（暫定値。利用実績で見直す）。 */
+export const MIN_LATENCY_N = 20;
+
+export const isLatencyReference = (n: number): boolean => n < MIN_LATENCY_N;
+
+/** ms → 秒の表示（小数 1 桁）。 */
+export const secondsText = (ms: number): string => `${(ms / 1000).toFixed(1)} s`;
 
 export interface RequestLogSummary {
   count?: number;
@@ -67,6 +77,14 @@ export function recentRows(recent: unknown, limit = MAX_RECENT): RecentRow[] {
   });
 }
 
+function latencyOf(v: unknown): RequestLogModelRow["latency"] {
+  const l = v && typeof v === "object" ? (v as Record<string, unknown>) : null;
+  const n = l ? count(l.n) : null;
+  const p50 = l ? count(l.p50) : null;
+  const p95 = l ? count(l.p95) : null;
+  return n && p50 !== null && p95 !== null ? { n, p50, p95 } : null;
+}
+
 /** モデル別の表。数でない値は 0 でなく捨てる（要求数 0 の行は出さない）。 */
 export function modelRows(byModel: unknown): RequestLogModelRow[] {
   if (!Array.isArray(byModel)) return [];
@@ -82,6 +100,7 @@ export function modelRows(byModel: unknown): RequestLogModelRow[] {
       tokensIn: count(r.tokensIn) ?? 0,
       tokensOut: count(r.tokensOut) ?? 0,
       unknownUsage: count(r.unknownUsage) ?? 0,
+      latency: latencyOf(r.latency),
     });
   }
   return out;

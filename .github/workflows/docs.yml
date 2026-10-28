@@ -12,12 +12,18 @@ on:
       - 'docs/**'
       - 'mkdocs.yml'
       - 'requirements-docs.txt'
+      - 'scripts/check-docs-labels.py'
+      # アプリの画面の文言を変えたら、マニュアルの文言との照合を走らせる
+      - 'frontend/src/i18n/ja.ts'
       - '.github/workflows/docs.yml'
   pull_request:
     paths:
       - 'docs/**'
       - 'mkdocs.yml'
       - 'requirements-docs.txt'
+      - 'scripts/check-docs-labels.py'
+      # アプリの画面の文言を変えたら、マニュアルの文言との照合を走らせる
+      - 'frontend/src/i18n/ja.ts'
       - '.github/workflows/docs.yml'
   workflow_dispatch:
 
@@ -47,6 +53,10 @@ jobs:
 
       - name: Install Python dependencies
         run: pip install -r requirements-docs.txt
+
+      # マニュアルに `**文言**{.ui}` と書いた画面の文言が、アプリの文言（ja.ts）と一致するか
+      - name: Check UI labels
+        run: python3 scripts/check-docs-labels.py
 
       # --strict: リンク切れ / nav 漏れをビルドエラーにする
       - name: Build MkDocs

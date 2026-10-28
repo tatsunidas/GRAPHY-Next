@@ -31,6 +31,10 @@ function opMismatch(want: EvalOp, got: GotCall): string | null {
   for (const [k, v] of Object.entries(want.args ?? {})) {
     if (!argMatches(v, got.args[k])) return `${want.id}.${k}: expected ${JSON.stringify(v)}, got ${JSON.stringify(got.args[k])}`;
   }
+  for (const [k, [lo, hi]] of Object.entries(want.ranges ?? {})) {
+    const g = got.args[k];
+    if (typeof g !== "number" || !(g >= lo && g <= hi)) return `${want.id}.${k}: expected [${lo.toFixed(2)}, ${hi.toFixed(2)}], got ${JSON.stringify(g)}`;
+  }
   return null;
 }
 

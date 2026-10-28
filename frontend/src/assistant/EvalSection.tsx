@@ -6,16 +6,18 @@
 // 🔴 ツールは実行しない（合成の状態を返すスタブ）。送るのは合成の質問とツール定義だけ。外部宛てなら実行前に画面内で確認する。
 import { useCallback, useEffect, useState, type CSSProperties } from "react";
 import { compareRuns, type StoredEvalRun } from "./eval/compareRuns";
-import { EVAL_CASES, EVAL_SUITE_VERSION } from "./eval/cases";
+import { EVAL_SUITES, type EvalSuite, type EvalSuiteId } from "./eval/cases";
 import type { EvalRun } from "./eval/runEval";
-import { shortText } from "./requestLogView";
+import { wilson95 } from "./eval/wilson";
+import { secondsText, shortText } from "./requestLogView";
 
 type T = (k: string, v?: Record<string, string | number>) => string;
 
 export interface EvalApi {
   list: () => Promise<{ ok: boolean; runs?: StoredEvalRun[] } | undefined>;
-  append: (run: EvalRun) => Promise<{ ok: boolean } | undefined>;
-  run: (onProgress: (done: number, total: number) => void) => Promise<EvalRun>;
+  append: (suite: EvalSuite, run: EvalRun) => Promise<{ ok: boolean } | undefined>;
+  /** `suite` の各質問を `k` 回流す。 */
+  run: (suite: EvalSuite, k: number, onProgress: (done: number, total: number) => void) => Promise<EvalRun>;
   /** 外部へ出る宛先ならそのホスト名。ローカルは null。使えない（ツール呼び出し不可など）ときは undefined。 */
   destination: { host: string } | null | undefined;
 }
@@ -26,12 +28,30 @@ export function evalStartMode(destination: EvalApi["destination"]): "ask" | "run
   return destination === null ? "run" : "ask";
 }
 
+/** 組ごとの反復回数の既定。基本の組は 1 回、プラグイン・位置の組は揺れを見るため 5 回。上限は保存側（main）と同じ 20。 */
+export const DEFAULT_REPEATS: Record<EvalSuiteId, number> = { basic: 1, "plugin-pos": 5 };
+export const MAX_REPEATS = 20;
+
+/** 全質問・全反復の合格回数/回数と Wilson 95% 区間の文。反復を独立とみなす近似。回数が 0 なら null（未取得）。n<20 は参考値。 */
+export function rateText(cases: readonly { passes: number; n: number }[], t: T): string | null {
+  const passes = cases.reduce((a, c) => a + c.passes, 0);
+  const n = cases.reduce((a, c) => a + c.n, 0);
+  const w = wilson95(passes, n);
+  if (!w) return null;
+  const pct = (x: number) => Math.round(x * 100);
+  return t(n < 20 ? "assistant.eval.rateRef" : "assistant.eval.rate", { passes, n, pct: pct(w.rate), lo: pct(w.lo), hi: pct(w.hi) });
+}
+
 export function EvalSection({ api, busy, t, onRan }: { api: EvalApi; busy: boolean; t: T; onRan?: () => void }) {
   const [runs, setRuns] = useState<StoredEvalRun[]>([]);
   const [last, setLast] = useState<EvalRun | null>(null);
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
   const [asking, setAsking] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [suiteId, setSuiteId] = useState<EvalSuiteId>("basic");
+  const [k, setK] = useState<number>(DEFAULT_REPEATS.basic);
+  const suite = EVAL_SUITES.find((x) => x.id === suiteId)!;
+  const sends = suite.cases.length * k;
 
   const load = useCallback(async () => {
     const r = await api.list();
@@ -45,12 +65,12 @@ export function EvalSection({ api, busy, t, onRan }: { api: EvalApi; busy: boole
     setAsking(false);
     setError(null);
     setLast(null);
-    setProgress({ done: 0, total: EVAL_CASES.length });
+    setProgress({ done: 0, total: sends });
     try {
-      const run = await api.run((done, total) => setProgress({ done, total }));
+      const run = await api.run(suite, k, (done, total) => setProgress({ done, total }));
       setLast(run);
-      if (run.total === EVAL_CASES.length) {
-        const saved = await api.append(run);
+      if (run.total === suite.cases.length) {
+        const saved = await api.append(suite, run);
         if (!saved?.ok) setError("save-failed");
       }
     } catch {
@@ -63,14 +83,48 @@ export function EvalSection({ api, busy, t, onRan }: { api: EvalApi; busy: boole
 
   const mode = evalStartMode(api.destination);
   const unavailable = mode === "unavailable";
-  const latest = runs[0];
-  const prev = latest ? runs.slice(1).find((r) => r.suiteVersion === latest.suiteVersion) : undefined;
+  const inSuite = runs.filter((r) => r.suite === suite.id);
+  const latest = inSuite[0];
+  const prev = latest ? inSuite.slice(1).find((r) => r.suiteVersion === latest.suiteVersion) : undefined;
   const cmp = latest && prev ? compareRuns(prev, latest) : null;
   const failed = last ? last.cases.filter((c) => !c.pass) : [];
   return (
     <div style={S.box} data-testid="assistant-eval">
       <div style={S.title}>{t("assistant.eval.title")}</div>
-      <div style={S.dim}>{t("assistant.eval.note", { n: EVAL_CASES.length })}</div>
+      <div style={S.dim}>{t("assistant.eval.note", { n: suite.cases.length })}</div>
+      <div style={S.row}>
+        <label>
+          {t("assistant.eval.suiteLabel")}{" "}
+          <select
+            value={suiteId}
+            disabled={busy || progress !== null}
+            onChange={(e) => {
+              const id = e.target.value as EvalSuiteId;
+              setSuiteId(id);
+              setK(DEFAULT_REPEATS[id]);
+              setLast(null);
+            }}
+            data-testid="assistant-eval-suite"
+          >
+            {EVAL_SUITES.map((x) => (
+              <option key={x.id} value={x.id}>{t(`assistant.eval.suite.${x.id}`)}</option>
+            ))}
+          </select>
+        </label>
+        <label>
+          {t("assistant.eval.repeats")}{" "}
+          <input
+            type="number"
+            min={1}
+            max={MAX_REPEATS}
+            value={k}
+            disabled={busy || progress !== null}
+            onChange={(e) => setK(Math.min(MAX_REPEATS, Math.max(1, Math.floor(Number(e.target.value)) || 1)))}
+            style={{ width: 48 }}
+            data-testid="assistant-eval-k"
+          />
+        </label>
+      </div>
       {unavailable && <div style={S.dim} data-testid="assistant-eval-unavailable">{t("assistant.eval.unavailable")}</div>}
       <div style={S.row}>
         {!asking ? (
@@ -84,7 +138,7 @@ export function EvalSection({ api, busy, t, onRan }: { api: EvalApi; busy: boole
           </button>
         ) : (
           <>
-            <span data-testid="assistant-eval-ask">{t("assistant.eval.ask", { n: EVAL_CASES.length, host: api.destination?.host ?? "?" })}</span>
+            <span data-testid="assistant-eval-ask">{t("assistant.eval.ask", { n: sends, host: api.destination?.host ?? "?" })}</span>
             <button style={S.btn} onClick={() => void start()} data-testid="assistant-eval-ask-yes">{t("assistant.eval.askYes")}</button>
             <button style={S.btn} onClick={() => setAsking(false)} data-testid="assistant-eval-ask-no">{t("assistant.eval.askNo")}</button>
           </>
@@ -100,11 +154,15 @@ export function EvalSection({ api, busy, t, onRan }: { api: EvalApi; busy: boole
               {latest.modelVersion ?? latest.modelId ?? t("assistant.requestlog.unknown")} · {latest.ts.replace("T", " ").slice(0, 19)}
             </span>
           </div>
+          {rateText(latest.cases, t) && <div data-testid="assistant-eval-rate">{rateText(latest.cases, t)}</div>}
+          <div style={S.dim} data-testid="assistant-eval-total-latency">
+            {t("assistant.eval.totalLatency", { v: typeof latest.totalLatencyMs === "number" ? secondsText(latest.totalLatencyMs) : t("assistant.requestlog.notObtained") })}
+          </div>
           {last && failed.length > 0 && (
             <div data-testid="assistant-eval-failed">
               {failed.map((c) => (
                 <div key={c.id} style={S.fail} data-testid="assistant-eval-failed-row">
-                  {c.id}: {c.error ? t("assistant.eval.chatFailed", { code: shortText(c.error, 30) }) : shortText(c.reason, 90)}
+                  {c.id} ({c.passes}/{c.n}): {c.error ? t("assistant.eval.chatFailed", { code: shortText(c.error, 30) }) : shortText(c.reason, 90)}
                 </div>
               ))}
             </div>
@@ -126,7 +184,7 @@ export function EvalSection({ api, busy, t, onRan }: { api: EvalApi; busy: boole
         </div>
       )}
       {runs.length === 0 && !progress && <div style={S.dim} data-testid="assistant-eval-none">{t("assistant.eval.none")}</div>}
-      <div style={S.dim}>{t("assistant.eval.suite", { v: EVAL_SUITE_VERSION })}</div>
+      <div style={S.dim}>{t("assistant.eval.suite", { v: suite.version })}</div>
     </div>
   );
 }

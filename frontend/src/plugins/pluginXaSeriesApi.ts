@@ -21,6 +21,7 @@ import { readModalitySlice } from "../viewer/pixelCalibration";
 import { prewarmXaDataset, xaDataSetOf } from "../viewer/xaCine";
 import { readXaViewGeometry, type XaViewGeometryResult } from "../viewer/xaViewGeometryProvider";
 import type { PluginSeriesRef } from "./pluginTypes";
+import { pixelIntensityRelationshipOf } from "./xaPixelIntensity";
 
 type StudyResolver = (seriesUid: string) => string | undefined;
 
@@ -34,6 +35,8 @@ export interface PluginXaSeriesInfo extends XaViewGeometryResult {
   frameCount: number | null;
   rows: number | null;
   cols: number | null;
+  /** `PixelIntensityRelationship (0028,1040)`（LIN / LOG）。タグが無ければ null（推測で埋めない）。QCA の径の測り方（対数変換の要否）を決めるのに要る。 */
+  pixelIntensityRelationship: string | null;
 }
 
 export interface PluginXaSeriesFrame {
@@ -85,6 +88,7 @@ export async function readXaSeriesInfo(
     frameCount: nf != null && nf > 0 ? nf : null,
     rows,
     cols,
+    pixelIntensityRelationship: ds ? pixelIntensityRelationshipOf(ds) : null,
   };
 }
 
