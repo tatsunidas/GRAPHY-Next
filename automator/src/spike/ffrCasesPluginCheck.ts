@@ -157,6 +157,9 @@ async function editCheck(page: Page, label: string): Promise<Record<string, unkn
   await page.getByTestId("dual-mode").selectOption("edge");
   const snap = page.getByTestId("dual-snap-edge");
   if (await snap.count()) await snap.uncheck();
+  // 中心線の寄せ直しは FFR_EDITCHECK=recenter で見る。ここでは、なぞる側の選択だけを見るので切る（寄せ直すと中心線からの距離が変わる）。
+  const rc = page.getByTestId("dual-auto-recenter");
+  if (await rc.count()) await rc.uncheck();
   const toolSel = page.getByTestId("dual-edge-tool");
   const hover = async () => (await cv.getAttribute("data-hover")) ?? "";
 
@@ -488,6 +491,9 @@ async function eraseCheck(page: Page, label: string): Promise<Record<string, unk
   await page.getByTestId("dual-edge-tool").selectOption("trace");
   const snap = page.getByTestId("dual-snap-edge");
   if (await snap.count()) await snap.uncheck();
+  // 中心線の寄せ直しは FFR_EDITCHECK=recenter で見る。ここでは消しゴムだけを見るので切る（寄せ直すと、オフセットの基準が動く）。
+  const rc = page.getByTestId("dual-auto-recenter");
+  if (await rc.count()) await rc.uncheck();
 
   const auto = await offsets();
   const pts0 = await edgepts();
@@ -649,6 +655,82 @@ async function resizeCheck(page: Page, label: string): Promise<Record<string, un
   const miss = r5.added ? Math.hypot(r5.added[0] - r5.target[0], r5.added[1] - r5.target[1]) : null;
   check("[R5] ★負例: 20 px ずらして押すと、ずれが許容を超えて見える（検出器が差を見られる）", miss !== null && miss > r5.tol * 2, { miss, tol: r5.tol });
   out.sizes = { d0, d1, d2, dpr };
+  return out;
+}
+
+/**
+ * エッジを整えたら中心線も寄せ直す（FFR_EDITCHECK=recenter。仮想血管の方向 A）。
+ *  C1 ★負例: チェックを外した状態でエッジをブラシで動かすと、中心線は動かず、点 k の左右の中点はずれたまま（編集は効いている）
+ *  C2 元に戻すで、エッジも中心線も編集前に戻る
+ *  C3 チェックを入れて同じ編集をすると、中心線が動き（点の数は同じ）、点 k の中点のずれが C1 の 35% 未満になる
+ *  C4 元に戻すで、中心線の座標が編集前と完全に一致する
+ *  C5 寄せ直したあとで経由点を足すと、寄せ直した中心線は使わず引き直した旨が出る（中心線の点の並びの前提が変わるため）
+ */
+async function recenterCheck(page: Page, label: string): Promise<Record<string, unknown>> {
+  const out: Record<string, unknown> = {};
+  const key = "A";
+  const cv = page.getByTestId(`dual-canvas-${key}`);
+  const attr = async (n: string) => JSON.parse((await cv.getAttribute(`data-${n}`)) ?? "null");
+  const edgepts0: number[][] = await attr("edgepts");
+  const k = Math.floor(edgepts0.length / 3);
+  const nrm: Pt = (() => { const [lx, ly, rx, ry] = edgepts0[k]; const l = Math.hypot(rx - lx, ry - ly); return [(rx - lx) / l, (ry - ly) / l]; })();
+  const rightAt = (): Pt => { return [edgepts0[k][2], edgepts0[k][3]]; };
+  const mid = async () => { const eo: number[][] = await attr("edgeoffsets"); return (eo[k][0] + eo[k][1]) / 2; };
+  const cl = async (): Promise<Pt[]> => await attr("clpts");
+  const maxMove = (a: Pt[], b: Pt[]) => a.reduce((m, p, i) => Math.max(m, Math.hypot(p[0] - b[i][0], p[1] - b[i][1])), 0);
+
+  await page.getByTestId("dual-mode").selectOption("edge");
+  const snap = page.getByTestId("dual-snap-edge");
+  if (await snap.count()) await snap.uncheck();
+  await page.getByTestId("dual-edge-tool").selectOption("brush");
+  const auto = page.getByTestId("dual-auto-recenter");
+  const brushOut = async () => {
+    const r = rightAt();
+    const c0 = await toClient(page, key, r);
+    const c1 = await toClient(page, key, [r[0] + nrm[0] * 4, r[1] + nrm[1] * 4]);
+    await page.mouse.move(c0.x, c0.y);
+    await page.mouse.down();
+    for (let i = 1; i <= 12; i++) await page.mouse.move(c0.x + ((c1.x - c0.x) * i) / 12, c0.y + ((c1.y - c0.y) * i) / 12);
+    await page.mouse.up();
+    await page.waitForTimeout(600);
+  };
+  const cl0 = await cl();
+  const mid0 = await mid();
+
+  await auto.uncheck();
+  await brushOut();
+  const cl1 = await cl();
+  const mid1 = await mid();
+  await page.screenshot({ path: path.join(OUT_DIR, `${label}-recenter-1-off.png`) });
+  check("[C1] ★負例: 寄せ直しを切ると、中心線は動かず、左右の中点はずれたまま（編集は効いている）", maxMove(cl1, cl0) < 0.01 && Math.abs(mid1 - mid0) > 0.5, { moved: maxMove(cl1, cl0), mid0, mid1 });
+  await page.getByTestId("dual-undo").click();
+  await page.waitForTimeout(500);
+  const clU = await cl();
+  check("[C2] 元に戻すで、エッジ（中点）も中心線も編集前に戻る", maxMove(clU, cl0) < 0.01 && Math.abs((await mid()) - mid0) < 0.02, { moved: maxMove(clU, cl0), mid: await mid() });
+
+  await auto.check();
+  await brushOut();
+  const cl2 = await cl();
+  const mid2 = await mid();
+  const info = (await page.getByTestId("dual-info").textContent()) ?? "";
+  await page.screenshot({ path: path.join(OUT_DIR, `${label}-recenter-2-on.png`) });
+  check("[C3] 寄せ直しを入れると、中心線が動き（点の数は同じ）、点 k の中点のずれが C1 の 35% 未満になる", cl2.length === cl0.length && maxMove(cl2, cl0) > 0.3 && Math.abs(mid2) < Math.abs(mid1 - mid0) * 0.35 + Math.abs(mid0), { n: [cl2.length, cl0.length], moved: maxMove(cl2, cl0), mid0, mid1, mid2, info: info.slice(-120) });
+  await page.getByTestId("dual-undo").click();
+  await page.waitForTimeout(500);
+  const clV = await cl();
+  check("[C4] 元に戻すで、中心線の座標が編集前と一致する", maxMove(clV, cl0) < 0.01, { moved: maxMove(clV, cl0) });
+
+  // C5: 寄せ直した状態で経由点を足す
+  await brushOut();
+  const clR = await cl();
+  await page.getByTestId("dual-mode").selectOption("waypoint");
+  const mp = clR[Math.floor(clR.length * 0.7)];
+  const cw = await toClient(page, key, mp);
+  await page.mouse.click(cw.x, cw.y);
+  await page.waitForTimeout(800);
+  const info5 = (await page.getByTestId("dual-info").textContent()) ?? "";
+  check("[C5] 寄せ直したあとで経由点を足すと、寄せ直した中心線を使わず引き直した旨が出る", /引き直しました/.test(info5), { info: info5.slice(-160) });
+  out.values = { mid0, mid1, mid2 };
   return out;
 }
 
@@ -955,6 +1037,7 @@ async function main(): Promise<void> {
         : process.env.FFR_EDITCHECK === "erase" ? await eraseCheck(viewer, spec.label)
         : process.env.FFR_EDITCHECK === "redef" ? await redefineCheck(viewer, spec.label)
         : process.env.FFR_EDITCHECK === "resize" ? await resizeCheck(viewer, spec.label)
+        : process.env.FFR_EDITCHECK === "recenter" ? await recenterCheck(viewer, spec.label)
         : await editCheck(viewer, spec.label);
       fs.writeFileSync(path.join(OUT_DIR, `${spec.label}.json`), JSON.stringify({ ...report, checks: results }, null, 1));
       return;
