@@ -55,6 +55,22 @@ export function applySixStatistics(form: RoiFeatureForm): RoiFeatureForm {
   };
 }
 
+/** プリセット「36 特徴」: 6 統計を、半径 0, 2, 3, 4, 5, 6 mm の LoG（0 はフィルタなし）で。 */
+export function applyScale36(form: RoiFeatureForm): RoiFeatureForm {
+  return {
+    ...applySixStatistics(form),
+    logOn: true,
+    logByRadius: true,
+    scalesText: DEFAULT_SCALES,
+    scaleNotation: "RADIUS_MM",
+  };
+}
+
+/** 「36 特徴」のプリセットがいま当たっているか（換算・名札などは見ない）。 */
+export const isScale36 = (form: RoiFeatureForm): boolean =>
+  isSixStatistics(form) && form.logOn && form.logByRadius && form.scaleNotation === "RADIUS_MM"
+  && form.scalesText === DEFAULT_SCALES;
+
 /** 「6 統計」のプリセットがいま当たっているか。 */
 export const isSixStatistics = (form: RoiFeatureForm): boolean =>
   ROI_FEATURE_FAMILIES.every((f) => !!form.families[f.key] === SIX_STATISTICS_FAMILIES.has(f.key));

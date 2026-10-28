@@ -195,7 +195,7 @@ async function main(): Promise<void> {
     console.log(`  進み具合の表示: ${JSON.stringify([...new Set(seen)])}`);
     if (seen.length > 0) check(seen.some((x) => /スケール \d \/ 3（r [023] mm）/.test(x)), "進み具合に「スケール i / 3（r mm）」が出る", seen);
     else console.log("  [未達] 進み具合は計算が速く、表示を捉えられなかった（合格には数えない）");
-    check((await page.getByTestId("roifeat-scale-tabs").locator("button").count()) === 3, "スケールのタブが 3 つ");
+    check((await page.getByTestId("roifeat-scale-tabs").locator('button:not([data-testid="roifeat-scale-tab-compare"])').count()) === 3, "スケールのタブが 3 つ（比較のタブを除く）");
     await page.waitForTimeout(500);
     await page.getByTestId("roifeat-scale-tabs").evaluate((el) => el.scrollIntoView({ block: "start" }));
     await page.waitForTimeout(300);
@@ -295,7 +295,7 @@ async function main(): Promise<void> {
     await page.getByTestId("roifeat-run").click();
     await page.getByTestId("roifeat-scale-tabs").locator("button").nth(2).waitFor({ state: "visible", timeout: 180_000 });
     await page.waitForTimeout(500);
-    const tabs = await page.getByTestId("roifeat-scale-tabs").locator("button").allInnerTexts();
+    const tabs = await page.getByTestId("roifeat-scale-tabs").locator('button:not([data-testid="roifeat-scale-tab-compare"])').allInnerTexts();
     check(tabs.join("|") === "幅 4（r 1.4）（名札 1.0）|幅 6（r 2.1）（名札 1.5）|幅 12（r 4.2）（名札 2.5）", "タブに幅・換算後の r・名札（0.7 mm × 幅 / 2）", tabs);
     const infoW = await page.getByTestId("roifeat-scale-info").innerText();
     check(/指定: 幅 4 画素 × 画素間隔 0\.7 mm \/ 2 = r 1\.4 mm/.test(infoW), "タブの説明に画素間隔と換算", infoW);
