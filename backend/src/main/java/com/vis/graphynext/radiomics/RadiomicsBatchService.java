@@ -49,21 +49,52 @@ public class RadiomicsBatchService {
      *  ENVIRONMENT＝IO・メモリ。 */
     public enum FailureKind { INPUT, ENGINE, ENVIRONMENT }
 
+    /** QC に当たった組をどうするか。{@code FLAG}＝記録して続ける、{@code STOP}＝その組の結果を残してジョブを止める。 */
+    public enum QcMode { FLAG, STOP }
+
+    /** QC の条件ごとの扱い。null は {@code FLAG}。 */
+    public record Qc(QcMode smallRoi, QcMode lossy) {}
+
+    /** 旗。{@code SMALL_ROI}＝強度マスクのボクセル数が環境設定の基準値より少ない（基準値が未設定なら立たない）。 */
+    public static final String FLAG_SMALL_ROI = "SMALL_ROI";
+    public static final String FLAG_LOSSY = "LOSSY_COMPRESSION";
+
+    /** 停止の種類。QC＝利用者の確認待ち、ENVIRONMENT＝IO・メモリの障害。 */
+    public enum StopKind { QC, ENVIRONMENT }
+
     /**
-     * @param pairs 利用者が確認した組。計算するのは {@code AUTO} と、元画像を選んだ {@code NEEDS_CONFIRMATION}
+     * @param pairs          利用者が確認した組。計算するのは {@code AUTO} と、元画像を選んだ {@code NEEDS_CONFIRMATION}
+     * @param qc             QC の扱い。null は両方とも記録だけ
+     * @param qcAcknowledged 許容した組のキー（{@link BatchPair#pairKey()}）。この組は QC で止めない
      */
     public record BatchRequest(List<BatchPair> pairs, Map<String, String> settings,
                                Set<RoiFeatureRequest.RoiMode> roiModes, List<Double> scales, String scaleNotation,
                                List<String> scaleLabels, String scaleConversion, Double scaleCoefficient,
-                               int channel, int timePoint, boolean recompute) {}
+                               int channel, int timePoint, boolean recompute, Qc qc, List<String> qcAcknowledged) {
+        /** QC を指定しない（従来の要求）。 */
+        public BatchRequest(List<BatchPair> pairs, Map<String, String> settings,
+                            Set<RoiFeatureRequest.RoiMode> roiModes, List<Double> scales, String scaleNotation,
+                            List<String> scaleLabels, String scaleConversion, Double scaleCoefficient,
+                            int channel, int timePoint, boolean recompute) {
+            this(pairs, settings, roiModes, scales, scaleNotation, scaleLabels, scaleConversion, scaleCoefficient,
+                    channel, timePoint, recompute, null, null);
+        }
+    }
 
     public record PlanRequest(Long albumId, List<String> studyUids) {}
 
+    /** @param qcFlags 計算した組の QC の旗（{@link #FLAG_SMALL_ROI}・{@link #FLAG_LOSSY}）。常に記録する */
     public record PairStatus(int index, BatchPair pair, PairState state, FailureKind failureKind, String error,
-                             boolean fromCache, long elapsedMs) {}
+                             boolean fromCache, long elapsedMs, List<String> qcFlags) {}
 
+    /**
+     * @param stopReason 止めた理由。QC なら旗の並び（{@code SMALL_ROI,LOSSY_COMPRESSION}）、環境障害ならそのメッセージ
+     * @param stopKind   止めた種類。止まっていなければ null
+     * @param stopIndex  止めた組の添字（{@code pairs} の中）。止まっていなければ null
+     */
     public record Status(String jobId, JobState state, long elapsedMs, int total, int done, int failed, int skipped,
-                         int notRun, int cancelled, String stopReason, List<PairStatus> pairs) {}
+                         int notRun, int cancelled, String stopReason, StopKind stopKind, Integer stopIndex,
+                         List<PairStatus> pairs) {}
 
     public record PairResult(int index, BatchPair pair, RoiFeatureResult result) {}
 
@@ -83,6 +114,8 @@ public class RadiomicsBatchService {
         volatile long startedAt;
         volatile long finishedAt;
         volatile String stopReason;
+        volatile StopKind stopKind;
+        volatile Integer stopIndex;
 
         Job(String id, List<BatchPair> pairs) {
             this.id = id;
@@ -90,7 +123,7 @@ public class RadiomicsBatchService {
             this.status = new PairStatus[pairs.size()];
             this.results = new RoiFeatureResult[pairs.size()];
             for (int i = 0; i < pairs.size(); i++) {
-                status[i] = new PairStatus(i, pairs.get(i), PairState.PENDING, null, null, false, 0);
+                status[i] = new PairStatus(i, pairs.get(i), PairState.PENDING, null, null, false, 0, List.of());
             }
         }
 
@@ -116,7 +149,7 @@ public class RadiomicsBatchService {
                 }
             }
             return new Status(id, state, elapsedMs(), status.length, done, failed, skipped, notRun, cancelled,
-                    stopReason, list);
+                    stopReason, stopKind, stopIndex, list);
         }
     }
 
@@ -235,7 +268,33 @@ public class RadiomicsBatchService {
     }
 
     private void set(Job job, int i, PairState state, FailureKind kind, String error, boolean fromCache, long ms) {
-        job.status[i] = new PairStatus(i, job.pairs.get(i), state, kind, error, fromCache, ms);
+        set(job, i, state, kind, error, fromCache, ms, List.of());
+    }
+
+    private void set(Job job, int i, PairState state, FailureKind kind, String error, boolean fromCache, long ms,
+                     List<String> qcFlags) {
+        job.status[i] = new PairStatus(i, job.pairs.get(i), state, kind, error, fromCache, ms, qcFlags);
+    }
+
+    /** 計算結果の QC の旗。基準値が未設定（{@code smallRoi} が null）なら小さい ROI は判定しない。 */
+    static List<String> qcFlagsOf(RoiFeatureResult r) {
+        List<String> flags = new ArrayList<>();
+        RoiFeatureResult.RoiSize size = r.roiSize();
+        if (size != null && Boolean.TRUE.equals(size.smallRoi())) {
+            flags.add(FLAG_SMALL_ROI);
+        }
+        if (r.lossyCompressed()) {
+            flags.add(FLAG_LOSSY);
+        }
+        return flags;
+    }
+
+    private static boolean stopsOn(Qc qc, List<String> flags) {
+        if (qc == null) {
+            return false;
+        }
+        return (qc.smallRoi() == QcMode.STOP && flags.contains(FLAG_SMALL_ROI))
+                || (qc.lossy() == QcMode.STOP && flags.contains(FLAG_LOSSY));
     }
 
     private void run(Job job, BatchRequest req) {
@@ -261,7 +320,15 @@ public class RadiomicsBatchService {
                 try {
                     RoiFeatureResult r = computer.compute(toRequest(req, p), () -> job.cancelled);
                     job.results[i] = r;
-                    set(job, i, PairState.DONE, null, null, r.fromCache(), System.currentTimeMillis() - t0);
+                    List<String> flags = qcFlagsOf(r);
+                    set(job, i, PairState.DONE, null, null, r.fromCache(), System.currentTimeMillis() - t0, flags);
+                    if (!flags.isEmpty() && stopsOn(req.qc(), flags)
+                            && !acknowledged(req).contains(p.pairKey())) {
+                        // 結果は残して止める。続けるときは、画面がこの組を許容して送り直す（計算済みの組はキャッシュに当たる）
+                        stop(job, i + 1, n, String.join(",", flags), StopKind.QC, i);
+                        log.info("[roi-batch] job {} stopped by QC at pair {}: {}", job.id, i, flags);
+                        return;
+                    }
                 } catch (CancellationException e) {
                     set(job, i, PairState.CANCELLED, null, null, false, System.currentTimeMillis() - t0);
                 } catch (IllegalArgumentException e) {
@@ -272,7 +339,7 @@ public class RadiomicsBatchService {
                     // 環境の障害。この組も残りも、失敗に書き換えずに止める
                     set(job, i, PairState.NOT_RUN, FailureKind.ENVIRONMENT, message(e), false,
                             System.currentTimeMillis() - t0);
-                    stop(job, i + 1, n, message(e));
+                    stop(job, i + 1, n, message(e), StopKind.ENVIRONMENT, i);
                     log.error("[roi-batch] job {} stopped at pair {}", job.id, i, e);
                     return;
                 } catch (RuntimeException e) {
@@ -287,11 +354,17 @@ public class RadiomicsBatchService {
         }
     }
 
-    private void stop(Job job, int from, int n, String reason) {
+    private static Set<String> acknowledged(BatchRequest req) {
+        return req.qcAcknowledged() == null ? Set.of() : Set.copyOf(req.qcAcknowledged());
+    }
+
+    private void stop(Job job, int from, int n, String reason, StopKind kind, int index) {
         for (int j = from; j < n; j++) {
             set(job, j, PairState.NOT_RUN, null, null, false, 0);
         }
         job.stopReason = reason;
+        job.stopKind = kind;
+        job.stopIndex = index;
         job.state = JobState.STOPPED;
     }
 

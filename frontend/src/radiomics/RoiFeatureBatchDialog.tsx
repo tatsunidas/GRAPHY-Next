@@ -19,6 +19,7 @@ import {
   type BatchStatus,
 } from "./batchApi";
 import {
+  applyLabelFilter,
   assignCaseLabels,
   batchFiles,
   buildBatchRequest,
@@ -30,9 +31,23 @@ import {
   selectedPairs,
   setIncluded,
   setSource,
+  smallRoiThresholdUnset,
   summarize,
   type PairRow,
 } from "./batchPairs";
+import {
+  SPEC_MAX_BYTES,
+  applySpecToForm,
+  batchSpecFileName,
+  buildSpec,
+  contentSha256,
+  parseLabelInput,
+  parseSpec,
+  specContentFrom,
+  specText,
+  type BatchSpec,
+  type SpecQcMode,
+} from "./batchSpec";
 import { BatchSettingsPanel } from "./BatchSettingsPanel";
 import { downloadText } from "./downloadText";
 import { defaultRoiFeatureForm, type RoiFeatureForm } from "./roiFeatureSettings";
@@ -85,8 +100,20 @@ export function RoiFeatureBatchDialog({
   const [trial, setTrial] = useState<BatchPairResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [written, setWritten] = useState<number | null>(null);
-  /** 実行中のジョブの、組ごとの症例ラベルと、試行かどうか。結果の `index` で引く。 */
-  const runRef = useRef<{ jobId: string; labels: string[]; keys: string[]; trial: boolean } | null>(null);
+  const [qc, setQc] = useState<{ smallRoi: SpecQcMode; lossy: SpecQcMode }>({ smallRoi: "FLAG", lossy: "FLAG" });
+  const [labelsText, setLabelsText] = useState("");
+  const [specSha, setSpecSha] = useState("");
+  /** QC で止まったあとに「許容して続ける」で許容した組のキー。設定を変えたら空に戻す。 */
+  const [acknowledged, setAcknowledged] = useState<string[]>([]);
+  const [info, setInfo] = useState<string | null>(null);
+  /** 送信中（押してから応答が来るまで）。この間に押し直すと同じ組が二重に投入される。 */
+  const [starting, setStarting] = useState(false);
+  const fileRef = useRef<HTMLInputElement | null>(null);
+  const labels = useMemo(() => parseLabelInput(labelsText), [labelsText]);
+  const labelsRef = useRef<string[]>([]);
+  labelsRef.current = labels;
+  /** 実行中のジョブの、組ごとの症例ラベルと、試行かどうか。結果の `index` で引く。`spec` は実行に使った定義。 */
+  const runRef = useRef<{ jobId: string; labels: string[]; keys: string[]; trial: boolean; spec: BatchSpec } | null>(null);
 
   const errText = (e: unknown): string =>
     e instanceof HttpError && e.status === 403
@@ -99,7 +126,7 @@ export function RoiFeatureBatchDialog({
     planBatch({ albumId, studyUids: null })
       .then((pairs) => {
         if (!alive) return;
-        setRows(initialRows(pairs));
+        setRows(applyLabelFilter(initialRows(pairs), labelsRef.current));
         const studyUids = Array.from(new Set(pairs.map((p) => p.studyUid)));
         void fetchStudies(albumFilters(studyUids))
           .then((list) => alive && setStudies(new Map(list.map((s) => [s.studyInstanceUid, s]))))
@@ -115,6 +142,25 @@ export function RoiFeatureBatchDialog({
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [albumId]);
+
+  // セグメント名の絞り込み
+  useEffect(() => {
+    setRows((prev) => (prev ? applyLabelFilter(prev, labels) : prev));
+  }, [labels]);
+
+  // 定義の SHA-256（設定の中身だけ。接頭辞は含めない）
+  useEffect(() => {
+    let alive = true;
+    void contentSha256(specContentFrom(form, qc, labels)).then((h) => alive && setSpecSha(h));
+    return () => {
+      alive = false;
+    };
+  }, [form, qc, labels]);
+
+  // 設定を変えたら、許容した組は無効にする（別の設定の結果で出た旗を引き継がない）
+  useEffect(() => {
+    setAcknowledged([]);
+  }, [form, qc]);
 
   // ジョブの問い合わせ。古いジョブの応答は jobId で捨てる。
   useEffect(() => {
@@ -146,13 +192,24 @@ export function RoiFeatureBatchDialog({
   const running = !!job && !BATCH_FINISHED.has(job.state);
   const dup = rows ? duplicateLabels(assignCaseLabels(rows)) : [];
 
-  const start = async (isTrial: boolean) => {
-    if (!rows) return;
+  const start = async (isTrial: boolean, ack: readonly string[] = acknowledged, from?: readonly PairRow[]) => {
+    const base = from ?? rows;
+    if (!base || starting) return;
+    setStarting(true);
+    try {
+      await startInner(isTrial, ack, base);
+    } finally {
+      setStarting(false);
+    }
+  };
+
+  const startInner = async (isTrial: boolean, ack: readonly string[], base: readonly PairRow[]) => {
     setError(null);
+    setInfo(null);
     setWritten(null);
     setResults(null);
     setTrial(null);
-    const labelled = assignCaseLabels(rows);
+    const labelled = assignCaseLabels(base);
     setRows(labelled);
     const dups = duplicateLabels(labelled);
     if (dups.length > 0) return setError(t("roiFeat.batch.err.duplicate", { labels: dups.join(", ") }));
@@ -160,9 +217,13 @@ export function RoiFeatureBatchDialog({
     if (isTrial) chosen = chosen.slice(0, 1);
     if (chosen.length === 0) return setError(t("roiFeat.batch.err.nothing"));
     try {
-      const st = await submitBatch(buildBatchRequest(chosen.map((c) => c.pair), form));
+      const spec = await buildSpec(specContentFrom(form, qc, labels), prefix);
+      const st = await submitBatch(buildBatchRequest(chosen.map((c) => c.pair), form, {
+        qc: isTrial ? null : qc, acknowledged: ack,
+      }));
       runRef.current = {
-        jobId: st.jobId, labels: chosen.map((c) => c.caseLabel), keys: chosen.map((c) => pairKey(c.pair)), trial: isTrial,
+        jobId: st.jobId, labels: chosen.map((c) => c.caseLabel), keys: chosen.map((c) => pairKey(c.pair)),
+        trial: isTrial, spec,
       };
       setJob(st);
     } catch (e) {
@@ -179,7 +240,7 @@ export function RoiFeatureBatchDialog({
     if (!job || !results || !run) return;
     const items = results.map((r) => ({ caseLabel: run.labels[r.index] ?? "", result: r.result }));
     const all = job.pairs.map((p) => ({ caseLabel: run.labels[p.index] ?? "", status: p }));
-    const out = batchFiles(prefix, items, all);
+    const out = batchFiles(prefix, items, all, { sha256: run.spec.sha256, text: specText({ ...run.spec, output: { prefix } }) });
     if (!out.ok) {
       return setError(
         out.reason === "header mismatch"
@@ -188,11 +249,58 @@ export function RoiFeatureBatchDialog({
       );
     }
     setError(null);
-    for (const f of [out.files.features, out.files.definitions, out.files.settings, out.files.pairs]) {
-      downloadText(f.text, f.name, f.name.endsWith(".properties") ? "text/plain;charset=utf-8" : "text/csv;charset=utf-8");
+    const files = [out.files.features, out.files.definitions, out.files.settings, out.files.pairs, ...(out.files.spec ? [out.files.spec] : [])];
+    for (const f of files) {
+      downloadText(f.text, f.name, f.name.endsWith(".properties") ? "text/plain;charset=utf-8"
+        : f.name.endsWith(".json") ? "application/json;charset=utf-8" : "text/csv;charset=utf-8");
     }
-    setWritten(4);
+    setWritten(files.length);
   };
+
+  const saveSpec = async () => {
+    const spec = await buildSpec(specContentFrom(form, qc, labels), prefix);
+    downloadText(specText(spec), batchSpecFileName(prefix), "application/json;charset=utf-8");
+    setInfo(t("roiFeat.batch.spec.saved", { sha: spec.sha256.slice(0, 8) }));
+  };
+
+  const loadSpec = async (f: File) => {
+    setError(null);
+    setInfo(null);
+    if (f.size > SPEC_MAX_BYTES) return setError(t("roiFeat.batch.spec.err.too_large"));
+    const r = await parseSpec(await f.text());
+    if (!r.ok) return setError(t(`roiFeat.batch.spec.err.${r.error}`, { detail: r.detail }));
+    setForm((cur) => applySpecToForm(cur, r.spec));
+    setQc(r.spec.qc);
+    setLabelsText(r.spec.selection.segmentLabels.join(", "));
+    setPrefix(r.spec.output.prefix);
+    setInfo(t("roiFeat.batch.spec.loaded", { sha: r.spec.sha256.slice(0, 8) })
+      + (r.ignoredFamilies > 0 ? ` ${t("roiFeat.batch.spec.ignored", { n: r.ignoredFamilies })}` : ""));
+  };
+
+  /** QC で止まった組（全件実行のとき）。 */
+  const qcHold = (() => {
+    const run = runRef.current;
+    if (!job || !run || run.trial || job.state !== "STOPPED" || job.stopKind !== "QC" || job.stopIndex == null) return null;
+    const key = run.keys[job.stopIndex];
+    const res = results?.find((x) => x.index === job.stopIndex)?.result;
+    return { key, label: run.labels[job.stopIndex] ?? "", flags: (job.stopReason ?? "").split(",").filter(Boolean), size: res?.roiSize };
+  })();
+
+  const continueAcknowledging = () => {
+    if (!qcHold) return;
+    const ack = Array.from(new Set([...acknowledged, qcHold.key]));
+    setAcknowledged(ack);
+    void start(false, ack);
+  };
+
+  const continueExcluding = () => {
+    if (!rows || !qcHold) return;
+    const idx = rows.findIndex((r) => pairKey(r.pair) === qcHold.key);
+    if (idx < 0) return;
+    void start(false, acknowledged, setIncluded(rows, idx, false));
+  };
+
+  const unsetThreshold = smallRoiThresholdUnset(trial ? [trial.result] : (results ?? []).map((r) => r.result));
 
   const close = () => {
     if (running && job) void cancelBatch(job.jobId).catch(() => undefined);
@@ -233,6 +341,20 @@ export function RoiFeatureBatchDialog({
         <div style={body}>
           <div style={note}>{t("roiFeat.researchOnly")}</div>
           <div style={note}>{t("roiFeat.batch.privacy")}</div>
+          <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 8 }}>
+            <button type="button" style={btn} data-testid="batch-spec-save" disabled={running} onClick={() => void saveSpec()}>
+              {t("roiFeat.batch.spec.save")}
+            </button>
+            <button type="button" style={btn} data-testid="batch-spec-load" disabled={running} onClick={() => fileRef.current?.click()}>
+              {t("roiFeat.batch.spec.load")}
+            </button>
+            <input ref={fileRef} data-testid="batch-spec-file" type="file" accept=".json,application/json" style={{ display: "none" }}
+              onChange={(e) => { const f = e.target.files?.[0]; if (f) void loadSpec(f); e.target.value = ""; }} />
+            <span style={note} data-testid="batch-spec-sha" title={specSha}>
+              {t("roiFeat.batch.spec.sha")}: {specSha ? `${specSha.slice(0, 8)}…${specSha.slice(-4)}` : "…"}
+            </span>
+          </div>
+          {info && <div style={{ ...note, color: "#2f6b2f" }} data-testid="batch-info">{info}</div>}
 
           {!rows && !error && <div data-testid="batch-planning">{t("roiFeat.batch.planning")}</div>}
           {error && <div style={errStyle} data-testid="batch-error">{error}</div>}
@@ -283,6 +405,12 @@ export function RoiFeatureBatchDialog({
                           </td>
                           <td style={td} data-testid={`batch-state-${i}`}>
                             {ps ? `${t(`roiFeat.batch.pairState.${ps.state}`)}${ps.fromCache ? t("roiFeat.batch.cache") : ""}${ps.error ? `: ${ps.error}` : ""}` : stateText(r)}
+                            {ps && ps.qcFlags.length > 0 && (
+                              <span style={flagStyle} data-testid={`batch-flags-${i}`}>
+                                {" "}⚑ {ps.qcFlags.map((f) => t(`roiFeat.batch.qcflag.${f}`)).join("・")}
+                              </span>
+                            )}
+                            {!ps && r.filteredOut && <span style={flagStyle}> — {t("roiFeat.batch.filteredOut")}</span>}
                           </td>
                           <td style={td}>
                             {r.included && runnable(r) && (
@@ -304,7 +432,8 @@ export function RoiFeatureBatchDialog({
               </div>
 
               <div style={section}>{t("roiFeat.batch.step2")}</div>
-              <BatchSettingsPanel form={form} setForm={setForm} disabled={running} />
+              <BatchSettingsPanel form={form} setForm={setForm} disabled={running} qc={qc} setQc={setQc}
+                labelsText={labelsText} setLabelsText={setLabelsText} />
               <div style={note}>{t("roiFeat.batch.scope")}</div>
 
               <div style={section}>{t("roiFeat.batch.step3")}</div>
@@ -325,7 +454,26 @@ export function RoiFeatureBatchDialog({
                 })}
               </div>
               <div style={track}><div style={{ ...bar, width: `${job.total ? Math.round(((job.done + job.failed + job.skipped) / job.total) * 100) : 0}%` }} /></div>
-              {job.state === "STOPPED" && <div style={errStyle}>{t("roiFeat.batch.stopped", { reason: job.stopReason ?? "" })}</div>}
+              {job.state === "STOPPED" && job.stopKind !== "QC" && (
+                <div style={errStyle}>{t("roiFeat.batch.stopped", { reason: job.stopReason ?? "" })}</div>
+              )}
+              {qcHold && (
+                <div style={qcBox} data-testid="batch-qc-hold">
+                  <div>
+                    {t("roiFeat.batch.qc.held", { label: qcHold.label, flags: qcHold.flags.map((f) => t(`roiFeat.batch.qcflag.${f}`)).join("・") })}
+                    {qcHold.flags.includes("SMALL_ROI") && qcHold.size?.intensityVoxels != null && qcHold.size.smallRoiWarnVoxels != null
+                      && ` ${t("roiFeat.batch.qc.heldSize", { n: qcHold.size.intensityVoxels, threshold: qcHold.size.smallRoiWarnVoxels })}`}
+                  </div>
+                  <div style={{ display: "flex", gap: 8, marginTop: 6 }}>
+                    <button type="button" style={btnPrimary} data-testid="batch-qc-continue" disabled={starting} onClick={continueAcknowledging}>
+                      {t("roiFeat.batch.qc.continue")}
+                    </button>
+                    <button type="button" style={btn} data-testid="batch-qc-exclude" disabled={starting} onClick={continueExcluding}>
+                      {t("roiFeat.batch.qc.exclude")}
+                    </button>
+                  </div>
+                </div>
+              )}
               {job.state === "CANCELLED" && <div style={note}>{t("roiFeat.batch.cancelledNote")}</div>}
             </div>
           )}
@@ -334,12 +482,15 @@ export function RoiFeatureBatchDialog({
               {t("roiFeat.batch.trialResult", { n: trial.result.rows.length, ms: job?.pairs[0]?.elapsedMs ?? 0 })}
             </div>
           )}
+          {unsetThreshold && (qc.smallRoi === "STOP" || results || trial) && (
+            <div style={{ ...note, color: "#7a4b00" }} data-testid="batch-unset-threshold">{t("roiFeat.batch.qc.unset")}</div>
+          )}
           {written != null && <div style={{ ...note, color: "#2f6b2f" }} data-testid="batch-written">{t("roiFeat.batch.written", { n: written })}</div>}
         </div>
         <div style={footer}>
-          <button type="button" style={btn} data-testid="batch-trial" disabled={running || !summary || summary.selected === 0}
+          <button type="button" style={btn} data-testid="batch-trial" disabled={running || starting || !summary || summary.selected === 0}
             onClick={() => void start(true)}>{t("roiFeat.batch.trial")}</button>
-          <button type="button" style={btnPrimary} data-testid="batch-run" disabled={running || !summary || summary.selected === 0}
+          <button type="button" style={btnPrimary} data-testid="batch-run" disabled={running || starting || !summary || summary.selected === 0}
             onClick={() => void start(false)}>{t("roiFeat.batch.run")}</button>
           {running && <button type="button" style={btn} data-testid="batch-cancel" onClick={cancel}>{t("roiFeat.batch.cancel")}</button>}
           <button type="button" style={btn} data-testid="batch-write"
@@ -364,6 +515,8 @@ const th: React.CSSProperties = { textAlign: "left", padding: "4px 6px", borderB
 const td: React.CSSProperties = { padding: "3px 6px", verticalAlign: "top" };
 const input: React.CSSProperties = { boxSizing: "border-box", border: "1px solid #cdd5de", borderRadius: 4, fontSize: 12, padding: "3px 6px" };
 const btn: React.CSSProperties = { border: "1px solid #cdd5de", borderRadius: 6, background: "#fff", cursor: "pointer", fontSize: 12, padding: "5px 12px" };
+const flagStyle: React.CSSProperties = { color: "#7a4b00" };
+const qcBox: React.CSSProperties = { marginTop: 8, padding: "8px 10px", background: "#fff4d6", border: "1px solid #f0c36d", borderRadius: 4 };
 const btnPrimary: React.CSSProperties = { ...btn, background: "#0b5cad", border: "1px solid #0b5cad", color: "#fff" };
 const track: React.CSSProperties = { height: 6, marginTop: 6, borderRadius: 3, background: "#e1e7ee", overflow: "hidden" };
 const bar: React.CSSProperties = { height: "100%", background: "#0b5cad", transition: "width 0.3s" };

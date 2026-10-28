@@ -336,6 +336,154 @@ class RadiomicsBatchServiceTest {
         assertTrue(anyDiffers);
     }
 
+
+    // ---- QC ----
+
+    private static RoiFeatureResult stubQc(boolean smallRoi, boolean lossy) {
+        RoiFeatureResult.RoiSize size = new RoiFeatureResult.RoiSize(100L, 100L, 100L, 50.0, 1000, smallRoi);
+        return new RoiFeatureResult("rj", java.time.Instant.EPOCH, false, 1, List.of(), null, null, null, size, lossy);
+    }
+
+    private static RadiomicsBatchService.BatchRequest requestQc(List<BatchPair> pairs,
+            RadiomicsBatchService.Qc qc, List<String> acknowledged) {
+        return new RadiomicsBatchService.BatchRequest(pairs, new HashMap<>(), null, null, null, null, null, null, 0,
+                0, false, qc, acknowledged);
+    }
+
+    private static final RadiomicsBatchService.Qc STOP_SMALL =
+            new RadiomicsBatchService.Qc(RadiomicsBatchService.QcMode.STOP, RadiomicsBatchService.QcMode.FLAG);
+
+    @Test
+    void qcFlagsAreAlwaysRecorded_andFlagModeNeverStops() throws Exception {
+        RadiomicsBatchService svc = service((req, c) -> stubQc(req.sourceSeriesUid().equals("src1"), false));
+        Status s = await(svc, svc.submit(request(List.of(auto(0), auto(1), auto(2)))));
+        assertEquals(JobState.DONE, s.state());
+        assertEquals(3, s.done());
+        assertEquals(List.of(), s.pairs().get(0).qcFlags());
+        assertEquals(List.of(RadiomicsBatchService.FLAG_SMALL_ROI), s.pairs().get(1).qcFlags());
+        assertEquals(null, s.stopKind());
+    }
+
+    @Test
+    void stopModeKeepsTheFlaggedResult_andStopsTheRest() throws Exception {
+        AtomicInteger computed = new AtomicInteger();
+        RadiomicsBatchService svc = service((req, c) -> {
+            computed.incrementAndGet();
+            return stubQc(req.sourceSeriesUid().equals("src2"), false);
+        });
+        Status s = await(svc, svc.submit(requestQc(List.of(auto(0), auto(1), auto(2), auto(3), auto(4)),
+                STOP_SMALL, null)));
+
+        assertEquals(JobState.STOPPED, s.state());
+        assertEquals(RadiomicsBatchService.StopKind.QC, s.stopKind());
+        assertEquals(2, s.stopIndex());
+        assertEquals(RadiomicsBatchService.FLAG_SMALL_ROI, s.stopReason());
+        assertEquals(3, s.done(), "止めた組の結果は残る");
+        assertEquals(PairState.DONE, s.pairs().get(2).state());
+        assertEquals(2, s.notRun(), "残りは未実行");
+        assertEquals(0, s.failed());
+        assertEquals(3, computed.get(), "止めた後は計算しない");
+        assertEquals(3, svc.results(s.jobId()).size());
+    }
+
+    @Test
+    void anAcknowledgedPairDoesNotStop() throws Exception {
+        RadiomicsBatchService svc = service((req, c) -> stubQc(req.sourceSeriesUid().equals("src2"), false));
+        List<BatchPair> pairs = List.of(auto(0), auto(1), auto(2), auto(3));
+        Status s = await(svc, svc.submit(requestQc(pairs, STOP_SMALL, List.of(pairs.get(2).pairKey()))));
+        assertEquals(JobState.DONE, s.state());
+        assertEquals(4, s.done());
+        assertEquals(List.of(RadiomicsBatchService.FLAG_SMALL_ROI), s.pairs().get(2).qcFlags());
+    }
+
+    @Test
+    void lossyCompressionStopsOnlyWhenAskedTo() throws Exception {
+        RadiomicsBatchService svc = service((req, c) -> stubQc(false, req.sourceSeriesUid().equals("src1")));
+        Status flagOnly = await(svc, svc.submit(requestQc(List.of(auto(0), auto(1), auto(2)), STOP_SMALL, null)));
+        assertEquals(JobState.DONE, flagOnly.state(), "非可逆圧縮は STOP を頼んでいなければ止めない");
+        assertEquals(List.of(RadiomicsBatchService.FLAG_LOSSY), flagOnly.pairs().get(1).qcFlags());
+
+        RadiomicsBatchService.Qc stopLossy =
+                new RadiomicsBatchService.Qc(RadiomicsBatchService.QcMode.FLAG, RadiomicsBatchService.QcMode.STOP);
+        Status stopped = await(svc, svc.submit(requestQc(List.of(auto(0), auto(1), auto(2)), stopLossy, null)));
+        assertEquals(JobState.STOPPED, stopped.state());
+        assertEquals(1, stopped.stopIndex());
+        assertEquals(RadiomicsBatchService.FLAG_LOSSY, stopped.stopReason());
+    }
+
+    @Test
+    void environmentStopIsMarkedAsEnvironment() throws Exception {
+        RadiomicsBatchService svc = service((req, c) -> {
+            if (req.sourceSeriesUid().equals("src1")) throw new IOException("disk full");
+            return stub(false);
+        });
+        Status s = await(svc, svc.submit(request(List.of(auto(0), auto(1), auto(2)))));
+        assertEquals(RadiomicsBatchService.StopKind.ENVIRONMENT, s.stopKind());
+        assertEquals(1, s.stopIndex());
+    }
+
+    @Test
+    void theJsonContractKeepsOldRequestsWorking_andParsesQc() throws Exception {
+        String pair = "{\"studyUid\":\"1.2\",\"sourceSeriesUid\":\"S\",\"maskSeriesUid\":\"M\",\"segmentNumber\":1,"
+                + "\"segmentLabel\":\"GTV\",\"maskChannel\":0,\"status\":\"AUTO\",\"reason\":null,\"sourceCandidates\":[\"S\"]}";
+        String old = "{\"pairs\":[" + pair + "],\"settings\":{},\"roiModes\":[\"WHOLE_3D\"],\"channel\":0,\"timePoint\":0,\"recompute\":false}";
+        RadiomicsBatchService.BatchRequest a = JSON.readValue(old, RadiomicsBatchService.BatchRequest.class);
+        assertEquals(null, a.qc());
+        assertEquals(null, a.qcAcknowledged());
+
+        String withQc = old.substring(0, old.length() - 1)
+                + ",\"qc\":{\"smallRoi\":\"STOP\",\"lossy\":\"FLAG\"},\"qcAcknowledged\":[\"1.2|M|0\"]}";
+        RadiomicsBatchService.BatchRequest b = JSON.readValue(withQc, RadiomicsBatchService.BatchRequest.class);
+        assertEquals(RadiomicsBatchService.QcMode.STOP, b.qc().smallRoi());
+        assertEquals(List.of("1.2|M|0"), b.qcAcknowledged());
+        assertEquals("1.2|M|0", b.pairs().get(0).pairKey(), "画面の pairKey と同じ並び");
+        assertFalse(JSON.writeValueAsString(b.pairs().get(0)).contains("pairKey"), "キーは JSON に出さない");
+    }
+
+    @Test
+    void stopThenAcknowledgeThenResumeUsesTheCache_withTheRealComputeAndAThreshold(@TempDir Path dir) throws Exception {
+        // 基準値を 100000 ボクセルにして、324 ボクセルの合成 ROI を「小さい」ことにする（環境設定の代わり）
+        MockEnvironment env = new MockEnvironment();
+        env.setActiveProfiles("standalone");
+        RoiFeatureService features = new RoiFeatureService(new PairEngine(),
+                new MapCheckpointStore(new CacheStore(dir, 0), "v"), new RadiomicsMode(env), JSON,
+                (rj, img, m, label) -> {
+                    extractions.incrementAndGet();
+                    return rj.extractAll(img, m, label);
+                }, "9.9.9-test", () -> "100000");
+        RadiomicsBatchService svc = new RadiomicsBatchService(
+                (req, c) -> features.compute(req, p -> { }, (d, t) -> { }, c), features::check, null, null);
+        List<BatchPair> pairs = List.of(auto(0), auto(1), auto(2));
+
+        Status s1 = await(svc, svc.submit(requestQc(pairs, STOP_SMALL, null)));
+        assertEquals(JobState.STOPPED, s1.state());
+        assertEquals(0, s1.stopIndex());
+        assertEquals(1, extractions.get());
+        assertTrue(svc.results(s1.jobId()).get(0).result().roiSize().smallRoi(), "実物の結果で小さい ROI と判定される");
+
+        Status s2 = await(svc, svc.submit(requestQc(pairs, STOP_SMALL, List.of(pairs.get(0).pairKey()))));
+        assertEquals(1, s2.stopIndex(), "0 は許容したので、次の組で止まる");
+        assertEquals(2, extractions.get(), "0 はキャッシュに当たり、計算し直さない");
+        assertTrue(s2.pairs().get(0).fromCache());
+
+        Status s3 = await(svc, svc.submit(requestQc(pairs, STOP_SMALL,
+                List.of(pairs.get(0).pairKey(), pairs.get(1).pairKey(), pairs.get(2).pairKey()))));
+        assertEquals(JobState.DONE, s3.state());
+        assertEquals(3, s3.done());
+        assertEquals(3, extractions.get(), "全部で 3 回だけ計算した");
+    }
+
+    @Test
+    void anUnsetThresholdIsNotJudged_soStopModeDoesNotStop(@TempDir Path dir) throws Exception {
+        RoiFeatureService features = realFeatures(dir); // 基準値は null（未設定）
+        RadiomicsBatchService svc = new RadiomicsBatchService(
+                (req, c) -> features.compute(req, p -> { }, (d, t) -> { }, c), features::check, null, null);
+        Status s = await(svc, svc.submit(requestQc(List.of(auto(0), auto(1)), STOP_SMALL, null)));
+        assertEquals(JobState.DONE, s.state(), "基準値が未設定なら小さい ROI は判定しない");
+        assertEquals(List.of(), s.pairs().get(0).qcFlags());
+        assertEquals(null, svc.results(s.jobId()).get(0).result().roiSize().smallRoi());
+    }
+
     /**
      * 実測用（通常は走らせない）: {@code -Dbatch.measure=true} のときだけ、64×64×32 の合成 20 組を実際に計算して
      * 1 組あたりの時間とキャッシュの大きさを標準出力に出す。

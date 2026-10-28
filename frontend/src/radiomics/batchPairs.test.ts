@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import type { RoiFeatureResult, RoiFeatureRow } from "../api";
 import type { BatchPair, BatchPairStatusRow } from "./batchApi";
 import {
+  applyLabelFilter,
   assignCaseLabels,
   batchFileBase,
   batchFiles,
@@ -16,6 +17,7 @@ import {
   selectedPairs,
   setIncluded,
   setSource,
+  smallRoiThresholdUnset,
   stackedDataCsv,
   summarize,
 } from "./batchPairs";
@@ -175,7 +177,7 @@ describe("stackedDataCsv", () => {
 
 describe("pairsCsv / batchFiles", () => {
   const status = (p: BatchPair, over: Partial<BatchPairStatusRow> = {}): BatchPairStatusRow => ({
-    index: 0, pair: p, state: "DONE", failureKind: null, error: null, fromCache: false, elapsedMs: 5, ...over,
+    index: 0, pair: p, state: "DONE", failureKind: null, error: null, fromCache: false, elapsedMs: 5, qcFlags: [], ...over,
   });
 
   it("carries UIDs and labels but never a patient name or ID", () => {
@@ -215,5 +217,101 @@ describe("pairsCsv / batchFiles", () => {
 
   it("falls back to a default prefix", () => {
     expect(batchFileBase("  ")).toBe("roi-features-batch");
+  });
+});
+
+describe("applyLabelFilter", () => {
+  const rows = () => initialRows([
+    pair({ segmentLabel: "GTV" }), pair({ studyUid: "b", segmentLabel: "Tumor " }), pair({ studyUid: "c", segmentLabel: "liver" }),
+    pair({ studyUid: "d", segmentLabel: null }), needs({ segmentLabel: "GTV" }), excluded({ segmentLabel: "GTV" }),
+  ]);
+
+  it("empty filter changes nothing", () => {
+    expect(applyLabelFilter(rows(), [])).toEqual(rows());
+  });
+
+  it("keeps matching pairs (case- and space-insensitive) and turns the others off without removing them", () => {
+    const out = applyLabelFilter(rows(), [" gtv", "TUMOR"]);
+    expect(out.length).toBe(6);
+    expect(out.map((r) => r.included)).toEqual([true, true, false, false, false, false]);
+    expect(out.map((r) => r.filteredOut)).toEqual([false, false, true, true, false, false]);
+  });
+
+  it("a pair without a label never matches an active filter", () => {
+    expect(applyLabelFilter(rows(), ["GTV"])[3].included).toBe(false);
+  });
+
+  it("removing the filter restores the pairs it turned off, but never touches a pair the filter did not turn off", () => {
+    let r = rows();
+    r = setIncluded(r, 0, false); // 利用者が手で外した（GTV＝絞り込みに合う組）
+    r = applyLabelFilter(r, ["GTV"]);
+    expect(r[0].included).toBe(false); // 絞り込みに合うので触らない
+    expect(r[2].included).toBe(false); // liver は絞り込みが外した
+    r = applyLabelFilter(r, []);
+    expect(r[0].included).toBe(false); // 手で外した組は、絞り込みを外しても戻らない
+    expect(r[2].included).toBe(true); // 絞り込みが外した組は戻る
+    expect(r.map((x) => x.filteredOut)).toEqual([false, false, false, false, false, false]);
+    expect(r[4].included).toBe(false); // 要確認は元画像を選ぶまで入らない
+    expect(r[5].included).toBe(false); // 除外は戻らない
+  });
+
+  it("a manually included filtered-out pair stays included while the filter is unchanged", () => {
+    let r = applyLabelFilter(rows(), ["GTV"]);
+    r = setIncluded(r, 2, true);
+    expect(r[2].included).toBe(true);
+    expect(r[2].filteredOut).toBe(true);
+  });
+});
+
+describe("QC in the request and the pair map", () => {
+  it("carries qc and the acknowledged keys; defaults to none", () => {
+    const form = defaultRoiFeatureForm();
+    const a = buildBatchRequest([pair()], form);
+    expect(a.qc).toBeNull();
+    expect(a.qcAcknowledged).toBeNull();
+    const b = buildBatchRequest([pair()], form, {
+      qc: { smallRoi: "STOP", lossy: "FLAG" }, acknowledged: ["1.2.3|SEG|0"],
+    });
+    expect(b.qc).toEqual({ smallRoi: "STOP", lossy: "FLAG" });
+    expect(b.qcAcknowledged).toEqual(["1.2.3|SEG|0"]);
+  });
+
+  it("writes QcFlags and the spec hash on every row of the pair map", () => {
+    const st = (over: Partial<BatchPairStatusRow>): BatchPairStatusRow => ({
+      index: 0, pair: pair(), state: "DONE", failureKind: null, error: null, fromCache: false, elapsedMs: 1, qcFlags: [], ...over,
+    });
+    const csv = pairsCsv([
+      { caseLabel: "C001", status: st({}) },
+      { caseLabel: "C002", status: st({ qcFlags: ["SMALL_ROI", "LOSSY_COMPRESSION"] }) },
+    ], "ab".repeat(32));
+    const lines = csv.trim().split("\r\n");
+    expect(lines[0].endsWith("QcFlags,SpecSha256")).toBe(true);
+    expect(lines[1].endsWith(`,,${"ab".repeat(32)}`)).toBe(true);
+    expect(lines[2]).toContain("SMALL_ROI;LOSSY_COMPRESSION");
+  });
+
+  it("adds a spec file only when a spec is given", () => {
+    const r = result([1, 2]);
+    const items = [{ caseLabel: "C001", result: r }];
+    const all = [{ caseLabel: "C001", status: { index: 0, pair: pair(), state: "DONE" as const, failureKind: null, error: null, fromCache: false, elapsedMs: 1, qcFlags: [] } }];
+    const none = batchFiles("x", items, all);
+    const withSpec = batchFiles("x", items, all, { sha256: "ff", text: "{}" });
+    expect(none.ok && none.files.spec).toBeNull();
+    expect(withSpec.ok && withSpec.files.spec?.name).toBe("x_spec.json");
+  });
+});
+
+describe("smallRoiThresholdUnset", () => {
+  const withThreshold = (n: number | null): RoiFeatureResult => {
+    const r = result([1, 2]);
+    return { ...r, roiSize: { ...r.roiSize, smallRoiWarnVoxels: n, smallRoi: n == null ? null : false } };
+  };
+  it("is true only when no result carries a threshold (not judged, which is not the same as no warning)", () => {
+    expect(smallRoiThresholdUnset([withThreshold(null), withThreshold(null)])).toBe(true);
+    expect(smallRoiThresholdUnset([withThreshold(null), withThreshold(1000)])).toBe(false);
+    expect(smallRoiThresholdUnset([withThreshold(1000)])).toBe(false);
+  });
+  it("is false when there are no results yet", () => {
+    expect(smallRoiThresholdUnset([])).toBe(false);
   });
 });
