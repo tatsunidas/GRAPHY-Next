@@ -11,7 +11,9 @@ export interface StoredEvalRun {
   modelVersion: string | null;
   total: number;
   passed: number;
-  cases: { id: string; pass: boolean }[];
+  /** 全質問の応答時間の合計（ms）。1 問でも欠けた・古い行は null＝未取得。 */
+  totalLatencyMs?: number | null;
+  cases: { id: string; pass: boolean; latencyMs?: number }[];
 }
 
 export interface RunComparison {

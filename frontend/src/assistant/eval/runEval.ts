@@ -27,6 +27,8 @@ export interface CaseResult {
   got: string[];
   reason?: string;
   error?: string;
+  /** 質問 1 問の壁時間（ツール往復を含む、ms）。チャットが失敗した質問は入れない。 */
+  latencyMs?: number;
 }
 
 export interface EvalRun {
@@ -57,6 +59,7 @@ export async function runEval(d: EvalDeps): Promise<EvalRun> {
     const c = d.cases[i];
     const sessionId = `eval-${runId}-${i}`;
     const calls: GotCall[] = [];
+    const t0 = performance.now();
     let chatError: string | undefined;
     const viewer = async (cmd: { kind: string; id?: string; params?: unknown }): Promise<ActionResult> => {
       if (cmd.kind === "getState") return { ok: true, state: SYNTHETIC_STATE };
@@ -94,9 +97,10 @@ export async function runEval(d: EvalDeps): Promise<EvalRun> {
         aborted: () => d.aborted?.() === true,
       },
     );
+    const latencyMs = Math.round(performance.now() - t0);
     if (!res.ok) chatError = res.error;
     const score = scoreCase(c, calls);
-    results.push(chatError ? { id: c.id, pass: false, got: score.got, error: chatError } : { id: c.id, pass: score.pass, got: score.got, ...(score.reason ? { reason: score.reason } : {}) });
+    results.push(chatError ? { id: c.id, pass: false, got: score.got, error: chatError } : { id: c.id, pass: score.pass, got: score.got, latencyMs, ...(score.reason ? { reason: score.reason } : {}) });
     d.onProgress?.(i + 1, d.cases.length);
   }
   return { total: results.length, passed: results.filter((r) => r.pass).length, cases: results, meta };

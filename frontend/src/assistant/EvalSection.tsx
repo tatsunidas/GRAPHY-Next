@@ -8,7 +8,7 @@ import { useCallback, useEffect, useState, type CSSProperties } from "react";
 import { compareRuns, type StoredEvalRun } from "./eval/compareRuns";
 import { EVAL_CASES, EVAL_SUITE_VERSION } from "./eval/cases";
 import type { EvalRun } from "./eval/runEval";
-import { shortText } from "./requestLogView";
+import { secondsText, shortText } from "./requestLogView";
 
 type T = (k: string, v?: Record<string, string | number>) => string;
 
@@ -99,6 +99,9 @@ export function EvalSection({ api, busy, t, onRan }: { api: EvalApi; busy: boole
             <span style={S.dim}>
               {latest.modelVersion ?? latest.modelId ?? t("assistant.requestlog.unknown")} · {latest.ts.replace("T", " ").slice(0, 19)}
             </span>
+          </div>
+          <div style={S.dim} data-testid="assistant-eval-total-latency">
+            {t("assistant.eval.totalLatency", { v: typeof latest.totalLatencyMs === "number" ? secondsText(latest.totalLatencyMs) : t("assistant.requestlog.notObtained") })}
           </div>
           {last && failed.length > 0 && (
             <div data-testid="assistant-eval-failed">

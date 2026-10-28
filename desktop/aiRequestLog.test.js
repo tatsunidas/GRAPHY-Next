@@ -123,7 +123,7 @@ const EVAL = { suiteVersion: 1, meta: { provider: "cloud", modelId: "m", modelVe
 
 test("buildEvalRecord: 正例 — 件数と一致数は main が数え直す（レンダラの申告を使わない）", () => {
   const r = buildEvalRecord({ ...EVAL, total: 99, passed: 99 });
-  assert.deepEqual(r, { suiteVersion: 1, provider: "cloud", modelId: "m", modelVersion: "m-2026", total: 2, passed: 1, cases: EVAL.cases });
+  assert.deepEqual(r, { suiteVersion: 1, provider: "cloud", modelId: "m", modelVersion: "m-2026", total: 2, passed: 1, totalLatencyMs: null, cases: EVAL.cases });
 });
 
 test("buildEvalRecord: 負例 — 不正な id・型・空・巨大・版なし・余計な項目（質問本文など）は保存しない／出さない", () => {
@@ -161,4 +161,34 @@ test("createEvalStore: 上限で 1 世代ローテート", () => {
   for (let i = 0; i < 8; i++) s.append(EVAL);
   assert.ok(fs.existsSync(`${file}.1`));
   assert.ok(s.list(50).runs.length >= 2);
+});
+
+test("summary: モデル別の応答時間 — 手計算の分位数（最近順位法）。失敗行・不明は除く／0 件は null", () => {
+  const file = tmp();
+  const log = createRequestLog({ file });
+  // 10 件: 100..1000 ms。p50 = ⌈5⌉ 番目 = 500、p95 = ⌈9.5⌉=10 番目 = 1000
+  for (let i = 1; i <= 10; i++) log.append({ ...FULL, latencyMs: i * 100 });
+  log.append({ ...FULL, latencyMs: 99999, outcome: "timeout" }); // 失敗は入らない
+  log.append({ ...FULL, latencyMs: undefined }); // 不明は入らない
+  // 別モデル: 奇数 3 件（p50 = ⌈1.5⌉=2 番目、p95 = ⌈2.85⌉=3 番目）と、成功 0 件のモデル
+  for (const ms of [30, 10, 20]) log.append({ ...FULL, modelVersion: "odd", latencyMs: ms });
+  log.append({ ...FULL, modelVersion: "none", outcome: "timeout", latencyMs: 5 });
+  const by = (m) => log.summary().byModel.find((x) => x.model === m);
+  assert.deepEqual(by("m-2026").latency, { n: 10, p50: 500, p95: 1000 });
+  assert.deepEqual(by("odd").latency, { n: 3, p50: 20, p95: 30 });
+  assert.equal(by("none").latency, null, "件数 0 は 0 でなく null");
+  assert.equal("latencies" in by("odd"), false, "内部の配列は出さない");
+});
+
+test("buildEvalRecord: 質問ごとの応答時間 — 許可リスト（負例は項目だけ捨てる）と合計", () => {
+  const ok = buildEvalRecord({ ...EVAL, cases: [{ id: "a", pass: true, latencyMs: 1200 }, { id: "b", pass: false, latencyMs: 800 }] });
+  assert.deepEqual(ok.cases, [{ id: "a", pass: true, latencyMs: 1200 }, { id: "b", pass: false, latencyMs: 800 }]);
+  assert.equal(ok.totalLatencyMs, 2000);
+  for (const bad of [-1, 1.5, "9", null, 60 * 60 * 1000 + 1, NaN]) {
+    const r = buildEvalRecord({ ...EVAL, cases: [{ id: "a", pass: true, latencyMs: 100 }, { id: "b", pass: true, latencyMs: bad }] });
+    assert.deepEqual(r.cases[1], { id: "b", pass: true }, `不正値 ${String(bad)} は項目だけ捨てる`);
+    assert.equal(r.totalLatencyMs, null, "欠けがあれば合計は不明（欠けを 0 として足さない）");
+  }
+  const old = buildEvalRecord({ ...EVAL, cases: [{ id: "a", pass: true }] });
+  assert.equal(old.totalLatencyMs, null, "古い行（項目なし）は読めて、合計は未取得");
 });
