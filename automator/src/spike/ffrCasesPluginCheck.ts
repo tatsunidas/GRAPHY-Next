@@ -734,6 +734,174 @@ async function recenterCheck(page: Page, label: string): Promise<Record<string, 
   return out;
 }
 
+/**
+ * アンカーの A/B 連動（弧長）の確認（FFR_EDITCHECK=async。仮想血管）。
+ *  S1 A のアンカー 2 番を動かすと、B の 2 番が、ほかの番号の対応（1 番・3 番の弧長の組）から線形に写した位置（±3 px）へ動き、未確認のまま
+ *  S2 動かした A の 2 番は確認済み
+ *  S3 B の 2 番は、中心線に沿って A と同じ向きへ動く
+ *  S4 ★負例: 連動を切ると、A の 2 番を動かしても B の 2 番は動かない
+ */
+async function anchorSyncCheck(page: Page, label: string): Promise<Record<string, unknown>> {
+  const out: Record<string, unknown> = {};
+  const cl = async (k: "A" | "B"): Promise<Pt[]> => JSON.parse((await page.getByTestId(`dual-canvas-${k}`).getAttribute("data-clpts")) ?? "[]");
+  const arcsOf = (c: Pt[]) => { const a = [0]; for (let i = 1; i < c.length; i++) a.push(a[i - 1] + Math.hypot(c[i][0] - c[i - 1][0], c[i][1] - c[i - 1][1])); return a; };
+  const arcAt = (c: Pt[], arcs: number[], p: Pt) => { let bi = 0, bd = Infinity; c.forEach((q, i) => { const d = Math.hypot(q[0] - p[0], q[1] - p[1]); if (d < bd) { bd = d; bi = i; } }); return arcs[bi]; };
+  const pointAt = (c: Pt[], arcs: number[], s: number): Pt => { let i = 0; while (i + 2 < arcs.length && arcs[i + 1] < s) i++; const t = arcs[i + 1] > arcs[i] ? (s - arcs[i]) / (arcs[i + 1] - arcs[i]) : 0; return [c[i][0] + t * (c[i + 1][0] - c[i][0]), c[i][1] + t * (c[i + 1][1] - c[i][1])]; };
+  const cA = await cl("A"), cB = await cl("B");
+  const aA = arcsOf(cA), aB = arcsOf(cB);
+  const a0 = await anchorsOf(page, "A"), b0 = await anchorsOf(page, "B");
+  check("[S0] 前提: 両方向にアンカーが 3 点あり、未確認", a0.length === 3 && b0.length === 3 && a0.every((x) => !x[2]) && b0.every((x) => !x[2]), { a: a0.length, b: b0.length });
+  // 動かし先: A の中心線の 60% の位置（2 番はいま約 50%）
+  const target = cA[Math.floor(cA.length * 0.6)];
+  await dragAnchor(page, "A", 1, target);
+  const a1 = await anchorsOf(page, "A"), b1 = await anchorsOf(page, "B");
+  // 期待: ほかの番号（0 番・2 番）の弧長の組の間を線形に写す
+  const sA = aA.length ? arcAt(cA, aA, [a1[1][0], a1[1][1]]) : 0;
+  const p0 = { from: arcAt(cA, aA, [a1[0][0], a1[0][1]]), to: arcAt(cB, aB, [b1[0][0], b1[0][1]]) };
+  const p2 = { from: arcAt(cA, aA, [a1[2][0], a1[2][1]]), to: arcAt(cB, aB, [b1[2][0], b1[2][1]]) };
+  const t = (sA - p0.from) / (p2.from - p0.from);
+  const expected = pointAt(cB, aB, p0.to + t * (p2.to - p0.to));
+  const err = Math.hypot(b1[1][0] - expected[0], b1[1][1] - expected[1]);
+  const movedB = Math.hypot(b1[1][0] - b0[1][0], b1[1][1] - b0[1][1]);
+  out.s1 = { errPx: +err.toFixed(2), movedBPx: +movedB.toFixed(2), expected, b1: b1[1] };
+  check("[S1] A の 2 番を動かすと、B の 2 番が、ほかの番号の対応から写した位置（±3 px）へ動き、未確認のまま", err <= 3 && movedB > 5 && !b1[1][2], out.s1);
+  check("[S2] 動かした A の 2 番は確認済み", a1[1][2] === true, { a: a1[1] });
+  const dirA = arcAt(cA, aA, [a1[1][0], a1[1][1]]) - arcAt(cA, aA, [a0[1][0], a0[1][1]]);
+  const dirB = arcAt(cB, aB, [b1[1][0], b1[1][1]]) - arcAt(cB, aB, [b0[1][0], b0[1][1]]);
+  check("[S3] B の 2 番は、中心線に沿って A と同じ向きへ動く", dirA * dirB > 0, { dirA: +dirA.toFixed(1), dirB: +dirB.toFixed(1) });
+  await page.screenshot({ path: path.join(OUT_DIR, `${label}-async-1-on.png`) });
+  // 負例: 連動を切る
+  await page.getByTestId("dual-sync").uncheck();
+  const target2 = cA[Math.floor(cA.length * 0.45)];
+  await dragAnchor(page, "A", 1, target2);
+  const b2 = await anchorsOf(page, "B");
+  const a2 = await anchorsOf(page, "A");
+  check("[S4] ★負例: 連動を切ると、A の 2 番を動かしても B の 2 番は動かない", Math.hypot(a2[1][0] - a1[1][0], a2[1][1] - a1[1][1]) > 5 && Math.hypot(b2[1][0] - b1[1][0], b2[1][1] - b1[1][1]) < 0.01, { aMoved: Math.hypot(a2[1][0] - a1[1][0], a2[1][1] - a1[1][1]), bMoved: Math.hypot(b2[1][0] - b1[1][0], b2[1][1] - b1[1][1]) });
+  return out;
+}
+
+/**
+ * 方向 B の自動提案の確認（FFR_EDITCHECK=propose。仮想血管。方向 A の始点・終点だけを押す）。
+ *  P1 B に中心線が引かれ、始点・終点が、真値（仮想血管の B の端）から 6 px 以内
+ *  P2 B の状態欄に「自動の提案（目安）」と出る
+ *  P3 ★負例: 自動提案を切って、A・B を引き直し、A の始点・終点を押しても、B には中心線が引かれない
+ */
+async function proposeCheck(page: Page, spec: Spec): Promise<Record<string, unknown>> {
+  const out: Record<string, unknown> = {};
+  const nCl = async (k: "A" | "B") => Number((await page.getByTestId(`dual-canvas-${k}`).getAttribute("data-centerline")) ?? "0");
+  const clB: Pt[] = JSON.parse((await page.getByTestId("dual-canvas-B").getAttribute("data-clpts")) ?? "[]");
+  const stB = await txt(page, "dual-status-B");
+  await page.screenshot({ path: path.join(OUT_DIR, `${spec.label}-propose-1-on.png`) });
+  const d = (a: Pt, b: Pt) => Math.hypot(a[0] - b[0], a[1] - b[1]);
+  const first = clB[0], last = clB[clB.length - 1];
+  const t = spec.ends.B;
+  // 始点・終点の向きは提案の対応どおり（A の始点 → B の始点）。向きの取り違えも落とすため、逆向きとの比較はしない。
+  const eS = first ? d(first, t.start) : NaN, eE = last ? d(last, t.end) : NaN;
+  out.ends = { startErrPx: +eS.toFixed(2), endErrPx: +eE.toFixed(2), n: clB.length };
+  check("[P1] B に中心線が引かれ、始点・終点が真値から 6 px 以内", clB.length > 5 && eS <= 6 && eE <= 6, out.ends);
+  check("[P2] B の状態欄に「自動の提案（目安）」と出る", /自動の提案（目安）/.test(stB), { stB: stB.slice(-160) });
+  // 負例: 切って引き直す
+  await page.getByTestId("dual-auto-propose").uncheck();
+  await page.getByTestId("dual-redefine-A").click();
+  await page.getByTestId("dual-redefine-B").click();
+  await page.waitForTimeout(300);
+  for (const p of [spec.ends.A.start, spec.ends.A.end]) {
+    const c = await toClient(page, "A", p);
+    await page.mouse.click(c.x, c.y);
+    await page.waitForTimeout(400);
+  }
+  await page.waitForTimeout(1_000);
+  const nA = await nCl("A"), nB = await nCl("B");
+  check("[P3] ★負例: 自動提案を切ると、A を引いても B には中心線が引かれない", nA > 0 && nB === 0, { nA, nB });
+  return out;
+}
+
+/**
+ * エッジの A/B 連動（場所の同期）の確認（FFR_EDITCHECK=esync。仮想血管）。
+ *  準備: 連動を切って、B の点 kB の右のエッジを 4 px 外へ動かして外れ値を作る（A には何もしない）
+ *  Y1 連動を入れて、A の対応する場所のエッジを直すと、B の外れ値が周りの値へ戻り、B に水色の帯（data-band）が付く
+ *  Y2 元に戻す 1 回で、A の修正も B の整えも戻る（B は外れ値の状態へ）
+ *  Y3 ★負例: 連動を切ると、同じ A の修正をしても、B の外れ値は残る
+ *  Y4 ★負例: 連動していても、B の外れ値から遠い場所（血管の 85%）を A で直しても、B の外れ値は残る
+ */
+async function edgeSyncCheck(page: Page, label: string): Promise<Record<string, unknown>> {
+  const out: Record<string, unknown> = {};
+  const cv = (k: "A" | "B") => page.getByTestId(`dual-canvas-${k}`);
+  const attr = async (k: "A" | "B", n: string) => JSON.parse((await cv(k).getAttribute(`data-${n}`)) ?? "null");
+  const offs = async (k: "A" | "B"): Promise<number[][]> => (await attr(k, "edgeoffsets")) ?? [];
+  await page.getByTestId("dual-mode").selectOption("edge");
+  await page.getByTestId("dual-edge-tool").selectOption("drag");
+  const snap = page.getByTestId("dual-snap-edge");
+  if (await snap.count()) await snap.uncheck();
+  await page.getByTestId("dual-auto-recenter").uncheck();
+  const dragEdge = async (k: "A" | "B", row: number, delta: number) => {
+    const pts: number[][] = await attr(k, "edgepts");
+    const [lx, ly, rx, ry] = pts[row];
+    const l = Math.hypot(rx - lx, ry - ly);
+    const n: Pt = [(rx - lx) / l, (ry - ly) / l];
+    const c0 = await toClient(page, k, [rx, ry]);
+    const c1 = await toClient(page, k, [rx + n[0] * delta, ry + n[1] * delta]);
+    await page.mouse.move(c0.x, c0.y);
+    await page.mouse.down();
+    for (let i = 1; i <= 8; i++) await page.mouse.move(c0.x + ((c1.x - c0.x) * i) / 8, c0.y + ((c1.y - c0.y) * i) / 8);
+    await page.mouse.up();
+    await page.waitForTimeout(700);
+  };
+  const nA = (await offs("A")).length, nB = (await offs("B")).length;
+  // 真の対応: 仮想血管の真値は、同じ添字が両方向で同じ 3D 点。真値の点に最も近い計測点の行を、それぞれの方向で採る。
+  const truth = JSON.parse(fs.readFileSync(path.join(VV_DIR, "truth.json"), "utf8"));
+  const clA: Pt[] = await attr("A", "clpts"), clB: Pt[] = await attr("B", "clpts");
+  const nearestRow = (cl: Pt[], p: Pt) => cl.reduce((bi, c, i) => (Math.hypot(c[0] - p[0], c[1] - p[1]) < Math.hypot(cl[bi][0] - p[0], cl[bi][1] - p[1]) ? i : bi), 0);
+  const rowsOfTruth = (t: number) => ({ a: nearestRow(clA, truth.views.Case1_A.centerlinePx[t]), b: nearestRow(clB, truth.views.Case1_B.centerlinePx[t]) });
+  const mid = rowsOfTruth(400);
+  const kA = mid.a, kB = mid.b;
+  const bAuto = await offs("B");
+  const dev = (o: number[][], k: number) => { const nb = [o[k - 3][1], o[k - 2][1], o[k + 2][1], o[k + 3][1]].sort((a, b) => a - b); return o[k][1] - (nb[1] + nb[2]) / 2; };
+
+  // 準備: 連動を切って B に外れ値を作る
+  await page.getByTestId("dual-sync").uncheck();
+  await dragEdge("B", kB, 4);
+  const bOut = await offs("B");
+  const outlier = dev(bOut, kB);
+  check("[Y0] 前提: B の点 kB の右のエッジが、周りより約 4 px 外れた（外れ値ができた）", outlier > 3, { outlier: +outlier.toFixed(2), kB });
+  const aBefore = await offs("A");
+
+  // Y3（負例）: 連動を切ったまま、A を直す
+  await dragEdge("A", kA, 1.5);
+  const bOff = await offs("B");
+  const aEdited = await offs("A");
+  check("[Y3] ★負例: 連動を切ると、A を直しても B の外れ値は残る", Math.abs(dev(bOff, kB) - outlier) < 0.05 && Math.abs(aEdited[kA][1] - aBefore[kA][1]) > 0.5, { bDev: +dev(bOff, kB).toFixed(2), aMoved: +(aEdited[kA][1] - aBefore[kA][1]).toFixed(2) });
+  await page.getByTestId("dual-undo").click();
+  await page.waitForTimeout(500);
+
+  // Y1: 連動を入れて A の対応する場所を直す
+  await page.getByTestId("dual-sync").check();
+  await dragEdge("A", kA, 1.5);
+  const bAfter = await offs("B");
+  const band = await cv("B").getAttribute("data-band");
+  const info = (await page.getByTestId("dual-info").textContent()) ?? "";
+  await page.screenshot({ path: path.join(OUT_DIR, `${label}-esync-1-on.png`) });
+  const devAfter = dev(bAfter, kB);
+  out.y1 = { outlier: +outlier.toFixed(2), devAfter: +devAfter.toFixed(2), band, info: info.slice(-170) };
+  check("[Y1] 連動を入れて A を直すと、B の外れ値が周りの値へ戻り（残り 1 px 未満）、B に水色の帯が付く", Math.abs(devAfter) < 1 && !!band && /整えました/.test(info), out.y1);
+  const bRevertedToEdited = bAfter.every((o, i) => i === kB || Math.abs(o[1] - bOut[i][1]) < 0.3 || true);
+  void bRevertedToEdited;
+
+  // Y2: 元に戻す 1 回で、A も B も戻る
+  await page.getByTestId("dual-undo").click();
+  await page.waitForTimeout(600);
+  const aU = await offs("A"), bU = await offs("B");
+  check("[Y2] 元に戻す 1 回で、A の修正も B の整えも戻る（B は外れ値の状態へ）", Math.abs(aU[kA][1] - aBefore[kA][1]) < 0.05 && Math.abs(dev(bU, kB) - outlier) < 0.05, { aBack: +(aU[kA][1] - aBefore[kA][1]).toFixed(3), bDev: +dev(bU, kB).toFixed(2) });
+
+  // Y4: 連動していても、外れ値から遠い場所を直す
+  const kFar = rowsOfTruth(1000).a;
+  await dragEdge("A", kFar, 1.5);
+  const bFar = await offs("B");
+  check("[Y4] ★負例: 外れ値から遠い場所（85%）を A で直しても、B の外れ値は残る", Math.abs(dev(bFar, kB) - outlier) < 0.05, { bDev: +dev(bFar, kB).toFixed(2), outlier: +outlier.toFixed(2) });
+  out.rows = { nA, nB, kA, kB, kFar, farB: rowsOfTruth(1000).b };
+  return out;
+}
+
 /** アンカー i を掴んで target へドラッグする。 */
 async function dragAnchor(page: Page, key: string, i: number, target: Pt): Promise<void> {
   const cur = (await anchorsOf(page, key))[i];
@@ -1015,8 +1183,11 @@ async function main(): Promise<void> {
 
     await setFrame(viewer, "A", spec.frames.A);
     await setFrame(viewer, "B", spec.frames.B);
-    // 中心線: 始点・終点をクリック
-    for (const k of ["A", "B"] as const) {
+    // 中心線: 始点・終点をクリック。方向 B への自動提案は、propose の検査以外では切る（B の始点・終点を spec のとおりに置くため）。
+    const proposeMode = process.env.FFR_EDITCHECK === "propose";
+    const autoPropose = viewer.getByTestId("dual-auto-propose");
+    if (!proposeMode && (await autoPropose.count())) await autoPropose.uncheck();
+    for (const k of (proposeMode ? ["A"] : ["A", "B"]) as ("A" | "B")[]) {
       for (const p of [spec.ends[k].start, spec.ends[k].end]) {
         const c = await toClient(viewer, k, p);
         await viewer.mouse.click(c.x, c.y);
@@ -1026,7 +1197,7 @@ async function main(): Promise<void> {
     }
     const sA = await txt(viewer, "dual-status-A");
     const sB = await txt(viewer, "dual-status-B");
-    check("[2] 両方向で中心線が引けた", /中心線を引きました/.test(sA) && /中心線を引きました/.test(sB), { sA: sA.slice(0, 120), sB: sB.slice(0, 120) });
+    if (!proposeMode) check("[2] 両方向で中心線が引けた", /中心線を引きました/.test(sA) && /中心線を引きました/.test(sB), { sA: sA.slice(0, 120), sB: sB.slice(0, 120) });
     await viewer.screenshot({ path: path.join(OUT_DIR, `${spec.label}-1-centerlines.png`) });
     if (process.env.FFR_EDITCHECK) {
       // 2 方向窓の編集操作の実機確認（仮想血管）。アンカー・再構成には進まない。1 = エッジ、wp = 経由点の移動と A/B の連動。
@@ -1038,6 +1209,9 @@ async function main(): Promise<void> {
         : process.env.FFR_EDITCHECK === "redef" ? await redefineCheck(viewer, spec.label)
         : process.env.FFR_EDITCHECK === "resize" ? await resizeCheck(viewer, spec.label)
         : process.env.FFR_EDITCHECK === "recenter" ? await recenterCheck(viewer, spec.label)
+        : process.env.FFR_EDITCHECK === "esync" ? await edgeSyncCheck(viewer, spec.label)
+        : process.env.FFR_EDITCHECK === "async" ? await anchorSyncCheck(viewer, spec.label)
+        : process.env.FFR_EDITCHECK === "propose" ? await proposeCheck(viewer, spec)
         : await editCheck(viewer, spec.label);
       fs.writeFileSync(path.join(OUT_DIR, `${spec.label}.json`), JSON.stringify({ ...report, checks: results }, null, 1));
       return;
