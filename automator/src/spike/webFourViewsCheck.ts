@@ -31,7 +31,8 @@ const WEB_PORT = Number(process.env.WFV_WEB_PORT ?? 18190);
 const STANDALONE_PORT = Number(process.env.WFV_STANDALONE_PORT ?? 18191);
 const SCP_PORT = Number(process.env.WFV_SCP_PORT ?? 18192);
 const ROOT = path.resolve(AUTOMATOR_ROOT, "..");
-const JAR = path.join(ROOT, "backend", "target", "graphy-next-backend.jar");
+// WFV_JAR: 旧コードの jar との対照用（既定はこの作業コピーでビルドした jar）。
+const JAR = process.env.WFV_JAR ?? path.join(ROOT, "backend", "target", "graphy-next-backend.jar");
 const OUT_DIR = path.join(AUTOMATOR_ROOT, ".results", "web-four-views");
 const RUN_DIR = path.join(OUT_DIR, "run");
 const SCREENS = ["mpr", "viewer3d", "curvedmpr", "slicer"] as const;
@@ -90,8 +91,6 @@ async function pngStats(helper: Page, png: Buffer): Promise<{ colors: number; st
   }, png.toString("base64"));
 }
 
-/** 既知の食い違い（製品側。この検査では直さず、報告する）。web プロファイルに無い経路への fire-and-forget の登録。 */
-const KNOWN_HTTP = /^404 \/api\/dbadmin\/retention\/in-use\/register/;
 const ERR_RE = /指定されていません|取得できません|読み込めません|見つかりません|失敗しました|エラー|再試行|ボリュームを作れません|cannot|could not|failed|error|not found|retry|not specified|no context/i;
 
 interface Opened {
@@ -101,6 +100,8 @@ interface Opened {
   stats: { colors: number; std: number; lit: number } | null;
   consoleErrors: string[];
   httpErrors: string[];
+  /** 使用中の登録（POST …/in-use/register）への応答の状態。 */
+  inUse: number[];
   has3dView: boolean | null;
   shot: string;
 }
@@ -129,8 +130,9 @@ async function openScreen(ctx: BrowserContext, helper: Page, base: string, scree
   const page = await ctx.newPage();
   const consoleErrors: string[] = [];
   const httpErrors: string[] = [];
+  const inUse: number[] = [];
   page.on("console", (m) => { if (m.type() === "error") consoleErrors.push(m.text().slice(0, 200)); });
-  page.on("response", (r) => { if (r.status() >= 400) httpErrors.push(`${r.status()} ${r.url().replace(base, "").slice(0, 120)}`); });
+  page.on("response", (r) => { if (r.url().includes("/in-use/register")) inUse.push(r.status()); if (r.status() >= 400) httpErrors.push(`${r.status()} ${r.url().replace(base, "").slice(0, 120)}`); });
   page.on("pageerror", (e) => consoleErrors.push(`pageerror: ${String(e).slice(0, 200)}`));
   await page.addInitScript(() => {
     // 確認ダイアログは CDP を止める。応答を返して素通しにする。
@@ -170,7 +172,7 @@ async function openScreen(ctx: BrowserContext, helper: Page, base: string, scree
       has3dView = centerLit >= 0.05;
     }
     const painted = screen === "viewer3d" ? has3dView === true && !!cstats && cstats.colors > 50 : !!cstats && cstats.colors > 50 && cstats.std > 5 && cstats.lit >= 0.05;
-    return { ok: canvases > 0 && painted && !errorText, errorText, canvases, stats: cstats, consoleErrors, httpErrors, has3dView, shot };
+    return { ok: canvases > 0 && painted && !errorText, errorText, canvases, stats: cstats, consoleErrors, httpErrors, inUse, has3dView, shot };
   } finally {
     await page.close().catch(() => {});
   }
@@ -239,13 +241,19 @@ async function main(): Promise<void> {
       await sctx.close();
       console.log(`  ${s}: canvases=${r.canvases} colors=${r.stats?.colors} std=${r.stats?.std.toFixed(1)} lit=${r.stats?.lit.toFixed(2)} err=${r.errorText} bulk=${stub.counts.seriesBulk} instance=${stub.counts.instance} console=${r.consoleErrors.length} http4xx=${r.httpErrors.length} 3dCenterLit=${r.has3dView}`);
       check(r.ok, `${s}: 描画される・エラー表示なし`, { has3dView: r.has3dView, canvases: r.canvases, stats: r.stats, errorText: r.errorText, shot: r.shot });
-      const unknownHttp = r.httpErrors.filter((h) => !KNOWN_HTTP.test(h));
-      const knownHttp = r.httpErrors.length - unknownHttp.length;
-      if (knownHttp > 0) console.log(`  [既知] ${s}: ${knownHttp} 件の 404（/api/dbadmin/retention/in-use/register）。製品側の食い違いとして報告（この検査では直さない）`);
-      const unknownConsole = r.consoleErrors.filter((c) => !(knownHttp > 0 && /status of 404/.test(c)));
-      check(unknownConsole.length === 0 && unknownHttp.length === 0, `${s}: 上記の既知 1 件を除き、console エラー・pageerror・HTTP 4xx/5xx が無い`, { console: unknownConsole.slice(0, 3), http: unknownHttp.slice(0, 5) });
+      check(r.consoleErrors.length === 0 && r.httpErrors.length === 0, `${s}: console エラー・pageerror・HTTP 4xx/5xx が無い`, { console: r.consoleErrors.slice(0, 3), http: r.httpErrors.slice(0, 5) });
+      check(r.inUse.length === 0, `${s}: web では使用中の登録（standalone 専用）を呼ばない`, r.inUse);
       check(stub.counts.seriesBulk === 1 && stub.counts.instance === 0, `${s}: 取得はシリーズ一括 1 回・インスタンス単位 0 回（120 回取りに行かない）`, stub.counts);
     }
+
+    // ── 正例: standalone では使用中の登録が実際に飛び、受け付けられる（登録を止めた変更が standalone を壊していない）
+    console.log("\n[standalone] 使用中の登録");
+    const rctx = await browser.newContext({ viewport: { width: 1400, height: 900 }, locale: "ja-JP" });
+    const sr = await openScreen(rctx, helper, stdBase, "mpr", "standalone", 8_000);
+    await rctx.close();
+    console.log(`  inUse=${JSON.stringify(sr.inUse)} ok=${sr.ok}`);
+    check(sr.ok, "standalone でも MPR が開く", { stats: sr.stats, errorText: sr.errorText });
+    check(sr.inUse.length >= 1 && sr.inUse.every((c) => c >= 200 && c < 300), "standalone では使用中の登録が飛び、2xx で受け付けられる", sr.inUse);
 
     // ── 画素一致: 同じ合成 CT を standalone と web で開いた MPR の表示
     console.log("\n[画素一致] standalone と web の MPR");
