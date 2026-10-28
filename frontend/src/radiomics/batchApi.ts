@@ -30,6 +30,17 @@ export interface BatchPlanRequest {
   studyUids: string[] | null;
 }
 
+/** QC に当たった組の扱い。FLAG＝記録して続ける、STOP＝その組の結果を残してジョブを止める。 */
+export type BatchQcMode = "FLAG" | "STOP";
+
+export interface BatchQc {
+  smallRoi: BatchQcMode;
+  lossy: BatchQcMode;
+}
+
+/** QC の旗。SMALL_ROI は環境設定の基準値が未設定なら立たない（「判定していない」）。 */
+export type BatchQcFlag = "SMALL_ROI" | "LOSSY_COMPRESSION";
+
 export interface BatchRequest {
   pairs: BatchPair[];
   settings: Record<string, string>;
@@ -42,6 +53,10 @@ export interface BatchRequest {
   channel: number;
   timePoint: number;
   recompute: boolean;
+  /** null は両方とも記録だけ（従来の要求）。 */
+  qc: BatchQc | null;
+  /** 許容した組のキー（`pairKey`）。この組は QC で止めない。 */
+  qcAcknowledged: string[] | null;
 }
 
 export type BatchJobState = "QUEUED" | "RUNNING" | "DONE" | "STOPPED" | "CANCELLED";
@@ -57,6 +72,7 @@ export interface BatchPairStatusRow {
   error: string | null;
   fromCache: boolean;
   elapsedMs: number;
+  qcFlags: BatchQcFlag[];
 }
 
 export interface BatchStatus {
@@ -69,7 +85,11 @@ export interface BatchStatus {
   skipped: number;
   notRun: number;
   cancelled: number;
+  /** QC なら旗の並び（`SMALL_ROI,LOSSY_COMPRESSION`）、環境障害ならそのメッセージ。 */
   stopReason: string | null;
+  /** QC＝利用者の確認待ち、ENVIRONMENT＝IO・メモリの障害。止まっていなければ null。 */
+  stopKind: "QC" | "ENVIRONMENT" | null;
+  stopIndex: number | null;
   pairs: BatchPairStatusRow[];
 }
 

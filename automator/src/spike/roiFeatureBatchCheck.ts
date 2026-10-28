@@ -13,6 +13,10 @@
  *      行数が組の数に一致し、各行の値が同じ組を既存の API で直接計算した値と全列で差 0。患者情報が無い。
  *   5. 取り消し: 重い設定にして実行し、1 組終わったところで取り消す → 残りが取り消し。同じ設定で実行し直すと、
  *      計算済みの組はキャッシュ表示になる。
+ *   6. QC: 環境設定の小さい ROI の基準値を 1000 にして「止める」で実行 → 400 ボクセルの組で止まり、許容して続けると完了。
+ *      止めた組の値・旗が予測（400 ＜ 1000）と一致。基準値が未設定なら止まらず「判定していません」（負例）。
+ *   7. 定義: 保存 → 開き直して読み込む → 欄と SHA-256 が復元。書き換えたファイル・SHA-256 の無いファイルは断られ、
+ *      欄は変わらない。読み込んで実行した結果の Provenance_SettingsSha256 が、手で同じ設定にして実行した結果と同じ。
  *
  * 前提: backend jar（今のビルド）・python3 と pydicom・automator と desktop の依存。
  */
@@ -270,9 +274,9 @@ async function main(): Promise<void> {
     check(await page.getByTestId("batch-write").isEnabled(), "書き出しボタンが有効");
     await page.getByTestId("batch-prefix").fill("batchcheck");
     await page.getByTestId("batch-write").click();
-    const dl = await takeDownloads(page, 4);
+    const dl = await takeDownloads(page, 5);
     for (const f of dl) fs.writeFileSync(path.join(OUT_DIR, f.name), f.text);
-    check(dl.length === 4, "4 ファイルが出る", dl.map((f) => f.name));
+    check(dl.length === 5, "5 ファイルが出る（定義を含む）", dl.map((f) => f.name));
     const features = dl.find((f) => f.name === "batchcheck.csv");
     const pairsCsv = dl.find((f) => f.name === "batchcheck_pairs.csv");
     check(!!features && !!pairsCsv, "特徴量 CSV と対応表がある");
@@ -313,11 +317,14 @@ async function main(): Promise<void> {
     await page.getByTestId("batch-bincount").locator("input").fill("16");
     await page.getByTestId("batch-bincount").locator("input").press("Enter");
     await page.locator('[data-testid="batch-settings"] select').selectOption("iso");
-    await page.locator('[data-testid="batch-settings"] input[type="number"]').last().fill("0.5");
+    await page.locator('[data-testid="batch-settings"] input[type="number"]').last().fill("0.35");
     await page.locator('[data-testid="batch-settings"] input[type="number"]').last().press("Enter");
     await page.waitForTimeout(300);
     await page.getByTestId("batch-run").click();
-    await waitText(page, "batch-progress", /実行中 — [1-5]\/6 完了/, 600_000);
+    // 途中の状態を観測できるだけ重い設定にしてある。観測できずに終わったら、検査できていないので失敗にする（合格にしない）
+    const running = await waitText(page, "batch-progress", /実行中 — [1-5]\/6 完了/, 600_000)
+      .catch((e: Error) => { check(false, "取り消しを試せる途中の状態を観測できた", e.message); throw e; });
+    console.log(`  running: ${running.replace(/\n/g, " ")}`);
     await page.getByTestId("batch-cancel").click();
     const cancelledText = await waitText(page, "batch-progress", /取り消し —/, 600_000);
     console.log(`  cancelled: ${cancelledText.replace(/\n/g, " ")}`);
@@ -330,6 +337,214 @@ async function main(): Promise<void> {
     await page.screenshot({ path: path.join(OUT_DIR, "05-resumed.png"), fullPage: true });
     const cached = await page.locator('[data-testid^="batch-state-"]', { hasText: "キャッシュ" }).count();
     check(cached >= doneBefore, "同じ設定の再実行で、計算済みの組はキャッシュ表示", { cached, doneBefore });
+
+    // ---- 6. QC ----
+    console.log("\n[6] QC: 小さい ROI で止める");
+    const put = (v: string) => api(base, "/api/settings", {
+      method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ "texture.SmallRoiWarnVoxels": v }),
+    });
+    const reopen = async () => {
+      await page.getByTestId("batch-close").click();
+      await page.waitForTimeout(500);
+      await btn.click();
+      await page.getByTestId("batch-row-5").waitFor({ state: "visible", timeout: 30_000 });
+      await page.waitForTimeout(1500);
+    };
+    const bincount = page.getByTestId("batch-bincount").locator("input");
+    const radio = (id: string, n: number) => page.getByTestId(id).locator('input[type="radio"]').nth(n);
+    const parseFeatures = (csv: string) => {
+      const lines = csv.split("\r\n").filter(Boolean);
+      const header = splitRow(lines[0]);
+      return { header, rows: lines.slice(1).map(splitRow) };
+    };
+
+    /** 停止（QC）のたびに「許容して続ける」を押し、完了まで進める。押したあとは停止の表示が消えるのを待つ。 */
+    const acceptUntilDone = async (done: RegExp): Promise<string> => {
+      for (let i = 0; i < 10; i++) {
+        const txt = await waitText(page, "batch-progress", /^(停止|完了|取り消し)/, 300_000);
+        if (done.test(txt)) return txt;
+        await page.getByTestId("batch-qc-hold").waitFor({ state: "visible", timeout: 30_000 });
+        await page.getByTestId("batch-qc-continue").click();
+        await page.getByTestId("batch-qc-hold").waitFor({ state: "hidden", timeout: 60_000 }).catch(() => {});
+      }
+      throw new Error("完了しない");
+    };
+
+    await put("1000");
+    await reopen();
+    check(await bincount.inputValue() === "32", "開き直すと設定は既定に戻る");
+    await radio("batch-qc-small", 1).check();
+    await page.getByTestId("batch-run").click();
+    await page.getByTestId("batch-qc-hold").waitFor({ state: "visible", timeout: 300_000 });
+    const hold1 = await page.getByTestId("batch-qc-hold").innerText();
+    console.log(`  hold1: ${hold1.replace(/\n/g, " ")}`);
+    check(/C002/.test(hold1) && /小さい ROI/.test(hold1), "最初の小さい ROI の組（C002）で止まる", hold1);
+    check(/400 ボクセル/.test(hold1) && /1000/.test(hold1), "400 ボクセル ＜ 基準値 1000 が出る（予測値と一致）", hold1);
+    const prog1 = await page.getByTestId("batch-progress").innerText();
+    check(/停止 — 2\/5 完了/.test(prog1) && /未実行 3/.test(prog1), "2 組完了・3 組は未実行で停止", prog1);
+    check(/小さい ROI/.test(await page.getByTestId("batch-flags-1").innerText()), "止めた組に旗が付く");
+    check(!(await page.getByTestId("batch-error").isVisible().catch(() => false)), "QC の停止はエラーではない");
+    await page.screenshot({ path: path.join(OUT_DIR, "06-qc-hold.png"), fullPage: true });
+
+    await page.getByTestId("batch-qc-continue").click();
+    // 止めた組の結果は残るので、最後の組で止まったときも「5/5 完了」と数える
+    await waitText(page, "batch-progress", /停止 — 5\/5 完了/, 300_000);
+    await page.getByTestId("batch-qc-hold").waitFor({ state: "visible", timeout: 60_000 });
+    const hold2 = await page.getByTestId("batch-qc-hold").innerText();
+    check(/C005/.test(hold2), "許容した組では止まらず、次の小さい ROI の組（C005）で止まる", hold2);
+    await page.getByTestId("batch-qc-continue").click();
+    const doneQc = await waitText(page, "batch-progress", /完了 — 5\/5 完了/, 300_000);
+    console.log(`  qc done: ${doneQc.replace(/\n/g, " ")}`);
+    await page.screenshot({ path: path.join(OUT_DIR, "07-qc-done.png"), fullPage: true });
+    await page.getByTestId("batch-prefix").fill("qccheck");
+    await page.getByTestId("batch-write").click();
+    const dlQc = await takeDownloads(page, 5);
+    const qcFeatures = dlQc.find((f) => f.name === "qccheck.csv");
+    const qcPairs = dlQc.find((f) => f.name === "qccheck_pairs.csv");
+    const qcSpec = dlQc.find((f) => f.name === "qccheck_spec.json");
+    check(!!qcFeatures && !!qcPairs && !!qcSpec, "QC の実行でも 5 ファイルが出る", dlQc.map((f) => f.name));
+    if (qcFeatures && qcPairs && qcSpec) {
+      const feat = parseFeatures(qcFeatures.text);
+      const iVox = feat.header.indexOf("Roi_IntensityMaskVoxels");
+      const iWarn = feat.header.indexOf("Warning_SmallRoi");
+      const small = feat.rows.filter((r) => r[iVox] === "400");
+      const big = feat.rows.filter((r) => r[iVox] === "5760");
+      check(feat.rows.length === 5 && small.length === 2 && big.length === 3, "5 行（400 ボクセル 2・5760 ボクセル 3）", feat.rows.map((r) => r[iVox]));
+      check(small.every((r) => r[iWarn] === "1") && big.every((r) => r[iWarn] === "0"), "Warning_SmallRoi が 400→1・5760→0（予測どおり）");
+      const pr = qcPairs.text.split("\r\n").filter(Boolean).slice(1).map(splitRow);
+      const iFlags = 11;
+      const flagged = pr.filter((r) => r[iFlags].includes("SMALL_ROI"));
+      check(pr.length === 5 && flagged.length === 2, "対応表の QcFlags: 小さい 2 組だけに SMALL_ROI", pr.map((r) => r[iFlags]));
+      const specObj = JSON.parse(qcSpec.text) as { sha256: string; qc: { smallRoi: string } };
+      check(pr.every((r) => r[12] === specObj.sha256), "対応表の SpecSha256 が書き出した定義の sha256 と一致", specObj.sha256);
+      check(specObj.qc.smallRoi === "STOP", "書き出した定義に QC の設定（止める）が残る");
+      // 止まって続けた組の値が、止まらずに直接計算した値と全列で一致する
+      const reqNow = posted[posted.length - 1];
+      let mismatched = 0;
+      for (let i = 0; i < feat.rows.length; i++) {
+        const label = feat.rows[i][0];
+        const p = pr.find((r) => r[0] === label)!;
+        const direct = await apiFeatures(base, {
+          studyInstanceUid: p[1], sourceSeriesUid: p[2], maskSeriesUid: p[3], maskChannel: Number(p[6]),
+          channel: 0, timePoint: 0, settings: reqNow.settings, recompute: true,
+        });
+        const names = feat.header.slice(NREC);
+        const values = feat.rows[i].slice(NREC).map(Number);
+        const same = names.length === direct.rows.length && names.every((n, k) => n === direct.rows[k].column)
+          && direct.rows.every((r, k) => Object.is(values[k], r.value ?? NaN));
+        if (!same) mismatched++;
+      }
+      check(mismatched === 0, "止めて許容して続けた結果が、直接計算した値と全列で差 0（5 行）", mismatched);
+    }
+
+    console.log("\n[6b] 負例: 基準値が未設定なら判定せず、止めない");
+    await put("");
+    await reopen();
+    await radio("batch-qc-small", 1).check();
+    await page.getByTestId("batch-run").click();
+    await waitText(page, "batch-progress", /完了 — 5\/5 完了/, 300_000);
+    check(!(await page.getByTestId("batch-qc-hold").isVisible().catch(() => false)), "基準値が未設定なら「止める」でも止まらない");
+    const unset = await page.getByTestId("batch-unset-threshold").innerText().catch(() => "");
+    check(/判定していません/.test(unset), "「小さい ROI は判定していません」と出る（警告なしとは書かない）", unset);
+    check((await page.locator('[data-testid^="batch-flags-"]').count()) === 0, "旗は 1 つも付かない");
+    await page.screenshot({ path: path.join(OUT_DIR, "08-unset.png"), fullPage: true });
+    await put("1000");
+
+    console.log("\n[6c] 「対象から外して続ける」");
+    await reopen();
+    await radio("batch-qc-small", 1).check();
+    await page.getByTestId("batch-run").click();
+    await page.getByTestId("batch-qc-hold").waitFor({ state: "visible", timeout: 300_000 });
+    check(/C002/.test(await page.getByTestId("batch-qc-hold").innerText()), "C002 で止まる");
+    await page.getByTestId("batch-qc-exclude").click();
+    // 押した直後は古い停止の表示が残る。消えてから、次の停止を待つ
+    await page.getByTestId("batch-qc-hold").waitFor({ state: "hidden", timeout: 60_000 });
+    await page.getByTestId("batch-qc-hold").waitFor({ state: "visible", timeout: 300_000 });
+    const holdEx = await page.getByTestId("batch-qc-hold").innerText();
+    check(/C005/.test(holdEx), "C002 を外して続けると、次の小さい ROI の組（C005）で止まる", holdEx);
+    check(!(await page.getByTestId("batch-include-1").isChecked()), "外した組は対象から外れている");
+    await page.getByTestId("batch-qc-exclude").click();
+    const doneEx = await waitText(page, "batch-progress", /完了 — 3\/3 完了/, 300_000);
+    check(/3\/3 完了/.test(doneEx), "両方を外すと、残りの 3 組で完了", doneEx);
+    await page.screenshot({ path: path.join(OUT_DIR, "08b-qc-excluded.png"), fullPage: true });
+
+    // ---- 7. 定義 ----
+    console.log("\n[7] 定義の保存・読込・改ざんの拒否・SHA-256");
+    await reopen();
+    await bincount.fill("16");
+    await bincount.press("Enter");
+    await page.getByTestId("batch-labels").fill("smallbox");
+    await radio("batch-qc-small", 1).check();
+    await page.getByTestId("batch-prefix").fill("speccheck");
+    await page.waitForTimeout(500);
+    const shownA = await page.getByTestId("batch-spec-sha").getAttribute("title");
+    await page.getByTestId("batch-spec-save").click();
+    const [savedSpec] = await takeDownloads(page, 1);
+    fs.writeFileSync(path.join(OUT_DIR, savedSpec.name), savedSpec.text);
+    const specA = JSON.parse(savedSpec.text) as { sha256: string; form: { binCount: number }; selection: { segmentLabels: string[] } };
+    check(savedSpec.name === "speccheck_spec.json", "定義のファイル名は接頭辞つき", savedSpec.name);
+    check(specA.sha256 === shownA, "保存した定義の sha256 が画面の表示と一致", { file: specA.sha256, shown: shownA });
+    check(specA.form.binCount === 16 && specA.selection.segmentLabels[0] === "smallbox", "定義に設定と絞り込みが入る");
+    // 手で同じ設定にして実行 → 出力の Provenance_SettingsSha256 を控える
+    const sel = await page.getByTestId("batch-summary").innerText();
+    check(/対象 2/.test(sel), "絞り込み（SmallBox）で対象は 2 組（BigBox は絞り込み外）", sel);
+    check((await page.locator('[data-testid^="batch-state-"]', { hasText: "絞り込み外" }).count()) >= 3, "絞り込み外の組が表に残って表示される");
+    await page.getByTestId("batch-run").click();
+    await acceptUntilDone(/^完了 — 2\/2 完了/);
+    await page.getByTestId("batch-write").click();
+    const dlA = await takeDownloads(page, 5);
+    const featA = parseFeatures(dlA.find((f) => f.name === "speccheck.csv")!.text);
+    const shaCol = featA.header.indexOf("Provenance_SettingsSha256");
+    const provA = featA.rows[0][shaCol];
+    check(featA.rows.length === 2 && /^[0-9a-f]{64}$/.test(provA), "手で設定して実行: 2 行・設定の SHA-256 が出る", provA);
+
+    // 開き直す → 既定に戻る → 定義を読み込む
+    await reopen();
+    check(await bincount.inputValue() === "32" && (await page.getByTestId("batch-labels").inputValue()) === "", "開き直すと欄は既定");
+    const shaDefault = await page.getByTestId("batch-spec-sha").getAttribute("title");
+    check(shaDefault !== shownA, "既定の定義の SHA-256 は保存した定義と違う");
+    await page.getByTestId("batch-spec-file").setInputFiles(path.join(OUT_DIR, savedSpec.name));
+    await waitText(page, "batch-info", /読み込みました/, 20_000);
+    await page.waitForTimeout(400);
+    check(await bincount.inputValue() === "16", "読み込むとビン数が復元される");
+    check((await page.getByTestId("batch-labels").inputValue()) === "smallbox", "絞り込みが復元される");
+    check(await radio("batch-qc-small", 1).isChecked(), "QC の設定（止める）が復元される");
+    check((await page.getByTestId("batch-prefix").inputValue()) === "speccheck", "接頭辞が復元される");
+    check((await page.getByTestId("batch-spec-sha").getAttribute("title")) === shownA, "SHA-256 の表示が保存時と同じ");
+    await page.screenshot({ path: path.join(OUT_DIR, "09-spec-loaded.png"), fullPage: true });
+
+    // 改ざん・SHA-256 なしは断られ、欄は変わらない
+    const tamperPath = path.join(OUT_DIR, "tampered_spec.json");
+    const tampered = JSON.parse(savedSpec.text) as Record<string, any>;
+    tampered.form.binCount = 64;
+    fs.writeFileSync(tamperPath, JSON.stringify(tampered));
+    await page.getByTestId("batch-spec-file").setInputFiles(tamperPath);
+    await page.getByTestId("batch-error").waitFor({ state: "visible", timeout: 10_000 });
+    check(/一致しません/.test(await page.getByTestId("batch-error").innerText()), "書き換えた定義は断られる（SHA-256 が一致しない）");
+    check(await bincount.inputValue() === "16", "断られたとき、欄は変わらない（64 にならない）");
+    await page.screenshot({ path: path.join(OUT_DIR, "10-spec-tampered.png"), fullPage: true });
+    const noShaPath = path.join(OUT_DIR, "nosha_spec.json");
+    const noSha = JSON.parse(savedSpec.text) as Record<string, any>;
+    delete noSha.sha256;
+    fs.writeFileSync(noShaPath, JSON.stringify(noSha));
+    await page.getByTestId("batch-spec-file").setInputFiles(noShaPath);
+    await page.waitForTimeout(500);
+    check(/SHA-256 がありません/.test(await page.getByTestId("batch-error").innerText()), "SHA-256 の無い定義は断られる");
+
+    // 読み込んだ定義で実行 → 手で設定した実行と同じ設定の SHA-256
+    await page.getByTestId("batch-spec-file").setInputFiles(path.join(OUT_DIR, savedSpec.name));
+    await waitText(page, "batch-info", /読み込みました/, 20_000);
+    await page.waitForTimeout(400);
+    await page.getByTestId("batch-run").click();
+    await acceptUntilDone(/^完了 — 2\/2 完了/);
+    await page.getByTestId("batch-write").click();
+    const dlB = await takeDownloads(page, 5);
+    const featB = parseFeatures(dlB.find((f) => f.name === "speccheck.csv")!.text);
+    check(featB.rows[0][shaCol] === provA, "定義を読み込んで実行した結果の設定 SHA-256 が、手で設定した実行と同じ", { a: provA, b: featB.rows[0][shaCol] });
+    const specB = JSON.parse(dlB.find((f) => f.name === "speccheck_spec.json")!.text) as { sha256: string };
+    check(specB.sha256 === specA.sha256, "書き出した定義の sha256 が保存した定義と同じ");
+    const pairsB = dlB.find((f) => f.name === "speccheck_pairs.csv")!.text.split("\r\n").filter(Boolean).slice(1).map(splitRow);
+    check(pairsB.every((r) => r[12] === specA.sha256), "対応表の SpecSha256 が定義の sha256 と一致");
   } finally {
     // resetDb はアルバムを消さないので、自分で作ったものは自分で消す
     if (albumId) await fetch(`${base}/api/albums/${albumId}`, { method: "DELETE" }).catch(() => {});

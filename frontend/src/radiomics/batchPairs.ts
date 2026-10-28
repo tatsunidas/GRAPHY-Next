@@ -9,7 +9,8 @@
  */
 import type { RoiFeatureResult } from "../api";
 import { cell } from "../viewer/roiStatsCsv";
-import type { BatchPair, BatchPairStatusRow, BatchRequest } from "./batchApi";
+import type { BatchPair, BatchPairStatusRow, BatchQc, BatchRequest } from "./batchApi";
+import { normalizeLabels } from "./batchSpec";
 import { roiFeatureDataCsv, roiFeatureDefinitionsCsv } from "./roiFeatureCsv";
 import { roiFeatureSettings, type RoiFeatureForm } from "./roiFeatureSettings";
 
@@ -19,6 +20,8 @@ export interface PairRow {
   source: string | null;
   included: boolean;
   caseLabel: string;
+  /** セグメント名の絞り込みに合わない（対象から外した）。手でチェックすれば入れられる。 */
+  filteredOut: boolean;
 }
 
 export const pairKey = (p: BatchPair): string => `${p.studyUid}|${p.maskSeriesUid}|${p.maskChannel}`;
@@ -30,7 +33,21 @@ export const runnable = (r: PairRow): boolean => r.pair.status !== "EXCLUDED" &&
 export function initialRows(pairs: readonly BatchPair[]): PairRow[] {
   return pairs.map((pair) => {
     const source = pair.status === "AUTO" ? pair.sourceSeriesUid : null;
-    return { pair, source, included: pair.status === "AUTO" && !!source, caseLabel: "" };
+    return { pair, source, included: pair.status === "AUTO" && !!source, caseLabel: "", filteredOut: false };
+  });
+}
+
+/**
+ * セグメント名で絞り込む（大文字小文字・前後の空白を無視。空なら絞り込まない）。合わない組は**消さずに**対象から外し、
+ * 絞り込みを外す・合うようにすると、外した組だけを戻す（利用者が手で外した組は触らない）。
+ */
+export function applyLabelFilter(rows: readonly PairRow[], labels: readonly string[]): PairRow[] {
+  const want = new Set(normalizeLabels(labels).map((l) => l.toLowerCase()));
+  return rows.map((r) => {
+    if (r.pair.status === "EXCLUDED") return r;
+    const matches = want.size === 0 || (r.pair.segmentLabel != null && want.has(r.pair.segmentLabel.trim().toLowerCase()));
+    if (!matches) return { ...r, included: false, filteredOut: true };
+    return r.filteredOut ? { ...r, included: runnable(r), filteredOut: false } : r;
   });
 }
 
@@ -115,7 +132,15 @@ export function selectedPairs(rows: readonly PairRow[]): { pair: BatchPair; case
 }
 
 /** 段 2 は 3D・スケールなし・C/T は 0 だけ。ログ・スケールは設定にあってもオフにして送る。 */
-export function buildBatchRequest(pairs: readonly BatchPair[], form: RoiFeatureForm, recompute = false): BatchRequest {
+export interface BatchRunOptions {
+  recompute?: boolean;
+  /** QC に当たった組の扱い。null は記録だけ。 */
+  qc?: BatchQc | null;
+  /** 許容した組のキー（`pairKey`）。 */
+  acknowledged?: readonly string[];
+}
+
+export function buildBatchRequest(pairs: readonly BatchPair[], form: RoiFeatureForm, opts: BatchRunOptions = {}): BatchRequest {
   return {
     pairs: [...pairs],
     settings: roiFeatureSettings({ ...form, logOn: false }),
@@ -127,8 +152,18 @@ export function buildBatchRequest(pairs: readonly BatchPair[], form: RoiFeatureF
     scaleCoefficient: null,
     channel: 0,
     timePoint: 0,
-    recompute,
+    recompute: opts.recompute ?? false,
+    qc: opts.qc ?? null,
+    qcAcknowledged: opts.acknowledged ? [...opts.acknowledged] : null,
   };
+}
+
+/**
+ * 小さい ROI の基準値（環境設定）が未設定で、どの結果でも判定していないか。判定していないことと「警告なし」を
+ * 取り違えないために、画面で別に知らせる。結果が 1 つも無いときは false。
+ */
+export function smallRoiThresholdUnset(results: readonly RoiFeatureResult[]): boolean {
+  return results.length > 0 && results.every((r) => r.roiSize?.smallRoiWarnVoxels == null);
 }
 
 export interface LabelledResult {
@@ -159,10 +194,13 @@ export function stackedDataCsv(items: readonly LabelledResult[]): StackedCsv {
 }
 
 /** 症例ラベルと UID の対応表。患者名・患者 ID は入れない。計算しなかった組・失敗した組も、状態つきで残す。 */
-export function pairsCsv(rows: readonly { caseLabel: string; status: BatchPairStatusRow }[]): string {
+export function pairsCsv(
+  rows: readonly { caseLabel: string; status: BatchPairStatusRow }[],
+  specSha256 = "",
+): string {
   const head = [
     "CaseLabel", "StudyInstanceUID", "SourceSeriesUID", "MaskSeriesUID", "SegmentNumber", "SegmentLabel",
-    "MaskChannel", "State", "FailureKind", "FromCache", "Error",
+    "MaskChannel", "State", "FailureKind", "FromCache", "Error", "QcFlags", "SpecSha256",
   ];
   const out = [head.join(",")];
   for (const { caseLabel, status: s } of rows) {
@@ -170,6 +208,7 @@ export function pairsCsv(rows: readonly { caseLabel: string; status: BatchPairSt
       caseLabel, s.pair.studyUid, s.pair.sourceSeriesUid ?? "", s.pair.maskSeriesUid,
       s.pair.segmentNumber == null ? "" : String(s.pair.segmentNumber), s.pair.segmentLabel ?? "",
       String(s.pair.maskChannel), s.state, s.failureKind ?? "", s.fromCache ? "1" : "0", s.error ?? "",
+      (s.qcFlags ?? []).join(";"), specSha256,
     ].map(cell).join(","));
   }
   return `${out.join("\r\n")}\r\n`;
@@ -181,18 +220,26 @@ export function batchFileBase(prefix: string): string {
   return p || "roi-features-batch";
 }
 
+/** 書き出す定義（`_spec.json`）。ハッシュは `_pairs.csv` の `SpecSha256` に入れる。 */
+export interface BatchSpecFile {
+  sha256: string;
+  text: string;
+}
+
 export interface BatchFiles {
   features: { name: string; text: string };
   definitions: { name: string; text: string };
   settings: { name: string; text: string };
   pairs: { name: string; text: string };
+  spec: { name: string; text: string } | null;
 }
 
-/** 書き出す 4 ファイル。計算できた症例が無い、または見出しが合わないときは理由を返す。 */
+/** 書き出すファイル（4 つ。定義を渡せば `_spec.json` も）。計算できた症例が無い、または見出しが合わないときは理由を返す。 */
 export function batchFiles(
   prefix: string,
   items: readonly LabelledResult[],
   all: readonly { caseLabel: string; status: BatchPairStatusRow }[],
+  spec: BatchSpecFile | null = null,
 ): { ok: true; files: BatchFiles } | { ok: false; reason: string; caseLabel: string } {
   const stacked = stackedDataCsv(items);
   if (!stacked.ok) return stacked;
@@ -203,7 +250,8 @@ export function batchFiles(
       features: { name: `${base}.csv`, text: stacked.csv },
       definitions: { name: `${base}_definitions.csv`, text: roiFeatureDefinitionsCsv(items[0].result) },
       settings: { name: `${base}_radiomicsj.properties`, text: items[0].result.settingsProperties },
-      pairs: { name: `${base}_pairs.csv`, text: pairsCsv(all) },
+      pairs: { name: `${base}_pairs.csv`, text: pairsCsv(all, spec?.sha256 ?? "") },
+      spec: spec ? { name: `${base}_spec.json`, text: spec.text } : null,
     },
   };
 }

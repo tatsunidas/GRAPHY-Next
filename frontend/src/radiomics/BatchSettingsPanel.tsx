@@ -4,6 +4,7 @@
  */
 import { NumberField } from "../hooks/NumberField";
 import { useI18n } from "../i18n/i18n";
+import type { SpecQcMode } from "./batchSpec";
 import { ROI_FEATURE_FAMILIES, type RoiFeatureForm } from "./roiFeatureSettings";
 
 /**
@@ -14,10 +15,18 @@ export function BatchSettingsPanel({
   form,
   setForm,
   disabled,
+  qc,
+  setQc,
+  labelsText,
+  setLabelsText,
 }: {
   form: RoiFeatureForm;
   setForm: (f: (prev: RoiFeatureForm) => RoiFeatureForm) => void;
   disabled: boolean;
+  qc: { smallRoi: SpecQcMode; lossy: SpecQcMode };
+  setQc: (q: { smallRoi: SpecQcMode; lossy: SpecQcMode }) => void;
+  labelsText: string;
+  setLabelsText: (s: string) => void;
 }) {
   const { t } = useI18n();
   const familyLabel = (key: string): string => {
@@ -59,6 +68,22 @@ export function BatchSettingsPanel({
           </>
         )}
       </div>
+      <div style={row}>
+        <span style={label}>{t("roiFeat.batch.labels")}</span>
+        <input data-testid="batch-labels" value={labelsText} placeholder="GTV, tumor" disabled={disabled}
+          style={{ ...input, width: 300 }} onChange={(e) => setLabelsText(e.target.value)} />
+        <span style={hint}>{t("roiFeat.batch.labelsHelp")}</span>
+      </div>
+      <div style={row} data-testid="batch-qc">
+        <span style={label}>{t("roiFeat.batch.qc.title")}</span>
+        <span>{t("roiFeat.batch.qc.smallRoi")}</span>
+        <QcRadios name="qc-small" value={qc.smallRoi} disabled={disabled} testId="batch-qc-small"
+          onChange={(v) => setQc({ ...qc, smallRoi: v })} />
+        <span style={{ marginLeft: 10 }}>{t("roiFeat.batch.qc.lossy")}</span>
+        <QcRadios name="qc-lossy" value={qc.lossy} disabled={disabled} testId="batch-qc-lossy"
+          onChange={(v) => setQc({ ...qc, lossy: v })} />
+      </div>
+      <div style={hint}>{t("roiFeat.batch.qc.help")}</div>
       <div style={{ ...label, marginTop: 6 }}>{t("roiFeat.field.families")}</div>
       <div style={grid}>
         {ROI_FEATURE_FAMILIES.map((fam) => (
@@ -73,6 +98,21 @@ export function BatchSettingsPanel({
   );
 }
 
+function QcRadios({ name, value, disabled, onChange, testId }: {
+  name: string; value: SpecQcMode; disabled: boolean; onChange: (v: SpecQcMode) => void; testId: string;
+}) {
+  const { t } = useI18n();
+  return (
+    <span data-testid={testId} style={{ display: "inline-flex", gap: 8 }}>
+      <label><input type="radio" name={name} checked={value === "FLAG"} disabled={disabled}
+        onChange={() => onChange("FLAG")} /> {t("roiFeat.batch.qc.flag")}</label>
+      <label><input type="radio" name={name} checked={value === "STOP"} disabled={disabled}
+        onChange={() => onChange("STOP")} /> {t("roiFeat.batch.qc.stop")}</label>
+    </span>
+  );
+}
+
+const hint: React.CSSProperties = { color: "#6b7785", fontSize: 11 };
 const row: React.CSSProperties = { display: "flex", alignItems: "center", gap: 10, padding: "3px 0", flexWrap: "wrap" };
 const label: React.CSSProperties = { color: "#5a6672", minWidth: 110 };
 const grid: React.CSSProperties = {

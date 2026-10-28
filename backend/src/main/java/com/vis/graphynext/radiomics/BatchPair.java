@@ -29,6 +29,12 @@ public record BatchPair(
 
     public enum Status { AUTO, NEEDS_CONFIRMATION, EXCLUDED }
 
+    /** 組を識別するキー。画面の {@code pairKey} と同じ並び（QC で許容した組の照合に使う）。 */
+    @com.fasterxml.jackson.annotation.JsonIgnore
+    public String pairKey() {
+        return studyUid + "|" + maskSeriesUid + "|" + maskChannel;
+    }
+
     static BatchPair excluded(String studyUid, String maskSeriesUid, Integer segmentNumber, String segmentLabel,
                               String reason) {
         return new BatchPair(studyUid, null, maskSeriesUid, segmentNumber, segmentLabel, 0, Status.EXCLUDED, reason,
