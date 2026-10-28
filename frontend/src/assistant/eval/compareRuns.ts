@@ -5,6 +5,8 @@
 // 回帰評価の 2 回の実行を比べる（純関数）。質問セットの版が違う実行どうしは比べない。
 export interface StoredEvalRun {
   ts: string;
+  /** 質問の組。組が違う実行どうしは比べない。 */
+  suite: "basic" | "plugin-pos";
   suiteVersion: number;
   provider: string | null;
   modelId: string | null;
@@ -13,7 +15,7 @@ export interface StoredEvalRun {
   passed: number;
   /** 全質問の応答時間の合計（ms）。1 問でも欠けた・古い行は null＝未取得。 */
   totalLatencyMs?: number | null;
-  cases: { id: string; pass: boolean; latencyMs?: number }[];
+  cases: { id: string; pass: boolean; passes: number; n: number; latencyMs?: number }[];
 }
 
 export interface RunComparison {
@@ -27,7 +29,7 @@ export interface RunComparison {
 }
 
 export function compareRuns(prev: StoredEvalRun, cur: StoredEvalRun): RunComparison {
-  if (prev.suiteVersion !== cur.suiteVersion) return { comparable: false, modelChanged: false, regressed: [], fixed: [] };
+  if (prev.suite !== cur.suite || prev.suiteVersion !== cur.suiteVersion) return { comparable: false, modelChanged: false, regressed: [], fixed: [] };
   const was = new Map(prev.cases.map((c) => [c.id, c.pass]));
   const regressed: string[] = [];
   const fixed: string[] = [];

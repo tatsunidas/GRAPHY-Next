@@ -129,8 +129,8 @@ import { compareRuns, type StoredEvalRun } from "./compareRuns";
 
 describe("compareRuns", () => {
   const run = (over: Partial<StoredEvalRun> = {}, pass: Record<string, boolean> = {}): StoredEvalRun => ({
-    ts: "t", suiteVersion: 1, provider: "p", modelId: "m", modelVersion: "v1", total: 3, passed: 3,
-    cases: [{ id: "a", pass: pass.a ?? true }, { id: "b", pass: pass.b ?? true }, { id: "c", pass: pass.c ?? true }], ...over,
+    ts: "t", suite: "basic", suiteVersion: 1, provider: "p", modelId: "m", modelVersion: "v1", total: 3, passed: 3,
+    cases: (["a", "b", "c"] as const).map((id) => ({ id, pass: pass[id] ?? true, passes: (pass[id] ?? true) ? 1 : 0, n: 1 })), ...over,
   });
   it("一致→不一致と、不一致→一致を分ける。版の変化を示す", () => {
     const r = compareRuns(run({}, { c: false }), run({ modelVersion: "v2" }, { a: false }));
@@ -141,9 +141,10 @@ describe("compareRuns", () => {
   });
   it("負例: 質問セットの版が違えば比べない。版が不明（null）なら変化とは言わない。前回に無い質問は無視", () => {
     expect(compareRuns(run({ suiteVersion: 1 }), run({ suiteVersion: 2 })).comparable).toBe(false);
+    expect(compareRuns(run({ suite: "basic" }), run({ suite: "plugin-pos" })).comparable).toBe(false);
     expect(compareRuns(run({ modelVersion: null }), run({ modelVersion: "v2" })).modelChanged).toBe(false);
     const cur = run();
-    cur.cases.push({ id: "new", pass: false });
+    cur.cases.push({ id: "new", pass: false, passes: 0, n: 1 });
     expect(compareRuns(run(), cur).regressed).toEqual([]);
   });
 });

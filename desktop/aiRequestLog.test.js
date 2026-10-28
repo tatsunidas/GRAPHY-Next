@@ -123,7 +123,7 @@ const EVAL = { suiteVersion: 1, meta: { provider: "cloud", modelId: "m", modelVe
 
 test("buildEvalRecord: 正例 — 件数と一致数は main が数え直す（レンダラの申告を使わない）", () => {
   const r = buildEvalRecord({ ...EVAL, total: 99, passed: 99 });
-  assert.deepEqual(r, { suiteVersion: 1, provider: "cloud", modelId: "m", modelVersion: "m-2026", total: 2, passed: 1, totalLatencyMs: null, cases: EVAL.cases });
+  assert.deepEqual(r, { suite: "basic", suiteVersion: 1, provider: "cloud", modelId: "m", modelVersion: "m-2026", total: 2, passed: 1, totalLatencyMs: null, cases: [{ id: "flip-h", pass: true, passes: 1, n: 1 }, { id: "slice-10th", pass: false, passes: 0, n: 1 }] });
 });
 
 test("buildEvalRecord: 負例 — 不正な id・型・空・巨大・版なし・余計な項目（質問本文など）は保存しない／出さない", () => {
@@ -182,13 +182,42 @@ test("summary: モデル別の応答時間 — 手計算の分位数（最近順
 
 test("buildEvalRecord: 質問ごとの応答時間 — 許可リスト（負例は項目だけ捨てる）と合計", () => {
   const ok = buildEvalRecord({ ...EVAL, cases: [{ id: "a", pass: true, latencyMs: 1200 }, { id: "b", pass: false, latencyMs: 800 }] });
-  assert.deepEqual(ok.cases, [{ id: "a", pass: true, latencyMs: 1200 }, { id: "b", pass: false, latencyMs: 800 }]);
+  assert.deepEqual(ok.cases, [{ id: "a", pass: true, passes: 1, n: 1, latencyMs: 1200 }, { id: "b", pass: false, passes: 0, n: 1, latencyMs: 800 }]);
   assert.equal(ok.totalLatencyMs, 2000);
   for (const bad of [-1, 1.5, "9", null, 60 * 60 * 1000 + 1, NaN]) {
     const r = buildEvalRecord({ ...EVAL, cases: [{ id: "a", pass: true, latencyMs: 100 }, { id: "b", pass: true, latencyMs: bad }] });
-    assert.deepEqual(r.cases[1], { id: "b", pass: true }, `不正値 ${String(bad)} は項目だけ捨てる`);
+    assert.deepEqual(r.cases[1], { id: "b", pass: true, passes: 1, n: 1 }, `不正値 ${String(bad)} は項目だけ捨てる`);
     assert.equal(r.totalLatencyMs, null, "欠けがあれば合計は不明（欠けを 0 として足さない）");
   }
   const old = buildEvalRecord({ ...EVAL, cases: [{ id: "a", pass: true }] });
   assert.equal(old.totalLatencyMs, null, "古い行（項目なし）は読めて、合計は未取得");
+});
+
+test("buildEvalRecord: 組と反復の集計 — 許可リスト。pass と矛盾する・範囲外の passes/n・未知の組は保存しない", () => {
+  const ok = buildEvalRecord({ ...EVAL, suite: "plugin-pos", cases: [{ id: "a", pass: true, passes: 5, n: 5 }, { id: "b", pass: false, passes: 3, n: 5 }] });
+  assert.equal(ok.suite, "plugin-pos");
+  assert.deepEqual(ok.cases.map((c) => [c.passes, c.n]), [[5, 5], [3, 5]]);
+  assert.equal(ok.passed, 1, "一致数は『k 回すべて合格』の質問数");
+  for (const bad of [
+    { suite: "other" }, { suite: 1 },
+    { cases: [{ id: "a", pass: true, passes: 4, n: 5 }] }, // 全回合格でないのに pass:true
+    { cases: [{ id: "a", pass: false, passes: 5, n: 5 }] }, // 全回合格なのに pass:false
+    { cases: [{ id: "a", pass: false, passes: 6, n: 5 }] },
+    { cases: [{ id: "a", pass: true, passes: 21, n: 21 }] },
+    { cases: [{ id: "a", pass: false, passes: 0, n: 0 }] },
+    { cases: [{ id: "a", pass: false, passes: "1", n: 5 }] },
+    { cases: [{ id: "a", pass: false, n: 5 }] },
+  ]) assert.equal(buildEvalRecord({ ...EVAL, ...bad }), null, JSON.stringify(bad).slice(0, 70));
+});
+
+test("createEvalStore: 組と集計は書いて読み戻せる。古い行（suite なし）は basic・1 回として読める", () => {
+  const file = tmp();
+  const s = createEvalStore({ file });
+  s.append({ ...EVAL, suite: "plugin-pos", cases: [{ id: "a", pass: false, passes: 3, n: 5 }] });
+  fs.appendFileSync(file, JSON.stringify({ ts: "2026-10-01T00:00:00.000Z", suiteVersion: 1, provider: "cloud", modelId: "m", modelVersion: null, total: 1, passed: 1, totalLatencyMs: null, cases: [{ id: "a", pass: true }] }) + "\n");
+  const [old, cur] = s.list().runs; // 新しい順（最後に足した古い形式の行が先頭）
+  assert.equal(old.suite, "basic");
+  assert.deepEqual(old.cases[0], { id: "a", pass: true, passes: 1, n: 1 });
+  assert.equal(cur.suite, "plugin-pos");
+  assert.deepEqual(cur.cases[0], { id: "a", pass: false, passes: 3, n: 5 });
 });
