@@ -7,6 +7,7 @@ import { useI18n } from "../i18n/i18n";
 import { fetchAlbums, fetchAlbumStudies, type Album } from "./albumApi";
 import type { AlbumView } from "./albumView";
 import { AlbumManageDialog } from "./AlbumManageDialog";
+import { RoiFeatureBatchDialog } from "../radiomics/RoiFeatureBatchDialog";
 
 /**
  * 一覧の上のアルバム切り替え。選ぶと一覧をそのアルバムのスタディだけに絞り、「検索条件に戻す」で元に戻る。
@@ -18,16 +19,20 @@ export function AlbumBar({
   onOpen,
   onClose,
   onChanged,
+  batchEnabled = false,
 }: {
   view: AlbumView | null;
   version: number;
   onOpen: (v: AlbumView) => void;
   onClose: () => void;
   onChanged: () => void;
+  /** ROI 特徴量の一括抽出を出せるか（standalone 版だけ）。 */
+  batchEnabled?: boolean;
 }) {
   const { t } = useI18n();
   const [albums, setAlbums] = useState<Album[]>([]);
   const [manageOpen, setManageOpen] = useState(false);
+  const [batchOpen, setBatchOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -72,6 +77,12 @@ export function AlbumBar({
         <button type="button" data-testid="album-manage-button" onClick={() => setManageOpen(true)} style={btn}>
           {t("album.bar.manage")}
         </button>
+        {batchEnabled && (
+          <button type="button" data-testid="album-batch-button" disabled={!view} onClick={() => setBatchOpen(true)}
+            title={view ? undefined : t("album.bar.batchNeedsAlbum")} style={btn}>
+            {t("album.bar.batch")}
+          </button>
+        )}
       </div>
       {error && (
         <div data-testid="album-error" style={{ color: "#b42318", fontSize: 12, marginTop: 4 }}>
@@ -85,6 +96,10 @@ export function AlbumBar({
             {t("album.bar.back")}
           </button>
         </div>
+      )}
+      {batchOpen && view && (
+        <RoiFeatureBatchDialog albumId={view.id} albumName={view.name} uids={view.uids}
+          onClose={() => setBatchOpen(false)} />
       )}
       {manageOpen && (
         <AlbumManageDialog
