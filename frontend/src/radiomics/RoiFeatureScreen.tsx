@@ -32,6 +32,7 @@ import {
   type Series,
 } from "../api";
 import { formatFeatureValue } from "./GlamFeatureTable";
+import { RoiSummaryPanels } from "./RoiSummaryPanels";
 import { formatAreaMm2, formatPositionMm, tiePositions } from "./maxSection";
 import { requestRemoteReveal } from "../viewer/roiRevealBridge";
 import { compareRows, roiFeature2dFiles, type CompareRow } from "./roiFeatureModes";
@@ -51,6 +52,9 @@ import {
 import {
   ROI_FEATURE_FAMILIES,
   LOG_PADDINGS,
+  applySixStatistics,
+  isSixStatistics,
+  rangeBounds,
   SCALE_CONVERSIONS,
   anyFamilyOn,
   roiFeatureScaleRequest,
@@ -382,6 +386,8 @@ export function RoiFeatureScreen() {
     return t("roiFeat.summary.settings", { disc, resampling: rs, filter, on, total: ROI_FEATURE_FAMILIES.length });
   }, [result, t]);
 
+  const rangeProblem = rangeBounds(form).problem;
+
   const setFamily = (key: string, on: boolean) =>
     setForm((f) => ({ ...f, families: { ...f.families, [key]: on } }));
 
@@ -553,6 +559,20 @@ export function RoiFeatureScreen() {
             )}
           </span>
         </Field>
+        <Field label={t("roiFeat.field.range")}>
+          <span style={{ display: "inline-flex", gap: 6, alignItems: "center", justifyContent: "flex-end" }}>
+            <input value={form.rangeMinText} disabled={busy} style={{ ...input, width: 72 }} inputMode="decimal"
+              placeholder={t("roiFeat.range.min")} data-testid="roifeat-range-min"
+              onChange={(e) => setForm((f) => ({ ...f, rangeMinText: e.target.value }))} />
+            <span>〜</span>
+            <input value={form.rangeMaxText} disabled={busy} style={{ ...input, width: 72 }} inputMode="decimal"
+              placeholder={t("roiFeat.range.max")} data-testid="roifeat-range-max"
+              onChange={(e) => setForm((f) => ({ ...f, rangeMaxText: e.target.value }))} />
+          </span>
+        </Field>
+        {rangeProblem && (
+          <div style={warnBand} data-testid="roifeat-range-problem">{t(`roiFeat.range.problem.${rangeProblem}`)}</div>
+        )}
         <Field label={t("roiFeat.field.filter")}>
           <span style={{ display: "inline-flex", gap: 8, alignItems: "center", justifyContent: "flex-end", flexWrap: "wrap" }}>
             <label>
@@ -642,6 +662,14 @@ export function RoiFeatureScreen() {
             <div style={note}>{t("roiFeat.filter.note")}</div>
           </>
         )}
+        <Field label={t("roiFeat.field.preset")}>
+          <select value={isSixStatistics(form) ? "six" : "custom"} disabled={busy} style={{ ...input, width: 190 }}
+            data-testid="roifeat-preset"
+            onChange={(e) => { if (e.target.value === "six") setForm((f) => applySixStatistics(f)); }}>
+            <option value="custom">{t("roiFeat.preset.custom")}</option>
+            <option value="six">{t("roiFeat.preset.six")}</option>
+          </select>
+        </Field>
         <div style={{ ...fieldLabel, marginTop: 6 }}>{t("roiFeat.field.families")}</div>
         <div style={familyGrid}>
           {ROI_FEATURE_FAMILIES.map((f) => (
@@ -654,7 +682,7 @@ export function RoiFeatureScreen() {
         {form.families.GLAM && <div style={note}>{t("roiFeat.glamNote")}</div>}
 
         <div style={{ display: "flex", gap: 6, marginTop: 10, justifyContent: "flex-end" }}>
-          <button onClick={() => void run(false)} disabled={busy || !studyUid}
+          <button onClick={() => void run(false)} disabled={busy || !studyUid || rangeProblem !== null}
             style={{ ...btnPrimary, opacity: busy ? 0.6 : 1 }} data-testid="roifeat-run">
             {t("roiFeat.run")}
           </button>
@@ -783,6 +811,7 @@ export function RoiFeatureScreen() {
               volume: result.roiSize.volumeMm3 == null ? "?" : result.roiSize.volumeMm3.toFixed(1),
             })}
           </div>
+          {!(result.section || result.slices) && <RoiSummaryPanels rows={result.rows} t={t} />}
           <div style={note}>{t("roiFeat.count", { n: result.rows.length })}</div>
           {(result.section || result.slices) && <Modes2dPanel result={result} t={t} />}
 

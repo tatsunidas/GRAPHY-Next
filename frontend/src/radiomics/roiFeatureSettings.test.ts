@@ -23,7 +23,7 @@ const SETTING_PARAMS = new Set([
   "BOOL_enableIntensityBasedStatistics", "BOOL_enableLocalIntensityFeatures", "BOOL_enableIntensityHistogram",
   "BOOL_enableIntensityVolumeHistogram", "BOOL_enableMorphological", "BOOL_enableShape2D", "BOOL_enableGLCM",
   "BOOL_enableGLRLM", "BOOL_enableGLSZM", "BOOL_enableGLDZM", "BOOL_enableGLAM", "BOOL_enableNGTDM",
-  "BOOL_enableNGLDM", "BOOL_enableHomological", "BOOL_enableFractal", "BOOL_enableOperationalInfo",
+  "BOOL_enableNGLDM", "BOOL_enableHomological", "BOOL_enableFractal", "BOOL_enableAuxiliaryStatistics", "BOOL_enableOperationalInfo",
   "BOOL_enableDiagnostics",
   "DOUBLEARRAY_logSigmaMm", "DOUBLE_logTruncate", "STRING_logPadding",
 ]);

@@ -45,6 +45,7 @@ final class RadiomicsJSettingsSnapshot {
         put(SettingParams.DOUBLE_Mask_PartialVolumeThareshold, r -> s(RadiomicsJ.mask_PartialVolumeThreshold));
         put(SettingParams.BOOL_interpolation_intensity_rounding, r -> b(RadiomicsJ.interpolation_intensity_rounding));
         put(SettingParams.BOOL_USE_FixedBinNumber, r -> b(RadiomicsJ.BOOL_USE_FixedBinNumber));
+        put(SettingParams.BOOL_USE_GPU, r -> b(RadiomicsJ.BOOL_USE_GPU));
         put(SettingParams.DOUBLE_binWidth, r -> s(RadiomicsJ.binWidth));
         put(SettingParams.INT_binCount, r -> s(RadiomicsJ.nBins));
         put(SettingParams.BOOL_normalize, r -> b(RadiomicsJ.normalize));
