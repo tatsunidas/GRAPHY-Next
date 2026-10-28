@@ -6,7 +6,7 @@
 export interface StoredEvalRun {
   ts: string;
   /** 質問の組。組が違う実行どうしは比べない。 */
-  suite: "basic" | "plugin-pos";
+  suite: "basic" | "basic-b" | "plugin-pos";
   suiteVersion: number;
   provider: string | null;
   modelId: string | null;

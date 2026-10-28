@@ -29,7 +29,7 @@ export function evalStartMode(destination: EvalApi["destination"]): "ask" | "run
 }
 
 /** 組ごとの反復回数の既定。基本の組は 1 回、プラグイン・位置の組は揺れを見るため 5 回。上限は保存側（main）と同じ 20。 */
-export const DEFAULT_REPEATS: Record<EvalSuiteId, number> = { basic: 1, "plugin-pos": 5 };
+export const DEFAULT_REPEATS: Record<EvalSuiteId, number> = { basic: 1, "basic-b": 1, "plugin-pos": 5 };
 export const MAX_REPEATS = 20;
 
 /**

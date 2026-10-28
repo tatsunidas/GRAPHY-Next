@@ -547,14 +547,14 @@ export interface GraphyDesktop {
   assistantRequestLogClear?: () => Promise<{ ok: boolean; error?: string }>;
   /** 回帰評価の結果の保存と一覧（質問 id と一致/不一致だけ。本文は保存しない）。アシスタント窓だけ。 */
   assistantEvalAppend?: (run: {
-    suite: "basic" | "plugin-pos";
+    suite: "basic" | "basic-b" | "plugin-pos";
     suiteVersion: number;
     meta: { provider: string | null; modelId: string | null; modelVersion: string | null };
     cases: { id: string; pass: boolean; passes: number; n: number; latencyMs?: number }[];
   }) => Promise<{ ok: boolean; error?: string }>;
   assistantEvalList?: () => Promise<{
     ok: boolean;
-    runs?: { ts: string; suite: "basic" | "plugin-pos"; suiteVersion: number; provider: string | null; modelId: string | null; modelVersion: string | null; total: number; passed: number; totalLatencyMs: number | null; cases: { id: string; pass: boolean; passes: number; n: number; latencyMs?: number }[] }[];
+    runs?: { ts: string; suite: "basic" | "basic-b" | "plugin-pos"; suiteVersion: number; provider: string | null; modelId: string | null; modelVersion: string | null; total: number; passed: number; totalLatencyMs: number | null; cases: { id: string; pass: boolean; passes: number; n: number; latencyMs?: number }[] }[];
     error?: string;
   }>;
   assistantMacrosList?: () => Promise<{ ok: boolean; macros?: import("./assistant/macros/macroModel").Macro[]; error?: string }>;

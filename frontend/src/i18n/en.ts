@@ -252,6 +252,7 @@ export const en: Record<string, string> = {
   "assistant.eval.suite": "Question set version {{v}}",
   "assistant.eval.suiteLabel": "Question set",
   "assistant.eval.suite.basic": "Basic (display operations)",
+  "assistant.eval.suite.basic-b": "Basic, rephrased (held out)",
   "assistant.eval.suite.plugin-pos": "Plugin tools, positions, ambiguous requests",
   "assistant.eval.repeats": "Repeats",
   "assistant.eval.rate": "Pass rate {{pct}}% ({{ok}}/{{q}} questions passed every run, 95% CI {{lo}}–{{hi}}%)",

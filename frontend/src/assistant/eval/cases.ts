@@ -49,7 +49,7 @@ export const EVAL_CASES: readonly EvalCase[] = [
 ];
 
 /** 組の識別子（保存行の `suite`）。 */
-export type EvalSuiteId = "basic" | "plugin-pos";
+export type EvalSuiteId = "basic" | "basic-b" | "plugin-pos";
 
 export interface EvalSuite {
   id: EvalSuiteId;
@@ -114,7 +114,30 @@ export const EVAL_CASES_2: readonly EvalCase[] = [
   { id: "vague-window", text: "もう少し見やすくして", expect: { ops: [] } },
 ];
 
+// ---- 保留セット（basic-b）: 基本の組と同じ操作の、別の言い方 ----
+// 説明文の調整は基本の組を見て行うので、調整が言い回しへの過学習でないことを、こちらで確かめる。
+// 🔴 この組の質問を見て説明文を直さない（直すなら質問ではなく操作の別名として一般的に書く）。
+export const EVAL_SUITE_B_VERSION = 1;
+
+export const EVAL_CASES_B: readonly EvalCase[] = [
+  { id: "b-wl-numbers", text: "ウィンドウ幅 80、ウィンドウレベル 40 に設定して", expect: { ops: [{ id: "setWindowLevel", args: { center: 40, width: 80 } }] } },
+  { id: "b-wl-brain", text: "脳を見る条件に切り替えて", expect: { ops: [{ id: "applyWlPreset", args: { name: ["brain", "脳"] } }] } },
+  { id: "b-wl-bone", text: "骨を見やすい表示にして", expect: { ops: [{ id: "applyWlPreset", args: { name: ["bone", "骨"] } }] } },
+  { id: "b-rotate", text: "画像を右に 90 度回転させて", expect: { ops: [{ id: "rotate90" }] } },
+  { id: "b-flip-h", text: "画像を鏡のように左右入れ替えて", expect: { ops: [{ id: "flipH" }] } },
+  { id: "b-flip-v", text: "画像を上下ひっくり返して", expect: { ops: [{ id: "flipV" }] } },
+  { id: "b-invert", text: "ネガポジを反転して", expect: { ops: [{ id: "invert" }] } },
+  { id: "b-slice-5th", text: "5 枚目に移動して", expect: { ops: [{ id: "goToSlice", args: { index: 4 } }] } },
+  { id: "b-slice-last", text: "最後のスライスを表示して", expect: { ops: [{ id: "goToSlice", args: { index: 42 } }], reads: ["getState"] } },
+  { id: "b-layout-3", text: "3 列で並べて表示して", expect: { ops: [{ id: "setLayout", args: { cols: 3 } }] } },
+  { id: "b-tool-angle", text: "角度を測るツールに切り替えて", expect: { ops: [{ id: "setTool", args: { tool: "angle" } }] } },
+  { id: "b-wl-reset", text: "ウィンドウを元の設定に戻して", expect: { ops: [{ id: "resetWindow" }] } },
+  { id: "b-read-sd", text: "ROI の標準偏差はいくつ？", expect: { ops: [], reads: ["getMeasurements"] } },
+  { id: "b-no-op", text: "CT と MRI の違いを教えて", expect: { ops: [] } },
+];
+
 export const EVAL_SUITES: readonly EvalSuite[] = [
   { id: "basic", version: EVAL_SUITE_VERSION, cases: EVAL_CASES },
+  { id: "basic-b", version: EVAL_SUITE_B_VERSION, cases: EVAL_CASES_B },
   { id: "plugin-pos", version: EVAL_SUITE_2_VERSION, cases: EVAL_CASES_2, pluginTools: SYNTH_PLUGIN_TOOLS },
 ];
