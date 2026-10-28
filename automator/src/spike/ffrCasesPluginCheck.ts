@@ -11,6 +11,9 @@
  *   control-neg  同じ入力で、検算用アンカーの B 側だけ血管に沿って FFR_SHIFT_SAMPLES サンプルずらす（陰性対照:
  *                別の解剖点を指す取り違え）。
  *   spec         FFR_SPEC が指す JSON（ローカル・非コミット）を再生する。実症例用。
+ * FFR_GUIDE=1    補正に使うアンカーを、B を基準に［ガイドに合わせる］で A へ寄せて決める（点の選定用。検算用は寄せない）。
+ *                寄せた後の位置は report.finalAnchors に出る（それを ffr-cases-segments-C.json に写して固定する）。
+ *                ガイドで選んだ対応点は再投影ゲートが循環になるので、通過は「整合性ゲート通過」としか言えない。
  *
  * <h3>これは何を確かめ、何を確かめないか</h3>
  * - 確かめる: 窓の操作（シリーズ選択・フレーム・始点終点・アンカーの移動と確認・検算用アンカー・再構成）が
@@ -54,6 +57,8 @@ const OUT_DIR = path.join(AUTOMATOR_ROOT, ".results", "ffr-plugin");
 const MODE = process.env.FFR_MODE ?? "control-pos";
 const SHIFT = Number(process.env.FFR_SHIFT_SAMPLES ?? "130");
 const IMG = 512;
+/** 1: 補正に使うアンカーを、B を基準に［ガイドに合わせる］で A へ寄せて決める（検算用は寄せない）。 */
+const GUIDE = process.env.FFR_GUIDE === "1";
 
 const log = (...a: unknown[]) => console.log(...a);
 const results: { name: string; ok: boolean | null; detail?: unknown }[] = [];
@@ -293,14 +298,32 @@ async function main(): Promise<void> {
         await dragAnchor(viewer, "B", i, targets[i].b);
       }
     }
+    const guidedLog: { i: number; roughA: Pt; snappedA: [number, number]; note: string }[] = [];
     for (let i = 0; i < targets.length; i++) {
-      await dragAnchor(viewer, "A", i, targets[i].a);
-      await dragAnchor(viewer, "B", i, targets[i].b);
+      if (GUIDE && i < spec.anchors.length) {
+        // B を基準に置き、A は概略位置で掴んでから［ガイドに合わせる］で B のガイド線と A 中心線の交点へ寄せる。
+        // 検算用アンカー（i >= anchors.length）は独立でなければならないので、寄せずに直接置く。
+        await dragAnchor(viewer, "B", i, targets[i].b);
+        await viewer.getByTestId("dual-confirm").click();
+        await dragAnchor(viewer, "A", i, targets[i].a);
+        await viewer.getByTestId("dual-snap").click();
+        await viewer.waitForTimeout(300);
+        const s = (await anchorsOf(viewer, "A"))[i];
+        guidedLog.push({ i, roughA: targets[i].a, snappedA: [s[0], s[1]], note: await txt(viewer, "dual-info") });
+      } else {
+        await dragAnchor(viewer, "A", i, targets[i].a);
+        await dragAnchor(viewer, "B", i, targets[i].b);
+      }
       await viewer.getByTestId("dual-confirm").click();
       await viewer.waitForTimeout(250);
     }
     const gotA = await anchorsOf(viewer, "A");
     const gotB = await anchorsOf(viewer, "B");
+    if (GUIDE) {
+      report.guided = guidedLog;
+      report.finalAnchors = { A: gotA.map((g) => [+g[0].toFixed(2), +g[1].toFixed(2)]), B: gotB.map((g) => [+g[0].toFixed(2), +g[1].toFixed(2)]) };
+      log("ガイドで寄せた A:", JSON.stringify(guidedLog.map((g) => ({ i: g.i, rough: g.roughA, snapped: g.snappedA.map((v) => +v.toFixed(1)) }))));
+    }
     const off = (got: [number, number, boolean][], key: "a" | "b") => got.map((g, i) => Math.hypot(g[0] - targets[i][key][0], g[1] - targets[i][key][1]));
     const offA = off(gotA, "a");
     const offB = off(gotB, "b");
