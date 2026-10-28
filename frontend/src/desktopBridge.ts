@@ -410,6 +410,10 @@ export interface GraphyDesktop {
   pickDirectory?: () => Promise<string | null>;
   /** 2d/3d/mpr/slicer 等の独立ビューアを新規ウィンドウで開く。 */
   openViewer?: (screen: string) => Promise<void>;
+  /** 外部（RIS など）から「この検査を開く」を受ける（main が検証した要求だけ）。購読を外す関数を返す。メインウィンドウだけが使う。 */
+  onExternalOpen?: (cb: (parsed: unknown) => void) => () => void;
+  /** 受け取れる状態になったと main に知らせる（それまでに溜まった要求が届く）。 */
+  externalOpenReady?: () => void;
   /** 接続中の全ディスプレイ情報を取得（モニター診断、デスクトップのみ）。 */
   listDisplays?: () => Promise<DisplayInfo[]>;
   /** 指定モニターに目視テストパターンをフルスクリーン表示する（デスクトップのみ）。 */
@@ -536,20 +540,21 @@ export interface GraphyDesktop {
   assistantRequestLogSummary?: () => Promise<{
     ok: boolean;
     count?: number;
-    byModel?: { provider: string | null; model: string | null; requests: number; tokensIn: number; tokensOut: number; unknownUsage: number }[];
+    byModel?: { provider: string | null; model: string | null; requests: number; tokensIn: number; tokensOut: number; unknownUsage: number; latency: { n: number; p50: number; p95: number } | null }[];
     recent?: Record<string, unknown>[];
     error?: string;
   }>;
   assistantRequestLogClear?: () => Promise<{ ok: boolean; error?: string }>;
   /** 回帰評価の結果の保存と一覧（質問 id と一致/不一致だけ。本文は保存しない）。アシスタント窓だけ。 */
   assistantEvalAppend?: (run: {
+    suite: "basic" | "plugin-pos";
     suiteVersion: number;
     meta: { provider: string | null; modelId: string | null; modelVersion: string | null };
-    cases: { id: string; pass: boolean }[];
+    cases: { id: string; pass: boolean; passes: number; n: number; latencyMs?: number }[];
   }) => Promise<{ ok: boolean; error?: string }>;
   assistantEvalList?: () => Promise<{
     ok: boolean;
-    runs?: { ts: string; suiteVersion: number; provider: string | null; modelId: string | null; modelVersion: string | null; total: number; passed: number; cases: { id: string; pass: boolean }[] }[];
+    runs?: { ts: string; suite: "basic" | "plugin-pos"; suiteVersion: number; provider: string | null; modelId: string | null; modelVersion: string | null; total: number; passed: number; totalLatencyMs: number | null; cases: { id: string; pass: boolean; passes: number; n: number; latencyMs?: number }[] }[];
     error?: string;
   }>;
   assistantMacrosList?: () => Promise<{ ok: boolean; macros?: import("./assistant/macros/macroModel").Macro[]; error?: string }>;

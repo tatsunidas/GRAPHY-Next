@@ -57,6 +57,13 @@ java -jar backend/target/graphy-next-backend.jar \
 - [x] ブラウザ DevTools Network で、ボリューム表示前に **`POST .../prefetch` が 1 回**。以降のスライスは
       個別 WADO-RS 往復なしで表示される（prefetch 無効時の N 回逐次取得と比べ体感高速）。
 
+> **自動検査（2026-10-28 追加・実 PACS 不要）**: ②の「4 画面が開く・一括取得は 1 回」は、スタブ DICOMweb に対して
+> `cd automator && npx tsx src/spike/webFourViewsCheck.ts` で再実行できる（UI 同梱 jar が要る。専用ポート 18190〜18193）。
+> 合成 CT 120 枚で、web の MPR・3D・Curved MPR・Slicer が描画され、取得が「シリーズ一括 1 回・インスタンス単位 0 回」になること、
+> 一括が使えない PACS ではインスタンス単位に戻ること、PACS が止まると開けないことを確かめる。MPR の表示画素は standalone と一致する。
+> **この自動検査が確かめないこと**（上の実 dcm4chee・手動の項目に残る）: 実 dcm4chee・Safari／モバイル・数百枚の CT での BFF のメモリ・
+> Curved MPR のプレビューと Slicer の再構成の操作・ボリューム全画素の一致。
+
 ### ③ 保存＝STOW-RS 書き戻し（#3・★必須）
 - **派生シリーズ（Slicer）**:
   - [x] Slicer でリスライス→保存（派生シリーズ生成）を実行。

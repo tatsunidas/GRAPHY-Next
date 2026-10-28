@@ -7,6 +7,7 @@
 import type { AiChatMessage, AiChatResult } from "../../desktopBridge";
 import { GET_MEASUREMENTS_TOOL, GET_STATE_TOOL, PROPOSE_TOOL, type ActionResult, type ToolDef } from "../actions/registry";
 import { runToolLoop } from "../toolLoop";
+import { toToolDef, type PluginToolEntry } from "../pluginTools";
 import type { EvalCase } from "./cases";
 import { scoreCase, type GotCall } from "./scoreCase";
 
@@ -22,11 +23,16 @@ export const SYNTHETIC_MEASUREMENTS: Record<string, unknown> = {
 
 export interface CaseResult {
   id: string;
-  /** 期待どおりに呼ばれたか。チャット自体が失敗した質問は false（`error` が入る）。 */
+  /** k 回すべて期待どおりに呼ばれたか（`passes === n`）。チャット自体が失敗した回は不合格に数える（`error` が入る）。 */
   pass: boolean;
+  /** 合格した回数と流した回数（k 回反復）。 */
+  passes: number;
+  n: number;
   got: string[];
   reason?: string;
   error?: string;
+  /** 質問 1 回あたりの壁時間（ツール往復を含む、ms。k 回の平均）。チャットが失敗した回が 1 回でもあれば入れない。 */
+  latencyMs?: number;
 }
 
 export interface EvalRun {
@@ -39,6 +45,10 @@ export interface EvalRun {
 
 export interface EvalDeps {
   cases: readonly EvalCase[];
+  /** 各質問を流す回数（既定 1）。 */
+  k?: number;
+  /** 組の合成プラグインツール。ツール一覧に足し、実行は viewer スタブが受ける。 */
+  pluginTools?: readonly PluginToolEntry[];
   systemPrompt: string;
   tools: ToolDef[];
   /** 1 往復。`sessionId` は質問ごとに別（`eval-…`）。 */
@@ -52,52 +62,89 @@ export async function runEval(d: EvalDeps): Promise<EvalRun> {
   const meta: EvalRun["meta"] = { provider: null, modelId: null, modelVersion: null };
   const results: CaseResult[] = [];
   const runId = d.runId ?? Date.now().toString(36);
-  for (let i = 0; i < d.cases.length; i++) {
-    if (d.aborted?.()) break;
+  const k = Math.max(1, Math.floor(d.k ?? 1));
+  const pluginTools = (d.pluginTools ?? []) as PluginToolEntry[];
+  const tools = [...d.tools, ...pluginTools.map(toToolDef)];
+  const total = d.cases.length * k;
+  let done = 0;
+  outer: for (let i = 0; i < d.cases.length; i++) {
     const c = d.cases[i];
-    const sessionId = `eval-${runId}-${i}`;
-    const calls: GotCall[] = [];
-    let chatError: string | undefined;
-    const viewer = async (cmd: { kind: string; id?: string; params?: unknown }): Promise<ActionResult> => {
-      if (cmd.kind === "getState") return { ok: true, state: SYNTHETIC_STATE };
-      if (cmd.kind === "getMeasurements") return { ok: true, measurements: SYNTHETIC_MEASUREMENTS };
-      return { ok: true };
-    };
-    const res = await runToolLoop(
-      [
-        { role: "system", text: d.systemPrompt },
-        { role: "user", text: c.text },
-      ],
-      d.tools,
-      {
-        mode: "chat",
-        chat: async (messages, tools) => {
-          const r = await d.chat(sessionId, messages, tools);
-          if (r.ok) {
-            meta.provider = r.provenance.providerId;
-            meta.modelId = r.provenance.model;
-            const v = (r as { modelVersion?: unknown }).modelVersion;
-            if (typeof v === "string") meta.modelVersion = v;
-          }
-          return r;
+    let passes = 0;
+    let n = 0;
+    let first: { got: string[]; reason?: string; error?: string } | undefined;
+    const lat: number[] = [];
+    let latMissing = false;
+    let lastGot: string[] = [];
+    for (let r = 0; r < k; r++) {
+      if (d.aborted?.()) break outer;
+      const sessionId = k === 1 ? `eval-${runId}-${i}` : `eval-${runId}-${i}-${r}`;
+      const calls: GotCall[] = [];
+      const t0 = performance.now();
+      const viewer = async (cmd: { kind: string; id?: string; params?: unknown }): Promise<ActionResult> => {
+        if (cmd.kind === "getState") return { ok: true, state: SYNTHETIC_STATE };
+        if (cmd.kind === "getMeasurements") return { ok: true, measurements: SYNTHETIC_MEASUREMENTS };
+        return { ok: true };
+      };
+      const res = await runToolLoop(
+        [
+          { role: "system", text: d.systemPrompt },
+          { role: "user", text: c.text },
+        ],
+        tools,
+        {
+          mode: "chat",
+          chat: async (messages, ts) => {
+            const resp = await d.chat(sessionId, messages, ts);
+            if (resp.ok) {
+              meta.provider = resp.provenance.providerId;
+              meta.modelId = resp.provenance.model;
+              const v = (resp as { modelVersion?: unknown }).modelVersion;
+              if (typeof v === "string") meta.modelVersion = v;
+            }
+            return resp;
+          },
+          viewer: viewer as never,
+          pluginTools,
+          pluginTool: async () => ({ ok: true, source: "eval-synth", untrusted: true, data: {} }),
+          onAction: (a) => {
+            // 失敗（引数の検証落ち）も「呼んだ」ものとして数える。更新（done/failed の結果）は数えない。
+            if (a.status === "running" || a.status === "failed" || a.name === GET_STATE_TOOL || a.name === GET_MEASUREMENTS_TOOL) {
+              if (!calls.some((x) => (x as GotCall & { id?: string }).id === a.id)) calls.push({ name: a.name, args: (a.params as Record<string, unknown>) ?? {}, id: a.id } as GotCall);
+            }
+          },
+          onActionUpdate: () => {},
+          onProposal: (p) => calls.push({ name: PROPOSE_TOOL, args: { title: p.title }, id: p.id } as GotCall),
+          onRoundDone: () => {},
+          aborted: () => d.aborted?.() === true,
         },
-        viewer: viewer as never,
-        onAction: (a) => {
-          // 失敗（引数の検証落ち）も「呼んだ」ものとして数える。更新（done/failed の結果）は数えない。
-          if (a.status === "running" || a.status === "failed" || a.name === GET_STATE_TOOL || a.name === GET_MEASUREMENTS_TOOL) {
-            if (!calls.some((x) => (x as GotCall & { id?: string }).id === a.id)) calls.push({ name: a.name, args: (a.params as Record<string, unknown>) ?? {}, id: a.id } as GotCall);
-          }
-        },
-        onActionUpdate: () => {},
-        onProposal: (p) => calls.push({ name: PROPOSE_TOOL, args: { title: p.title }, id: p.id } as GotCall),
-        onRoundDone: () => {},
-        aborted: () => d.aborted?.() === true,
-      },
-    );
-    if (!res.ok) chatError = res.error;
-    const score = scoreCase(c, calls);
-    results.push(chatError ? { id: c.id, pass: false, got: score.got, error: chatError } : { id: c.id, pass: score.pass, got: score.got, ...(score.reason ? { reason: score.reason } : {}) });
-    d.onProgress?.(i + 1, d.cases.length);
+      );
+      const latencyMs = Math.round(performance.now() - t0);
+      const score = scoreCase(c, calls);
+      n++;
+      lastGot = score.got;
+      let ok = false;
+      if (!res.ok) {
+        latMissing = true;
+        first ??= { got: score.got, error: res.error };
+      } else {
+        lat.push(latencyMs);
+        ok = score.pass;
+        if (!ok) first ??= { got: score.got, ...(score.reason ? { reason: score.reason } : {}) };
+      }
+      if (ok) passes++;
+      done++;
+      d.onProgress?.(done, total);
+    }
+    results.push({
+      id: c.id,
+      pass: passes === n,
+      passes,
+      n,
+      got: first?.got ?? lastGot,
+      ...(first?.reason ? { reason: first.reason } : {}),
+      ...(first?.error ? { error: first.error } : {}),
+      ...(!latMissing && lat.length ? { latencyMs: Math.round(lat.reduce((a, b) => a + b, 0) / lat.length) } : {}),
+    });
   }
   return { total: results.length, passed: results.filter((r) => r.pass).length, cases: results, meta };
 }

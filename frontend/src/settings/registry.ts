@@ -662,6 +662,13 @@ export const SETTINGS_REGISTRY: CategoryDef[] = [
             default: "0.0.0.0",
             helpKey: "settings.field.localAeBindAddress.help",
           },
+          {
+            key: "dicom.discovery.advertise",
+            labelKey: "settings.field.discoveryAdvertise",
+            type: "toggle",
+            default: false,
+            helpKey: "settings.field.discoveryAdvertise.help",
+          },
         ],
       },
       {
@@ -708,6 +715,25 @@ export const SETTINGS_REGISTRY: CategoryDef[] = [
             type: "text",
             default: "",
             helpKey: "settings.field.pacsUiUrl.help",
+          },
+        ],
+      },
+      {
+        titleKey: "settings.sec.externalOpen",
+        fields: [
+          {
+            key: "external.openEnabled",
+            labelKey: "settings.field.externalOpenEnabled",
+            type: "toggle",
+            default: true,
+            helpKey: "settings.field.externalOpenEnabled.help",
+          },
+          {
+            key: "external.openConfirm",
+            labelKey: "settings.field.externalOpenConfirm",
+            type: "toggle",
+            default: false,
+            helpKey: "settings.field.externalOpenConfirm.help",
           },
         ],
       },

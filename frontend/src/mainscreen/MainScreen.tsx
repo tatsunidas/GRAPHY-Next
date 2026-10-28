@@ -495,7 +495,7 @@ export function MainScreen({
         <div style={centerColumn}>
         <div style={listArea(listLayout)}>
         <div style={treeArea}>
-          <AlbumBar view={albumView} version={albumVersion} onOpen={openAlbum} onClose={closeAlbum} onChanged={onAlbumChanged} />
+          <AlbumBar view={albumView} version={albumVersion} onOpen={openAlbum} onClose={closeAlbum} onChanged={onAlbumChanged} batchEnabled={isStandalone} />
           {importedView && (
             <div style={importedBanner} data-testid="imported-view-banner">
               <span>
