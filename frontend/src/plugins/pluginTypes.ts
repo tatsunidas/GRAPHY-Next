@@ -783,6 +783,9 @@ export interface Viewer2DPluginHost extends PluginHostBase {
    * <p>`disclaimer` は**そのまま画面に出る**（本体は要約も書き換えもしない）。FFR は治療方針を
    * 左右する値なので、モジュールの限界を書くこと。校正の縮退区分（近似か未校正か）は
    * host が凡例の脇に必ず出す。
+   *
+   * <p>**成功すると、本体の 3D 画面（`#geometry3d`）が開く**（開いていれば前面に出て、中身が差し替わる）。
+   * 色が見える場所はここしかない。分岐部のモデル（`xa-bifurcation3d`）では開かない（3D 画面は中心線 1 本しか描かない）。
    */
   putVesselAnalysis: (runId: string, result: XaVesselAnalysisInput) => VesselAnalysisResult;
   /**

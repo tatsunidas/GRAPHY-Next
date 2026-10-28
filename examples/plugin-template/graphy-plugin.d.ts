@@ -2080,6 +2080,9 @@ export interface Viewer2DPluginHost extends PluginHostBase {
    *
    * 🔴 **壊れた入力はエラーになる**（未知の `segmentId`・範囲外の `index`・非有限の値・
    * 退化した `range`）。捨てて残りを採用すると**ずれたまま色が乗り**、誰も気付けない。
+   *
+   * **成功すると、本体の 3D 画面（`#geometry3d`）が開く**（開いていれば前面に出て、中身が差し替わる）。
+   * 分岐部のモデル（`xa-bifurcation3d`）では開かない（3D 画面は中心線 1 本しか描かない）。
    */
   putVesselAnalysis: (runId: string, result: VesselAnalysisInput) => VesselAnalysisResult;
   /**

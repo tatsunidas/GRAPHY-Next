@@ -212,7 +212,7 @@ async function geo3dStats(page: Page): Promise<Geo3dStats | null> {
 
 /**
  * QFR 窓の「3D に色マップとして送る」→ 本体の 3D 画面（geometry3d）に色が乗るか。仮想血管専用（実症例では使わない）。
- *   FFR_COLOR3D=l2  送ったあと、3D 画面が開くか（利用者が行ける入口があるか）。ウィンドウ一覧の URL で見る。
+ *   FFR_COLOR3D=l2  入口の確認（注入なし）: 送信ボタンだけで 3D 画面が開き、色・凡例が出るか。送る前は開いていないこと（負例）も見る。
  *   FFR_COLOR3D=l3  検査だけの注入（localStorage の 3D コンテキスト）で 3D 画面を開き、色・凡例を見る。
  *                   「表示側は動く」ことの確認で、「利用者が行ける」ことの確認ではない。
  */
@@ -226,19 +226,43 @@ async function colorCheck3d(driver: DesktopDriver, viewer: Page, mode: string): 
   check("[C0] 本体のストアに登録済みの血管モデルがある（H73）", !!model && model.pts.length > 10, { runId: model?.runId?.slice(0, 40), points: model?.pts.length });
   if (!model) return out;
   out.points = model.pts.length;
+  out.modelEnds = [model.pts[0], model.pts[model.pts.length - 1]]; // 仮想血管の真値（近位・遠位）との照合用
   const put = viewer.getByTestId("qfr-put");
   check("[C1] 「3D に色マップとして送る」ボタンがある（本体が putVesselAnalysis を持つ）", (await put.count()) === 1);
   const panelTail = async () => ((await viewer.getByTestId("qfr-panel").textContent()) ?? "").replace(/\s+/g, " ").trim().slice(-220);
   const urls = () => viewer.context().pages().map((pg) => pg.url().replace(/^.*?#/, "#").slice(0, 40));
 
   if (mode === "l2") {
-    await put.click();
-    await viewer.waitForTimeout(3_000);
+    // 入口の確認（注入なし）: 利用者と同じ操作（QFR 窓の送信ボタン）だけで 3D 画面が開き、色と凡例が出るか。
+    out.windowsBefore = urls();
+    check("[L2-0] 負例: 送る前は 3D 画面（geometry3d）が開いていない", !(out.windowsBefore as string[]).some((u) => u.includes("geometry3d")), out.windowsBefore);
+    let geo: Page | null = null;
+    try {
+      geo = await driver.waitForNewPage(() => put.click(), (u) => u.includes("geometry3d"), 20_000);
+    } catch (e) {
+      out.openError = String(e).slice(0, 160);
+    }
     out.panelTail = await panelTail();
-    out.windows = urls();
-    log("送信後の表示:", out.panelTail, "| ウィンドウ:", JSON.stringify(out.windows));
-    check("[L2-1] 送信後、窓の表示は「3D ビューへ送りました」", /3D ビューへ送りました/.test(String(out.panelTail)), out.panelTail);
-    check("[L2-2] ★送っても 3D 画面（geometry3d）は開かない＝利用者の入口にならない", !(out.windows as string[]).some((u) => u.includes("geometry3d")), out.windows);
+    out.windowsAfter = urls();
+    check("[L2-1] 送信後、窓の表示は「3D ビューへ送りました」", /3D ビューへ送りました/.test(String(out.panelTail)), String(out.panelTail).slice(-120));
+    check("[L2-2] ★送信だけで 3D 画面（geometry3d）が開く＝利用者の入口がある", !!geo, out.openError ?? out.windowsAfter);
+    if (!geo) return out;
+    await geo.getByTestId("geometry3d-root").waitFor({ state: "visible", timeout: 30_000 });
+    await geo.waitForTimeout(3_500);
+    const st = await geo3dStats(geo);
+    const lg = geo.getByTestId("vessel-legend");
+    out.stats = st; out.legendCount = await lg.count();
+    await geo.screenshot({ path: path.join(OUT_DIR, "color3d-l2-open.png") }).catch(() => {});
+    check("[L2-3] ★開いた 3D 画面に凡例が 1 つ出る", out.legendCount === 1, { legend: out.legendCount });
+    check("[L2-4] ★開いた 3D 画面に勾配が乗る（neutral・cool が立つ。注入なし）", !!st && st.neutral > 0 && st.cool > 0, st);
+    out.legendLabel = await lg.getAttribute("data-label").catch(() => null);
+    check("[L2-5] 凡例の量の名前が QFR", String(out.legendLabel).includes("QFR"), out.legendLabel);
+    // 色の向きの観測（合否に数えない）: 同じ runId で中心線の点列だけ逆順にして渡すと、画面上の色の並びが入れ替わるはず（色は頂点の添字に乗る）。
+    await viewer.evaluate(`(() => { const k = ${JSON.stringify(GEO_CTX_KEY)}; const c = JSON.parse(localStorage.getItem(k)); c.centerlineLps = c.centerlineLps.slice().reverse(); c.ts = Date.now();
+      localStorage.setItem(k, JSON.stringify(c)); const bc = new BroadcastChannel("graphy-geometry3d"); bc.postMessage({ type: "updated" }); bc.close(); })()`);
+    await geo.waitForTimeout(2_500);
+    await geo.screenshot({ path: path.join(OUT_DIR, "color3d-l2-reversed.png") }).catch(() => {});
+    results.push({ name: "[L2-6 観測] 中心線を逆順にした画面を撮った（color3d-l2-reversed.png。色の並びが入れ替わるかは目視）", ok: null });
     return out;
   }
 
