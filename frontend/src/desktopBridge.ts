@@ -540,7 +540,7 @@ export interface GraphyDesktop {
   assistantRequestLogSummary?: () => Promise<{
     ok: boolean;
     count?: number;
-    byModel?: { provider: string | null; model: string | null; requests: number; tokensIn: number; tokensOut: number; unknownUsage: number }[];
+    byModel?: { provider: string | null; model: string | null; requests: number; tokensIn: number; tokensOut: number; unknownUsage: number; latency: { n: number; p50: number; p95: number } | null }[];
     recent?: Record<string, unknown>[];
     error?: string;
   }>;
@@ -549,11 +549,11 @@ export interface GraphyDesktop {
   assistantEvalAppend?: (run: {
     suiteVersion: number;
     meta: { provider: string | null; modelId: string | null; modelVersion: string | null };
-    cases: { id: string; pass: boolean }[];
+    cases: { id: string; pass: boolean; latencyMs?: number }[];
   }) => Promise<{ ok: boolean; error?: string }>;
   assistantEvalList?: () => Promise<{
     ok: boolean;
-    runs?: { ts: string; suiteVersion: number; provider: string | null; modelId: string | null; modelVersion: string | null; total: number; passed: number; cases: { id: string; pass: boolean }[] }[];
+    runs?: { ts: string; suiteVersion: number; provider: string | null; modelId: string | null; modelVersion: string | null; total: number; passed: number; totalLatencyMs: number | null; cases: { id: string; pass: boolean; latencyMs?: number }[] }[];
     error?: string;
   }>;
   assistantMacrosList?: () => Promise<{ ok: boolean; macros?: import("./assistant/macros/macroModel").Macro[]; error?: string }>;

@@ -385,7 +385,7 @@ export function AssistantScreen() {
     const ok = resolved?.ok === true && resolved.toolMode !== "none";
     return {
       list: bridge.assistantEvalList,
-      append: (run) => bridge.assistantEvalAppend!({ suiteVersion: EVAL_SUITE_VERSION, meta: run.meta, cases: run.cases.map((c) => ({ id: c.id, pass: c.pass })) }),
+      append: (run) => bridge.assistantEvalAppend!({ suiteVersion: EVAL_SUITE_VERSION, meta: run.meta, cases: run.cases.map((c) => ({ id: c.id, pass: c.pass, ...(c.latencyMs !== undefined ? { latencyMs: c.latencyMs } : {}) })) }),
       run: (onProgress) =>
         runEval({
           cases: EVAL_CASES,

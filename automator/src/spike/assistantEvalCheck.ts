@@ -10,6 +10,9 @@
  *      差分が「その 2 問と版の変化」を指す（期待値は偽モデルの表から別に決めてある）
  *   3. 🔴 ツールは実行されない（操作の履歴＝ジャーナルが増えない）。評価の要求は通常の記録に残る（セッション ID が eval-）
  *   4. 🔴 メイン窓からの eval の保存・一覧は forbidden で、ファイルに触れない
+ *   5. 応答時間: 偽モデルに既知の遅延（要求ごとに 120〜320 ms。v2 は +600 ms）を入れ、評価の質問ごとの値・合計・
+ *      記録パネルの中央値/p95 が、記録ファイルの生の値から別に手計算した値と一致する（v2 は中央値が上がる＝負例）。
+ *      n<20 の行（記録に直接足した 5 件）は「参考値」と出る
  * 偽モデルが確かめるのは「流す・採点する・保存する・比べる・表示する」。実クラウドモデルの一致率は確かめない（未達）。
  */
 import fs from "node:fs";
@@ -50,9 +53,14 @@ const V2: Record<string, Call[]> = {
 };
 const CHANGED = ["flip-h", "slice-10th"]; // 上の 2 問の id（期待値）
 
+/** 最近順位法（p = ⌈q·n⌉ 番目）。製品側の実装とは別に、ここで書く。 */
+const nearestRank = (xs: number[], q: number): number => [...xs].sort((a, b) => a - b)[Math.max(1, Math.ceil(q * xs.length)) - 1];
+
 function startFake(port: number): { server: http.Server; mode: { version: "fake-v1" | "fake-v2" } } {
   const mode = { version: "fake-v1" as "fake-v1" | "fake-v2" };
+  let counter = 0;
   const server = http.createServer((req, res) => {
+    const delay = 120 + (counter++ % 5) * 50 + (mode.version === "fake-v2" ? 600 : 0);
     const chunks: Buffer[] = [];
     req.on("data", (c) => chunks.push(c));
     req.on("end", () => {
@@ -64,12 +72,13 @@ function startFake(port: number): { server: http.Server; mode: { version: "fake-
       const toolRounds = msgs.filter((m) => m.role === "tool").length;
       const calls = (mode.version === "fake-v2" ? V2[q] : undefined) ?? TABLE[q];
       res.setHeader("Content-Type", "application/json");
+      const send = (body: string) => setTimeout(() => res.end(body), delay);
       if (toolRounds === 0 && calls) {
         const tool_calls = [{ name: "getState", args: {} }, ...calls].map((c, i) => ({ id: `c${i}`, type: "function", function: { name: c.name, arguments: JSON.stringify(c.args) } }));
-        res.end(JSON.stringify({ model: mode.version, choices: [{ finish_reason: "tool_calls", message: { content: "", tool_calls } }] }));
+        send(JSON.stringify({ model: mode.version, choices: [{ finish_reason: "tool_calls", message: { content: "", tool_calls } }] }));
         return;
       }
-      res.end(JSON.stringify({ model: mode.version, choices: [{ finish_reason: "stop", message: { content: "了解しました" } }] }));
+      send(JSON.stringify({ model: mode.version, choices: [{ finish_reason: "stop", message: { content: "了解しました" } }] }));
     });
   });
   server.listen(port, "127.0.0.1");
@@ -161,6 +170,47 @@ async function main(): Promise<void> {
     check(lines(journalFile).length === journalBefore + 1, "対照: 実際の操作を中継するとジャーナルは 1 件増える（記録は効いている）", lines(journalFile).length);
     const reqRows = lines(reqFile).map((l) => JSON.parse(l));
     check(reqRows.length >= 32 && reqRows.filter((r) => String(r.sessionId).startsWith("eval-")).length === reqRows.length, "評価の要求は通常の記録に残る（セッション ID が eval-）", reqRows.length);
+
+    // --- 5. 応答時間 ---
+    console.log("\n[5] 応答時間");
+    for (const v of ["fake-v1", "fake-v2"]) {
+      const lat = reqRows.filter((r) => r.modelVersion === v && r.outcome === "ok").map((r) => r.latencyMs as number);
+      check(lat.length >= 20 && lat.every((x) => x >= (v === "fake-v2" ? 720 : 120)), `前提: ${v} の要求（20 件以上）の応答時間が、入れた遅延以上で記録されている`, lat.slice(0, 5));
+    }
+    const rawLat = (v: string) => reqRows.filter((r) => r.modelVersion === v && r.outcome === "ok").map((r) => r.latencyMs as number);
+    const secs = (ms: number) => `${(ms / 1000).toFixed(1)} s`;
+    const expectText = (v: string) => `${secs(nearestRank(rawLat(v), 0.5))} / ${secs(nearestRank(rawLat(v), 0.95))}`;
+    // 質問ごとの値: 1 問 = 2 往復なので、各 ≥ 2×最小遅延。保存された合計は質問ごとの値の和
+    for (const [i, v] of [[0, "fake-v1"], [1, "fake-v2"]] as const) {
+      const cs = saved2[i].cases as { latencyMs?: number }[];
+      const min = v === "fake-v2" ? 720 : 120; // 1 問は 1〜2 往復
+      check(cs.length === 16 && cs.every((c) => typeof c.latencyMs === "number" && c.latencyMs >= min), `${v}: 16 問すべてに質問ごとの応答時間があり、遅延 1 往復分以上`, cs.map((c) => c.latencyMs).slice(0, 4));
+      check(saved2[i].totalLatencyMs === cs.reduce((a, c) => a + (c.latencyMs ?? 0), 0), `${v}: 保存された合計 = 質問ごとの和`, saved2[i].totalLatencyMs);
+    }
+    // 記録パネル（評価の途中で開いた状態なので読み直す）
+    await win.getByTestId("assistant-requestlog-refresh").click();
+    await win.waitForFunction(() => document.querySelectorAll('[data-testid="assistant-requestlog-model-row"]').length >= 2, null, { timeout: 10_000 });
+    const rowText = async (v: string) => {
+      const rows = win.getByTestId("assistant-requestlog-model-row").filter({ hasText: v });
+      return (await rows.first().getByTestId("assistant-requestlog-latency").textContent()) ?? "";
+    };
+    const t1 = await rowText("fake-v1");
+    const t2 = await rowText("fake-v2");
+    check(t1.includes(expectText("fake-v1")) && !/参考値|reference/.test(t1), "🔴 v1 の 中央値/p95 が、記録ファイルの生の値から手計算した値と一致（n≥20 なので参考値ではない）", { shown: t1, expected: expectText("fake-v1") });
+    check(t2.includes(expectText("fake-v2")) && !/参考値|reference/.test(t2), "🔴 v2 も一致", { shown: t2, expected: expectText("fake-v2") });
+    check(nearestRank(rawLat("fake-v2"), 0.5) - nearestRank(rawLat("fake-v1"), 0.5) >= 550 && t1 !== t2, "負例: 遅延を +600 ms にした v2 は中央値が上がり、表示も変わる", { v1: t1, v2: t2 });
+    check(/2\s*問?.*[0-9.]+ s|[0-9.]+ s/.test((await win.getByTestId("assistant-eval-total-latency").textContent()) ?? ""), "評価の結果に合計応答時間が出る", await win.getByTestId("assistant-eval-total-latency").textContent());
+    // n<20: 記録に直接 5 件足す（偽の小標本）
+    fs.appendFileSync(reqFile, [100, 200, 300, 400, 500].map((ms) => JSON.stringify({ ts: new Date().toISOString(), provider: "local", modelId: "tiny", modelVersion: "seed-small", destination: "local", outcome: "ok", latencyMs: ms, usage: null, toolCalls: [], toolsOffered: 0, params: {}, attachments: { images: { count: 0, bytes: 0 } } })).join("\n") + "\n");
+    fs.appendFileSync(reqFile, JSON.stringify({ ts: new Date().toISOString(), provider: "local", modelId: "tiny", modelVersion: "seed-none", destination: "local", outcome: "timeout", latencyMs: 9000, usage: null, toolCalls: [], toolsOffered: 0, params: {}, attachments: { images: { count: 0, bytes: 0 } } }) + "\n");
+    await win.getByTestId("assistant-requestlog-refresh").click();
+    await win.waitForFunction(() => /seed-small/.test(document.querySelector('[data-testid="assistant-requestlog-models"]')?.textContent ?? ""), null, { timeout: 10_000 });
+    const ts = await rowText("seed-small");
+    check(ts.includes("0.3 s / 0.5 s") && /参考値|reference/.test(ts) && ts.includes("n=5"), "🔴 5 件（100〜500 ms）は 中央値 0.3 s / p95 0.5 s で『参考値 n=5』", ts);
+    const tn = await rowText("seed-none");
+    check(/未取得|not available/.test(tn) && !tn.includes(" s"), "🔴 成功した要求が 0 件のモデルは 0 でなく『未取得』", tn);
+    await win.getByTestId("assistant-requestlog-models").scrollIntoViewIfNeeded();
+    await win.screenshot({ path: path.join(OUT_DIR, "latency.png") });
 
     // --- 4. メイン窓から ---
     console.log("\n[4] メイン窓からは forbidden");
