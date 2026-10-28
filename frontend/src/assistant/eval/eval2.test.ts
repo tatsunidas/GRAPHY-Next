@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { buildTools } from "../actions/registry";
 import type { AiChatResult, AiToolCall } from "../../desktopBridge";
-import { EVAL_CASES_2, EVAL_SUITES, gridCell, SYNTH_PLUGIN_TOOLS, type EvalCase } from "./cases";
+import { EVAL_CASES, EVAL_CASES_2, EVAL_CASES_B, EVAL_SUITES, gridCell, SYNTH_PLUGIN_TOOLS, type EvalCase } from "./cases";
 import { runEval } from "./runEval";
 import { scoreCase } from "./scoreCase";
 import { wilson95 } from "./wilson";
@@ -32,7 +32,7 @@ describe("wilson95", () => {
 
 describe("第 2 組の整合", () => {
   it("組ごとに id は一意で形式に合い、組の id と版が定義されている", () => {
-    expect(EVAL_SUITES.map((s) => s.id)).toEqual(["basic", "plugin-pos"]);
+    expect(EVAL_SUITES.map((s) => s.id)).toEqual(["basic", "basic-b", "plugin-pos"]);
     const ids = EVAL_CASES_2.map((c) => c.id);
     expect(new Set(ids).size).toBe(ids.length);
     for (const c of EVAL_CASES_2) expect(c.id).toMatch(/^[a-z0-9-]{1,24}$/);
@@ -93,7 +93,7 @@ describe("runEval 第 2 組（k 回反復）", () => {
     };
     return { chat, seen };
   }
-  const suite = EVAL_SUITES[1];
+  const suite = EVAL_SUITES.find((s) => s.id === "plugin-pos")!;
   const deps = (chat: ReturnType<typeof fake>["chat"], extra = {}) => ({
     cases: suite.cases, pluginTools: suite.pluginTools, systemPrompt: "sys", tools: buildTools(), chat: chat as never, runId: "t", ...extra,
   });
@@ -130,5 +130,24 @@ describe("runEval 第 2 組（k 回反復）", () => {
     const r = await runEval(deps(m.chat));
     expect(r.cases.every((c) => c.n === 1 && c.passes === 1)).toBe(true);
     expect(m.seen[0]).toBe("eval-t-0");
+  });
+});
+
+describe("保留セット basic-b", () => {
+  it("id は組をまたいで一意で形式に合い、期待する操作は実在のツール", () => {
+    const all = [...EVAL_CASES, ...EVAL_CASES_B].map((c) => c.id);
+    expect(new Set(all).size).toBe(all.length);
+    const names = new Set(buildTools().map((t) => t.name));
+    for (const c of EVAL_CASES_B) {
+      expect(c.id).toMatch(/^[a-z0-9-]{1,24}$/);
+      for (const o of c.expect.ops) expect(names.has(o.id), `${c.id}: ${o.id}`).toBe(true);
+    }
+  });
+  it("基本の組と質問文が重ならず、基本の組が使う操作をすべて覆う（言い換えとして使える）", () => {
+    const basicTexts = new Set(EVAL_CASES.map((c) => c.text));
+    expect(EVAL_CASES_B.filter((c) => basicTexts.has(c.text))).toEqual([]);
+    const used = (cs: readonly EvalCase[]) => new Set(cs.flatMap((c) => c.expect.ops.map((o) => o.id)));
+    const b = used(EVAL_CASES_B);
+    for (const op of used(EVAL_CASES)) if (op !== "propose_steps") expect(b.has(op), `basic-b に ${op} が無い`).toBe(true);
   });
 });

@@ -137,7 +137,7 @@ const EVAL_MAX_BYTES = 512 * 1024;
 const EVAL_ID_RE = /^[a-z0-9-]{1,24}$/;
 const MAX_EVAL_CASES = 200;
 const MAX_EVAL_LATENCY_MS = 60 * 60 * 1000;
-const EVAL_SUITES = ["basic", "plugin-pos"];
+const EVAL_SUITES = ["basic", "basic-b", "plugin-pos"];
 const MAX_EVAL_REPEATS = 20;
 
 /**

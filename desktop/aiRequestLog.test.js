@@ -196,6 +196,7 @@ test("buildEvalRecord: 質問ごとの応答時間 — 許可リスト（負例�
 test("buildEvalRecord: 組と反復の集計 — 許可リスト。pass と矛盾する・範囲外の passes/n・未知の組は保存しない", () => {
   const ok = buildEvalRecord({ ...EVAL, suite: "plugin-pos", cases: [{ id: "a", pass: true, passes: 5, n: 5 }, { id: "b", pass: false, passes: 3, n: 5 }] });
   assert.equal(ok.suite, "plugin-pos");
+  assert.equal(buildEvalRecord({ ...EVAL, suite: "basic-b" }).suite, "basic-b");
   assert.deepEqual(ok.cases.map((c) => [c.passes, c.n]), [[5, 5], [3, 5]]);
   assert.equal(ok.passed, 1, "一致数は『k 回すべて合格』の質問数");
   for (const bad of [

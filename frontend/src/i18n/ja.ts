@@ -252,6 +252,7 @@ export const ja: Record<string, string> = {
   "assistant.eval.suite": "質問セット 版 {{v}}",
   "assistant.eval.suiteLabel": "質問セット",
   "assistant.eval.suite.basic": "基本（表示操作）",
+  "assistant.eval.suite.basic-b": "基本（言い換え・保留用）",
   "assistant.eval.suite.plugin-pos": "プラグイン・位置・曖昧な依頼",
   "assistant.eval.repeats": "反復",
   "assistant.eval.rate": "合格率 {{pct}}%（全回合格 {{ok}}/{{q}} 問、95% 区間 {{lo}}–{{hi}}%）",
