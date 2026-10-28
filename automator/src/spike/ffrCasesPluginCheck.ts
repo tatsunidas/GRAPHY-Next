@@ -467,6 +467,96 @@ async function endpointCheck(page: Page, label: string): Promise<Record<string, 
   return out;
 }
 
+/**
+ * 2 方向窓の、手修正の点（橙）の消去の確認（FFR_EDITCHECK=erase。仮想血管の方向 A）。
+ *  1. なぞって置き換え（吸着オフ）で、右のエッジに手修正の点を作る
+ *  2. 右クリックで 1 点だけ消える（その点は自動検出の値へ戻り、隣の点は手修正のまま）
+ *  3. 右ボタンを押したままなぞると、通った点がまとめて消える
+ *  4. ［元に戻す］で、なぞって消した分が 1 回で戻る
+ *  5. 負例: 手修正の無い所を右クリックしても、何も変わらない
+ */
+async function eraseCheck(page: Page, label: string): Promise<Record<string, unknown>> {
+  const out: Record<string, unknown> = {};
+  const cv = page.getByTestId("dual-canvas-A");
+  const attr = async (n: string) => JSON.parse((await cv.getAttribute(`data-${n}`)) ?? "null");
+  const offsets = async (): Promise<number[][]> => (await attr("edgeoffsets")) ?? [];
+  const edgepts = async (): Promise<number[][]> => (await attr("edgepts")) ?? [];
+  const edited = async (): Promise<number[]> => (await attr("edited-edges")) ?? [];
+  const mouseAt = async (p: Pt) => toClient(page, "A", p);
+
+  await page.getByTestId("dual-mode").selectOption("edge");
+  await page.getByTestId("dual-edge-tool").selectOption("trace");
+  const snap = page.getByTestId("dual-snap-edge");
+  if (await snap.count()) await snap.uncheck();
+
+  const auto = await offsets();
+  const pts0 = await edgepts();
+  const k = Math.floor(pts0.length / 3);
+  // 1. 右のエッジを 3 px 内側へなぞる（k〜k+20）
+  const nrm = (i: number): Pt => { const [lx, ly, rx, ry] = pts0[i]; const l = Math.hypot(rx - lx, ry - ly); return [(rx - lx) / l, (ry - ly) / l]; };
+  const line: Pt[] = [];
+  for (let i = k; i <= k + 20; i++) { const n = nrm(i); line.push([pts0[i][2] - n[0] * 3, pts0[i][3] - n[1] * 3]); }
+  const c0 = await mouseAt(line[0]);
+  await page.mouse.move(c0.x, c0.y);
+  await page.mouse.down();
+  for (const q of line.slice(1)) { const c = await mouseAt(q); await page.mouse.move(c.x, c.y); }
+  await page.mouse.up();
+  await page.waitForTimeout(600);
+  const e1 = await edited();
+  const off1 = await offsets();
+  out.afterTrace = { editedPoints: e1.length };
+  await page.screenshot({ path: path.join(OUT_DIR, `${label}-erase-1-traced.png`) });
+  check("[X1] なぞって、右のエッジに手修正の点ができる（10 点以上）", e1.length >= 10, out.afterTrace);
+
+  // 2. 右クリックで 1 点だけ消す（真ん中あたりの点 m）
+  const m = e1[Math.floor(e1.length / 2)];
+  const em = (await edgepts())[m];
+  const cm = await mouseAt([em[2], em[3]]);
+  await page.mouse.click(cm.x, cm.y, { button: "right" });
+  await page.waitForTimeout(600);
+  const e2 = await edited();
+  const off2 = await offsets();
+  out.afterClick = { before: e1.length, after: e2.length, mBackToAuto: +Math.abs(off2[m][1] - auto[m][1]).toFixed(3), neighbourKept: +Math.abs(off2[m + 1][1] - auto[m + 1][1]).toFixed(3) };
+  await page.screenshot({ path: path.join(OUT_DIR, `${label}-erase-2-clicked.png`) });
+  const ac = out.afterClick as { before: number; after: number; mBackToAuto: number; neighbourKept: number };
+  check("[X2] 右クリックで、手修正の点がちょうど 1 点減り、その点は自動検出の値に戻る", ac.after === ac.before - 1 && ac.mBackToAuto < 0.05, ac);
+  check("[X3] 隣の点は手修正のまま（消えていない）", e2.includes(m + 1) || e2.includes(m - 1), { neighbourKept: ac.neighbourKept });
+
+  // 3. 右ボタンを押したままなぞって、まとめて消す（m+3 〜 m+12）
+  const pts2 = await edgepts();
+  const sweep: Pt[] = [];
+  for (let i = m + 3; i <= m + 12; i++) sweep.push([pts2[i][2], pts2[i][3]]);
+  const s0 = await mouseAt(sweep[0]);
+  await page.mouse.move(s0.x, s0.y);
+  await page.mouse.down({ button: "right" });
+  for (const q of sweep.slice(1)) { const c = await mouseAt(q); await page.mouse.move(c.x, c.y, { steps: 3 }); }
+  await page.mouse.up({ button: "right" });
+  await page.waitForTimeout(600);
+  const e3 = await edited();
+  out.afterSweep = { before: e2.length, after: e3.length };
+  await page.screenshot({ path: path.join(OUT_DIR, `${label}-erase-3-swept.png`) });
+  check("[X4] 右ボタンでなぞると、通った点がまとめて消える（5 点以上）", e2.length - e3.length >= 5, out.afterSweep);
+
+  // 4. 元に戻す: なぞって消した分が 1 回で戻る
+  await page.getByTestId("dual-undo").click();
+  await page.waitForTimeout(600);
+  const e4 = await edited();
+  out.afterUndo = { count: e4.length };
+  check("[X5] ［元に戻す］で、なぞって消した分が 1 回でまとめて戻る", e4.length === e2.length, { before: e2.length, after: e4.length });
+
+  // 5. 負例: 手修正の無い所（手修正から遠い左のエッジ）を右クリック → 何も変わらない
+  const pts4 = await edgepts();
+  // 手修正の点（k〜k+20）から十分遠い位置（血管に沿って 25 点先）の左のエッジ。近い位置は、掴める半径に手修正の点が入るので消える（仕様）
+  const farLeft = await mouseAt([pts4[k + 45][0], pts4[k + 45][1]]);
+  await page.mouse.click(farLeft.x, farLeft.y, { button: "right" });
+  await page.waitForTimeout(500);
+  const e5 = await edited();
+  out.farClick = { before: e4.length, after: e5.length };
+  check("[X6] ★負例: 手修正の無い所（左のエッジ）を右クリックしても、何も消えない", e5.length === e4.length, out.farClick);
+  void off1;
+  return out;
+}
+
 /** アンカー i を掴んで target へドラッグする。 */
 async function dragAnchor(page: Page, key: string, i: number, target: Pt): Promise<void> {
   const cur = (await anchorsOf(page, key))[i];
@@ -767,6 +857,7 @@ async function main(): Promise<void> {
         process.env.FFR_EDITCHECK === "wp" ? await waypointCheck(viewer, spec.label)
         : process.env.FFR_EDITCHECK === "range" ? await rangeAnchorCheck(viewer, spec.label)
         : process.env.FFR_EDITCHECK === "end" ? await endpointCheck(viewer, spec.label)
+        : process.env.FFR_EDITCHECK === "erase" ? await eraseCheck(viewer, spec.label)
         : await editCheck(viewer, spec.label);
       fs.writeFileSync(path.join(OUT_DIR, `${spec.label}.json`), JSON.stringify({ ...report, checks: results }, null, 1));
       return;
