@@ -557,6 +557,36 @@ async function eraseCheck(page: Page, label: string): Promise<Record<string, unk
   return out;
 }
 
+/**
+ * ［中心線を引き直す］のツールバーへの移動の確認（FFR_EDITCHECK=redef。仮想血管）。
+ *  1. A 用・B 用のボタンが、上部のツールバー（再構成ボタンと同じ行）にあり、ラベルで方向が分かる。各方向の列の下には無い
+ *  2. 「: A」を押すと、方向 A だけが消える（B は残る）。「: B」を押すと B も消える
+ */
+async function redefineCheck(page: Page, label: string): Promise<Record<string, unknown>> {
+  const out: Record<string, unknown> = {};
+  const nCl = async (k: "A" | "B") => Number((await page.getByTestId(`dual-canvas-${k}`).getAttribute("data-centerline")) ?? "0");
+  const btn = (k: "A" | "B") => page.getByTestId(`dual-redefine-${k}`);
+  const where = await btn("A").evaluate((el) => {
+    const recon = document.querySelector("[data-testid=dual-recon]");
+    return { sameRowAsRecon: !!recon && el.parentElement === recon.parentElement, inColumn: !!el.closest("[data-testid=dual-canvas-A],[data-testid=dual-canvas-B]"), text: el.textContent };
+  });
+  out.where = where;
+  check("[B1] ボタンは、再構成ボタンと同じツールバーにあり、ラベルに方向が付く", where.sameRowAsRecon && /中心線を引き直す: A/.test(String(where.text)), where);
+  const before = { a: await nCl("A"), b: await nCl("B") };
+  await page.screenshot({ path: path.join(OUT_DIR, `${label}-redef-1-before.png`) });
+  await btn("A").click();
+  await page.waitForTimeout(500);
+  const afterA = { a: await nCl("A"), b: await nCl("B") };
+  await page.screenshot({ path: path.join(OUT_DIR, `${label}-redef-2-after-A.png`) });
+  check("[B2] 「: A」を押すと、方向 A だけが消える（B は残る）", before.a > 0 && before.b > 0 && afterA.a === 0 && afterA.b === before.b, { before, afterA });
+  await btn("B").click();
+  await page.waitForTimeout(500);
+  const afterB = { a: await nCl("A"), b: await nCl("B") };
+  check("[B3] 「: B」を押すと、方向 B も消える", afterB.a === 0 && afterB.b === 0, afterB);
+  out.counts = { before, afterA, afterB };
+  return out;
+}
+
 /** アンカー i を掴んで target へドラッグする。 */
 async function dragAnchor(page: Page, key: string, i: number, target: Pt): Promise<void> {
   const cur = (await anchorsOf(page, key))[i];
@@ -858,6 +888,7 @@ async function main(): Promise<void> {
         : process.env.FFR_EDITCHECK === "range" ? await rangeAnchorCheck(viewer, spec.label)
         : process.env.FFR_EDITCHECK === "end" ? await endpointCheck(viewer, spec.label)
         : process.env.FFR_EDITCHECK === "erase" ? await eraseCheck(viewer, spec.label)
+        : process.env.FFR_EDITCHECK === "redef" ? await redefineCheck(viewer, spec.label)
         : await editCheck(viewer, spec.label);
       fs.writeFileSync(path.join(OUT_DIR, `${spec.label}.json`), JSON.stringify({ ...report, checks: results }, null, 1));
       return;
