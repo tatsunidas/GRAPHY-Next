@@ -36,7 +36,7 @@ for z in range(D):
     d.SOPClassUID = CTImageStorage
     d.SOPInstanceUID = sop
     d.PatientName = "SYNTH^ROIFEAT"
-    d.PatientID = "SYNTHROIFEAT"
+    d.PatientID = sys.argv[4] if len(sys.argv) > 4 else "SYNTHROIFEAT"
     d.PatientBirthDate = "19010203"
     d.PatientSex = "O"
     d.StudyInstanceUID = study

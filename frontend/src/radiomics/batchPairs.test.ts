@@ -4,24 +4,20 @@
  */
 import { describe, expect, it } from "vitest";
 import type { RoiFeatureResult, RoiFeatureRow } from "../api";
-import type { BatchPair, BatchPairStatusRow } from "./batchApi";
+import type { BatchPair } from "./batchApi";
 import {
   applyLabelFilter,
   assignCaseLabels,
   batchFileBase,
-  batchFiles,
   buildBatchRequest,
   duplicateLabels,
   initialRows,
-  pairsCsv,
   selectedPairs,
   setIncluded,
   setSource,
   smallRoiThresholdUnset,
-  stackedDataCsv,
   summarize,
 } from "./batchPairs";
-import { roiFeatureDataCsv } from "./roiFeatureCsv";
 import { defaultRoiFeatureForm } from "./roiFeatureSettings";
 
 const pair = (over: Partial<BatchPair> = {}): BatchPair => ({
@@ -147,79 +143,6 @@ describe("buildBatchRequest", () => {
   });
 });
 
-describe("stackedDataCsv", () => {
-  it("each line equals the single-case row of the existing exporter (old path vs new path)", () => {
-    const a = result([1.5, 9]);
-    const b = result([2.5, 7]);
-    const out = stackedDataCsv([{ caseLabel: "C001", result: a }, { caseLabel: "C002", result: b }]);
-    expect(out.ok).toBe(true);
-    if (!out.ok) return;
-    const single = (r: RoiFeatureResult, l: string) => roiFeatureDataCsv(r, l).split("\r\n");
-    const lines = out.csv.split("\r\n");
-    expect(lines[0]).toBe(single(a, "C001")[0]);
-    expect(lines[1]).toBe(single(a, "C001")[1]);
-    expect(lines[2]).toBe(single(b, "C002")[1]);
-    expect(lines.length).toBe(4); // 見出し + 2 行 + 末尾の空
-  });
-
-  it("refuses to stack when the columns differ, naming the case", () => {
-    const out = stackedDataCsv([
-      { caseLabel: "C001", result: result([1, 2]) },
-      { caseLabel: "C002", result: result([1, 2], ["Stat_mean", "Other_x"]) },
-    ]);
-    expect(out).toEqual({ ok: false, reason: "header mismatch", caseLabel: "C002" });
-  });
-
-  it("refuses an empty input", () => {
-    expect(stackedDataCsv([]).ok).toBe(false);
-  });
-});
-
-describe("pairsCsv / batchFiles", () => {
-  const status = (p: BatchPair, over: Partial<BatchPairStatusRow> = {}): BatchPairStatusRow => ({
-    index: 0, pair: p, state: "DONE", failureKind: null, error: null, fromCache: false, elapsedMs: 5, qcFlags: [], ...over,
-  });
-
-  it("carries UIDs and labels but never a patient name or ID", () => {
-    // 画面の確認表だけが持つ患者情報を、関数の入力に混ぜても出力に出ない
-    const display = { patientName: "YAMADA^TARO", patientId: "PID-0001" };
-    const csv = pairsCsv([{ caseLabel: "C001", status: status(pair()) }]);
-    expect(csv).toContain("1.2.3");
-    expect(csv).toContain("C001");
-    expect(csv).not.toContain(display.patientName);
-    expect(csv).not.toContain(display.patientId);
-  });
-
-  it("keeps failed and not-run pairs in the map with their state", () => {
-    const csv = pairsCsv([
-      { caseLabel: "C001", status: status(pair()) },
-      { caseLabel: "C002", status: status(pair(), { state: "FAILED", failureKind: "INPUT", error: "ROI が空です" }) },
-      { caseLabel: "C003", status: status(pair(), { state: "NOT_RUN", failureKind: "ENVIRONMENT", error: "disk full" }) },
-    ]);
-    const lines = csv.trim().split("\r\n");
-    expect(lines.length).toBe(4);
-    expect(lines[2]).toContain("FAILED");
-    expect(lines[3]).toContain("NOT_RUN");
-  });
-
-  it("builds four files with one prefix", () => {
-    const r = result([1, 2]);
-    const out = batchFiles("my study", [{ caseLabel: "C001", result: r }],
-      [{ caseLabel: "C001", status: status(pair()) }]);
-    expect(out.ok).toBe(true);
-    if (!out.ok) return;
-    expect(out.files.features.name).toBe("my_study.csv");
-    expect(out.files.definitions.name).toBe("my_study_definitions.csv");
-    expect(out.files.settings.name).toBe("my_study_radiomicsj.properties");
-    expect(out.files.pairs.name).toBe("my_study_pairs.csv");
-    expect(out.files.settings.text).toBe(r.settingsProperties);
-  });
-
-  it("falls back to a default prefix", () => {
-    expect(batchFileBase("  ")).toBe("roi-features-batch");
-  });
-});
-
 describe("applyLabelFilter", () => {
   const rows = () => initialRows([
     pair({ segmentLabel: "GTV" }), pair({ studyUid: "b", segmentLabel: "Tumor " }), pair({ studyUid: "c", segmentLabel: "liver" }),
@@ -263,7 +186,7 @@ describe("applyLabelFilter", () => {
   });
 });
 
-describe("QC in the request and the pair map", () => {
+describe("QC in the request", () => {
   it("carries qc and the acknowledged keys; defaults to none", () => {
     const form = defaultRoiFeatureForm();
     const a = buildBatchRequest([pair()], form);
@@ -274,30 +197,6 @@ describe("QC in the request and the pair map", () => {
     });
     expect(b.qc).toEqual({ smallRoi: "STOP", lossy: "FLAG" });
     expect(b.qcAcknowledged).toEqual(["1.2.3|SEG|0"]);
-  });
-
-  it("writes QcFlags and the spec hash on every row of the pair map", () => {
-    const st = (over: Partial<BatchPairStatusRow>): BatchPairStatusRow => ({
-      index: 0, pair: pair(), state: "DONE", failureKind: null, error: null, fromCache: false, elapsedMs: 1, qcFlags: [], ...over,
-    });
-    const csv = pairsCsv([
-      { caseLabel: "C001", status: st({}) },
-      { caseLabel: "C002", status: st({ qcFlags: ["SMALL_ROI", "LOSSY_COMPRESSION"] }) },
-    ], "ab".repeat(32));
-    const lines = csv.trim().split("\r\n");
-    expect(lines[0].endsWith("QcFlags,SpecSha256")).toBe(true);
-    expect(lines[1].endsWith(`,,${"ab".repeat(32)}`)).toBe(true);
-    expect(lines[2]).toContain("SMALL_ROI;LOSSY_COMPRESSION");
-  });
-
-  it("adds a spec file only when a spec is given", () => {
-    const r = result([1, 2]);
-    const items = [{ caseLabel: "C001", result: r }];
-    const all = [{ caseLabel: "C001", status: { index: 0, pair: pair(), state: "DONE" as const, failureKind: null, error: null, fromCache: false, elapsedMs: 1, qcFlags: [] } }];
-    const none = batchFiles("x", items, all);
-    const withSpec = batchFiles("x", items, all, { sha256: "ff", text: "{}" });
-    expect(none.ok && none.files.spec).toBeNull();
-    expect(withSpec.ok && withSpec.files.spec?.name).toBe("x_spec.json");
   });
 });
 
@@ -313,5 +212,12 @@ describe("smallRoiThresholdUnset", () => {
   });
   it("is false when there are no results yet", () => {
     expect(smallRoiThresholdUnset([])).toBe(false);
+  });
+});
+
+describe("batchFileBase", () => {
+  it("replaces characters that cannot be in a file name, and falls back to a default", () => {
+    expect(batchFileBase(" my study/1 ")).toBe("my_study_1");
+    expect(batchFileBase("  ")).toBe("roi-features-batch");
   });
 });

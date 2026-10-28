@@ -5,13 +5,11 @@
 /**
  * 一括抽出ダイアログの純粋な部分: 組の選択、症例ラベル、要求、縦に連ねた CSV。
  *
- * <p>患者名・患者 ID はここへ入れない（画面の確認表にだけ出す）。CSV と対応表に載るのは、採番した症例ラベルと UID。
+ * <p>患者名・患者 ID はここでは扱わない（画面の確認表にだけ出す）。書き出しは `datasetCsv.ts`。
  */
 import type { RoiFeatureResult } from "../api";
-import { cell } from "../viewer/roiStatsCsv";
-import type { BatchPair, BatchPairStatusRow, BatchQc, BatchRequest } from "./batchApi";
+import type { BatchPair, BatchQc, BatchRequest } from "./batchApi";
 import { normalizeLabels } from "./batchSpec";
-import { roiFeatureDataCsv, roiFeatureDefinitionsCsv } from "./roiFeatureCsv";
 import { roiFeatureSettings, type RoiFeatureForm } from "./roiFeatureSettings";
 
 export interface PairRow {
@@ -166,92 +164,8 @@ export function smallRoiThresholdUnset(results: readonly RoiFeatureResult[]): bo
   return results.length > 0 && results.every((r) => r.roiSize?.smallRoiWarnVoxels == null);
 }
 
-export interface LabelledResult {
-  caseLabel: string;
-  result: RoiFeatureResult;
-}
-
-export type StackedCsv = { ok: true; csv: string } | { ok: false; reason: string; caseLabel: string };
-
-/**
- * 症例ごとの `roiFeatureDataCsv` の行をそのまま縦に連ねる。見出しが症例の間で違うとき（族が欠けたなど）は
- * 列がずれて値が別の特徴量になるので、連ねずに止める。
- */
-export function stackedDataCsv(items: readonly LabelledResult[]): StackedCsv {
-  if (items.length === 0) return { ok: false, reason: "no results", caseLabel: "" };
-  let header = "";
-  const lines: string[] = [];
-  for (const it of items) {
-    const csv = roiFeatureDataCsv(it.result, it.caseLabel);
-    const cut = csv.indexOf("\r\n");
-    const h = csv.slice(0, cut);
-    const v = csv.slice(cut + 2).replace(/\r\n$/, "");
-    if (!header) header = h;
-    else if (h !== header) return { ok: false, reason: "header mismatch", caseLabel: it.caseLabel };
-    lines.push(v);
-  }
-  return { ok: true, csv: `${header}\r\n${lines.join("\r\n")}\r\n` };
-}
-
-/** 症例ラベルと UID の対応表。患者名・患者 ID は入れない。計算しなかった組・失敗した組も、状態つきで残す。 */
-export function pairsCsv(
-  rows: readonly { caseLabel: string; status: BatchPairStatusRow }[],
-  specSha256 = "",
-): string {
-  const head = [
-    "CaseLabel", "StudyInstanceUID", "SourceSeriesUID", "MaskSeriesUID", "SegmentNumber", "SegmentLabel",
-    "MaskChannel", "State", "FailureKind", "FromCache", "Error", "QcFlags", "SpecSha256",
-  ];
-  const out = [head.join(",")];
-  for (const { caseLabel, status: s } of rows) {
-    out.push([
-      caseLabel, s.pair.studyUid, s.pair.sourceSeriesUid ?? "", s.pair.maskSeriesUid,
-      s.pair.segmentNumber == null ? "" : String(s.pair.segmentNumber), s.pair.segmentLabel ?? "",
-      String(s.pair.maskChannel), s.state, s.failureKind ?? "", s.fromCache ? "1" : "0", s.error ?? "",
-      (s.qcFlags ?? []).join(";"), specSha256,
-    ].map(cell).join(","));
-  }
-  return `${out.join("\r\n")}\r\n`;
-}
-
 /** ファイル名の接頭辞に使えない文字を `_` にする。空なら `roi-features-batch`。 */
 export function batchFileBase(prefix: string): string {
   const p = prefix.trim().replace(/[\\/:*?"<>|\s]/g, "_");
   return p || "roi-features-batch";
-}
-
-/** 書き出す定義（`_spec.json`）。ハッシュは `_pairs.csv` の `SpecSha256` に入れる。 */
-export interface BatchSpecFile {
-  sha256: string;
-  text: string;
-}
-
-export interface BatchFiles {
-  features: { name: string; text: string };
-  definitions: { name: string; text: string };
-  settings: { name: string; text: string };
-  pairs: { name: string; text: string };
-  spec: { name: string; text: string } | null;
-}
-
-/** 書き出すファイル（4 つ。定義を渡せば `_spec.json` も）。計算できた症例が無い、または見出しが合わないときは理由を返す。 */
-export function batchFiles(
-  prefix: string,
-  items: readonly LabelledResult[],
-  all: readonly { caseLabel: string; status: BatchPairStatusRow }[],
-  spec: BatchSpecFile | null = null,
-): { ok: true; files: BatchFiles } | { ok: false; reason: string; caseLabel: string } {
-  const stacked = stackedDataCsv(items);
-  if (!stacked.ok) return stacked;
-  const base = batchFileBase(prefix);
-  return {
-    ok: true,
-    files: {
-      features: { name: `${base}.csv`, text: stacked.csv },
-      definitions: { name: `${base}_definitions.csv`, text: roiFeatureDefinitionsCsv(items[0].result) },
-      settings: { name: `${base}_radiomicsj.properties`, text: items[0].result.settingsProperties },
-      pairs: { name: `${base}_pairs.csv`, text: pairsCsv(all, spec?.sha256 ?? "") },
-      spec: spec ? { name: `${base}_spec.json`, text: spec.text } : null,
-    },
-  };
 }
