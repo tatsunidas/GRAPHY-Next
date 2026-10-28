@@ -21,7 +21,7 @@ import {
 import {
   applyLabelFilter,
   assignCaseLabels,
-  batchFiles,
+  batchFileBase,
   buildBatchRequest,
   cleanLabel,
   duplicateLabels,
@@ -49,6 +49,7 @@ import {
   type SpecQcMode,
 } from "./batchSpec";
 import { BatchSettingsPanel } from "./BatchSettingsPanel";
+import { assignSubjectCodes, datasetFiles, type DatasetRow } from "./datasetCsv";
 import { downloadText } from "./downloadText";
 import { defaultRoiFeatureForm, type RoiFeatureForm } from "./roiFeatureSettings";
 
@@ -106,10 +107,20 @@ export function RoiFeatureBatchDialog({
   /** QC で止まったあとに「許容して続ける」で許容した組のキー。設定を変えたら空に戻す。 */
   const [acknowledged, setAcknowledged] = useState<string[]>([]);
   const [info, setInfo] = useState<string | null>(null);
+  /** 出力の選択。被験者の対応表は既定で書く（別ファイル）。患者 ID を表に含めるのは選んだときだけ。BOM は既定で付けない。 */
+  const [subjectsFile, setSubjectsFile] = useState(true);
+  const [includePatientId, setIncludePatientId] = useState(false);
+  const [bom, setBom] = useState(false);
   /** 送信中（押してから応答が来るまで）。この間に押し直すと同じ組が二重に投入される。 */
   const [starting, setStarting] = useState(false);
   const fileRef = useRef<HTMLInputElement | null>(null);
   const labels = useMemo(() => parseLabelInput(labelsText), [labelsText]);
+  /** 被験者のコード。アルバムのスタディの並び順だけで決める（選んだ組には依らない）。 */
+  const subjects = useMemo(
+    () => assignSubjectCodes(uids, (u) => studies.get(u)?.patientId,
+      Array.from(new Set((rows ?? []).map((r) => r.pair.studyUid)))),
+    [uids, studies, rows],
+  );
   const labelsRef = useRef<string[]>([]);
   labelsRef.current = labels;
   /** 実行中のジョブの、組ごとの症例ラベルと、試行かどうか。結果の `index` で引く。`spec` は実行に使った定義。 */
@@ -238,22 +249,24 @@ export function RoiFeatureBatchDialog({
   const write = () => {
     const run = runRef.current;
     if (!job || !results || !run) return;
-    const items = results.map((r) => ({ caseLabel: run.labels[r.index] ?? "", result: r.result }));
-    const all = job.pairs.map((p) => ({ caseLabel: run.labels[p.index] ?? "", status: p }));
-    const out = batchFiles(prefix, items, all, { sha256: run.spec.sha256, text: specText({ ...run.spec, output: { prefix } }) });
+    const byIndex = new Map(results.map((r) => [r.index, r.result]));
+    const dsRows: DatasetRow[] = job.pairs.map((p) => ({
+      caseLabel: run.labels[p.index] ?? "", status: p, result: byIndex.get(p.index) ?? null,
+    }));
+    const out = datasetFiles(dsRows, subjects, {
+      albumName, specSha256: run.spec.sha256, includePatientId, base: batchFileBase(prefix),
+      specText: specText({ ...run.spec, output: { prefix } }), subjectsFile, bom,
+    });
     if (!out.ok) {
       return setError(
-        out.reason === "header mismatch"
-          ? t("roiFeat.batch.err.header", { label: out.caseLabel })
+        out.reason === "header mismatch" ? t("roiFeat.batch.err.header", { label: out.caseLabel })
+          : out.reason === "missing result" ? t("roiFeat.batch.err.missing", { label: out.caseLabel })
           : t("roiFeat.batch.err.noResult"),
       );
     }
     setError(null);
-    const files = [out.files.features, out.files.definitions, out.files.settings, out.files.pairs, ...(out.files.spec ? [out.files.spec] : [])];
-    for (const f of files) {
-      downloadText(f.text, f.name, f.name.endsWith(".properties") ? "text/plain;charset=utf-8"
-        : f.name.endsWith(".json") ? "application/json;charset=utf-8" : "text/csv;charset=utf-8");
-    }
+    const files = out.files;
+    for (const f of files) downloadText(f.text, f.name, f.mime);
     setWritten(files.length);
   };
 
@@ -442,6 +455,22 @@ export function RoiFeatureBatchDialog({
                 <input data-testid="batch-prefix" value={prefix} placeholder="roi-features-batch" disabled={running}
                   style={{ ...input, width: 220 }} onChange={(e) => setPrefix(e.target.value)} />
               </label>
+              <div style={{ marginTop: 6, display: "flex", flexDirection: "column", gap: 3 }} data-testid="batch-output-options">
+                <label>
+                  <input type="checkbox" data-testid="batch-out-subjects" checked={subjectsFile} disabled={running}
+                    onChange={(e) => setSubjectsFile(e.target.checked)} /> {t("roiFeat.batch.out.subjects")}
+                </label>
+                <div style={note}>{t("roiFeat.batch.out.subjectsHelp")}</div>
+                <label>
+                  <input type="checkbox" data-testid="batch-out-patientid" checked={includePatientId} disabled={running}
+                    onChange={(e) => setIncludePatientId(e.target.checked)} /> {t("roiFeat.batch.out.patientId")}
+                </label>
+                {includePatientId && <div style={{ ...note, color: "#b00020" }} data-testid="batch-out-patientid-warn">{t("roiFeat.batch.out.patientIdWarn")}</div>}
+                <label>
+                  <input type="checkbox" data-testid="batch-out-bom" checked={bom} disabled={running}
+                    onChange={(e) => setBom(e.target.checked)} /> {t("roiFeat.batch.out.bom")}
+                </label>
+              </div>
               {dup.length > 0 && <div style={errStyle}>{t("roiFeat.batch.err.duplicate", { labels: dup.join(", ") })}</div>}
             </>
           )}

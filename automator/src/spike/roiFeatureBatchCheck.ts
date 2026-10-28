@@ -60,14 +60,15 @@ interface Box { r0: number; r1: number; c0: number; c1: number; z0: number; z1: 
 const SEG1: Box = { r0: 12, r1: 36, c0: 10, c1: 34, z0: 3, z1: 13 };
 const SEG2: Box = { r0: 30, r1: 40, c0: 36, c1: 46, z0: 5, z1: 9 };
 const PATIENT_NAME = "SYNTH^ROIFEAT";
-const PATIENT_ID = "SYNTHROIFEAT";
+/** 検査 0・1 が患者 A、検査 2 が患者 B、検査 3 は既定の患者 ID。 */
+const PATIENT_IDS = ["SYNTHBATCH-A", "SYNTHBATCH-A", "SYNTHBATCH-B"];
 
-function makeSynth(i: number): Synth & { dir: string } {
+function makeSynth(i: number, patientId?: string): Synth & { dir: string } {
   const dir = path.join(OUT_DIR, `synth${i}`);
   fs.rmSync(dir, { recursive: true, force: true });
   fs.mkdirSync(dir, { recursive: true });
   const seed = String((Date.now() + i * 7919) % 2_000_000_000);
-  const r = spawnSync("python3", ["-I", path.join(import.meta.dirname, "roiFeatureSynth.py"), dir, seed], { encoding: "utf8" });
+  const r = spawnSync("python3", ["-I", path.join(import.meta.dirname, "roiFeatureSynth.py"), dir, seed, "-1000", ...(patientId ? [patientId] : [])], { encoding: "utf8" });
   if (r.status !== 0) throw new Error(`合成データを作れません: ${r.stderr}`);
   return { ...(JSON.parse(r.stdout) as Synth), dir };
 }
@@ -114,10 +115,18 @@ function splitRow(line: string): string[] {
   out.push(cur);
   return out;
 }
-/** 先頭の記録の列（症例ラベル・Provenance_* の 5 列と、ROI の大きさ・警告の 6 列）。 */
+/** 先頭の記録の列（症例ラベル・Provenance_* の 5 列と、ROI の大きさ・警告の 6 列）。旧い書き出し用で、今は使わない。 */
 const NREC = 11;
 
-interface Download { name: string; text: string }
+/** 表を見出しと行に分ける（BOM は無視）。 */
+function parseFeatures(csv: string): { header: string[]; rows: string[][] } {
+  const lines = csv.replace(/^\uFEFF/, "").split("\r\n").filter(Boolean);
+  return { header: splitRow(lines[0]), rows: lines.slice(1).map(splitRow) };
+}
+/** 特徴量の列の始まり（`Warning_SmallRoi` の次）。識別・記録・大きさの列は列名で引き、位置を決め打ちしない。 */
+const featureStart = (header: string[]): number => header.indexOf("Warning_SmallRoi") + 1;
+
+interface Download { name: string; text: string; head: number[] }
 async function takeDownloads(page: Page, n: number): Promise<Download[]> {
   for (let i = 0; i < 50; i++) {
     const got = (await page.evaluate("window.__roiDownloads.length")) as number;
@@ -147,7 +156,7 @@ async function waitText(page: Page, testId: string, re: RegExp, timeoutMs: numbe
 
 async function main(): Promise<void> {
   fs.mkdirSync(OUT_DIR, { recursive: true });
-  const synths = [0, 1, 2, 3].map(makeSynth);
+  const synths = [0, 1, 2, 3].map((i) => makeSynth(i, PATIENT_IDS[i]));
   const d = new DesktopDriver();
   await d.start();
   const base = `http://127.0.0.1:${d.ports.http}`;
@@ -198,8 +207,10 @@ async function main(): Promise<void> {
           var a = this;
           if (a.download && a.href.indexOf("blob:") === 0) {
             var name = a.download;
-            fetch(a.href).then(function (r) { return r.text(); }).then(function (t) {
-              window.__roiDownloads.push({ name: name, text: t });
+            fetch(a.href).then(function (r) { return r.arrayBuffer(); }).then(function (buf) {
+              var head = Array.prototype.slice.call(new Uint8Array(buf).slice(0, 3));
+              var text = new TextDecoder("utf-8", { ignoreBOM: true }).decode(buf);
+              window.__roiDownloads.push({ name: name, text: text, head: head });
             });
             return;
           }
@@ -278,38 +289,45 @@ async function main(): Promise<void> {
     for (const f of dl) fs.writeFileSync(path.join(OUT_DIR, f.name), f.text);
     check(dl.length === 5, "5 ファイルが出る（定義を含む）", dl.map((f) => f.name));
     const features = dl.find((f) => f.name === "batchcheck.csv");
-    const pairsCsv = dl.find((f) => f.name === "batchcheck_pairs.csv");
-    check(!!features && !!pairsCsv, "特徴量 CSV と対応表がある");
-    check(!dl.some((f) => f.text.includes(PATIENT_NAME) || f.text.includes(PATIENT_ID)), "どのファイルにも患者名・患者 ID が無い");
-    if (features && pairsCsv) {
-      const lines = features.text.split("\r\n");
-      check(lines.length === 8 && lines[7] === "", "特徴量 CSV は見出し + 6 行", lines.length);
-      check(features.text.charCodeAt(0) !== 0xfeff, "BOM なし");
-      const header = splitRow(lines[0]);
-      const pairRows = pairsCsv.text.split("\r\n").filter(Boolean).slice(1).map(splitRow);
-      check(pairRows.length === 6, "対応表は 6 行", pairRows.length);
-      check(pairRows.every((r) => r[7] === "DONE"), "対応表の状態はすべて DONE", pairRows.map((r) => r[7]));
+    const subjectsPrivate = dl.find((f) => f.name === "batchcheck_subjects_private.csv");
+    check(dl.map((f) => f.name).sort().join() === ["batchcheck.csv", "batchcheck_definitions.csv", "batchcheck_radiomicsj.properties", "batchcheck_spec.json", "batchcheck_subjects_private.csv"].sort().join(),
+      "5 ファイルの名前（表・定義表・設定・定義・被験者の対応表）", dl.map((f) => f.name));
+    check(!!features && !!subjectsPrivate, "表と被験者の対応表がある");
+    check(!dl.some((f) => f.text.includes(PATIENT_NAME)), "どのファイルにも患者名が無い");
+    check(!dl.filter((f) => f !== subjectsPrivate).some((f) => f.text.includes("SYNTHBATCH")), "患者 ID は被験者の対応表以外のファイルに入らない");
+    if (features && subjectsPrivate) {
+      const feat = parseFeatures(features.text);
+      const col = (n: string) => feat.header.indexOf(n);
+      check(feat.rows.length === 6, "表は 6 行（送った組の数）", feat.rows.length);
+      check(features.head.join() !== "239,187,191", "BOM なし");
+      check(!feat.header.includes("PatientID"), "既定では PatientID の列が無い");
+      check(feat.rows.every((r) => r[col("RowStatus")] === "DONE"), "状態はすべて DONE");
+      check(feat.rows.map((r) => r[col("SubjectCode")]).join() === "S001,S001,S001,S001,S002,S002",
+        "SubjectCode: 患者 A の 4 組が S001、患者 B の 2 組が S002", feat.rows.map((r) => r[col("SubjectCode")]));
+      check(feat.rows.every((r) => r[col("Album")].startsWith("batch-check-")), "Album の列にアルバム名が入る");
+      const subj = subjectsPrivate.text.split("\r\n").filter(Boolean).map(splitRow);
+      check(subj[0].join() === "SubjectCode,PatientID,StudyInstanceUID" && subj.length === 4, "被験者の対応表: 見出し + 検査 3 件（SEG のある検査だけ）", subj);
+      check(subj[1].join() === `S001,SYNTHBATCH-A,${synths[0].studyInstanceUid}` && subj[2].join() === `S001,SYNTHBATCH-A,${synths[1].studyInstanceUid}`
+        && subj[3].join() === `S002,SYNTHBATCH-B,${synths[2].studyInstanceUid}`, "対応表: 患者 A の 2 検査が S001、患者 B の検査が S002");
+      const specObj0 = JSON.parse(dl.find((f) => f.name === "batchcheck_spec.json")!.text) as { sha256: string };
+      check(feat.rows.every((r) => r[col("Provenance_SpecSha256")] === specObj0.sha256), "全行の Provenance_SpecSha256 が定義の sha256 と一致");
       let mismatched = 0;
       let compared = 0;
-      for (let i = 1; i <= 6; i++) {
-        const cells = splitRow(lines[i]);
-        const label = cells[0];
-        const pr = pairRows.find((r) => r[0] === label);
-        if (!pr) { check(false, `症例 ${label} が対応表にある`); continue; }
-        // 対応表: CaseLabel, Study, Source, Mask, SegNo, SegLabel, MaskChannel, ...
+      const start = featureStart(feat.header);
+      for (const r of feat.rows) {
         const direct = await apiFeatures(base, {
-          studyInstanceUid: pr[1], sourceSeriesUid: pr[2], maskSeriesUid: pr[3], maskChannel: Number(pr[6]),
-          channel: 0, timePoint: 0, settings: req.settings, recompute: true,
+          studyInstanceUid: r[col("StudyInstanceUID")], sourceSeriesUid: r[col("SourceSeriesUID")], maskSeriesUid: r[col("MaskSeriesUID")],
+          maskChannel: Number(r[col("Roi_MaskChannel")]), channel: 0, timePoint: 0, settings: req.settings, recompute: true,
         });
-        const names = header.slice(NREC);
-        const values = cells.slice(NREC).map(Number);
+        const names = feat.header.slice(start);
+        const values = r.slice(start).map(Number);
         const same = names.length === direct.rows.length && names.every((n, k) => n === direct.rows[k].column)
-          && direct.rows.every((r, k) => Object.is(values[k], r.value ?? NaN));
+          && direct.rows.every((x, k) => Object.is(values[k], x.value ?? NaN));
         compared++;
         if (!same) mismatched++;
       }
       check(compared === 6 && mismatched === 0, "6 行すべてで、同じ組の API 直呼び（キャッシュなし）と全列の差 0", { compared, mismatched });
-      const labels = lines.slice(1, 7).map((l) => splitRow(l)[0]);
+      const labels = feat.rows.map((r) => r[0]);
       check(new Set(labels).size === 6 && labels[0] === "C001", "症例ラベルが C001… と重複なしで振られる", labels);
     }
 
@@ -332,6 +350,22 @@ async function main(): Promise<void> {
     const doneBefore = Number(/(\d+)\/6 完了/.exec(cancelledText)?.[1] ?? 0);
     check(doneBefore >= 1 && doneBefore < 6, "取り消し時点で一部だけ完了している", cancelledText);
     check(await page.getByTestId("batch-write").isEnabled(), "取り消し後も、計算できた分は書き出せる");
+    // 取り消した途中で書き出す: 取り消した組も行に残り、特徴量・記録は空欄（0 でも NaN でもない）
+    await page.getByTestId("batch-prefix").fill("cancelcheck");
+    await page.getByTestId("batch-write").click();
+    const dlC = await takeDownloads(page, 5);
+    for (const f of dlC) fs.writeFileSync(path.join(OUT_DIR, f.name), f.text);
+    const featC = parseFeatures(dlC.find((f) => f.name === "cancelcheck.csv")!.text);
+    const cC = (n: string) => featC.header.indexOf(n);
+    const cancelledRows = featC.rows.filter((r) => r[cC("RowStatus")] === "CANCELLED");
+    check(featC.rows.length === 6, "取り消しの途中でも表は 6 行（送った組の数）", featC.rows.length);
+    check(featC.rows.filter((r) => r[cC("RowStatus")] === "DONE").length === doneBefore && cancelledRows.length === 6 - doneBefore,
+      "完了と取り消しの行数が画面の表示と一致", { doneBefore, cancelled: cancelledRows.length });
+    check(cancelledRows.every((r) => r.slice(featureStart(featC.header)).every((c) => c === "") && r[cC("Provenance_ExtractedAt")] === ""),
+      "取り消した行は、特徴量と記録が空欄（0 でも NaN でもない）");
+    check(cancelledRows.every((r) => r[cC("StudyInstanceUID")] !== "" && r[cC("SubjectCode")] !== "" && r[cC("CaseLabel")] !== ""),
+      "取り消した行にも、症例ラベル・被験者・UID が残る");
+    await page.getByTestId("batch-prefix").fill("");
     await page.getByTestId("batch-run").click();
     await waitText(page, "batch-progress", /完了 — 6\/6 完了/, 900_000);
     await page.screenshot({ path: path.join(OUT_DIR, "05-resumed.png"), fullPage: true });
@@ -352,16 +386,13 @@ async function main(): Promise<void> {
     };
     const bincount = page.getByTestId("batch-bincount").locator("input");
     const radio = (id: string, n: number) => page.getByTestId(id).locator('input[type="radio"]').nth(n);
-    const parseFeatures = (csv: string) => {
-      const lines = csv.split("\r\n").filter(Boolean);
-      const header = splitRow(lines[0]);
-      return { header, rows: lines.slice(1).map(splitRow) };
-    };
 
     /** 停止（QC）のたびに「許容して続ける」を押し、完了まで進める。押したあとは停止の表示が消えるのを待つ。 */
-    const acceptUntilDone = async (done: RegExp): Promise<string> => {
+    const acceptUntilDone = async (done: RegExp, total?: number): Promise<string> => {
+      // 総数を渡すと、その総数の新しいジョブの表示だけを待つ（開き直さないときに、直前のジョブの表示を取り違えない）
+      const shown = total ? new RegExp(`^(停止|完了|取り消し) — \\d+/${total} 完了`) : /^(停止|完了|取り消し)/;
       for (let i = 0; i < 10; i++) {
-        const txt = await waitText(page, "batch-progress", /^(停止|完了|取り消し)/, 300_000);
+        const txt = await waitText(page, "batch-progress", shown, 300_000);
         if (done.test(txt)) return txt;
         await page.getByTestId("batch-qc-hold").waitFor({ state: "visible", timeout: 30_000 });
         await page.getByTestId("batch-qc-continue").click();
@@ -400,10 +431,9 @@ async function main(): Promise<void> {
     await page.getByTestId("batch-write").click();
     const dlQc = await takeDownloads(page, 5);
     const qcFeatures = dlQc.find((f) => f.name === "qccheck.csv");
-    const qcPairs = dlQc.find((f) => f.name === "qccheck_pairs.csv");
     const qcSpec = dlQc.find((f) => f.name === "qccheck_spec.json");
-    check(!!qcFeatures && !!qcPairs && !!qcSpec, "QC の実行でも 5 ファイルが出る", dlQc.map((f) => f.name));
-    if (qcFeatures && qcPairs && qcSpec) {
+    check(!!qcFeatures && !!qcSpec, "QC の実行でも 5 ファイルが出る", dlQc.map((f) => f.name));
+    if (qcFeatures && qcSpec) {
       const feat = parseFeatures(qcFeatures.text);
       const iVox = feat.header.indexOf("Roi_IntensityMaskVoxels");
       const iWarn = feat.header.indexOf("Warning_SmallRoi");
@@ -411,25 +441,24 @@ async function main(): Promise<void> {
       const big = feat.rows.filter((r) => r[iVox] === "5760");
       check(feat.rows.length === 5 && small.length === 2 && big.length === 3, "5 行（400 ボクセル 2・5760 ボクセル 3）", feat.rows.map((r) => r[iVox]));
       check(small.every((r) => r[iWarn] === "1") && big.every((r) => r[iWarn] === "0"), "Warning_SmallRoi が 400→1・5760→0（予測どおり）");
-      const pr = qcPairs.text.split("\r\n").filter(Boolean).slice(1).map(splitRow);
-      const iFlags = 11;
-      const flagged = pr.filter((r) => r[iFlags].includes("SMALL_ROI"));
-      check(pr.length === 5 && flagged.length === 2, "対応表の QcFlags: 小さい 2 組だけに SMALL_ROI", pr.map((r) => r[iFlags]));
+      const iFlags = feat.header.indexOf("Provenance_QcFlags");
+      const flagged = feat.rows.filter((r) => r[iFlags].includes("SMALL_ROI"));
+      check(feat.rows.length === 5 && flagged.length === 2 && flagged.every((r) => r[iVox] === "400"),
+        "表の Provenance_QcFlags: 小さい 2 組（400 ボクセル）だけに SMALL_ROI", feat.rows.map((r) => r[iFlags]));
       const specObj = JSON.parse(qcSpec.text) as { sha256: string; qc: { smallRoi: string } };
-      check(pr.every((r) => r[12] === specObj.sha256), "対応表の SpecSha256 が書き出した定義の sha256 と一致", specObj.sha256);
+      check(feat.rows.every((r) => r[feat.header.indexOf("Provenance_SpecSha256")] === specObj.sha256), "表の Provenance_SpecSha256 が書き出した定義の sha256 と一致", specObj.sha256);
       check(specObj.qc.smallRoi === "STOP", "書き出した定義に QC の設定（止める）が残る");
       // 止まって続けた組の値が、止まらずに直接計算した値と全列で一致する
       const reqNow = posted[posted.length - 1];
       let mismatched = 0;
       for (let i = 0; i < feat.rows.length; i++) {
-        const label = feat.rows[i][0];
-        const p = pr.find((r) => r[0] === label)!;
+        const fc = (n: string) => feat.rows[i][feat.header.indexOf(n)];
         const direct = await apiFeatures(base, {
-          studyInstanceUid: p[1], sourceSeriesUid: p[2], maskSeriesUid: p[3], maskChannel: Number(p[6]),
-          channel: 0, timePoint: 0, settings: reqNow.settings, recompute: true,
+          studyInstanceUid: fc("StudyInstanceUID"), sourceSeriesUid: fc("SourceSeriesUID"), maskSeriesUid: fc("MaskSeriesUID"),
+          maskChannel: Number(fc("Roi_MaskChannel")), channel: 0, timePoint: 0, settings: reqNow.settings, recompute: true,
         });
-        const names = feat.header.slice(NREC);
-        const values = feat.rows[i].slice(NREC).map(Number);
+        const names = feat.header.slice(featureStart(feat.header));
+        const values = feat.rows[i].slice(featureStart(feat.header)).map(Number);
         const same = names.length === direct.rows.length && names.every((n, k) => n === direct.rows[k].column)
           && direct.rows.every((r, k) => Object.is(values[k], r.value ?? NaN));
         if (!same) mismatched++;
@@ -543,8 +572,36 @@ async function main(): Promise<void> {
     check(featB.rows[0][shaCol] === provA, "定義を読み込んで実行した結果の設定 SHA-256 が、手で設定した実行と同じ", { a: provA, b: featB.rows[0][shaCol] });
     const specB = JSON.parse(dlB.find((f) => f.name === "speccheck_spec.json")!.text) as { sha256: string };
     check(specB.sha256 === specA.sha256, "書き出した定義の sha256 が保存した定義と同じ");
-    const pairsB = dlB.find((f) => f.name === "speccheck_pairs.csv")!.text.split("\r\n").filter(Boolean).slice(1).map(splitRow);
-    check(pairsB.every((r) => r[12] === specA.sha256), "対応表の SpecSha256 が定義の sha256 と一致");
+    check(featB.rows.every((r) => r[featB.header.indexOf("Provenance_SpecSha256")] === specA.sha256), "表の Provenance_SpecSha256 が定義の sha256 と一致");
+
+    // ---- 8. 出力の選択 ----
+    console.log("\n[8] 出力の選択: 1 人だけ選んでも SubjectCode は動かない・PatientID を含める・BOM・対応表なし");
+    // 患者 B の検査（検査 2）の SmallBox だけを対象にする（絞り込みで対象は 検査 0 と 検査 2 の SmallBox）
+    await page.getByTestId("batch-include-1").uncheck();
+    await page.getByTestId("batch-out-subjects").uncheck();
+    await page.getByTestId("batch-out-patientid").check();
+    await page.getByTestId("batch-out-bom").check();
+    check(await page.getByTestId("batch-out-patientid-warn").isVisible(), "患者 ID を含めると警告が出る");
+    await page.getByTestId("batch-prefix").fill("optcheck");
+    await page.screenshot({ path: path.join(OUT_DIR, "11-output-options.png"), fullPage: true });
+    await page.getByTestId("batch-run").click();
+    await acceptUntilDone(/^完了 — 1\/1 完了/, 1);
+    await page.getByTestId("batch-write").click();
+    const dlO = await takeDownloads(page, 4);
+    check(dlO.map((f) => f.name).sort().join() === ["optcheck.csv", "optcheck_definitions.csv", "optcheck_radiomicsj.properties", "optcheck_spec.json"].sort().join(),
+      "対応表を外すと、4 ファイルだけ書く（被験者の対応表は書かない）", dlO.map((f) => f.name));
+    for (const f of dlO) fs.writeFileSync(path.join(OUT_DIR, f.name), f.text);
+    check(dlO.filter((f) => f.name.endsWith(".csv")).every((f) => f.head.join() === "239,187,191"), "BOM 付き: CSV の先頭 3 バイトが EF BB BF");
+    check(dlO.filter((f) => !f.name.endsWith(".csv")).every((f) => f.head.join() !== "239,187,191"), "設定ファイル・定義の JSON には BOM を付けない");
+    const featO = parseFeatures(dlO.find((f) => f.name === "optcheck.csv")!.text);
+    const cO = (n: string) => featO.header.indexOf(n);
+    check(featO.header[0] === "CaseLabel" && featO.header[1] === "PatientID" && featO.header[2] === "SubjectCode", "PatientID を選ぶと、表の 2 列目に入る", featO.header.slice(0, 4));
+    check(featO.rows.length === 1 && featO.rows[0][cO("PatientID")] === "SYNTHBATCH-B" && featO.rows[0][cO("StudyInstanceUID")] === synths[2].studyInstanceUid,
+      "患者 B の 1 行だけが出る", featO.rows[0]?.slice(0, 6));
+    check(featO.rows[0][cO("SubjectCode")] === "S002", "患者 B だけを選んでも SubjectCode は S002（アルバムの並びで決まり、選択では動かない）", featO.rows[0][cO("SubjectCode")]);
+    const defsO = dlO.find((f) => f.name === "optcheck_definitions.csv")!.text.replace(/^\uFEFF/, "").split("\r\n").filter(Boolean).slice(1).map((l) => splitRow(l)[0]);
+    check(defsO.join() === featO.header.join(), "定義表の行が、表の列と 1 対 1（PatientID の行を含む）");
+    await page.screenshot({ path: path.join(OUT_DIR, "12-output-written.png"), fullPage: true });
   } finally {
     // resetDb はアルバムを消さないので、自分で作ったものは自分で消す
     if (albumId) await fetch(`${base}/api/albums/${albumId}`, { method: "DELETE" }).catch(() => {});
