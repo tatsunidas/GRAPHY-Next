@@ -44,6 +44,8 @@ interface Spec {
   /** 検算用アンカー（使うものより遠位であること。補正・再構成に使わない）。 */
   heldOut?: { a: Pt; b: Pt };
   proximal: "start" | "end" | "";
+  /** 平均大動脈圧 [mmHg]。無ければ QFR は計算しない（負例の確認に使う）。control の値は配管の確認用で、意味を持たない。 */
+  pa?: number;
 }
 
 const QUANT_REPO = path.resolve(AUTOMATOR_ROOT, "..", "..", "graphy-next-plugin-angio-quant");
@@ -78,6 +80,7 @@ function controlSpec(shiftSamples: number): Spec {
     anchors: used.map((i) => ({ a: at(A, i), b: at(B, i) })),
     heldOut: { a: at(A, held), b: at(B, Math.min(1199, held + shiftSamples)) },
     proximal: "start",
+    pa: 100,
   };
 }
 
@@ -135,12 +138,72 @@ const num = (s: string, re: RegExp): number | null => {
   return m ? Number(m[1]) : null;
 };
 
+/** 2 方向窓の次に QFR 窓を開き、入力 → 計算 → 結果を読む。計算できない場合は理由（ボタンの無効・文言）を返す。 */
+async function runQfr(viewer: Page, spec: Spec, outDir: string): Promise<Record<string, unknown>> {
+  const q: Record<string, unknown> = {};
+  // 2 方向窓が QFR ボタンを覆うので閉じる。登録した血管モデルはセッション中は残る（QFR 窓の説明）。
+  const dualWin = viewer.getByRole("dialog", { name: /アンギオ 3D/ });
+  await dualWin.getByRole("button", { name: "×" }).click();
+  await viewer.waitForTimeout(400);
+  const guard = viewer.getByTestId("plugin-window-close-guard-close");
+  if (await guard.isVisible().catch(() => false)) await guard.click();
+  await viewer.waitForTimeout(500);
+  await viewer.getByTestId("angio-quant-qfr").click({ timeout: 8_000 }).catch(async (e) => {
+    log("QFR ボタンを押せない:", String(e).slice(0, 160));
+    await viewer.screenshot({ path: path.join(outDir, `${spec.label}-3-qfr-open-fail.png`) });
+    throw e;
+  });
+  await viewer.getByTestId("qfr-panel").waitFor({ state: "visible", timeout: 10_000 });
+  await viewer.waitForTimeout(800);
+  q.modelOptions = await viewer.getByTestId("qfr-model").locator("option").count();
+  q.directionRowVisible = await viewer.getByTestId("qfr-direction").isVisible().catch(() => false);
+  const run = viewer.getByTestId("qfr-run");
+  q.runEnabledWithoutPa = await run.isEnabled();
+  check("[Q1] ★Pa 未入力では「QFR を計算する」が無効（計算しない）", !q.runEnabledWithoutPa, { enabled: q.runEnabledWithoutPa });
+  if (spec.pa !== undefined) {
+    // 流速モデルは固定流速（fQFR）に明示する。cQFR は造影フレームカウント（別窓での ROI 操作）が要り、この検査では未達として扱う。
+    await viewer.getByTestId("qfr-velocity").selectOption("fixed");
+    q.velocityModel = await viewer.getByTestId("qfr-velocity").inputValue();
+    await viewer.getByTestId("qfr-pa").fill(String(spec.pa));
+    await viewer.waitForTimeout(300);
+    q.directionRowVisible = await viewer.getByTestId("qfr-direction").isVisible().catch(() => false);
+    q.runEnabledWithPa = await run.isEnabled();
+    q.directionConfirmed = spec.proximal !== "" ;
+    if (spec.proximal === "") {
+      check("[Q2] ★近位端が未確認なら、Pa を入れても計算できない（向きの確認が要る）", !q.runEnabledWithPa, { enabled: q.runEnabledWithPa, directionRowVisible: q.directionRowVisible });
+    } else {
+      check("[Q2] 近位端を選んであれば、Pa を入れると計算できる", !!q.runEnabledWithPa, { enabled: q.runEnabledWithPa });
+    }
+    if (q.runEnabledWithPa) {
+      await run.click();
+      await viewer.waitForTimeout(4_000);
+      const txt2 = async (id: string) => (await viewer.getByTestId(id).first().innerText({ timeout: 2_000 }).catch(() => "")).replace(/\s+/g, " ");
+      q.value = await txt2("qfr-value");
+      q.primary = await txt2("qfr-primary");
+      q.cross = await txt2("qfr-cross");
+      q.diff = await txt2("qfr-diff");
+      q.caveats = (await txt2("qfr-caveats")).slice(0, 600);
+      log("QFR:", q.value, "| 主:", q.primary, "| 検算:", q.cross, "| 差:", q.diff);
+      check("[Q3] QFR の値が出た（数値）", /\d\.\d{2,}/.test(String(q.value)), { value: q.value });
+      await viewer.screenshot({ path: path.join(outDir, `${spec.label}-3-qfr.png`) });
+    }
+  }
+  return q;
+}
+
 async function main(): Promise<void> {
   const spec: Spec =
     MODE === "control-pos" ? controlSpec(0)
     : MODE === "control-neg" ? controlSpec(SHIFT)
     : (JSON.parse(fs.readFileSync(process.env.FFR_SPEC ?? "", "utf8")) as Spec);
   if (spec.anchors.length < 3) throw new Error("アンカーは 3 点以上");
+  // 負例用の上書き: FFR_PROXIMAL=none|start|end（none = 近位端を未確認のまま）。
+  const pxEnv = process.env.FFR_PROXIMAL;
+  if (pxEnv !== undefined) {
+    if (!["none", "start", "end"].includes(pxEnv)) throw new Error("FFR_PROXIMAL は none|start|end");
+    spec.proximal = pxEnv === "none" ? "" : (pxEnv as "start" | "end");
+    spec.label += `-prox-${pxEnv}`;
+  }
   fs.mkdirSync(OUT_DIR, { recursive: true });
   installPlugin();
   const driver = new DesktopDriver();
@@ -270,6 +333,12 @@ async function main(): Promise<void> {
     check("[6] 再構成が結果を出した（ブロック警告なし）", !!rec && !/結果を出しません|再構成できませんでした/.test(rec), rec.slice(0, 160));
     if (spec.heldOut) check("[7] 検算用アンカーの誤差が表示された（数値）", report.heldOutPx !== null, held.slice(0, 160));
     check("[8] 径の食い違いが表示された、または出せない理由が分かる", /2 方向の径の差|断面積・狭窄率は出せません/.test(rec + " " + agree), agree.slice(0, 120));
+
+    /* ── QFR 窓 ── */
+    if (process.env.FFR_QFR !== "0") {
+      const q = await runQfr(viewer, spec, OUT_DIR);
+      report.qfr = q;
+    }
 
     fs.writeFileSync(path.join(OUT_DIR, `${spec.label}.json`), JSON.stringify({ ...report, checks: results }, null, 1));
   } finally {
