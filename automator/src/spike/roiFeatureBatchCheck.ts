@@ -656,6 +656,130 @@ async function main(): Promise<void> {
     const defsO = dlO.find((f) => f.name === "optcheck_definitions.csv")!.text.replace(/^\uFEFF/, "").split("\r\n").filter(Boolean).slice(1).map((l) => splitRow(l)[0]);
     check(defsO.join() === featO.header.join(), "定義表の行が、表の列と 1 対 1（PatientID の行を含む）");
     await page.screenshot({ path: path.join(OUT_DIR, "12-output-written.png"), fullPage: true });
+
+    // ---- 9. 範囲で除く・6 統計のプリセット ----
+    console.log("\n[9] 範囲で除く（片側可）・6 統計のプリセット・定義に範囲");
+    const settingsOf = (r: Record<string, unknown>) => (r.settings ?? {}) as Record<string, string>;
+    const shaOf = async () => (await page.getByTestId("batch-spec-sha").getAttribute("title")) ?? "";
+    const rangeMin = page.getByTestId("batch-range-min");
+    const rangeMax = page.getByTestId("batch-range-max");
+    const familyBoxes = page.getByTestId("batch-settings").locator('input[type="checkbox"]');
+    await reopen();
+    await page.getByTestId("batch-prefix").fill("rangecheck");
+    check((await page.getByTestId("batch-preset").inputValue()) === "custom", "プリセットは既定で「自分で選ぶ」");
+    const presetValues = await page.getByTestId("batch-preset").locator("option").evaluateAll((os) => os.map((o) => (o as HTMLOptionElement).value));
+    check(presetValues.join() === "custom,six", "一括抽出のプリセットに「36 特徴」は出ない（LoG が前提のため）", presetValues);
+    check((await rangeMin.inputValue()) === "" && (await rangeMax.inputValue()) === "", "範囲の欄は既定で空");
+
+    console.log("  -- 9a. プリセット「6 統計」");
+    await page.getByTestId("batch-preset").selectOption("six");
+    await page.waitForTimeout(300);
+    const checkedLabels = (await familyBoxes.evaluateAll((els) => els.filter((e) => (e as HTMLInputElement).checked).map((e) => e.closest("label")?.textContent?.trim() ?? "")));
+    check(checkedLabels.length === 3 && /一次統計/.test(checkedLabels.join()) && /強度ヒストグラム/.test(checkedLabels.join()) && /補助統計/.test(checkedLabels.join()),
+      "族がちょうど 3 つ（一次統計・強度ヒストグラム・補助統計）だけオンになる", checkedLabels);
+    check((await page.getByTestId("batch-preset").inputValue()) === "six", "選択欄が「6 統計」を示す");
+    await page.screenshot({ path: path.join(OUT_DIR, "13-preset-six.png"), fullPage: true });
+    await page.getByTestId("batch-trial").click();
+    await page.getByTestId("batch-trial-result").waitFor({ state: "visible", timeout: 120_000 });
+    const sentSix = settingsOf(posted[posted.length - 1]);
+    const onKeys = Object.entries(sentSix).filter(([k, v]) => k.startsWith("BOOL_enable") && v === "1").map(([k]) => k).sort();
+    check(onKeys.length === 3 && sentSix.BOOL_enableAuxiliaryStatistics === "1" && sentSix.BOOL_enableGLCM === "0",
+      "試行の要求に族が 3 つだけオンで載る", onKeys);
+    check(sentSix.DOUBLE_rangeMin === undefined && sentSix.DOUBLE_rangeMax === undefined, "範囲を入れないと範囲は送らない");
+    const shaNoRange = await shaOf();
+
+    console.log("  -- 9b. 負例: 下限が上限より大きい");
+    await rangeMin.fill("-700");
+    await rangeMax.fill("-900");
+    check(await page.getByTestId("batch-range-problem").isVisible(), "下限が上限より大きいと警告が出る");
+    check(await page.getByTestId("batch-run").isDisabled() && await page.getByTestId("batch-trial").isDisabled()
+      && await page.getByTestId("batch-spec-save").isDisabled(), "そのときは「一括で実行」「1 組だけ試す」「定義を保存」を押せない");
+    await page.screenshot({ path: path.join(OUT_DIR, "14-range-problem.png"), fullPage: true });
+    await rangeMax.fill("");
+    check(!(await page.getByTestId("batch-range-problem").isVisible().catch(() => false)), "上限を空にすると警告が消える（下限だけは有効）");
+    check(await page.getByTestId("batch-run").isEnabled() && await page.getByTestId("batch-trial").isEnabled()
+      && await page.getByTestId("batch-spec-save").isEnabled(), "3 つのボタンが押せる");
+
+    console.log("  -- 9c. 下限だけで一括実行（予測値・直接計算との比較）");
+    await rangeMin.fill("-850.5");
+    const shaRange = await shaOf();
+    check(shaRange !== "" && shaRange !== shaNoRange, "範囲を入れると定義の SHA-256 が変わる");
+    await page.getByTestId("batch-run").click();
+    await waitText(page, "batch-progress", /^完了 — 5\/5 完了/, 300_000);
+    const reqR = posted[posted.length - 1];
+    check(settingsOf(reqR).DOUBLE_rangeMin === "-850.5" && settingsOf(reqR).DOUBLE_rangeMax === undefined, "要求に下限だけが載る", settingsOf(reqR));
+    await page.getByTestId("batch-write").click();
+    const dlR = await takeDownloads(page, 5);
+    for (const f of dlR) fs.writeFileSync(path.join(OUT_DIR, f.name), f.text);
+    const featR = parseFeatures(dlR.find((f) => f.name === "rangecheck.csv")!.text);
+    const cR = (n: string) => featR.header.indexOf(n);
+    const VOX = "Diagnostics_DiagnosticsResegmentedROIIntMaskVoxelCount";
+    check(cR(VOX) > 0 && featR.rows.length === 5, "表は 5 行（要確認の 1 組は元画像を選ばないので対象外）で、再セグメント後のボクセル数の列がある", { vox: cR(VOX), rows: featR.rows.length });
+    const boxVoxels = (b: Box) => (b.r1 - b.r0) * (b.c1 - b.c0) * (b.z1 - b.z0);
+    const boxes = { BigBox: [SEG1.r0, SEG1.r1, SEG1.c0, SEG1.c1, SEG1.z0, SEG1.z1], SmallBox: [SEG2.r0, SEG2.r1, SEG2.c0, SEG2.c1, SEG2.z0, SEG2.z1] };
+    const predicted = synths.slice(0, 3).map((s) => {
+      const r = spawnSync("python3", ["-I", path.join(import.meta.dirname, "roiFeatureRangeCount.py"), s.dir, "-850.5", JSON.stringify(boxes)], { encoding: "utf8" });
+      if (r.status !== 0) throw new Error(`予測値を数えられません: ${r.stderr}`);
+      return JSON.parse(r.stdout) as { BigBox: number; SmallBox: number };
+    });
+    let voxOk = 0;
+    const voxDetail: unknown[] = [];
+    for (const r of featR.rows) {
+      const si = synths.findIndex((s) => s.studyInstanceUid === r[cR("StudyInstanceUID")]);
+      const name = Number(r[cR("Roi_MaskChannel")]) === 0 ? "BigBox" : "SmallBox";
+      const want = predicted[si]?.[name as "BigBox" | "SmallBox"];
+      const got = Number(r[cR(VOX)]);
+      voxDetail.push({ study: si, name, got, want });
+      if (want !== undefined && got === want) voxOk++;
+    }
+    check(voxOk === 5, "対象の 5 組すべてで、再セグメント後のボクセル数が予測値（合成 CT の箱の中で ≥ -850.5 の画素数）と一致", voxDetail);
+    check(predicted.every((p) => p.BigBox < boxVoxels(SEG1) && p.BigBox > 0 && p.SmallBox < boxVoxels(SEG2) && p.SmallBox > 0),
+      "予測値は箱の全体より小さく 0 でもない（範囲が実際に効く条件）", predicted);
+    let diffR = 0;
+    const startR = featureStart(featR.header);
+    for (const r of featR.rows) {
+      const direct = await apiFeatures(base, {
+        studyInstanceUid: r[cR("StudyInstanceUID")], sourceSeriesUid: r[cR("SourceSeriesUID")], maskSeriesUid: r[cR("MaskSeriesUID")],
+        maskChannel: Number(r[cR("Roi_MaskChannel")]), channel: 0, timePoint: 0, settings: reqR.settings, recompute: true,
+      });
+      const names = featR.header.slice(startR);
+      const values = r.slice(startR).map(Number);
+      const same = names.length === direct.rows.length && names.every((n, k) => n === direct.rows[k].column)
+        && direct.rows.every((x, k) => Object.is(values[k], x.value ?? NaN));
+      if (!same) diffR++;
+    }
+    check(diffR === 0, "5 行すべてで、同じ組の API 直呼び（同じ範囲・キャッシュなし）と全列の差 0", { diffR });
+    const specR = JSON.parse(dlR.find((f) => f.name === "rangecheck_spec.json")!.text) as { sha256: string; form: Record<string, unknown> };
+    check(specR.form.rangeMin === -850.5 && !("rangeMax" in specR.form), "書き出した定義に下限だけが入る（上限のキーは無い）", specR.form);
+    check(specR.sha256 === shaRange && featR.rows.every((r) => r[cR("Provenance_SpecSha256")] === shaRange), "定義と全行の Provenance_SpecSha256 が画面の SHA-256 と一致");
+
+    console.log("  -- 9d. 定義の保存・読込・拒否");
+    await page.getByTestId("batch-spec-save").click();
+    const [savedR] = await takeDownloads(page, 1);
+    fs.writeFileSync(path.join(OUT_DIR, "range_spec.json"), savedR.text);
+    const specSaved = JSON.parse(savedR.text) as { sha256: string; form: Record<string, unknown> };
+    check(specSaved.form.rangeMin === -850.5 && !("rangeMax" in specSaved.form) && specSaved.sha256 === shaRange, "保存した定義に下限だけが入り、sha256 が画面の表示と一致");
+    await reopen();
+    check((await rangeMin.inputValue()) === "" && (await shaOf()) !== shaRange, "開き直すと範囲の欄は空に戻る");
+    await page.getByTestId("batch-spec-file").setInputFiles(path.join(OUT_DIR, "range_spec.json"));
+    await waitText(page, "batch-info", /読み込みました/, 20_000);
+    await page.waitForTimeout(400);
+    check((await rangeMin.inputValue()) === "-850.5" && (await rangeMax.inputValue()) === "", "定義を読み込むと範囲が復元される（下限 -850.5・上限は空）");
+    check((await page.getByTestId("batch-preset").inputValue()) === "six" && (await shaOf()) === shaRange, "プリセット表示も戻り、SHA-256 が保存時と同じ");
+    await page.screenshot({ path: path.join(OUT_DIR, "15-range-loaded.png"), fullPage: true });
+    const tamperedR = JSON.parse(savedR.text) as { form: Record<string, unknown> };
+    tamperedR.form.rangeMin = -800;
+    fs.writeFileSync(path.join(OUT_DIR, "range_tampered.json"), JSON.stringify(tamperedR));
+    await page.getByTestId("batch-spec-file").setInputFiles(path.join(OUT_DIR, "range_tampered.json"));
+    await waitText(page, "batch-error", /SHA-256 が一致しません/, 20_000);
+    check((await rangeMin.inputValue()) === "-850.5" && (await shaOf()) === shaRange, "範囲を書き換えた定義は断られ、欄は変わらない（負例）");
+    const reversed = JSON.parse(savedR.text) as { form: Record<string, unknown> };
+    reversed.form.rangeMin = 400;
+    reversed.form.rangeMax = 300;
+    fs.writeFileSync(path.join(OUT_DIR, "range_reversed.json"), JSON.stringify(reversed));
+    await page.getByTestId("batch-spec-file").setInputFiles(path.join(OUT_DIR, "range_reversed.json"));
+    await waitText(page, "batch-error", /範囲外.*form\.range/, 20_000);
+    check((await rangeMin.inputValue()) === "-850.5" && (await rangeMax.inputValue()) === "", "下限が上限より大きい定義は範囲外として断られ、欄は変わらない（負例）");
   } finally {
     // resetDb はアルバムを消さないので、自分で作ったものは自分で消す
     if (albumId) await fetch(`${base}/api/albums/${albumId}`, { method: "DELETE" }).catch(() => {});

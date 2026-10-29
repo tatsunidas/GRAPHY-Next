@@ -90,6 +90,72 @@ describe("small-ROI threshold in the definition", () => {
   });
 });
 
+describe("range in the definition", () => {
+  const withRange = (min: number | null, max: number | null): SpecContent =>
+    content({ form: { ...defaultSpecContent().form, rangeMin: min, rangeMax: max } });
+
+  it("no range leaves the key out of the canonical JSON and the saved file", async () => {
+    expect(canonicalContentJson(withRange(null, null))).not.toContain("range");
+    expect(specText(await buildSpec(withRange(null, null), "p"))).not.toContain("range");
+  });
+  it("a range writes only the sides that are set", async () => {
+    expect(canonicalContentJson(withRange(-850.5, null))).toContain('"rangeMin":-850.5');
+    expect(canonicalContentJson(withRange(-850.5, null))).not.toContain("rangeMax");
+    expect(canonicalContentJson(withRange(null, 300))).toContain('"rangeMax":300');
+    expect(specText(await buildSpec(withRange(-850.5, 300), "p"))).toMatch(/"rangeMin": -850\.5[\s\S]*"rangeMax": 300/);
+  });
+  it("a range changes the hash, and each side and value changes it again", async () => {
+    const hashes = await Promise.all([withRange(null, null), withRange(-850, null), withRange(null, -850), withRange(-850, 300), withRange(-851, 300)].map(contentSha256));
+    expect(new Set(hashes).size).toBe(5);
+  });
+  it("round trip restores both sides, one side, and none", async () => {
+    for (const [min, max] of [[-850.5, 300], [-850.5, null], [null, 300], [null, null]] as const) {
+      const spec = await buildSpec(withRange(min, max), "p");
+      const back = await parseSpec(specText(spec));
+      expect(back.ok).toBe(true);
+      if (!back.ok) continue;
+      expect([back.spec.form.rangeMin, back.spec.form.rangeMax]).toEqual([min, max]);
+      expect(back.spec.sha256).toBe(spec.sha256);
+    }
+  });
+  it("an explicit null in the file reads as no bound (same hash as the file without the key)", async () => {
+    const r = await parseSpec(await text((o) => { o.form.rangeMin = null; o.form.rangeMax = null; }));
+    expect(r.ok).toBe(true);
+  });
+  it("refuses a non-number bound and a lower bound above the upper bound (negative cases)", async () => {
+    const c = withRange(-850, 300);
+    const refuse = async (mutate: (o: Record<string, any>) => void, error: string) => {
+      const r = await parseSpec(await text(mutate, c));
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.error).toBe(error);
+    };
+    for (const v of ["-850", true, [], {}]) await refuse((o) => { o.form.rangeMin = v; }, "type");
+    await refuse((o) => { o.form.rangeMax = "300"; }, "type");
+    await refuse((o) => { o.form.rangeMin = 400; }, "range");
+    expect((await parseSpec(await text(() => undefined, withRange(300, 300)))).ok).toBe(true);
+  });
+  it("tampering with a bound is caught by the hash", async () => {
+    const r = await parseSpec(await text((o) => { o.form.rangeMin = -800; }, withRange(-850, 300)));
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toBe("sha_mismatch");
+  });
+  it("the form fields round-trip as text; an empty side is an empty field", () => {
+    const base = defaultRoiFeatureForm();
+    const c = specContentFrom({ ...base, rangeMinText: " -850.5 ", rangeMaxText: "" }, defaultSpecContent().qc, []);
+    expect([c.form.rangeMin, c.form.rangeMax]).toEqual([-850.5, null]);
+    const back = applySpecToForm({ ...base, rangeMinText: "9", rangeMaxText: "9" }, c);
+    expect([back.rangeMinText, back.rangeMaxText]).toEqual(["-850.5", ""]);
+    expect(Object.keys(back)).not.toContain("rangeMin");
+  });
+  it("a reversed or non-numeric field gives no range (the dialog stops before this matters)", () => {
+    const base = defaultRoiFeatureForm();
+    for (const [lo, hi] of [["5", "1"], ["abc", ""]]) {
+      const c = specContentFrom({ ...base, rangeMinText: lo, rangeMaxText: hi }, defaultSpecContent().qc, []);
+      expect([c.form.rangeMin, c.form.rangeMax]).toEqual([null, null]);
+    }
+  });
+});
+
 describe("round trip", () => {
   it("save then load gives the same content and the same SHA-256", async () => {
     const c = content({

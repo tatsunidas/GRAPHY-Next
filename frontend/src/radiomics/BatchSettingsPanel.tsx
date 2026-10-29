@@ -9,7 +9,7 @@ import { RoiFeatureSettingsFields } from "./RoiFeatureSettingsFields";
 import type { RoiFeatureForm } from "./roiFeatureSettings";
 
 /**
- * 一括抽出の特徴量の設定欄。離散化・リサンプリング・族は ROI 特徴量の画面と共通の `RoiFeatureSettingsFields`。値と変換も同じ
+ * 一括抽出の特徴量の設定欄。離散化・リサンプリング・範囲・プリセット・族は ROI 特徴量の画面と共通の `RoiFeatureSettingsFields`。値と変換も同じ
  * `RoiFeatureForm`・`roiFeatureSettings` を使い、入力欄だけを持つ。画像フィルタと 2D の単位は含めない。
  */
 export function BatchSettingsPanel({
@@ -33,7 +33,7 @@ export function BatchSettingsPanel({
   return (
     <div data-testid="batch-settings" style={{ fontSize: 12 }}>
       <RoiFeatureSettingsFields form={form} setForm={setForm} disabled={disabled} testIdPrefix="batch"
-        layout={{ labelMinWidth: 110, align: "left" }} showRange={false} showPreset={false}
+        layout={{ labelMinWidth: 110, align: "left" }} showRange showPreset presetScale36={false}
         middleSlot={(
           <>
             <div style={row}>

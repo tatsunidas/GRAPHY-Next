@@ -12,7 +12,7 @@
  *
  * <p>画像フィルタ（LoG・スケール）は定義に入れない（一括抽出が対象にしていない）。
  */
-import { ROI_FEATURE_FAMILIES, defaultRoiFeatureForm, type RoiFeatureForm } from "./roiFeatureSettings";
+import { ROI_FEATURE_FAMILIES, defaultRoiFeatureForm, rangeBounds, type RoiFeatureForm } from "./roiFeatureSettings";
 
 export const SPEC_FORMAT = "graphy-next.roi-batch-spec";
 export const SPEC_VERSION = 1;
@@ -24,7 +24,14 @@ export const PREFIX_MAX_LEN = 100;
 
 export type SpecQcMode = "FLAG" | "STOP";
 
-export type SpecForm = Pick<RoiFeatureForm, "fixedBinNumber" | "binCount" | "binWidth" | "resampleMm" | "families">;
+/**
+ * 設定の中身。`rangeMin`・`rangeMax` は範囲で除く（再セグメント）の下限・上限（強度の単位）で、null は未指定（片側だけも可）。
+ * null のときは正準 JSON にキーを出さない（範囲の無い従来の定義の SHA-256 を変えない）。
+ */
+export type SpecForm = Pick<RoiFeatureForm, "fixedBinNumber" | "binCount" | "binWidth" | "resampleMm" | "families"> & {
+  rangeMin: number | null;
+  rangeMax: number | null;
+};
 
 /**
  * QC の設定。`smallRoiVoxels` は小さい ROI の基準値（ボクセル数、1 以上の整数）。null は環境設定の値を使う。
@@ -63,7 +70,7 @@ export type SpecParse =
 export function defaultSpecContent(): SpecContent {
   const f = defaultRoiFeatureForm();
   return {
-    form: { fixedBinNumber: f.fixedBinNumber, binCount: f.binCount, binWidth: f.binWidth, resampleMm: f.resampleMm, families: f.families },
+    form: { fixedBinNumber: f.fixedBinNumber, binCount: f.binCount, binWidth: f.binWidth, resampleMm: f.resampleMm, families: f.families, rangeMin: null, rangeMax: null },
     qc: { smallRoi: "FLAG", lossy: "FLAG", smallRoiVoxels: null },
     selection: { segmentLabels: [] },
   };
@@ -87,17 +94,20 @@ export function parseLabelInput(text: string): string[] {
 const qcJson = (q: SpecQc) =>
   q.smallRoiVoxels == null ? { smallRoi: q.smallRoi, lossy: q.lossy } : { smallRoi: q.smallRoi, lossy: q.lossy, smallRoiVoxels: q.smallRoiVoxels };
 
+const formJson = (f: SpecForm) => ({
+  fixedBinNumber: f.fixedBinNumber,
+  binCount: f.binCount,
+  binWidth: f.binWidth,
+  resampleMm: f.resampleMm,
+  families: Object.fromEntries(ROI_FEATURE_FAMILIES.map((fam) => [fam.key, !!f.families[fam.key]])),
+  ...(f.rangeMin == null ? {} : { rangeMin: f.rangeMin }),
+  ...(f.rangeMax == null ? {} : { rangeMax: f.rangeMax }),
+});
+
 /** 正準な JSON。キーの並びを固定して組み立てる（族は `ROI_FEATURE_FAMILIES` の順）。 */
 export function canonicalContentJson(c: SpecContent): string {
-  const families = ROI_FEATURE_FAMILIES.map((f) => [f.key, !!c.form.families[f.key]] as const);
   return JSON.stringify({
-    form: {
-      fixedBinNumber: c.form.fixedBinNumber,
-      binCount: c.form.binCount,
-      binWidth: c.form.binWidth,
-      resampleMm: c.form.resampleMm,
-      families: Object.fromEntries(families),
-    },
+    form: formJson(c.form),
     qc: qcJson(c.qc),
     selection: { segmentLabels: normalizeLabels(c.selection.segmentLabels) },
   });
@@ -114,10 +124,7 @@ export async function buildSpec(c: SpecContent, prefix: string): Promise<BatchSp
   return {
     format: SPEC_FORMAT,
     version: SPEC_VERSION,
-    form: {
-      fixedBinNumber: c.form.fixedBinNumber, binCount: c.form.binCount, binWidth: c.form.binWidth,
-      resampleMm: c.form.resampleMm, families: Object.fromEntries(ROI_FEATURE_FAMILIES.map((f) => [f.key, !!c.form.families[f.key]])),
-    },
+    form: { ...c.form, families: formJson(c.form).families },
     qc: { ...c.qc },
     selection: { segmentLabels: normalizeLabels(c.selection.segmentLabels) },
     output: { prefix: prefix.slice(0, PREFIX_MAX_LEN) },
@@ -125,8 +132,9 @@ export async function buildSpec(c: SpecContent, prefix: string): Promise<BatchSp
   };
 }
 
-/** 保存するテキスト。基準値が null のときは、正準 JSON と同じくキーを書かない。 */
-export const specText = (spec: BatchSpec): string => `${JSON.stringify({ ...spec, qc: qcJson(spec.qc) }, null, 2)}\n`;
+/** 保存するテキスト。基準値・範囲が null のときは、正準 JSON と同じくキーを書かない。 */
+export const specText = (spec: BatchSpec): string =>
+  `${JSON.stringify({ ...spec, form: formJson(spec.form), qc: qcJson(spec.qc) }, null, 2)}\n`;
 
 /** 定義のファイル名。接頭辞に使えない文字は `_`、空なら `roi-features-batch`。 */
 export const batchSpecFileName = (prefix: string): string =>
@@ -165,6 +173,17 @@ export async function parseSpec(text: string): Promise<SpecParse> {
   if (!inRange(binWidth, 0.001, 100000)) return fail("range", "form.binWidth");
   const resampleMm = own(form, "resampleMm");
   if (resampleMm !== null && !inRange(resampleMm, 0.05, 20)) return fail("range", "form.resampleMm");
+
+  const bound = (key: "rangeMin" | "rangeMax"): number | null | undefined => {
+    const v = own(form, key);
+    if (v === undefined || v === null) return null;
+    return typeof v === "number" ? v : undefined;
+  };
+  const rangeMin = bound("rangeMin");
+  const rangeMax = bound("rangeMax");
+  if (rangeMin === undefined) return fail("type", "form.rangeMin");
+  if (rangeMax === undefined) return fail("type", "form.rangeMax");
+  if (rangeMin !== null && rangeMax !== null && rangeMin > rangeMax) return fail("range", "form.range");
 
   const famRaw = own(form, "families");
   if (!isObj(famRaw)) return fail("type", "form.families");
@@ -208,7 +227,7 @@ export async function parseSpec(text: string): Promise<SpecParse> {
   if (typeof embedded !== "string" || embedded === "") return fail("sha_missing", "");
 
   const content: SpecContent = {
-    form: { fixedBinNumber, binCount, binWidth, resampleMm: resampleMm as number | null, families },
+    form: { fixedBinNumber, binCount, binWidth, resampleMm: resampleMm as number | null, families, rangeMin, rangeMax },
     qc: { smallRoi, lossy, smallRoiVoxels },
     selection: { segmentLabels: normalizeLabels(labels) },
   };
@@ -219,13 +238,23 @@ export async function parseSpec(text: string): Promise<SpecParse> {
 
 /** 定義の中身を ROI 特徴量の入力欄の値に反映する（LoG・スケールは既定のまま）。 */
 export function applySpecToForm(base: RoiFeatureForm, spec: SpecContent): RoiFeatureForm {
-  return { ...base, ...spec.form, families: { ...spec.form.families } };
+  const { rangeMin, rangeMax, ...rest } = spec.form;
+  return {
+    ...base, ...rest, families: { ...spec.form.families },
+    rangeMinText: rangeMin == null ? "" : String(rangeMin),
+    rangeMaxText: rangeMax == null ? "" : String(rangeMax),
+  };
 }
 
 /** 入力欄の値から定義の中身を作る。 */
 export function specContentFrom(form: RoiFeatureForm, qc: SpecContent["qc"], labels: readonly string[]): SpecContent {
+  const range = rangeBounds(form);
+  const ok = range.problem === null;
   return {
-    form: { fixedBinNumber: form.fixedBinNumber, binCount: form.binCount, binWidth: form.binWidth, resampleMm: form.resampleMm, families: form.families },
+    form: {
+      fixedBinNumber: form.fixedBinNumber, binCount: form.binCount, binWidth: form.binWidth, resampleMm: form.resampleMm, families: form.families,
+      rangeMin: ok ? range.min : null, rangeMax: ok ? range.max : null,
+    },
     qc,
     selection: { segmentLabels: normalizeLabels(labels) },
   };
