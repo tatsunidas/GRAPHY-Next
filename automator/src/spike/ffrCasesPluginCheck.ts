@@ -959,6 +959,51 @@ async function stepsCheck(page: Page, label: string): Promise<Record<string, unk
   return out;
 }
 
+/**
+ * 分岐部の窓の確認（FFR_EDITCHECK=bifui。2 方向窓ではなく、分岐部の窓から入る）。
+ *  U1 ★負例: シリーズを選ぶ前は、役割ごとの［2 方向窓で定義する］が押せない
+ *  U2 シリーズを選ぶと、3 つの役割（近位母血管・遠位母血管・側枝）それぞれに、押せる［2 方向窓で定義する］が出て、「未保存」と出る
+ *  U3 ［近位母血管の定義］を押すと、2 方向窓が開き、同じ 2 シリーズが読み込まれ（両方向の状態欄にフレーム番号）、役割が「近位母血管」になり、手順 ② に進んでいる
+ *  U4 2 方向窓の上に、その役割の定義の案内（向きの約束）が出る
+ */
+async function bifUiCheck(viewer: Page, imp: Record<"A" | "B", { study: string; series: string }>, label: string): Promise<Record<string, unknown>> {
+  const out: Record<string, unknown> = {};
+  await viewer.getByTestId("bif-panel").waitFor({ state: "visible", timeout: 10_000 });
+  const defs = ["proximal", "distal", "side"];
+  const dis = async () => Promise.all(defs.map(async (r) => await viewer.getByTestId(`bif-define-${r}`).isDisabled()));
+  const before = await dis();
+  await viewer.screenshot({ path: path.join(OUT_DIR, `${label}-bifui-1-before.png`) });
+  check("[U1] ★負例: シリーズを選ぶ前は、役割ごとの［2 方向窓で定義する］が押せない", before.every((d) => d), { before });
+  await viewer.getByTestId("bif-pick").click();
+  await viewer.getByTestId("pickseries-dialog").waitFor({ state: "visible", timeout: 10_000 });
+  await viewer.waitForTimeout(1_000);
+  for (const st of new Set([imp.A.study, imp.B.study])) {
+    const exp = viewer.getByTestId(`pickseries-expand-${st}`);
+    if ((await exp.count()) && (await exp.getAttribute("aria-expanded")) !== "true") await exp.click();
+  }
+  await viewer.waitForTimeout(800);
+  await viewer.getByTestId(`pickseries-series-check-${imp.A.series}`).check();
+  await viewer.getByTestId(`pickseries-series-check-${imp.B.series}`).check();
+  await viewer.getByTestId("pickseries-ok").click();
+  await viewer.waitForTimeout(2_000);
+  const after = await dis();
+  const texts = await Promise.all(defs.map(async (r) => ((await viewer.getByTestId(`bif-role-${r}`).innerText()) ?? "").replace(/s+/g, " ")));
+  await viewer.screenshot({ path: path.join(OUT_DIR, `${label}-bifui-2-picked.png`) });
+  check("[U2] シリーズを選ぶと、3 つの役割それぞれの［2 方向窓で定義する］が押せ、「未保存」と出る", after.every((d) => !d) && texts.every((t) => /未保存/.test(t)), { after, texts: texts.map((t) => t.slice(0, 30)) });
+  await viewer.getByTestId("bif-define-proximal").click();
+  await viewer.getByTestId("dual-panel").waitFor({ state: "visible", timeout: 10_000 });
+  await viewer.waitForTimeout(4_000);
+  const stA = await txt(viewer, "dual-status-A");
+  const stB = await txt(viewer, "dual-status-B");
+  const role = await viewer.getByTestId("dual-bif-role").inputValue();
+  const cur = await viewer.evaluate(() => Array.from(document.querySelectorAll("[data-testid^=dual-step-]")).filter((e) => e.getAttribute("aria-current") === "step").map((e) => e.getAttribute("data-testid")));
+  await viewer.screenshot({ path: path.join(OUT_DIR, `${label}-bifui-3-dual.png`) });
+  check("[U3] ［近位母血管…］で 2 方向窓が開き、同じ 2 シリーズが読まれ、役割が近位母血管で、手順 ② にいる", /フレーム/.test(stA) && /フレーム/.test(stB) && role === "proximal" && cur[0] === "dual-step-2", { stA: stA.slice(0, 30), stB: stB.slice(0, 30), role, cur });
+  const note = (await viewer.getByTestId("dual-preset-note").innerText().catch(() => "")) ?? "";
+  check("[U4] 2 方向窓の上に、その役割の定義の案内（近位母血管・向きの約束）が出る", /近位母血管/.test(note) && /向き/.test(note), { note: note.slice(0, 60) });
+  return out;
+}
+
 /** アンカー i を掴んで target へドラッグする。 */
 async function dragAnchor(page: Page, key: string, i: number, target: Pt): Promise<void> {
   const cur = (await anchorsOf(page, key))[i];
@@ -1219,6 +1264,12 @@ async function main(): Promise<void> {
     await viewer.waitForTimeout(300);
     await viewer.getByTestId("plugin-item-angio-quant").click();
     await viewer.waitForTimeout(1_500);
+    if (process.env.FFR_EDITCHECK === "bifui") {
+      await viewer.getByTestId("angio-quant-bif").click();
+      report.editCheck = await bifUiCheck(viewer, imp, spec.label);
+      fs.writeFileSync(path.join(OUT_DIR, `${spec.label}.json`), JSON.stringify({ ...report, checks: results }, null, 1));
+      return;
+    }
     await viewer.getByTestId("angio-quant-dual").click();
     await viewer.getByTestId("dual-panel").waitFor({ state: "visible", timeout: 10_000 });
     await viewer.getByTestId("dual-pick").click();
