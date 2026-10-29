@@ -68,6 +68,8 @@ async function main(): Promise<void> {
     await page.getByTestId("album-select").waitFor({ state: "visible", timeout: 60_000 });
 
     console.log("\n[1] ROI 特徴量の画面（文脈なしで開く）");
+    // 前の実行が残した文脈（localStorage）があると「対象のスタディがありません」の注記が出ない。文脈なしで開くために消す
+    await page.evaluate("localStorage.removeItem('graphy-roifeat-ctx')");
     await page.evaluate("window.location.hash = 'radiomics-features'");
     await page.getByTestId("roifeat-bincount").waitFor({ state: "visible", timeout: 20_000 });
     got["screen-default"] = await snapshot(page, "body");

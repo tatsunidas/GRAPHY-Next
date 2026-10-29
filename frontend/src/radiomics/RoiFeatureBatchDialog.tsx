@@ -51,7 +51,7 @@ import {
 import { BatchSettingsPanel } from "./BatchSettingsPanel";
 import { assignSubjectCodes, datasetFiles, type DatasetRow } from "./datasetCsv";
 import { downloadText } from "./downloadText";
-import { defaultRoiFeatureForm, type RoiFeatureForm } from "./roiFeatureSettings";
+import { defaultRoiFeatureForm, rangeBounds, type RoiFeatureForm } from "./roiFeatureSettings";
 
 const POLL_INTERVAL_MS = 1000;
 const SERIES_CONCURRENCY = 4;
@@ -201,6 +201,8 @@ export function RoiFeatureBatchDialog({
 
   const summary = useMemo(() => (rows ? summarize(rows) : null), [rows]);
   const running = !!job && !BATCH_FINISHED.has(job.state);
+  /** 範囲の欄が数でない・下限が上限より大きい間は、実行も定義の保存もしない（範囲なしの定義が黙って作られるのを防ぐ）。 */
+  const rangeProblem = rangeBounds(form).problem;
   const dup = rows ? duplicateLabels(assignCaseLabels(rows)) : [];
 
   const start = async (isTrial: boolean, ack: readonly string[] = acknowledged, from?: readonly PairRow[]) => {
@@ -355,7 +357,7 @@ export function RoiFeatureBatchDialog({
           <div style={note}>{t("roiFeat.researchOnly")}</div>
           <div style={note}>{t("roiFeat.batch.privacy")}</div>
           <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 8 }}>
-            <button type="button" style={btn} data-testid="batch-spec-save" disabled={running} onClick={() => void saveSpec()}>
+            <button type="button" style={btn} data-testid="batch-spec-save" disabled={running || rangeProblem !== null} onClick={() => void saveSpec()}>
               {t("roiFeat.batch.spec.save")}
             </button>
             <button type="button" style={btn} data-testid="batch-spec-load" disabled={running} onClick={() => fileRef.current?.click()}>
@@ -517,9 +519,9 @@ export function RoiFeatureBatchDialog({
           {written != null && <div style={{ ...note, color: "#2f6b2f" }} data-testid="batch-written">{t("roiFeat.batch.written", { n: written })}</div>}
         </div>
         <div style={footer}>
-          <button type="button" style={btn} data-testid="batch-trial" disabled={running || starting || !summary || summary.selected === 0}
+          <button type="button" style={btn} data-testid="batch-trial" disabled={rangeProblem !== null || running || starting || !summary || summary.selected === 0}
             onClick={() => void start(true)}>{t("roiFeat.batch.trial")}</button>
-          <button type="button" style={btnPrimary} data-testid="batch-run" disabled={running || starting || !summary || summary.selected === 0}
+          <button type="button" style={btnPrimary} data-testid="batch-run" disabled={rangeProblem !== null || running || starting || !summary || summary.selected === 0}
             onClick={() => void start(false)}>{t("roiFeat.batch.run")}</button>
           {running && <button type="button" style={btn} data-testid="batch-cancel" onClick={cancel}>{t("roiFeat.batch.cancel")}</button>}
           <button type="button" style={btn} data-testid="batch-write"

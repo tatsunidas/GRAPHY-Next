@@ -23,6 +23,7 @@ export function RoiFeatureSettingsFields({
   layout,
   showRange,
   showPreset,
+  presetScale36 = true,
   middleSlot,
 }: {
   form: RoiFeatureForm;
@@ -34,6 +35,8 @@ export function RoiFeatureSettingsFields({
   layout: { labelMinWidth: number; align: "left" | "right" };
   showRange: boolean;
   showPreset: boolean;
+  /** プリセットに「36 特徴」（LoG が前提）を出すか。画像フィルタを使わない一括抽出は false。 */
+  presetScale36?: boolean;
   /** 範囲（無ければリサンプリング）の後、プリセット（無ければ族）の前に差し込む。 */
   middleSlot?: ReactNode;
 }) {
@@ -107,7 +110,7 @@ export function RoiFeatureSettingsFields({
       )}
       {middleSlot}
       {showPreset && row(t("roiFeat.field.preset"), 8, (
-        <select value={isScale36(form) ? "scale36" : isSixStatistics(form) ? "six" : "custom"} disabled={disabled}
+        <select value={presetScale36 && isScale36(form) ? "scale36" : isSixStatistics(form) ? "six" : "custom"} disabled={disabled}
           style={{ ...input, width: 260 }} data-testid={`${p}-preset`}
           onChange={(e) => {
             if (e.target.value === "six") setForm((f) => applySixStatistics(f));
@@ -115,7 +118,7 @@ export function RoiFeatureSettingsFields({
           }}>
           <option value="custom">{t("roiFeat.preset.custom")}</option>
           <option value="six">{t("roiFeat.preset.six")}</option>
-          <option value="scale36">{t("roiFeat.preset.scale36")}</option>
+          {presetScale36 && <option value="scale36">{t("roiFeat.preset.scale36")}</option>}
         </select>
       ))}
       <div style={{ color: "#5a6672", marginTop: 6 }}>{t("roiFeat.field.families")}</div>
