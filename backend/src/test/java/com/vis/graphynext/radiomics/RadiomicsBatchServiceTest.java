@@ -606,4 +606,57 @@ class RadiomicsBatchServiceTest {
                 + " cacheBytesPerPair=" + bytes / 20);
         assertEquals(20, s.done());
     }
+
+    // ---- 種類（kind）----
+
+    private static RadiomicsBatchService.BatchRequest requestKind(List<BatchPair> pairs, String kind) {
+        return new RadiomicsBatchService.BatchRequest(pairs, new HashMap<>(), null, null, null, null, null, null, 0,
+                0, false, null, null, null, kind);
+    }
+
+    @Test
+    void voiStatsRefusesPetPairsOnlyAndKeepsGoing() throws Exception {
+        // src1 だけ PET。その組は入力固有の失敗で記録され、残りは続く（黙って値を出さない・落とさない）
+        RadiomicsBatchService svc = new RadiomicsBatchService(
+                (req, cancelled) -> stub(false), r -> { }, null, null,
+                (study, series) -> "src1".equals(series) ? "PT" : "CT");
+        Status s = await(svc, svc.submit(requestKind(List.of(auto(0), auto(1), auto(2)), "voiStats")));
+        assertEquals(RadiomicsBatchService.JobState.DONE, s.state());
+        assertEquals(RadiomicsBatchService.PairState.DONE, s.pairs().get(0).state());
+        assertEquals(RadiomicsBatchService.PairState.FAILED, s.pairs().get(1).state());
+        assertEquals(RadiomicsBatchService.FailureKind.INPUT, s.pairs().get(1).failureKind());
+        assertTrue(s.pairs().get(1).error().contains("PET"));
+        assertEquals(RadiomicsBatchService.PairState.DONE, s.pairs().get(2).state());
+        assertEquals(List.of(0, 2), svc.results(s.jobId()).stream().map(RadiomicsBatchService.PairResult::index).toList(),
+                "PET の組は結果を持たない");
+    }
+
+    @Test
+    void theRadiomicsKindDoesNotRefusePet() throws Exception {
+        // 従来の抽出（kind なし・radiomics）は PET を断らない（回帰）
+        for (String kind : new String[] { null, "radiomics" }) {
+            RadiomicsBatchService svc = new RadiomicsBatchService(
+                    (req, cancelled) -> stub(false), r -> { }, null, null, (study, series) -> "PT");
+            Status s = await(svc, svc.submit(requestKind(List.of(auto(0)), kind)));
+            assertEquals(RadiomicsBatchService.PairState.DONE, s.pairs().get(0).state(), "kind=" + kind);
+        }
+    }
+
+    @Test
+    void anUnknownKindIsRejectedAtSubmit() {
+        RadiomicsBatchService svc = service((req, cancelled) -> stub(false));
+        IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                () -> svc.submit(requestKind(List.of(auto(0)), "dynamic")));
+        assertTrue(e.getMessage().contains("kind"));
+    }
+
+    @Test
+    void theKindFieldIsOptionalInJson() throws Exception {
+        String pair = "{\"studyUid\":\"1.2\",\"sourceSeriesUid\":\"S\",\"maskSeriesUid\":\"M\",\"segmentNumber\":1,"
+                + "\"segmentLabel\":\"GTV\",\"maskChannel\":0,\"status\":\"AUTO\",\"reason\":null,\"sourceCandidates\":[\"S\"]}";
+        String old = "{\"pairs\":[" + pair + "],\"settings\":{},\"channel\":0,\"timePoint\":0,\"recompute\":false}";
+        assertEquals(null, JSON.readValue(old, RadiomicsBatchService.BatchRequest.class).kind());
+        assertEquals("voiStats", JSON.readValue(old.substring(0, old.length() - 1) + ",\"kind\":\"voiStats\"}",
+                RadiomicsBatchService.BatchRequest.class).kind());
+    }
 }

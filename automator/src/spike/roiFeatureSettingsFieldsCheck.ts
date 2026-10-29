@@ -110,7 +110,7 @@ async function main(): Promise<void> {
       return;
     }
 
-    console.log("\n[3] 期待値（載せ替え前の一覧 + 段 1 で足す 3 つ）との突き合わせ");
+    console.log("\n[3] 期待値（載せ替え前の一覧 + 段 1 で足す 3 つ + 種類の欄の 3 つ）との突き合わせ");
     const expected = JSON.parse(fs.readFileSync(EXPECTED, "utf8")) as Record<string, Snapshot>;
     check(Object.keys(expected).length === 5, "期待値は 5 状態", Object.keys(expected));
     for (const key of Object.keys(expected)) {

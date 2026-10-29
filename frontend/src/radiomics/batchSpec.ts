@@ -25,6 +25,13 @@ export const PREFIX_MAX_LEN = 100;
 export type SpecQcMode = "FLAG" | "STOP";
 
 /**
+ * 抽出の種類。`radiomics`＝特徴量抽出（従来）、`voiStats`＝一次統計だけの VOI 統計。
+ * `radiomics` のときは正準 JSON にキーを出さない（種類の無い従来の定義の SHA-256 を変えない）。
+ */
+export type SpecKind = "radiomics" | "voiStats";
+export const SPEC_KINDS: readonly SpecKind[] = ["radiomics", "voiStats"];
+
+/**
  * 設定の中身。`rangeMin`・`rangeMax` は範囲で除く（再セグメント）の下限・上限（強度の単位）で、null は未指定（片側だけも可）。
  * null のときは正準 JSON にキーを出さない（範囲の無い従来の定義の SHA-256 を変えない）。
  */
@@ -48,6 +55,7 @@ export const SMALL_ROI_VOXELS_MAX = 2147483647;
 
 /** ハッシュの対象になる中身。 */
 export interface SpecContent {
+  kind: SpecKind;
   form: SpecForm;
   qc: SpecQc;
   selection: { segmentLabels: string[] };
@@ -70,6 +78,7 @@ export type SpecParse =
 export function defaultSpecContent(): SpecContent {
   const f = defaultRoiFeatureForm();
   return {
+    kind: "radiomics",
     form: { fixedBinNumber: f.fixedBinNumber, binCount: f.binCount, binWidth: f.binWidth, resampleMm: f.resampleMm, families: f.families, rangeMin: null, rangeMax: null },
     qc: { smallRoi: "FLAG", lossy: "FLAG", smallRoiVoxels: null },
     selection: { segmentLabels: [] },
@@ -104,10 +113,17 @@ const formJson = (f: SpecForm) => ({
   ...(f.rangeMax == null ? {} : { rangeMax: f.rangeMax }),
 });
 
+/**
+ * VOI 統計では族・ビン・再標本化・範囲の欄を使わない（隠れた欄の値でハッシュが変わらないよう、既定値に固定する）。
+ * 通常の特徴量抽出はそのまま。
+ */
+const effectiveForm = (c: SpecContent): SpecForm => (c.kind === "voiStats" ? defaultSpecContent().form : c.form);
+
 /** 正準な JSON。キーの並びを固定して組み立てる（族は `ROI_FEATURE_FAMILIES` の順）。 */
 export function canonicalContentJson(c: SpecContent): string {
   return JSON.stringify({
-    form: formJson(c.form),
+    ...(c.kind === "voiStats" ? { kind: c.kind } : {}),
+    form: formJson(effectiveForm(c)),
     qc: qcJson(c.qc),
     selection: { segmentLabels: normalizeLabels(c.selection.segmentLabels) },
   });
@@ -121,10 +137,12 @@ export async function sha256Hex(text: string): Promise<string> {
 export const contentSha256 = (c: SpecContent): Promise<string> => sha256Hex(canonicalContentJson(c));
 
 export async function buildSpec(c: SpecContent, prefix: string): Promise<BatchSpec> {
+  const form = effectiveForm(c);
   return {
     format: SPEC_FORMAT,
     version: SPEC_VERSION,
-    form: { ...c.form, families: formJson(c.form).families },
+    kind: c.kind,
+    form: { ...form, families: formJson(form).families },
     qc: { ...c.qc },
     selection: { segmentLabels: normalizeLabels(c.selection.segmentLabels) },
     output: { prefix: prefix.slice(0, PREFIX_MAX_LEN) },
@@ -133,8 +151,10 @@ export async function buildSpec(c: SpecContent, prefix: string): Promise<BatchSp
 }
 
 /** 保存するテキスト。基準値・範囲が null のときは、正準 JSON と同じくキーを書かない。 */
-export const specText = (spec: BatchSpec): string =>
-  `${JSON.stringify({ ...spec, form: formJson(spec.form), qc: qcJson(spec.qc) }, null, 2)}\n`;
+export const specText = (spec: BatchSpec): string => {
+  const { kind, ...rest } = spec;
+  return `${JSON.stringify({ ...(kind === "voiStats" ? { kind } : {}), ...rest, form: formJson(spec.form), qc: qcJson(spec.qc) }, null, 2)}\n`;
+};
 
 /** 定義のファイル名。接頭辞に使えない文字は `_`、空なら `roi-features-batch`。 */
 export const batchSpecFileName = (prefix: string): string =>
@@ -158,6 +178,10 @@ export async function parseSpec(text: string): Promise<SpecParse> {
   if (!isObj(raw)) return fail("not_object", "");
   if (own(raw, "format") !== SPEC_FORMAT) return fail("format", String(own(raw, "format")));
   if (own(raw, "version") !== SPEC_VERSION) return fail("version", String(own(raw, "version")));
+
+  const kindRaw = own(raw, "kind");
+  if (kindRaw !== undefined && kindRaw !== null && !SPEC_KINDS.includes(kindRaw as SpecKind)) return fail("type", "kind");
+  const kind: SpecKind = kindRaw === "voiStats" ? "voiStats" : "radiomics";
 
   const form = own(raw, "form");
   const qc = own(raw, "qc");
@@ -227,6 +251,7 @@ export async function parseSpec(text: string): Promise<SpecParse> {
   if (typeof embedded !== "string" || embedded === "") return fail("sha_missing", "");
 
   const content: SpecContent = {
+    kind,
     form: { fixedBinNumber, binCount, binWidth, resampleMm: resampleMm as number | null, families, rangeMin, rangeMax },
     qc: { smallRoi, lossy, smallRoiVoxels },
     selection: { segmentLabels: normalizeLabels(labels) },
@@ -247,10 +272,13 @@ export function applySpecToForm(base: RoiFeatureForm, spec: SpecContent): RoiFea
 }
 
 /** 入力欄の値から定義の中身を作る。 */
-export function specContentFrom(form: RoiFeatureForm, qc: SpecContent["qc"], labels: readonly string[]): SpecContent {
+export function specContentFrom(
+  form: RoiFeatureForm, qc: SpecContent["qc"], labels: readonly string[], kind: SpecKind = "radiomics",
+): SpecContent {
   const range = rangeBounds(form);
   const ok = range.problem === null;
   return {
+    kind,
     form: {
       fixedBinNumber: form.fixedBinNumber, binCount: form.binCount, binWidth: form.binWidth, resampleMm: form.resampleMm, families: form.families,
       rangeMin: ok ? range.min : null, rangeMax: ok ? range.max : null,

@@ -21,6 +21,7 @@ import java.util.concurrent.CancellationException;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.function.BiFunction;
 import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 
@@ -68,12 +69,24 @@ public class RadiomicsBatchService {
      * @param qcAcknowledged 許容した組のキー（{@link BatchPair#pairKey()}）。この組は QC で止めない
      * @param smallRoiWarnVoxels 小さい ROI の基準値（ボクセル数）。null は環境設定の値。{@code qc} とは別の項目
      *                       （試行は {@code qc} を送らないが、基準値は効かせる）
+     * @param kind           抽出の種類。null・{@code radiomics}＝従来の特徴量抽出、{@code voiStats}＝一次統計だけ
+     *                       （設定はフロントが一次統計の族だけを有効にして送る。PET は SUV を扱えないので組ごとに断る）
      */
     public record BatchRequest(List<BatchPair> pairs, Map<String, String> settings,
                                Set<RoiFeatureRequest.RoiMode> roiModes, List<Double> scales, String scaleNotation,
                                List<String> scaleLabels, String scaleConversion, Double scaleCoefficient,
                                int channel, int timePoint, boolean recompute, Qc qc, List<String> qcAcknowledged,
-                               Integer smallRoiWarnVoxels) {
+                               Integer smallRoiWarnVoxels, String kind) {
+        /** 種類を指定しない（従来の要求）。 */
+        public BatchRequest(List<BatchPair> pairs, Map<String, String> settings,
+                            Set<RoiFeatureRequest.RoiMode> roiModes, List<Double> scales, String scaleNotation,
+                            List<String> scaleLabels, String scaleConversion, Double scaleCoefficient,
+                            int channel, int timePoint, boolean recompute, Qc qc, List<String> qcAcknowledged,
+                            Integer smallRoiWarnVoxels) {
+            this(pairs, settings, roiModes, scales, scaleNotation, scaleLabels, scaleConversion, scaleCoefficient,
+                    channel, timePoint, recompute, qc, qcAcknowledged, smallRoiWarnVoxels, null);
+        }
+
         /** QC を指定しない（従来の要求）。 */
         public BatchRequest(List<BatchPair> pairs, Map<String, String> settings,
                             Set<RoiFeatureRequest.RoiMode> roiModes, List<Double> scales, String scaleNotation,
@@ -100,6 +113,9 @@ public class RadiomicsBatchService {
                          List<PairStatus> pairs) {}
 
     public record PairResult(int index, BatchPair pair, RoiFeatureResult result) {}
+
+    public static final String KIND_RADIOMICS = "radiomics";
+    public static final String KIND_VOI_STATS = "voiStats";
 
     /** 1 組の計算。本番は {@link RoiFeatureService#compute}、テストは差し替える。 */
     @FunctionalInterface
@@ -164,6 +180,8 @@ public class RadiomicsBatchService {
     private final Consumer<RoiFeatureRequest> checker;
     private final SegSourceResolver resolver;
     private final AlbumService albums;
+    /** (スタディ UID, シリーズ UID) → Modality。null なら Modality の検査をしない（テスト用）。 */
+    private final BiFunction<String, String, String> modalityOf;
     private final Map<String, Job> jobs = new ConcurrentHashMap<>();
     private final ExecutorService worker = Executors.newSingleThreadExecutor(r -> {
         Thread t = new Thread(r, "roi-feature-batch");
@@ -174,15 +192,21 @@ public class RadiomicsBatchService {
     @Autowired
     public RadiomicsBatchService(RoiFeatureService features, SegSourceResolver resolver, AlbumService albums) {
         this((req, cancelled) -> features.compute(req, phase -> { }, (done, total) -> { }, cancelled),
-                features::check, resolver, albums);
+                features::check, resolver, albums, resolver::modalityOf);
     }
 
     RadiomicsBatchService(Computer computer, Consumer<RoiFeatureRequest> checker, SegSourceResolver resolver,
                           AlbumService albums) {
+        this(computer, checker, resolver, albums, null);
+    }
+
+    RadiomicsBatchService(Computer computer, Consumer<RoiFeatureRequest> checker, SegSourceResolver resolver,
+                          AlbumService albums, BiFunction<String, String, String> modalityOf) {
         this.computer = computer;
         this.checker = checker;
         this.resolver = resolver;
         this.albums = albums;
+        this.modalityOf = modalityOf;
     }
 
     /** アルバムまたはスタディ UID の並びから、組の候補を作る。 */
@@ -202,6 +226,9 @@ public class RadiomicsBatchService {
     public Status submit(BatchRequest req) {
         if (req.pairs() == null || req.pairs().isEmpty()) {
             throw new IllegalArgumentException("組（pairs）が空です");
+        }
+        if (req.kind() != null && !KIND_RADIOMICS.equals(req.kind()) && !KIND_VOI_STATS.equals(req.kind())) {
+            throw new IllegalArgumentException("kind は radiomics か voiStats です: " + req.kind());
         }
         RoiFeatureRequest first = null;
         for (int i = 0; i < req.pairs().size(); i++) {
@@ -326,6 +353,7 @@ public class RadiomicsBatchService {
                 set(job, i, PairState.RUNNING, null, null, false, 0);
                 long t0 = System.currentTimeMillis();
                 try {
+                    rejectUnsupportedModality(req, p);
                     RoiFeatureResult r = computer.compute(toRequest(req, p), () -> job.cancelled);
                     job.results[i] = r;
                     List<String> flags = qcFlagsOf(r);
@@ -359,6 +387,16 @@ public class RadiomicsBatchService {
             job.state = job.cancelled ? JobState.CANCELLED : JobState.DONE;
         } finally {
             job.finishedAt = System.currentTimeMillis();
+        }
+    }
+
+    /** VOI 統計は PET の SUV を扱えない（保存値のまま Bq/mL を SUV と取り違えないよう、その組は断る）。 */
+    private void rejectUnsupportedModality(BatchRequest req, BatchPair p) {
+        if (!KIND_VOI_STATS.equals(req.kind()) || modalityOf == null) {
+            return;
+        }
+        if ("PT".equals(modalityOf.apply(p.studyUid(), p.sourceSeriesUid()))) {
+            throw new IllegalArgumentException("PET は SUV に未対応のため、VOI 統計を出しません（保存値の単位のままになるため）");
         }
     }
 

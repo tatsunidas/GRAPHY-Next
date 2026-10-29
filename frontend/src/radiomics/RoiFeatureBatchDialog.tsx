@@ -47,6 +47,7 @@ import {
   specText,
   type BatchSpec,
   type SpecContent,
+  type SpecKind,
 } from "./batchSpec";
 import { BatchSettingsPanel } from "./BatchSettingsPanel";
 import { assignSubjectCodes, datasetFiles, type DatasetRow } from "./datasetCsv";
@@ -103,6 +104,8 @@ export function RoiFeatureBatchDialog({
   const [written, setWritten] = useState<number | null>(null);
   const [qc, setQc] = useState<SpecContent["qc"]>({ smallRoi: "FLAG", lossy: "FLAG", smallRoiVoxels: null });
   const [labelsText, setLabelsText] = useState("");
+  /** 抽出の種類。`voiStats` は一次統計だけ（族・ビン・再標本化・範囲の欄は隠す）。 */
+  const [kind, setKind] = useState<SpecKind>("radiomics");
   const [specSha, setSpecSha] = useState("");
   /** QC で止まったあとに「許容して続ける」で許容した組のキー。設定を変えたら空に戻す。 */
   const [acknowledged, setAcknowledged] = useState<string[]>([]);
@@ -162,16 +165,16 @@ export function RoiFeatureBatchDialog({
   // 定義の SHA-256（設定の中身だけ。接頭辞は含めない）
   useEffect(() => {
     let alive = true;
-    void contentSha256(specContentFrom(form, qc, labels)).then((h) => alive && setSpecSha(h));
+    void contentSha256(specContentFrom(form, qc, labels, kind)).then((h) => alive && setSpecSha(h));
     return () => {
       alive = false;
     };
-  }, [form, qc, labels]);
+  }, [form, qc, labels, kind]);
 
   // 設定を変えたら、許容した組は無効にする（別の設定の結果で出た旗を引き継がない）
   useEffect(() => {
     setAcknowledged([]);
-  }, [form, qc]);
+  }, [form, qc, kind]);
 
   // ジョブの問い合わせ。古いジョブの応答は jobId で捨てる。
   useEffect(() => {
@@ -202,7 +205,7 @@ export function RoiFeatureBatchDialog({
   const summary = useMemo(() => (rows ? summarize(rows) : null), [rows]);
   const running = !!job && !BATCH_FINISHED.has(job.state);
   /** 範囲の欄が数でない・下限が上限より大きい間は、実行も定義の保存もしない（範囲なしの定義が黙って作られるのを防ぐ）。 */
-  const rangeProblem = rangeBounds(form).problem;
+  const rangeProblem = kind === "voiStats" ? null : rangeBounds(form).problem;
   const dup = rows ? duplicateLabels(assignCaseLabels(rows)) : [];
 
   const start = async (isTrial: boolean, ack: readonly string[] = acknowledged, from?: readonly PairRow[]) => {
@@ -230,9 +233,9 @@ export function RoiFeatureBatchDialog({
     if (isTrial) chosen = chosen.slice(0, 1);
     if (chosen.length === 0) return setError(t("roiFeat.batch.err.nothing"));
     try {
-      const spec = await buildSpec(specContentFrom(form, qc, labels), prefix);
+      const spec = await buildSpec(specContentFrom(form, qc, labels, kind), prefix);
       const st = await submitBatch(buildBatchRequest(chosen.map((c) => c.pair), form, {
-        qc: isTrial ? null : { smallRoi: qc.smallRoi, lossy: qc.lossy }, acknowledged: ack, smallRoiVoxels: qc.smallRoiVoxels,
+        qc: isTrial ? null : { smallRoi: qc.smallRoi, lossy: qc.lossy }, acknowledged: ack, smallRoiVoxels: qc.smallRoiVoxels, kind,
       }));
       runRef.current = {
         jobId: st.jobId, labels: chosen.map((c) => c.caseLabel), keys: chosen.map((c) => pairKey(c.pair)),
@@ -257,7 +260,7 @@ export function RoiFeatureBatchDialog({
     }));
     const out = datasetFiles(dsRows, subjects, {
       albumName, specSha256: run.spec.sha256, includePatientId, base: batchFileBase(prefix),
-      specText: specText({ ...run.spec, output: { prefix } }), subjectsFile, bom,
+      specText: specText({ ...run.spec, output: { prefix } }), subjectsFile, bom, kind: run.spec.kind,
     });
     if (!out.ok) {
       return setError(
@@ -273,7 +276,7 @@ export function RoiFeatureBatchDialog({
   };
 
   const saveSpec = async () => {
-    const spec = await buildSpec(specContentFrom(form, qc, labels), prefix);
+    const spec = await buildSpec(specContentFrom(form, qc, labels, kind), prefix);
     downloadText(specText(spec), batchSpecFileName(prefix), "application/json;charset=utf-8");
     setInfo(t("roiFeat.batch.spec.saved", { sha: spec.sha256.slice(0, 8) }));
   };
@@ -285,6 +288,7 @@ export function RoiFeatureBatchDialog({
     const r = await parseSpec(await f.text());
     if (!r.ok) return setError(t(`roiFeat.batch.spec.err.${r.error}`, { detail: r.detail }));
     setForm((cur) => applySpecToForm(cur, r.spec));
+    setKind(r.spec.kind);
     setQc(r.spec.qc);
     setLabelsText(r.spec.selection.segmentLabels.join(", "));
     setPrefix(r.spec.output.prefix);
@@ -448,7 +452,7 @@ export function RoiFeatureBatchDialog({
 
               <div style={section}>{t("roiFeat.batch.step2")}</div>
               <BatchSettingsPanel form={form} setForm={setForm} disabled={running} qc={qc} setQc={setQc}
-                labelsText={labelsText} setLabelsText={setLabelsText} />
+                labelsText={labelsText} setLabelsText={setLabelsText} kind={kind} setKind={setKind} />
               <div style={note}>{t("roiFeat.batch.scope")}</div>
 
               <div style={section}>{t("roiFeat.batch.step3")}</div>

@@ -7,6 +7,8 @@ import type { RoiFeatureResult, RoiFeatureRow } from "../api";
 import type { BatchPair, BatchPairStatusRow } from "./batchApi";
 import {
   ID_COLUMNS,
+  VOI_STATS_COLUMNS,
+  VOLUME_ML_COLUMN,
   UTF8_BOM,
   assignSubjectCodes,
   datasetDefinitionsCsv,
@@ -292,3 +294,52 @@ describe("datasetFiles", () => {
     expect(out.ok && out.files.find((f) => f.name.endsWith(".properties"))!.text).toBe("INT_binCount=32\n");
   });
 });
+
+describe("voiStats table", () => {
+  const cols = ["Diagnostics_Voxels", ...VOI_STATS_COLUMNS, "Morphology_Volume"];
+  const r = (vol: number | null) => ({ ...result([7, 1, 2, 3, 4, 5, 9], cols), roiSize: { ...result([]).roiSize, volumeMm3: vol } });
+  const vopts: DatasetOptions = { ...OPTS, kind: "voiStats" };
+
+  it("keeps the 5 statistics and adds the volume in mL after the size columns", () => {
+    const t = datasetTable([drow("A", pair(), r(5644.8))], subjects({}), vopts);
+    expect(t.ok).toBe(true);
+    if (!t.ok) return;
+    expect(t.featureColumns).toEqual([...VOI_STATS_COLUMNS]);
+    const at = t.header.indexOf(VOLUME_ML_COLUMN);
+    expect(at).toBe(t.header.indexOf(ROI_FEATURE_SIZE_COLUMNS[ROI_FEATURE_SIZE_COLUMNS.length - 1]) + 1);
+    const cells = split(t.csv.split("\r\n")[1]);
+    expect(cells[at]).toBe("5.6448");
+    expect(cells.slice(at + 1)).toEqual(["1", "2", "3", "4", "5"]);
+    expect(t.csv).not.toContain("Diagnostics_Voxels");
+  });
+
+  it("a failed row has blanks under every column and the same width", () => {
+    const t = datasetTable([drow("A", pair(), r(1000)), drow("B", pair({ studyUid: "9" }), null)], subjects({}), vopts);
+    expect(t.ok).toBe(true);
+    if (!t.ok) return;
+    const lines = t.csv.split("\r\n");
+    expect(split(lines[2]).length).toBe(t.header.length);
+    expect(split(lines[2]).slice(t.header.indexOf(VOLUME_ML_COLUMN))).toEqual(Array(1 + VOI_STATS_COLUMNS.length).fill(""));
+  });
+
+  it("stops when a result lacks one of the statistics (never shifts columns)", () => {
+    const bad = result([1, 2], ["IntensityBasedStatistical_Mean", "Morphology_Volume"]);
+    const t = datasetTable([drow("A", pair(), bad)], subjects({}), vopts);
+    expect(t.ok ? "ok" : t.reason).toBe("header mismatch");
+  });
+
+  it("the definitions table describes the volume column", () => {
+    const t = datasetTable([drow("A", pair(), r(1000))], subjects({}), vopts);
+    if (!t.ok) throw new Error("table");
+    const defs = datasetDefinitionsCsv(t).split("\r\n");
+    expect(defs.some((l) => l.startsWith(`${VOLUME_ML_COLUMN},Roi,VolumeMl`))).toBe(true);
+  });
+
+  it("without a kind the table is unchanged (all result columns, no mL column)", () => {
+    const t = datasetTable([drow("A", pair(), r(1000))], subjects({}), OPTS);
+    if (!t.ok) throw new Error("table");
+    expect(t.featureColumns).toEqual(cols);
+    expect(t.header).not.toContain(VOLUME_ML_COLUMN);
+  });
+});
+

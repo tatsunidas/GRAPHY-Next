@@ -17,6 +17,7 @@
 import type { RoiFeatureResult } from "../api";
 import { cell } from "../viewer/roiStatsCsv";
 import type { BatchPairStatusRow } from "./batchApi";
+import type { SpecKind } from "./batchSpec";
 import {
   ROI_FEATURE_RECORD_COLUMNS,
   ROI_FEATURE_SIZE_COLUMNS,
@@ -25,6 +26,19 @@ import {
   sizeValuesOf,
   value,
 } from "./roiFeatureCsv";
+
+/**
+ * VOI 統計の列（一次統計のうち、平均・SD（母集団）・最小・最大・中央値）。大きさの列の後ろに `Roi_VolumeMl` を足す。
+ * 一次統計の族だけを有効にして計算するので、結果にはこれらが必ずある。
+ */
+export const VOI_STATS_COLUMNS = [
+  "IntensityBasedStatistical_Mean",
+  "IntensityBasedStatistical_StandardDeviation",
+  "IntensityBasedStatistical_Minimum",
+  "IntensityBasedStatistical_Maximum",
+  "IntensityBasedStatistical_Median",
+] as const;
+export const VOLUME_ML_COLUMN = "Roi_VolumeMl";
 
 /** 識別と行の状態の列（`CaseLabel`・`PatientID` の後ろ、記録の列の前）。 */
 export const ID_COLUMNS = [
@@ -87,6 +101,8 @@ export interface DatasetOptions {
   specSha256: string;
   /** 表に `PatientID` の列を入れる（既定は入れない）。 */
   includePatientId: boolean;
+  /** 抽出の種類。`voiStats` は一次統計の 5 列と体積（mL）だけの表にする（既定は特徴量の全列）。 */
+  kind?: SpecKind;
 }
 
 export type DatasetFailure = { ok: false; reason: "no results" | "header mismatch" | "missing result"; caseLabel: string };
@@ -94,12 +110,14 @@ export type DatasetFailure = { ok: false; reason: "no results" | "header mismatc
 const blanks = (n: number): string[] => Array(n).fill("");
 
 /** 見出し（`CaseLabel`、任意で `PatientID`、識別、記録、大きさ、特徴量）。 */
-function headerOf(featureColumns: readonly string[], includePatientId: boolean): string[] {
+function headerOf(featureColumns: readonly string[], includePatientId: boolean, voi: boolean): string[] {
   return [
     "CaseLabel", ...(includePatientId ? ["PatientID"] : []), ...ID_COLUMNS, ...PROVENANCE_COLUMNS,
-    ...ROI_FEATURE_SIZE_COLUMNS, ...featureColumns,
+    ...ROI_FEATURE_SIZE_COLUMNS, ...(voi ? [VOLUME_ML_COLUMN] : []), ...featureColumns,
   ];
 }
+
+const volumeMlOf = (r: RoiFeatureResult): string => value(r.roiSize.volumeMm3 == null ? null : r.roiSize.volumeMm3 / 1000);
 
 /** 識別の列の値。 */
 function idCells(row: DatasetRow, subject: SubjectInfo | undefined, opts: DatasetOptions): string[] {
@@ -131,17 +149,23 @@ export function datasetTable(
 ): DatasetTable | DatasetFailure {
   const done = rows.filter((r) => r.result != null);
   if (done.length === 0) return { ok: false, reason: "no results", caseLabel: "" };
-  const featureColumns = done[0].result!.rows.map((r) => r.column);
+  const voi = opts.kind === "voiStats";
+  const featureColumns = voi ? [...VOI_STATS_COLUMNS] : done[0].result!.rows.map((r) => r.column);
   const sig = featureColumns.join("\u0000");
   for (const r of done) {
-    if (r.result!.rows.map((x) => x.column).join("\u0000") !== sig) {
-      return { ok: false, reason: "header mismatch", caseLabel: r.caseLabel };
-    }
+    const names = r.result!.rows.map((x) => x.column);
+    const same = voi ? featureColumns.every((c) => names.includes(c)) : names.join("\u0000") === sig;
+    if (!same) return { ok: false, reason: "header mismatch", caseLabel: r.caseLabel };
   }
+  const featureValues = (r: RoiFeatureResult): string[] => {
+    if (!voi) return r.rows.map((x) => value(x.value));
+    const byColumn = new Map(r.rows.map((x) => [x.column, x.value]));
+    return featureColumns.map((c) => value(byColumn.get(c) ?? null));
+  };
   for (const r of rows) {
     if (r.status.state === "DONE" && r.result == null) return { ok: false, reason: "missing result", caseLabel: r.caseLabel };
   }
-  const header = headerOf(featureColumns, opts.includePatientId);
+  const header = headerOf(featureColumns, opts.includePatientId, voi);
   const lines = [header.map(cell).join(",")];
   for (const r of rows) {
     const subject = subjects.get(r.status.pair.studyUid);
@@ -151,11 +175,11 @@ export function datasetTable(
       const rec = recordValuesOf(r.result.provenance, r.caseLabel);
       lines.push([
         rec[0], ...pid, ...ids, ...rec.slice(1), ...sizeValuesOf(r.result.roiSize),
-        ...r.result.rows.map((x) => value(x.value)),
+        ...(voi ? [volumeMlOf(r.result)] : []), ...featureValues(r.result),
       ].join(","));
     } else {
       lines.push([
-        cell(r.caseLabel), ...pid, ...ids, ...blanks(PROVENANCE_COLUMNS.length), ...blanks(ROI_FEATURE_SIZE_COLUMNS.length),
+        cell(r.caseLabel), ...pid, ...ids, ...blanks(PROVENANCE_COLUMNS.length), ...blanks(ROI_FEATURE_SIZE_COLUMNS.length + (voi ? 1 : 0)),
         ...blanks(featureColumns.length),
       ].join(","));
     }
@@ -178,6 +202,7 @@ const ID_NOTES: Record<string, [family: string, feature: string, note: string]> 
   RowError: ["Row", "Error", ""],
   Provenance_QcFlags: ["Provenance", "QcFlags", "SMALL_ROI;LOSSY_COMPRESSION"],
   Provenance_SpecSha256: ["Provenance", "SpecSha256", "sha256-of-the-batch-definition"],
+  [VOLUME_ML_COLUMN]: ["Roi", "VolumeMl", "Roi_VolumeMm3-divided-by-1000"],
 };
 
 /** 定義表。表の列の並びと 1 対 1（識別・状態の列の行を足す）。 */

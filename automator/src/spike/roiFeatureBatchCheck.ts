@@ -671,7 +671,18 @@ async function main(): Promise<void> {
     // ---- 9. 範囲で除く・6 統計のプリセット ----
     console.log("\n[9] 範囲で除く（片側可）・6 統計のプリセット・定義に範囲");
     const settingsOf = (r: Record<string, unknown>) => (r.settings ?? {}) as Record<string, string>;
-    const shaOf = async () => (await page.getByTestId("batch-spec-sha").getAttribute("title")) ?? "";
+    // 定義の SHA-256 は非同期のハッシュ計算の後で更新される。直前の入力の値を読まないよう、値が落ち着く（100 ms ごとに 3 回同じ）まで待つ
+    const shaOf = async () => {
+      let prev = "";
+      let same = 0;
+      for (let i = 0; i < 100 && same < 3; i++) {
+        await page.waitForTimeout(100);
+        const cur = (await page.getByTestId("batch-spec-sha").getAttribute("title")) ?? "";
+        same = cur === prev ? same + 1 : 0;
+        prev = cur;
+      }
+      return prev;
+    };
     const rangeMin = page.getByTestId("batch-range-min");
     const rangeMax = page.getByTestId("batch-range-max");
     const familyBoxes = page.getByTestId("batch-settings").locator('input[type="checkbox"]');

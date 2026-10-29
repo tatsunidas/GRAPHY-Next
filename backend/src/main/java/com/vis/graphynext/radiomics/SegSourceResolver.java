@@ -145,6 +145,12 @@ public class SegSourceResolver {
         return out;
     }
 
+    /** シリーズの Modality。見つからなければ null。 */
+    public String modalityOf(String studyUid, String seriesUid) {
+        return series.list(studyUid).stream().filter(s -> s.seriesUid().equals(seriesUid))
+                .map(SeriesInfo::modality).findFirst().orElse(null);
+    }
+
     private void resolveSeg(String studyUid, String segUid, List<SeriesInfo> sources, List<BatchPair> out) {
         List<SegmentInfo> segs;
         SegHeader header;
