@@ -267,6 +267,23 @@ async function main(): Promise<void> {
     await page.getByTestId("rs-joined").waitFor({ state: "visible" });
     check((await page.getByTestId("rs-joined").innerText()).includes("2 人"), "正しい臨床の表に戻すと、また結合できる");
 
+    console.log("\n[4b] 一括抽出の 1 表: 患者の列（SubjectCode）が既定で選ばれる");
+    const bHead = "CaseLabel,SubjectCode,Album,StudyInstanceUID,SourceSeriesUID,MaskSeriesUID,Roi_SegmentNumber,RowStatus,Provenance_SpecSha256,f1,f2";
+    const bRow = (c: string, s2: string, f1: number, f2: number) => `${c},${s2},A,1.2.3,1.2.3.1,1.2.3.2,1,OK,abc123,${f1},${f2}`;
+    const batchFeat = write("batch_feat.csv", [bHead, bRow("C001", "S1", 1, 10), bRow("C002", "S1", 3, 12), bRow("C003", "S2", 5, 20), bRow("C004", "S3", 7, 30)].join("\r\n") + "\r\n");
+    const batchClin = write("batch_clin.csv", "SubjectCode,time,event\r\nS1,12,1\r\nS2,8,0\r\nS9,5,1\r\n");
+    await page.getByTestId("rs-file-features").setInputFiles([batchFeat]);
+    await page.getByTestId("rs-file-clinical").setInputFiles(batchClin);
+    await page.waitForFunction(() => document.querySelector('[data-testid="rs-run"]') && !(document.querySelector('[data-testid="rs-run"]') as HTMLButtonElement).disabled, null, { timeout: 15_000 });
+    const picks = [await page.getByTestId("rs-feature-id").inputValue(), await page.getByTestId("rs-patient").inputValue(), await page.getByTestId("rs-clinical-id").inputValue()];
+    check(picks.join("|") === "CaseLabel|SubjectCode|SubjectCode", "特徴量の ID＝CaseLabel・患者＝SubjectCode・臨床の ID＝SubjectCode が既定で入る", picks);
+    check(/特徴量として使う列: 2 個/.test(await page.getByTestId("rs-feature-count").innerText()), "特徴量の列は f1・f2 の 2 個（識別・記録・状態の列が混ざらない）", await page.getByTestId("rs-feature-count").innerText());
+    await page.getByTestId("rs-run").click();
+    await page.getByTestId("rs-result").waitFor({ state: "visible" });
+    check((await page.getByTestId("rs-joined").innerText()).includes("2 人"), "既定のまま結合すると 2 人（S1・S2）", await page.getByTestId("rs-joined").innerText());
+    check((await page.getByTestId("rs-counts").innerText()) === "特徴量の表 4 行（3 患者）／臨床の表 3 患者／特徴量にだけいる 1 人／臨床にだけいる 1 人", "件数が手計算と一致（患者は SubjectCode で数える）", await page.getByTestId("rs-counts").innerText());
+    await page.getByTestId("rs-root").screenshot({ path: path.join(OUT_DIR, "01b-batch-table-defaults.png") });
+
     console.log("\n[5] 予後との関係（R1）: 別実装（statsmodels）との突き合わせ");
     const r1 = synthR1(100);
     const r1Feat = write("r1_feat.csv", r1.feat), r1Clin = write("r1_clin.csv", r1.clin);
