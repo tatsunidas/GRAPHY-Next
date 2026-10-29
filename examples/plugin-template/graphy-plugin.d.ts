@@ -638,6 +638,17 @@ export interface XaSeriesInfo {
   geometry: XaViewGeometry | null;
   missing: "noDataSet" | "noAngles" | "noDistances" | "noImagerSpacing" | "noImageSize" | null;
   perFrameAngles: boolean;
+  /**
+   * 撮影情報（fps の決め方は `getXaCine` と同じ）。読めなければ null。古い本体は返さない（undefined）。
+   * `fpsSource === "default"` は測定値ではない。
+   */
+  cine?: {
+    numberOfFrames: number;
+    fps: number;
+    fpsSource: "frameTimeVector" | "frameTime" | "cineRate" | "recommendedDisplayFrameRate" | "default";
+    frameStartTimesMs: number[];
+    uniform: boolean;
+  } | null;
 }
 
 /** `host.readXaSeriesFrame()` の戻り。**H42**。 */
@@ -2080,6 +2091,9 @@ export interface Viewer2DPluginHost extends PluginHostBase {
    *
    * 🔴 **壊れた入力はエラーになる**（未知の `segmentId`・範囲外の `index`・非有限の値・
    * 退化した `range`）。捨てて残りを採用すると**ずれたまま色が乗り**、誰も気付けない。
+   *
+   * **成功すると、本体の 3D 画面（`#geometry3d`）が開く**（開いていれば前面に出て、中身が差し替わる）。
+   * 分岐部のモデル（`xa-bifurcation3d`）では開かない（3D 画面は中心線 1 本しか描かない）。
    */
   putVesselAnalysis: (runId: string, result: VesselAnalysisInput) => VesselAnalysisResult;
   /**
@@ -2089,6 +2103,12 @@ export interface Viewer2DPluginHost extends PluginHostBase {
    * （`calibration.diameterCalibrated: false`）なら**全点 null**でなければ拒否する。
    */
   registerVesselModel: (model: VesselModelInput) => RegisterVesselModelResult;
+  /**
+   * **登録した 3D 血管モデルの 3D 画面を開く**（H74。開いていれば前面に出て、中身が差し替わる）。`runId` は
+   * `registerVesselModel` の戻り。色は乗らない（`putVesselAnalysis` が成功したときに、同じ画面へ乗る）。
+   * 🔴 開けないときは理由つきで `ok: false`（モデルが無い・分岐部モデル・中心線が 2 点未満）。
+   */
+  openVesselModel3d: (runId: string) => { ok: true } | { ok: false; error: string };
   /**
    * 処理結果（値マップ）を**表示中スライスへ重ねて見せる**。`tileId` 省略時は対象の先頭タイル。
    * rows/cols が現在スライスと不一致なら false。**0.1.9 以降**。

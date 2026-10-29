@@ -20,6 +20,7 @@ import {
   putVesselAnalysis,
   registerPluginVesselModel,
 } from "../plugins/pluginVesselApi";
+import { openAfterAnalysisPut, openVesselModel3dFromPlugin } from "../viewer3d/openVesselModel3d";
 import { openPluginWindow } from "../plugins/pluginWindowApi";
 import { mountValueViewport, mountVolumeView } from "../plugins/pluginViewportApi";
 import { measureMask } from "../plugins/pluginMeshApi";
@@ -129,11 +130,14 @@ export function Viewer2DMenuBar({
     // 🔴 出自は host が入れる。**本体は FFR を計算しない**（fw/angio-design.md §11.1）。
     listVesselModels: () => listVesselModels(),
     getVesselModel: (runId) => getVesselModel(runId),
+    // 送信が成功したら 3D 画面（色と凡例）を開く。旧 3D QCA ダイアログの「3D で開く」に代わる入口。
     putVesselAnalysis: (runId, result) =>
-      putVesselAnalysis(runId, result, { id: m.id, name: m.name, version: m.version }),
+      openAfterAnalysisPut(putVesselAnalysis(runId, result, { id: m.id, name: m.name, version: m.version }), runId),
     // H73: プラグインが作った 3D 血管モデルを登録簿へ入れる（本体の 3D 表示・QFR の色マップが読む）。
     registerVesselModel: (model) =>
       registerPluginVesselModel(model, { id: m.id, name: m.name, version: m.version }),
+    // H74: 登録したモデルの 3D 画面を開く（色は乗せない）。
+    openVesselModel3d: (runId) => openVesselModel3dFromPlugin(runId),
     // 出所ラベルはプラグイン任せにしない: host が必ずマニフェストの表示名を入れる。
     showOverlay: (tileId, overlay) => actions.showOverlay(tileId, { ...overlay, label: m.name }),
     showLabelVolume: (tileId, req) => actions.showLabelVolume(tileId, req, { id: m.id, name: m.name }),

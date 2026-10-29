@@ -18,10 +18,11 @@
 import { fetchInstances } from "../api";
 import { imageIdForXaFrame, xaSourceUrlOf, type ViewerMode } from "../viewer/imageId";
 import { readModalitySlice } from "../viewer/pixelCalibration";
-import { prewarmXaDataset, xaDataSetOf } from "../viewer/xaCine";
+import { prewarmXaDataset, readXaCineSource, xaDataSetOf } from "../viewer/xaCine";
 import { readXaViewGeometry, type XaViewGeometryResult } from "../viewer/xaViewGeometryProvider";
 import type { PluginSeriesRef } from "./pluginTypes";
 import { pixelIntensityRelationshipOf } from "./xaPixelIntensity";
+import { cineOfSource, type PluginXaSeriesCine } from "./xaSeriesCine";
 
 type StudyResolver = (seriesUid: string) => string | undefined;
 
@@ -37,6 +38,11 @@ export interface PluginXaSeriesInfo extends XaViewGeometryResult {
   cols: number | null;
   /** `PixelIntensityRelationship (0028,1040)`（LIN / LOG）。タグが無ければ null（推測で埋めない）。QCA の径の測り方（対数変換の要否）を決めるのに要る。 */
   pixelIntensityRelationship: string | null;
+  /**
+   * 撮影情報（fps の決め方は H40 `getXaCine` と同じ）。cQFR / aQFR のフレームカウントを、開いていないシネで数えるのに要る。
+   * dataSet が読めなければ null（既定値で埋めない）。
+   */
+  cine: PluginXaSeriesCine | null;
 }
 
 export interface PluginXaSeriesFrame {
@@ -89,6 +95,7 @@ export async function readXaSeriesInfo(
     rows,
     cols,
     pixelIntensityRelationship: ds ? pixelIntensityRelationshipOf(ds) : null,
+    cine: cineOfSource(readXaCineSource(imageId0)),
   };
 }
 
