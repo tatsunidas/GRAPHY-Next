@@ -48,6 +48,23 @@ class PluginCacheServiceTest {
     }
 
     @Test
+    void aValueThatChangedAfterSaving_isNotReturned(@TempDir Path dir) throws IOException {
+        PluginCacheService c = svc(dir, 1024);
+        byte[] data = {10, 20, 30, 40};
+        c.put("a", "k", data);
+        Path f;
+        try (Stream<Path> s = Files.list(dir)) { f = s.findFirst().orElseThrow(); }
+        byte[] raw = Files.readAllBytes(f);
+        raw[16 + 2] ^= 0x01; // 本体の 1 ビット（長さは変わらない）
+        Files.write(f, raw);
+
+        assertTrue(c.get("a", "k").isEmpty(), "化けた値は返さない（プラグインは再計算に倒れる）");
+        assertFalse(c.has("a", "k"));
+        c.put("a", "k", data);
+        assertArrayEquals(data, c.get("a", "k").orElseThrow(), "保存し直せば読める");
+    }
+
+    @Test
     void emptyPayloadIsStoredAndRead(@TempDir Path dir) {
         PluginCacheService c = svc(dir, 1024);
         assertEquals(PluginCacheService.Outcome.OK, c.put("a", "empty", new byte[0]));
