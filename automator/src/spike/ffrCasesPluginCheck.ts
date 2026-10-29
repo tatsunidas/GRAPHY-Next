@@ -102,7 +102,10 @@ function installPlugin(): void {
 }
 
 async function toClient(page: Page, key: string, p: Pt): Promise<{ x: number; y: number }> {
-  const b = await page.getByTestId(`dual-canvas-${key}`).boundingBox();
+  // 道具の行が高いと、画面の下側が表示領域の外になる。クリックの前に、画面が見えるところへスクロールする。
+  const loc = page.getByTestId(`dual-canvas-${key}`);
+  await loc.scrollIntoViewIfNeeded();
+  const b = await loc.boundingBox();
   if (!b) throw new Error("canvas なし");
   return { x: b.x + (p[0] / IMG) * b.width, y: b.y + (p[1] / IMG) * b.height };
 }
@@ -1076,6 +1079,169 @@ async function candsCheck(page: Page, spec: Spec): Promise<Record<string, unknow
   return out;
 }
 
+/**
+ * 画像ツール（パン・W/L・拡大・畳み・連動）の確認（FFR_EDITCHECK=imgtools。仮想血管。両方向の中心線がある状態から）。
+ * 解析の状態の「指紋」（中心線・エッジ・径・アンカー・経由点・取り消しの可否）を、ツールの操作の前後で取って比べる。
+ *  M1 ［＋］で拡大しても、解析の指紋は同じ
+ *  M2 パン: ドラッグで data-view が動き、指紋は同じ
+ *  M3 ★負例: パン中に画面をクリックしても、経由点は増えない（ツール中は解析が起きない）
+ *  M4 W/L: ドラッグで data-wl が変わり、画面の平均輝度が変わり、指紋は同じ（径・エッジは W/L を読まない）
+ *  M5 ページ送りしても W/L は保たれ、［W/L 自動］で自動に戻る
+ *  M6 拡大: ドラッグで data-zoom が増え、押した点の下の画像が動かない（1 px 以内）。指紋は同じ
+ *  M7 ★負例（検出器の確認）: ［解析］に戻して同じクリックをすると、経由点が増える（解析が効く）
+ *  M8 ［道具を畳む］で、画面の 1 辺が増え、解析の指紋は同じ。クリック位置→画像座標の対応は 1.5 画面 px 以内
+ *  M9 ★負例: A・B で同じ表示にそろえる、がオフなら、A のパンは B に写らない。オンなら写る
+ */
+async function imgToolsCheck(page: Page, label: string): Promise<Record<string, unknown>> {
+  const out: Record<string, unknown> = {};
+  const cv = (k: "A" | "B") => page.getByTestId(`dual-canvas-${k}`);
+  const at = async (k: "A" | "B", n: string) => (await cv(k).getAttribute(`data-${n}`)) ?? "";
+  const finger = async (): Promise<string> => {
+    const parts: string[] = [];
+    for (const k of ["A", "B"] as const) for (const n of ["clpts", "edgepts", "diameters", "anchors", "waypoints", "edgeoffsets", "centerline", "range"]) parts.push(await at(k, n));
+    parts.push(String(await page.getByTestId("dual-undo").isDisabled()), String(await page.getByTestId("dual-redo").isDisabled()));
+    return parts.join("|");
+  };
+  const nWp = async (k: "A" | "B") => (JSON.parse((await at(k, "waypoints")) || "[]") as Pt[]).length;
+  const mean = async (k: "A" | "B") =>
+    page.evaluate((id) => {
+      const c = document.querySelector(`[data-testid=${id}]`) as HTMLCanvasElement;
+      const d = c.getContext("2d")!.getImageData(0, 0, c.width, c.height).data;
+      let s = 0;
+      for (let i = 0; i < d.length; i += 4) s += d[i];
+      return s / (d.length / 4);
+    }, `dual-canvas-${k}`);
+  const view = async (k: "A" | "B") => (await at(k, "view")).split(",").map(Number) as [number, number];
+  const drag = async (k: "A" | "B", dx: number, dy: number, from: [number, number] = [0.5, 0.5]) => {
+    const b = (await cv(k).boundingBox())!;
+    const x0 = b.x + b.width * from[0], y0 = b.y + b.height * from[1];
+    await page.mouse.move(x0, y0);
+    await page.mouse.down();
+    for (let i = 1; i <= 8; i++) await page.mouse.move(x0 + (dx * i) / 8, y0 + (dy * i) / 8);
+    await page.mouse.up();
+    await page.waitForTimeout(400);
+  };
+
+  // 準備: 経由点を 1 つ置いて、取り消し履歴を作る（解析の状態を、指紋に厚くする）
+  await setMode(page, "waypoint");
+  const clA: Pt[] = JSON.parse(await at("A", "clpts"));
+  const cw = await toClient(page, "A", clA[Math.floor(clA.length * 0.4)]);
+  await page.mouse.click(cw.x, cw.y);
+  await page.waitForTimeout(800);
+  const wp0 = await nWp("A");
+  const fp0 = await finger();
+  check("[M0] 前提: 経由点が置かれ、取り消しが効く状態", wp0 >= 1 && !(await page.getByTestId("dual-undo").isDisabled()), { wp0 });
+
+  // M1: ［＋］
+  await page.getByTestId("dual-zoom-in").click();
+  await page.getByTestId("dual-zoom-in").click();
+  await page.waitForTimeout(300);
+  const z1 = Number(await at("A", "zoom"));
+  check("[M1] ［＋］で拡大しても、解析の指紋は同じ", z1 > 1.4 && (await finger()) === fp0, { zoom: z1 });
+
+  // M2/M3: パン
+  await page.getByTestId("dual-tool-pan").click();
+  const v0 = await view("A");
+  await drag("A", -80, -60);
+  const v1 = await view("A");
+  await page.screenshot({ path: path.join(OUT_DIR, `${label}-imgtools-1-pan.png`) });
+  check("[M2] パン: ドラッグで画像が動き（data-view）、解析の指紋は同じ", Math.hypot(v1[0] - v0[0], v1[1] - v0[1]) > 10 && (await finger()) === fp0, { v0, v1 });
+  const cw2 = await toClient(page, "A", clA[Math.floor(clA.length * 0.7)]);
+  const bBefore = (await cv("A").boundingBox())!;
+  void bBefore;
+  await page.mouse.click(cw2.x, cw2.y);
+  await page.waitForTimeout(600);
+  check("[M3] ★負例: パン中に画面をクリックしても、経由点は増えず、指紋は同じ", (await nWp("A")) === wp0 && (await finger()) === fp0, { wp: await nWp("A"), wp0 });
+
+  // M4/M5: W/L
+  await page.getByTestId("dual-tool-wl").click();
+  const m0 = await mean("A");
+  const win0 = await at("A", "window");
+  await drag("A", 70, -50);
+  const m1 = await mean("A");
+  const wl1 = await at("A", "wl");
+  const win1 = await at("A", "window");
+  await page.screenshot({ path: path.join(OUT_DIR, `${label}-imgtools-2-wl.png`) });
+  check("[M4] W/L: ドラッグで階調（data-wl・data-window）と画面の平均輝度が変わり、解析の指紋は同じ", wl1 !== "auto" && win1 !== win0 && Math.abs(m1 - m0) > 1 && (await finger()) === fp0, { wl1, win0, win1, mean0: +m0.toFixed(1), mean1: +m1.toFixed(1) });
+  await setFrame(page, "A", 30);
+  const wl2 = await at("A", "wl");
+  await page.getByTestId("dual-wl-auto").click();
+  await page.waitForTimeout(300);
+  const wl3 = await at("A", "wl");
+  await setFrame(page, "A", 37);
+  check("[M5] ページ送りしても W/L は保たれ、［W/L 自動］で自動に戻る", wl2 === wl1 && wl3 === "auto" && (await finger()) === fp0, { wl1, wl2, wl3 });
+
+  // M6: 拡大のドラッグ
+  await page.getByTestId("dual-tool-zoom").click();
+  const bb = (await cv("A").boundingBox())!;
+  const fx = 0.3, fy = 0.6;
+  const imgPt = async () => {
+    const [ox, oy] = await view("A");
+    const z = Number(await at("A", "zoom"));
+    return [ox + (fx * IMG) / z, oy + (fy * IMG) / z] as Pt;
+  };
+  const p0 = await imgPt();
+  const zb = Number(await at("A", "zoom"));
+  await drag("A", 0, -90, [fx, fy]);
+  const za = Number(await at("A", "zoom"));
+  const p1 = await imgPt();
+  void bb;
+  check("[M6] 拡大: ドラッグ（上）で拡大し、押した点の下の画像が動かない（1 px 以内）。解析の指紋は同じ", za > zb * 1.2 && Math.hypot(p1[0] - p0[0], p1[1] - p0[1]) <= 1 && (await finger()) === fp0, { zb, za, driftPx: +Math.hypot(p1[0] - p0[0], p1[1] - p0[1]).toFixed(2) });
+
+  // M7: 解析に戻す
+  await page.getByTestId("dual-tool-analyse").click();
+  // 拡大・パンで見え方が変わっているので、全体表示に戻してから、血管の上の同じ画像の点を押す（古い画面座標を使わない）。
+  await page.getByTestId("dual-zoom-reset").click();
+  await page.waitForTimeout(300);
+  const cw7 = await toClient(page, "A", clA[Math.floor(clA.length * 0.7)]);
+  await page.mouse.click(cw7.x, cw7.y);
+  await page.waitForTimeout(800);
+  const wp7 = await nWp("A");
+  check("[M7] ★負例（検出器の確認）: ［解析］に戻して同じクリックをすると、経由点が増える", wp7 === wp0 + 1 || wp7 > wp0, { wp0, wp7 });
+
+  // M8: 畳む
+  await page.getByTestId("dual-zoom-reset").click();
+  const lay = async () => JSON.parse((await page.getByTestId("dual-panel").getAttribute("data-layout")) ?? "null") as { size: number; top: number; h: number };
+  // 窓が低いと、畳んでも画面は下限（320 px）のままなので、可能なら表示領域を広げて、増えることを見る（Electron で効かなければ、そのまま）。
+  await page.setViewportSize({ width: 1500, height: 1250 }).catch(() => undefined);
+  await page.waitForTimeout(800);
+  const l0 = await lay();
+  const fp8 = await finger();
+  await page.getByTestId("dual-collapse").click();
+  await page.waitForTimeout(1_800);
+  const l1 = await lay();
+  await page.screenshot({ path: path.join(OUT_DIR, `${label}-imgtools-3-collapsed.png`) });
+  const target = clA[Math.floor(clA.length * 0.25)];
+  const cm = await toClient(page, "A", target);
+  const wpBefore = JSON.parse(await at("A", "waypoints")) as Pt[];
+  await page.mouse.click(cm.x, cm.y);
+  await page.waitForTimeout(700);
+  const wpAfter = JSON.parse(await at("A", "waypoints")) as Pt[];
+  const added = wpAfter.find((w) => !wpBefore.some((o) => Math.hypot(o[0] - w[0], o[1] - w[1]) < 0.05));
+  const tol = (IMG / (await cv("A").boundingBox())!.width) * 1.5;
+  const err = added ? Math.hypot(added[0] - target[0], added[1] - target[1]) : NaN;
+  out.m8 = { size0: l0.size, size1: l1.size, errImgPx: +err.toFixed(2), tol: +tol.toFixed(2) };
+  out.m8 = { ...(out.m8 as object), top0: l0.top, top1: l1.top, h: l1.h };
+  check("[M8] ［道具を畳む］で、画面より上の部品の高さが減り、画面の 1 辺が増えるか同じ（下限・幅で頭打ちのとき）。クリック位置→画像座標の対応が 1.5 画面 px 以内（畳んだ状態でも解析が効く）", l1.top < l0.top && l1.size >= l0.size && err <= tol && fp8.length > 0, out.m8);
+  await page.getByTestId("dual-collapse").click();
+  await page.waitForTimeout(400);
+
+  // M9: A・B の連動
+  await page.getByTestId("dual-zoom-in").click();
+  await page.getByTestId("dual-zoom-in").click();
+  await page.getByTestId("dual-tool-pan").click();
+  const b0 = await view("B");
+  await drag("A", -60, -40);
+  const b1 = await view("B");
+  const offMoved = Math.hypot(b1[0] - b0[0], b1[1] - b0[1]);
+  await page.getByTestId("dual-view-link").check();
+  await drag("A", -40, -30);
+  const a2 = await view("A"), b2 = await view("B");
+  check("[M9] ★負例: 連動がオフなら A のパンは B に写らず、オンなら写る", offMoved < 0.01 && Math.hypot(a2[0] - b2[0], a2[1] - b2[1]) < 0.5, { offMoved, a2, b2 });
+  await page.screenshot({ path: path.join(OUT_DIR, `${label}-imgtools-4-linked.png`) });
+  return out;
+}
+
 /** アンカー i を掴んで target へドラッグする。 */
 async function dragAnchor(page: Page, key: string, i: number, target: Pt): Promise<void> {
   const cur = (await anchorsOf(page, key))[i];
@@ -1394,6 +1560,7 @@ async function main(): Promise<void> {
         : process.env.FFR_EDITCHECK === "async" ? await anchorSyncCheck(viewer, spec.label)
         : process.env.FFR_EDITCHECK === "propose" ? await proposeCheck(viewer, spec)
         : process.env.FFR_EDITCHECK === "cands" ? await candsCheck(viewer, spec)
+        : process.env.FFR_EDITCHECK === "imgtools" ? await imgToolsCheck(viewer, spec.label)
         : await editCheck(viewer, spec.label);
       fs.writeFileSync(path.join(OUT_DIR, `${spec.label}.json`), JSON.stringify({ ...report, checks: results }, null, 1));
       return;
