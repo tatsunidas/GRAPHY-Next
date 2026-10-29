@@ -19,6 +19,7 @@ import { setRoiLocked } from "./roiLock";
 import {
   buildAnnotationData,
   buildRestoredMeta,
+  rescaleRoiToSpacing,
   selectRestorable,
   toSavedRoi,
   type AnnotationLike,
@@ -49,6 +50,33 @@ export function sopOfImageId(imageId: string): string | null {
   // 解決できた時だけ覚える（メタ未読の段階の null を固定化しないため）。
   if (sop) sopCache.set(imageId, sop);
   return sop;
+}
+
+/** 画像が作られたときの画素間隔（`xaCalibrationProvider.loaderSpacingFor`）。cornerstone 初期化時に登録する。 */
+let loaderSpacing: ((imageId: string) => { row: number; col: number }) | null = null;
+
+/**
+ * 画像の間隔の解決を登録する。`xaCalibrationProvider` を直に import すると DICOM ローダのワーカーまで読み込まれ、
+ * node のテストが読み込みで落ちる（comlink）ので、初期化側（`cornerstoneSetup`）から渡す。
+ */
+export function registerLoaderSpacing(fn: (imageId: string) => { row: number; col: number }): void {
+  loaderSpacing = fn;
+}
+
+/**
+ * その画像の world の基準の画素間隔 `[row, col]`。患者位置（IPP）のある画像は world が LPS mm で間隔に依らないので null。
+ * IPP の無い画像（XA など）は画像が作られたときの間隔が world の基準。未登録（テスト等）は null＝記録も換算もしない。
+ */
+export function worldSpacingOf(imageId: string): [number, number] | null {
+  if (!loaderSpacing) return null;
+  try {
+    const plane = metaData.get("imagePlaneModule", imageId) as { imagePositionPatient?: unknown } | undefined;
+    if (plane?.imagePositionPatient) return null;
+    const s = loaderSpacing(imageId);
+    return [s.row, s.col];
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -152,6 +180,7 @@ export function collectRoisForPatient(patientKey: string, loaded: SavedRoi[] = [
       // 🔴 その ROI 自身の imageId からフレームを取る（表示中の値を配ると別フレームの
       //    ROI に今見ているフレーム番号を書いてしまう。`ct` を渡していないのと同じ理由）。
       frameOf: frameOfImageId,
+      worldSpacingOf,
       metaOf: (roiUid) => getRoiMaskMeta(roiUid),
       // scope は作成時のメタが持っているので、ここでは補わない
       // （表示中の ZCT を混ぜると、別タイルの ROI に今見ている c/t を書いてしまう）。
@@ -256,12 +285,14 @@ interface AddSavedRoiOptions {
  * （UID はプラグインの縦断追跡の鍵なので、複製が元と同じ鍵を持つと追跡が壊れる）。
  */
 export function addSavedRoiToViewport(
-  roi: SavedRoi,
+  savedRoi: SavedRoi,
   imageId: string,
   viewport: RestoreViewport,
   opts: AddSavedRoiOptions,
 ): boolean {
   if (!viewport?.element) return false;
+  // 保存時と world の基準が違う（IPP の無い画像を、校正を変えて開き直した）なら、座標を今の基準へ換算する。
+  const roi = rescaleRoiToSpacing(savedRoi, worldSpacingOf(imageId));
   let camera = opts.camera;
   if (!camera) {
     try {
