@@ -97,10 +97,8 @@ export type {
  * **プラグイン由来であることの表示が必須**（区切り線 ＋ 印。`fw/subtraction-design.md` §15.8）。
  * host の中身は `viewer2d.menu` と完全に同一で、違うのは出る場所だけである。
  *
- * <p>`viewer2d.xa3d` は **3D QCA のダイアログの中**にボタンとして出す（**H63・0.3.7 以降**）。
- * ダイアログは全画面の背景を持ちメニューを押せないので、「再構成を見ながら解析を掛ける」
- * （QFR など）にはこの面が要る。押してもダイアログは閉じない。host の中身は `viewer2d.menu` と同一。
- * 旧本体はこの面を知らないだけで、宣言しても害は無い（`contributes` で絞るだけ）。
+ * <p>`viewer2d.xa3d` は、本体の 3D QCA ダイアログ（H63・0.3.7 以降）の中に出す面だった。3D QCA はプラグインへ移ったので
+ * **本体はこの面をどこにも出さない**。宣言しても害は無い（読み込めるが現れない）。型は旧プラグインの宣言を読めるよう残している。
  */
 import type { AiGenerationOptions, AiGenerationOutcome } from "./pluginAiApi";
 import type { ComputeRunJobOptions, ComputeRunOutcome, ComputeEndpointStatus, ComputeReleaseOutcome } from "./pluginComputeApi";
@@ -734,6 +732,9 @@ export interface Viewer2DPluginHost extends PluginHostBase {
    *
    * <p>`pixelIntensityRelationship` は `PixelIntensityRelationship (0028,1040)`（LIN / LOG。無ければ null）。
    * 径の測り方（対数変換の要否）を決めるのに要る。古い本体はこのフィールドを返さない（undefined）。
+   *
+   * <p>`cine` は撮影情報（fps・各フレームの開始時刻・出自）。cQFR / aQFR のフレームカウントを、開いていないシネで
+   * 数えるのに要る（H40 `getXaCine` と同じ決め方）。dataSet が読めなければ null。古い本体は返さない（undefined）。
    */
   readXaSeries: (ref: PluginSeriesRef) => Promise<import("./pluginXaSeriesApi").PluginXaSeriesInfo | null>;
   /**
@@ -785,6 +786,9 @@ export interface Viewer2DPluginHost extends PluginHostBase {
    * <p>`disclaimer` は**そのまま画面に出る**（本体は要約も書き換えもしない）。FFR は治療方針を
    * 左右する値なので、モジュールの限界を書くこと。校正の縮退区分（近似か未校正か）は
    * host が凡例の脇に必ず出す。
+   *
+   * <p>**成功すると、本体の 3D 画面（`#geometry3d`）が開く**（開いていれば前面に出て、中身が差し替わる）。
+   * 色が見える場所はここしかない。分岐部のモデル（`xa-bifurcation3d`）では開かない（3D 画面は中心線 1 本しか描かない）。
    */
   putVesselAnalysis: (runId: string, result: XaVesselAnalysisInput) => VesselAnalysisResult;
   /**
@@ -799,6 +803,12 @@ export interface Viewer2DPluginHost extends PluginHostBase {
    * `parentId` は他のセグメントの id、総点数は 20000 以下。
    */
   registerVesselModel: (model: XaVesselModelInput) => RegisterVesselModelResult;
+  /**
+   * **登録した 3D 血管モデルの 3D 画面（`#geometry3d`）を開く**（H74。開いていれば前面に出て、中身が差し替わる）。
+   * `runId` は `registerVesselModel` の戻り。色は乗らない（色は `putVesselAnalysis` が成功したときに、同じ画面へ乗る）。
+   * 🔴 開けないときは理由つきで `ok: false`（モデルが無い・分岐部モデル・中心線が 2 点未満）。何もせず成功を返さない。
+   */
+  openVesselModel3d: (runId: string) => { ok: true } | { ok: false; error: string };
   /**
    * 処理結果（値マップ）を対象タイルの**表示中スライスへ重ねて見せる**（H4a）。
    * `tileId` 省略時は対象の先頭タイル。rows/cols が現在スライスと不一致なら false。

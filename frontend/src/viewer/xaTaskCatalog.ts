@@ -24,16 +24,13 @@
 
 /** タスク識別子。`opens` が指すダイアログの実体は `SeriesViewer` にある。 */
 export type AnalysisTaskId =
-  | "qca"
-  | "qca3d"
-  | "qca3dBifurcation"
   | "qlv"
   | "qlvBiplane"
   | "timi"
   | "report";
 
 /** 起動したときに開くもの。`null` は未実装（開くものが無い）。 */
-export type AnalysisTaskTarget = "xaAnalysis" | "qlv" | "qca3d" | "qca3dBifurcation" | "timi" | "report";
+export type AnalysisTaskTarget = "qlv" | "timi" | "report";
 
 export interface AnalysisTaskDef {
   id: AnalysisTaskId;
@@ -61,16 +58,6 @@ export interface AnalysisTaskDef {
  * <p>名前は参照製品の訳語をそのまま使わず、**GRAPHY の既存用語に合わせる**（§21.2「守ること」）。
  */
 export const ANALYSIS_TASKS: readonly AnalysisTaskDef[] = [
-  {
-    id: "qca",
-    labelKey: "xa.task.qca",
-    descKey: "xa.task.qca.desc",
-    implemented: true,
-    phase: "A4",
-    opens: "xaAnalysis",
-    needsXaSeries: true,
-    standaloneOnly: true,
-  },
   // 🔴 **QVA（A5a）はここから外してある**（2026-09-01）。実装は残っているが導線を切った。
   //
   // 理由: 報告していた「ネック径」が**瘤頸（母血管との開口部の幅）ではなく、拡張区間の端の
@@ -85,26 +72,7 @@ export const ANALYSIS_TASKS: readonly AnalysisTaskDef[] = [
   // 実装は 2026-09-02 に本体から撤去した。**責務は `graphy-next-plugin-aneurysm-detector`**
   // （`src/qva/` ＋ `docs/qva.md`）。復活させる前にそちらの TODO と
   // `fw/angio-design.md` §9.1 を読むこと（何を測ると言うのかが未決）。
-  {
-    id: "qca3d",
-    labelKey: "xa.task.qca3d",
-    descKey: "xa.task.qca3d.desc",
-    implemented: true,
-    phase: "A6a",
-    opens: "qca3d",
-    needsXaSeries: true,
-    standaloneOnly: true,
-  },
-  {
-    id: "qca3dBifurcation",
-    labelKey: "xa.task.qca3dBifurcation",
-    descKey: "xa.task.qca3dBifurcation.desc",
-    implemented: true,
-    phase: "A6b",
-    opens: "qca3dBifurcation",
-    needsXaSeries: true,
-    standaloneOnly: true,
-  },
+  // 2D QCA・3D QCA・分岐部は本体から外した。解析は プラグイン（angio-quant）が担う。
   {
     id: "qlv",
     labelKey: "xa.task.qlv",

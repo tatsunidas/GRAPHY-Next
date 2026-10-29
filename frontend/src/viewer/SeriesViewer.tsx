@@ -14,8 +14,7 @@ import { nearestReal, nextRealLoop, realZs, stepReal } from "./realSlices";
 import { concatHasGap, describeKept, restrictLayout, type ConcatOpened, type ZRange } from "./virtualLayout";
 import CineControls from "./CineControls";
 import { VideoViewer } from "./VideoViewer";
-import { XaAnalysisDialog } from "./XaAnalysisDialog";
-import { Xa3dBifurcationDialog } from "./Xa3dBifurcationDialog";
+import { XaCalibrationDialog } from "./XaCalibrationDialog";
 import { XaQlvDialog } from "./XaQlvDialog";
 import { XaIvusSyncDialog } from "./XaIvusSyncDialog";
 import { XaTimiDialog } from "./XaTimiDialog";
@@ -27,8 +26,6 @@ import {
   type AutoPhaseProgress,
   type AutoPhaseResult,
 } from "./xaAutoPhaseMask";
-import { Xa3dQcaDialog } from "./Xa3dQcaDialog";
-import { useQcaRuns } from "./xaRecon3dStore";
 import { consumeXaTask, isFreshRequest, matchesRequest, onXaTaskRequest, pullXaTask } from "./xaTaskLaunch";
 import { prewarmXaDataset, readXaCineSource, resolveXaFps, type XaCineSource, frameStartTimesMs} from "./xaCine";
 import { readVoiWindow } from "./viewportRead";
@@ -463,7 +460,7 @@ export function SeriesViewer({
   const [dsaVersion, setDsaVersion] = useState(0);
   const [dsaBusy, setDsaBusy] = useState(false);
   // 校正 / QCA ダイアログ（fw/angio-design.md §7.3 / §8）。
-  const [xaDialogOpen, setXaDialogOpen] = useState(false);
+  const [calibDialogOpen, setCalibDialogOpen] = useState(false);
   const [qlvDialogOpen, setQlvDialogOpen] = useState(false);
   const [ivusDialogOpen, setIvusDialogOpen] = useState(false);
   const [timiDialogOpen, setTimiDialogOpen] = useState(false);
@@ -505,8 +502,6 @@ export function SeriesViewer({
   const [autoPhase, setAutoPhase] = useState<
     { status: "running"; progress: AutoPhaseProgress } | { status: "done"; result: AutoPhaseResult } | null
   >(null);
-  const [xaBifDialogOpen, setXaBifDialogOpen] = useState(false);
-  const [xa3dDialogOpen, setXa3dDialogOpen] = useState(false);
   /** 表示状態（GSPS）の読み込み（§14.1）。 */
   const [prDialogOpen, setPrDialogOpen] = useState(false);
   /**
@@ -515,8 +510,6 @@ export function SeriesViewer({
    * 当てる前に「適用しました」と出すと、DSA だけ効いていない状態を成功と読ませてしまう。
    */
   const [pendingDsaPlan, setPendingDsaPlan] = useState<PresentationPlan["dsa"] | null>(null);
-  /** 3D QCA に使える「2D QCA 実行済みの方向」。2 つ揃うまでボタンは押せない。 */
-  const qcaRuns = useQcaRuns();
   // 空間校正の確定/解除は imageId を変えないため、Viewer2D にメタデータを読み直させる鍵。
   const [calibVersion, setCalibVersion] = useState(0);
   // 保存済みの空間校正を戻す（§7.4）。戻ったら表示（スケールバー・計測ラベル）を作り直す。
@@ -558,9 +551,7 @@ export function SeriesViewer({
         emitToast(t("xa.task.reason.noFrames"));
         return;
       }
-      if (req.target === "xaAnalysis") setXaDialogOpen(true);
-      else if (req.target === "qlv") setQlvDialogOpen(true);
-      else if (req.target === "qca3d") setXa3dDialogOpen(true);
+      if (req.target === "qlv") setQlvDialogOpen(true);
       else if (req.target === "timi") setTimiDialogOpen(true);
     });
     // ビューアのウィンドウは依頼より後に立ち上がる。保留分を取りに行く。
@@ -1639,11 +1630,11 @@ export function SeriesViewer({
                   />
                   <button
                     style={btn}
-                    data-testid="xa-analysis-open"
-                    onClick={() => setXaDialogOpen(true)}
-                    title={t("xa.analysis.title")}
+                    data-testid="xa-calibration-open"
+                    onClick={() => setCalibDialogOpen(true)}
+                    title={t("xa.calib.dialogTitle")}
                   >
-                    {t("xa.analysis.open")}
+                    {t("xa.calib.open")}
                   </button>
                   {/* 🔴 **QVA のボタンは外してある**（2026-09-01）。理由は `xaTaskCatalog.ts` の
                       同名の注記を読むこと——報告していた「ネック径」が瘤頸ではなく、嚢状動脈瘤を
@@ -1679,28 +1670,6 @@ export function SeriesViewer({
                     title={t("timi.title")}
                   >
                     {t("xa.task.timi")}
-                  </button>
-                  {/* 3D QCA（A6a）。2 方向で 2D QCA を済ませてから開く（§10.2）。 */}
-                  <button
-                    style={btn}
-                    data-testid="xa3d-open"
-                    disabled={qcaRuns.length < 2}
-                    onClick={() => setXa3dDialogOpen(true)}
-                    title={
-                      qcaRuns.length < 2 ? t("xa3d.needRuns") : t("xa3d.title")
-                    }
-                  >
-                    {t("xa3d.open")}
-                  </button>
-                  {/* 分岐部 QCA（A6b）。3 本 × 2 方向ぶんの 2D QCA が要る（§21.4）。 */}
-                  <button
-                    style={btn}
-                    data-testid="xa3dbif-open"
-                    disabled={qcaRuns.length < 2}
-                    onClick={() => setXaBifDialogOpen(true)}
-                    title={qcaRuns.length < 2 ? t("xa3d.needRuns") : t("xa3dbif.title")}
-                  >
-                    {t("xa3dbif.open")}
                   </button>
                   {/* 表示状態（GSPS）の読み込み（§14.1）。書き出しは解析ダイアログ側。 */}
                   <button
@@ -2104,21 +2073,18 @@ export function SeriesViewer({
           onClose={() => setPrDialogOpen(false)}
         />
       )}
-      {xaDialogOpen && displayImageIds[zc] && (
-        <XaAnalysisDialog
+      {calibDialogOpen && displayImageIds[zc] && (
+        <XaCalibrationDialog
           imageId={displayImageIds[zc]}
           seriesUid={seriesUid}
-          isSubtracted={!!dsaToken}
           saveContext={{
             studyUid,
-            // 解析状態の保存先（ROI と同じ患者ごとの JSON。§14.5）。
-            patientKey,
-            // 保存の参照先は**合成 imageId ではなくネイティブフレーム**の元インスタンス。
+            // 保存の参照先は合成 imageId ではなく**ネイティブフレーム**の元インスタンス。
             sopInstanceUid: sopUidFromImageId(zStack[zc] ?? ""),
             frameIndex: zc,
             dsa: dsaState ? { maskFrames: dsaState.maskFrames, dx: dsaState.dx, dy: dsaState.dy } : null,
           }}
-          onClose={() => setXaDialogOpen(false)}
+          onClose={() => setCalibDialogOpen(false)}
           // 校正が変わったら表示（スケールバー・計測ラベル）を作り直す。
           // DSA 中は合成 imageId の版番号、非 DSA でも refreshKey でスタックを初期化し直す。
           onCalibrated={() => {
@@ -2127,8 +2093,6 @@ export function SeriesViewer({
           }}
         />
       )}
-      {xa3dDialogOpen && <Xa3dQcaDialog onClose={() => setXa3dDialogOpen(false)} />}
-      {xaBifDialogOpen && <Xa3dBifurcationDialog onClose={() => setXaBifDialogOpen(false)} />}
       {qlvDialogOpen && displayImageIds.length > 0 && (
         <XaQlvDialog
           imageIds={displayImageIds}

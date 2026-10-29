@@ -33,7 +33,9 @@
  */
 
 import { useSyncExternalStore } from "react";
-import { type QcaDiameterMethod } from "./qca";
+
+/** 径を何で測ったか。数値と輪郭が別方式なので、必ず結果に持ち回る。 */
+export type QcaDiameterMethod = "half-max" | "densitometric";
 
 /** 血管ツリーの 1 区間。分岐部は `parentId` で近位に繋がる。 */
 export interface XaVesselSegment {
