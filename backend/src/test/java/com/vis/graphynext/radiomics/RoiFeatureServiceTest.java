@@ -231,6 +231,46 @@ class RoiFeatureServiceTest {
         assertNull(RadiomicsJ.discretiseImp);
     }
 
+    /**
+     * 保存後に、JSON として読めたまま数字が 1 文字化けたキャッシュは、そのまま返さずに捨てて再計算する。
+     * （ヘッダ・長さの検査だけでは、化けた値が黙って研究の表に入る。）
+     */
+    @Test
+    void aCachedValueThatChangedAfterSaving_isNotReturned_butRecomputed(@TempDir Path dir) throws Exception {
+        FixedEngine engine = new FixedEngine(volume(phantom(), mask(0)));
+        RoiFeatureService svc = service(engine, dir, "t1");
+        RoiFeatureRequest request = req("1.2.9", settings("INT_binCount", "16"), false);
+
+        RoiFeatureResult first = svc.compute(request, p -> { });
+        assertEquals(1, extractions.get());
+        Path ckpt;
+        try (Stream<Path> s = Files.list(dir)) {
+            ckpt = s.filter(p -> p.getFileName().toString().endsWith(".ckpt")).findFirst().orElseThrow();
+        }
+        byte[] raw = Files.readAllBytes(ckpt);
+        // 本体（ヘッダ 16 バイトの後ろ）の "value": の直後の数字を、別の数字にする。JSON としては読めたままになる。
+        String body = new String(raw, 16, raw.length - 16 - 32, java.nio.charset.StandardCharsets.UTF_8);
+        int at = body.indexOf("\"value\":");
+        assertTrue(at >= 0, "本体に値がある");
+        int digit = -1;
+        for (int i = at + 8; i < body.length(); i++) {
+            if (Character.isDigit(body.charAt(i))) { digit = i; break; }
+        }
+        assertTrue(digit >= 0);
+        raw[16 + digit] = (byte) (raw[16 + digit] == '7' ? '3' : '7');
+        Files.write(ckpt, raw);
+
+        RoiFeatureResult second = svc.compute(request, p -> { });
+        assertEquals(2, extractions.get(), "化けたキャッシュは使わず、計算し直す");
+        assertFalse(second.fromCache());
+        assertEquals(values(first), values(second), "値は元の計算と全列で一致する");
+
+        RoiFeatureResult third = svc.compute(request, p -> { });
+        assertEquals(2, extractions.get(), "作り直したキャッシュは使える");
+        assertTrue(third.fromCache());
+        assertEquals(values(first), values(third));
+    }
+
     @Test
     void cacheHit_andWhatInvalidatesIt(@TempDir Path dir) throws Exception {
         FixedEngine engine = new FixedEngine(volume(phantom(), mask(0)));
