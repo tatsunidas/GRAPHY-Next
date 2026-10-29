@@ -753,11 +753,11 @@ async function recenterCheck(page: Page, label: string): Promise<Record<string, 
 }
 
 /**
- * アンカーの A/B 連動（弧長）の確認（FFR_EDITCHECK=async。仮想血管）。
- *  S1 A のアンカー 2 番を動かすと、B の 2 番が、ほかの番号の対応（1 番・3 番の弧長の組）から線形に写した位置（±3 px）へ動き、未確認のまま
+ * アンカーを手で動かしても相手が動かないことの確認（FFR_EDITCHECK=async。仮想血管）。旧版は［A/B で連動］で、B の同番号が弧長の対応で動いた。
+ *  S1 連動がオンでも、A のアンカー 2 番を約 10% ずらすと、B の 2 番は動かない（旧版: 5 px 超動く＝旧 ui.js ではここが落ちる負例）
  *  S2 動かした A の 2 番は確認済み
- *  S3 B の 2 番は、中心線に沿って A と同じ向きへ動く
- *  S4 ★負例: 連動を切ると、A の 2 番を動かしても B の 2 番は動かない
+ *  S3 補助線の基準が動かないので、B の 2 番から引いた線（A の画面）は動かない＝B のアンカーの位置が 0.01 px 以内で不変（S1 と同じ量を、別の見方で）
+ *  S4 連動を切っても同じ（B の 2 番は動かない）
  */
 async function anchorSyncCheck(page: Page, label: string): Promise<Record<string, unknown>> {
   const out: Record<string, unknown> = {};
@@ -782,12 +782,12 @@ async function anchorSyncCheck(page: Page, label: string): Promise<Record<string
   const expected = pointAt(cB, aB, p0.to + t * (p2.to - p0.to));
   const err = Math.hypot(b1[1][0] - expected[0], b1[1][1] - expected[1]);
   const movedB = Math.hypot(b1[1][0] - b0[1][0], b1[1][1] - b0[1][1]);
-  out.s1 = { errPx: +err.toFixed(2), movedBPx: +movedB.toFixed(2), expected, b1: b1[1] };
-  check("[S1] A の 2 番を動かすと、B の 2 番が、ほかの番号の対応から写した位置（±3 px）へ動き、未確認のまま", err <= 3 && movedB > 5 && !b1[1][2], out.s1);
+  const movedA = Math.hypot(a1[1][0] - a0[1][0], a1[1][1] - a0[1][1]);
+  out.s1 = { movedAPx: +movedA.toFixed(2), movedBPx: +movedB.toFixed(4), wouldHaveGoneTo: expected, errIfSyncedPx: +err.toFixed(2) };
+  check("[S1] 連動オンでも、A の 2 番を動かして（5 px 超）、B の 2 番は動かない（0.01 px 以内）", movedA > 5 && movedB < 0.01, out.s1);
   check("[S2] 動かした A の 2 番は確認済み", a1[1][2] === true, { a: a1[1] });
-  const dirA = arcAt(cA, aA, [a1[1][0], a1[1][1]]) - arcAt(cA, aA, [a0[1][0], a0[1][1]]);
-  const dirB = arcAt(cB, aB, [b1[1][0], b1[1][1]]) - arcAt(cB, aB, [b0[1][0], b0[1][1]]);
-  check("[S3] B の 2 番は、中心線に沿って A と同じ向きへ動く", dirA * dirB > 0, { dirA: +dirA.toFixed(1), dirB: +dirB.toFixed(1) });
+  const bAll = b1.every((x, k) => Math.hypot(x[0] - b0[k][0], x[1] - b0[k][1]) < 0.01);
+  check("[S3] B の 3 点とも、位置も確認の有無も変わらない（A のアンカーを動かした前後）", bAll && b1.every((x, k) => x[2] === b0[k][2]), { b0, b1 });
   await page.screenshot({ path: path.join(OUT_DIR, `${label}-async-1-on.png`) });
   // 負例: 連動を切る
   await page.getByTestId("dual-sync").uncheck();
@@ -795,7 +795,7 @@ async function anchorSyncCheck(page: Page, label: string): Promise<Record<string
   await dragAnchor(page, "A", 1, target2);
   const b2 = await anchorsOf(page, "B");
   const a2 = await anchorsOf(page, "A");
-  check("[S4] ★負例: 連動を切ると、A の 2 番を動かしても B の 2 番は動かない", Math.hypot(a2[1][0] - a1[1][0], a2[1][1] - a1[1][1]) > 5 && Math.hypot(b2[1][0] - b1[1][0], b2[1][1] - b1[1][1]) < 0.01, { aMoved: Math.hypot(a2[1][0] - a1[1][0], a2[1][1] - a1[1][1]), bMoved: Math.hypot(b2[1][0] - b1[1][0], b2[1][1] - b1[1][1]) });
+  check("[S4] 連動を切っても、A の 2 番を動かして（5 px 超）B の 2 番は動かない", Math.hypot(a2[1][0] - a1[1][0], a2[1][1] - a1[1][1]) > 5 && Math.hypot(b2[1][0] - b1[1][0], b2[1][1] - b1[1][1]) < 0.01, { aMoved: Math.hypot(a2[1][0] - a1[1][0], a2[1][1] - a1[1][1]), bMoved: Math.hypot(b2[1][0] - b1[1][0], b2[1][1] - b1[1][1]) });
   return out;
 }
 
@@ -927,6 +927,8 @@ async function edgeSyncCheck(page: Page, label: string): Promise<Record<string, 
  *  T2 ⑤（アンカー）: 未確認の間は「0/3」で［次へ］が押せない。★負例: 確認前に押せない
  *  T2b ④（エッジ）が ⑤（アンカー）より前にある（手順の並び）
  *  T3 3 点とも動かして確認すると「3/3」になり、［次へ］が押せる
+ *  T3b 検算用をオンにすると、同じ 3 組で「3/4」になり、［次へ］も［3D に再構成］も無効（数のそろい）。理由の 1 行が出る。4 組目を確認すると「4/4」で、［次へ］も［3D に再構成］も有効
+ *      ★負例: 旧ビルドは「3/3」のまま［次へ］が有効になり、ここが落ちる
  *  T4 ★負例: ［3D に再構成］は ⑥ に進むまで見えず、⑥ では見える
  */
 async function stepsCheck(page: Page, label: string): Promise<Record<string, unknown>> {
@@ -961,6 +963,28 @@ async function stepsCheck(page: Page, label: string): Promise<Record<string, unk
   const l4b = await lbl(5);
   check("[T3] 3 点とも動かして確認すると「3/3」になり、［次へ］が押せる", /3\/3/.test(l4b) && (await next.isEnabled()), { l4b, enabled: await next.isEnabled() });
   await page.screenshot({ path: path.join(OUT_DIR, `${label}-steps-4-anchors-after.png`) });
+  // T3b: 検算用オン（4 組要る）
+  await page.getByTestId("dual-holdout").check();
+  await page.waitForTimeout(300);
+  const l5a = await lbl(5);
+  const info5a = await txt(page, "dual-info");
+  const nextA = await next.isEnabled();
+  await setStep(page, 6);
+  const reconA = await page.getByTestId("dual-recon").isEnabled();
+  await setStep(page, 5);
+  await page.screenshot({ path: path.join(OUT_DIR, `${label}-steps-4b-holdout-3of4.png`) });
+  await page.getByTestId("dual-add-anchor").click();
+  await page.waitForTimeout(500);
+  const a4 = await anchorsOf(page, "A"), b4 = await anchorsOf(page, "B");
+  await dragAnchor(page, "A", 3, [a4[3][0] + 2, a4[3][1] + 2]);
+  await dragAnchor(page, "B", 3, [b4[3][0] + 2, b4[3][1] + 2]);
+  const l5b = await lbl(5);
+  const nextB = await next.isEnabled();
+  await setStep(page, 6);
+  const reconB = await page.getByTestId("dual-recon").isEnabled();
+  await setStep(page, 5);
+  check("[T3b] 検算用オン: 3 組では「3/4」で［次へ］・［3D に再構成］とも無効（理由の 1 行あり）。4 組目で「4/4」になり、どちらも有効", /3\/4/.test(l5a) && !nextA && !reconA && /4 組要ります/.test(info5a) && /4\/4/.test(l5b) && nextB && reconB, { l5a, nextA, reconA, info5a: info5a.slice(-80), l5b, nextB, reconB });
+  await page.getByTestId("dual-holdout").uncheck();
   const reconAt4 = await page.getByTestId("dual-recon").isVisible(); // ⑤ で見えないこと
   await setStep(page, 6);
   const reconAt6 = await page.getByTestId("dual-recon").isVisible();
@@ -1385,11 +1409,13 @@ async function curveCheck(page: Page, label: string): Promise<Record<string, unk
 }
 
 /**
- * ［ガイドに合わせる］の確認（FFR_EDITCHECK=gsnap。仮想血管。連動は切る）。
+ * ［A のアンカーを B に合わせる］［B のアンカーを A に合わせる］の確認（FFR_EDITCHECK=gsnap。仮想血管。連動は切る）。
  *  G0 前提: アンカー 1 番を A の中心線に沿って約 25 点ずらす。ドラッグは取り消しに積まれないので、［元に戻す］は無効
- *  G1 ［ガイドに合わせる］で、ずらす前の位置（B の 1 番から引いた線の交点）の近くへ戻る（ずらした位置より、元の位置に近づく）
+ *  G1 ［A のアンカーを B に合わせる］で、ずらす前の位置（B の 1 番から引いた線の交点）の近くへ戻る（ずらした位置より、元の位置に近づく）
  *  G2 ★取り消しに積まれる: ［元に戻す］が有効になる（積まない版では、G0 のまま無効で落ちる）
  *  G3 ［元に戻す］で、ずらした位置へ戻る（0.5 px 以内）
+ *  G4 ★基準にした B のアンカーは、A を合わせる前後で動かない（0.01 px 以内）
+ *  G5 逆向き: A を元の位置に戻し、B の 1 番を約 25 点ずらして［B のアンカーを A に合わせる］を押すと、B が元の位置の近くへ戻り、A は動かない
  */
 async function gsnapCheck(page: Page, label: string): Promise<Record<string, unknown>> {
   const out: Record<string, unknown> = {};
@@ -1405,21 +1431,40 @@ async function gsnapCheck(page: Page, label: string): Promise<Record<string, unk
   const dragged = (await anchorsOf(page, "A"))[0];
   const undo = page.getByTestId("dual-undo");
   const dist = (p: readonly unknown[], q: readonly unknown[]) => Math.hypot(Number(p[0]) - Number(q[0]), Number(p[1]) - Number(q[1]));
+  const bRef0 = (await anchorsOf(page, "B"))[0];
   out.g0 = { moved: +dist(dragged, a0).toFixed(1), undoDisabled: await undo.isDisabled() };
   check("[G0] 前提: アンカーを約 25 点ずらせた。ドラッグは取り消しに積まれない（［元に戻す］は無効）", dist(dragged, a0) > 5 && (await undo.isDisabled()), out.g0);
 
-  await page.getByTestId("dual-snap").click();
+  await page.getByTestId("dual-snap-A").click();
   await page.waitForTimeout(500);
   const snapped = (await anchorsOf(page, "A"))[0];
   out.g1 = { toOrigBefore: +dist(dragged, a0).toFixed(1), toOrigAfter: +dist(snapped, a0).toFixed(1), movedFromDragged: +dist(snapped, dragged).toFixed(1) };
   await page.screenshot({ path: path.join(OUT_DIR, `${label}-gsnap-1.png`) });
-  check("[G1] ［ガイドに合わせる］で、ずらした位置から動き、元の位置（ガイドの交点）に近づく", dist(snapped, dragged) > 3 && dist(snapped, a0) < dist(dragged, a0), out.g1);
-  check("[G2] ★［ガイドに合わせる］は取り消しに積まれ、［元に戻す］が有効になる", !(await undo.isDisabled()), { undoDisabled: await undo.isDisabled() });
+  check("[G1] ［A のアンカーを B に合わせる］で、ずらした位置から動き、元の位置（ガイドの交点）に近づく", dist(snapped, dragged) > 3 && dist(snapped, a0) < dist(dragged, a0), out.g1);
+  check("[G2] ★合わせる操作は取り消しに積まれ、［元に戻す］が有効になる", !(await undo.isDisabled()), { undoDisabled: await undo.isDisabled() });
   await undo.click();
   await page.waitForTimeout(600);
   const back = (await anchorsOf(page, "A"))[0];
   out.g3 = { backToDraggedPx: +dist(back, dragged).toFixed(2) };
   check("[G3] ［元に戻す］で、アンカーがずらした位置へ戻る（0.5 px 以内）", dist(back, dragged) <= 0.5, out.g3);
+  const bRef1 = (await anchorsOf(page, "B"))[0];
+  check("[G4] ★基準にした B の 1 番は、A を合わせる前後と、取り消しのあとで動かない（0.01 px 以内）", dist(bRef1, bRef0) < 0.01, { moved: +dist(bRef1, bRef0).toFixed(4) });
+
+  // 逆向き: A を元の位置へ戻して基準にし、B をずらして合わせる
+  await dragAnchor(page, "A", 0, [Number(a0[0]), Number(a0[1])]);
+  const aRef0 = (await anchorsOf(page, "A"))[0];
+  const cB: Pt[] = JSON.parse((await page.getByTestId("dual-canvas-B").getAttribute("data-clpts")) ?? "[]");
+  let bj = 0;
+  cB.forEach((q, i) => { if (Math.hypot(q[0] - Number(bRef0[0]), q[1] - Number(bRef0[1])) < Math.hypot(cB[bj][0] - Number(bRef0[0]), cB[bj][1] - Number(bRef0[1]))) bj = i; });
+  await dragAnchor(page, "B", 0, cB[Math.min(cB.length - 2, bj + 25)]);
+  const bDragged = (await anchorsOf(page, "B"))[0];
+  await page.getByTestId("dual-snap-B").click();
+  await page.waitForTimeout(500);
+  const bSnapped = (await anchorsOf(page, "B"))[0];
+  const aRef1 = (await anchorsOf(page, "A"))[0];
+  out.g5 = { toOrigBefore: +dist(bDragged, bRef0).toFixed(1), toOrigAfter: +dist(bSnapped, bRef0).toFixed(1), movedFromDragged: +dist(bSnapped, bDragged).toFixed(1), aMoved: +dist(aRef1, aRef0).toFixed(4) };
+  await page.screenshot({ path: path.join(OUT_DIR, `${label}-gsnap-2.png`) });
+  check("[G5] 逆向き: ［B のアンカーを A に合わせる］で、B がずらした位置から動いて元の位置に近づき、基準の A は動かない", dist(bSnapped, bDragged) > 3 && dist(bSnapped, bRef0) < dist(bDragged, bRef0) && dist(aRef1, aRef0) < 0.01, out.g5);
   return out;
 }
 
@@ -1428,7 +1473,7 @@ async function gsnapCheck(page: Page, label: string): Promise<Record<string, unk
  *  F0 前提: 素直な中心線では、中ほど（両端の 10% を除く）に折り返しは検出されない（検出器の負例）。
  *      両端は対象外: 始点・終点の押し位置が血管の端から少し外れると、先頭の数行が鉤形になり、実際に折り返す（実機で確認。赤い帯が出る）
  *  F1 経由点を 2 つ足し、前の経由点を血管の外へ 28 px ドラッグして、中心線を横へ迂回させる（鋭い V 字） → 中ほどに折り返しの区間が出る
- *  F2 折り返した行のエッジを動かそうとしても、オフセットは変わらず、状態欄に理由が出る
+ *  F2 折り返した行のエッジも動かせて（オフセットが変わる）、状態欄に折り返しの警告が残る（止めない仕様。旧ビルドでは動かず、ここが落ちる）
  *  F3 ★対照: 折り返していない行のエッジは、同じ操作で動く（操作が効いている）
  *  F4 ★負例: 経由点を戻して折り返しが無くなると、F2 と同じ行のエッジが動く（止めていたのは折り返しだけ）
  */
@@ -1507,7 +1552,7 @@ async function foldCheck(page: Page, label: string): Promise<Record<string, unkn
   const st = (await page.getByTestId("dual-status-A").textContent()) ?? "";
   out.blocked = { row, side, ...d2, status: st.slice(0, 160) };
   await page.screenshot({ path: path.join(OUT_DIR, `${label}-fold-2-blocked.png`) });
-  check("[F2] 折り返した行のエッジは動かず（オフセット不変）、状態欄に理由が出る", Math.abs(d2.after - d2.before) < 1e-6 && /折り返/.test(st), out.blocked);
+  check("[F2] 折り返した行のエッジも動き（オフセットが 1 px 超変わる）、状態欄に折り返しの警告が残る", Math.abs(d2.after - d2.before) > 1 && /折り返/.test(st), out.blocked);
 
   const clean = Math.floor(n * 0.15);
   const d3 = await dragEdge(clean, "right");
@@ -1870,7 +1915,7 @@ async function main(): Promise<void> {
         await dragAnchor(viewer, "B", i, targets[i].b);
         await viewer.getByTestId("dual-confirm").click();
         await dragAnchor(viewer, "A", i, targets[i].a);
-        await viewer.getByTestId("dual-snap").click();
+        await viewer.getByTestId("dual-snap-A").click();
         await viewer.waitForTimeout(300);
         const s = (await anchorsOf(viewer, "A"))[i];
         guidedLog.push({ i, roughA: targets[i].a, snappedA: [s[0], s[1]], note: await txt(viewer, "dual-info") });
