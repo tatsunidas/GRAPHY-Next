@@ -34,20 +34,38 @@ const defaultDeps: OpenVesselModel3dDeps = {
   },
 };
 
+/** 開けない理由（英語の短文。プラグインの結果欄にそのまま出る）。開けるなら null。 */
+function blocker(model: XaVesselModel | null): string | null {
+  if (!model) return "no vessel model is registered under this runId";
+  if (model.kind !== "xa-qca3d") return "the 3D view shows a single centerline; bifurcation models are not supported";
+  const points = model.segments[0]?.points;
+  if (!points || points.length < 2) return "the model has fewer than 2 centerline points";
+  return null;
+}
+
 /** @returns 開いたら true。モデルが無い・分岐部・点が足りないときは何もせず false。 */
 export function openVesselModel3d(runId: string, deps: OpenVesselModel3dDeps = defaultDeps): boolean {
   const model = deps.getModel(runId);
-  if (!model || model.kind !== "xa-qca3d") return false;
-  const points = model.segments[0]?.points;
-  if (!points || points.length < 2) return false;
+  if (blocker(model)) return false;
+  const points = model!.segments[0].points;
   deps.writeContext({
     kind: "xa-qca3d",
-    name: model.label,
-    runId: model.runId,
+    name: model!.label,
+    runId: model!.runId,
     centerlineLps: points.map((p) => [p[0], p[1], p[2]]),
   });
   deps.openWindow();
   return true;
+}
+
+/**
+ * H74: プラグインが、登録したモデル（H73）の 3D 画面を開く。開けないときは理由つきで ok: false（黙って何もしない、をしない）。
+ * 色は乗らない（色は H12 `putVesselAnalysis` が成功したときに、同じ画面が受け取る）。
+ */
+export function openVesselModel3dFromPlugin(runId: string, deps: OpenVesselModel3dDeps = defaultDeps): { ok: true } | { ok: false; error: string } {
+  const error = blocker(deps.getModel(runId));
+  if (error) return { ok: false, error };
+  return openVesselModel3d(runId, deps) ? { ok: true } : { ok: false, error: "could not open the 3D view" };
 }
 
 /** H12 の戻りが成功のときだけ開く（失敗では開かない）。プラグインへ返す値はそのまま通す。 */

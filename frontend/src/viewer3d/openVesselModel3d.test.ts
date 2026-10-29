@@ -9,7 +9,7 @@
  */
 import { describe, expect, it } from "vitest";
 import type { XaVesselModel } from "../viewer/xaVesselModelStore";
-import { openAfterAnalysisPut, openVesselModel3d, type OpenVesselModel3dDeps } from "./openVesselModel3d";
+import { openAfterAnalysisPut, openVesselModel3d, openVesselModel3dFromPlugin, type OpenVesselModel3dDeps } from "./openVesselModel3d";
 
 function model(over: Partial<XaVesselModel> = {}): XaVesselModel {
   return {
@@ -89,5 +89,36 @@ describe("openAfterAnalysisPut", () => {
     const r = { ok: false as const, error: "壊れた入力" };
     expect(openAfterAnalysisPut(r, "run-1", deps)).toBe(r);
     expect(calls).toEqual({ ctx: [], opened: 0 });
+  });
+});
+
+describe("openVesselModel3dFromPlugin（H74）", () => {
+  it("正例: 登録したモデルを開き、ok: true。色は乗せない（コンテキストは中心線と runId だけ）", () => {
+    const { calls, deps } = harness([model()]);
+    expect(openVesselModel3dFromPlugin("run-1", deps)).toEqual({ ok: true });
+    expect(calls.opened).toBe(1);
+    expect(calls.ctx).toHaveLength(1);
+  });
+
+  it("負例: 登録簿に無い runId は、開かず・理由つき", () => {
+    const { calls, deps } = harness([model()]);
+    const r = openVesselModel3dFromPlugin("no-such-run", deps);
+    expect(r.ok).toBe(false);
+    expect(r.ok === false && r.error).toMatch(/no vessel model/);
+    expect(calls).toEqual({ ctx: [], opened: 0 });
+  });
+
+  it("負例: 分岐部のモデルは、開かず・理由つき（理由が他と区別できる）", () => {
+    const { calls, deps } = harness([model({ kind: "xa-bifurcation3d" })]);
+    const r = openVesselModel3dFromPlugin("run-1", deps);
+    expect(r.ok === false && r.error).toMatch(/bifurcation/);
+    expect(calls).toEqual({ ctx: [], opened: 0 });
+  });
+
+  it("負例: 中心線が 2 点未満は、開かず・理由つき", () => {
+    const { calls, deps } = harness([model({ segments: [{ id: "main", points: [[0, 0, 0]], diameterMm: [3], parentId: null }] })]);
+    const r = openVesselModel3dFromPlugin("run-1", deps);
+    expect(r.ok === false && r.error).toMatch(/fewer than 2/);
+    expect(calls.opened).toBe(0);
   });
 });

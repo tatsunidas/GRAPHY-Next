@@ -801,6 +801,12 @@ export interface Viewer2DPluginHost extends PluginHostBase {
    */
   registerVesselModel: (model: XaVesselModelInput) => RegisterVesselModelResult;
   /**
+   * **登録した 3D 血管モデルの 3D 画面（`#geometry3d`）を開く**（H74。開いていれば前面に出て、中身が差し替わる）。
+   * `runId` は `registerVesselModel` の戻り。色は乗らない（色は `putVesselAnalysis` が成功したときに、同じ画面へ乗る）。
+   * 🔴 開けないときは理由つきで `ok: false`（モデルが無い・分岐部モデル・中心線が 2 点未満）。何もせず成功を返さない。
+   */
+  openVesselModel3d: (runId: string) => { ok: true } | { ok: false; error: string };
+  /**
    * 処理結果（値マップ）を対象タイルの**表示中スライスへ重ねて見せる**（H4a）。
    * `tileId` 省略時は対象の先頭タイル。rows/cols が現在スライスと不一致なら false。
    *

@@ -63,6 +63,7 @@ export const HOST_EFFECTS: Record<HostKey, ToolEffect> = {
   mountVolumeView: "display",
   mountSeriesPanel: "display",
   openCurvedMpr: "display",
+  openVesselModel3d: "display",
   // データを書く・外へ出す・外部を動かす
   setRoiMeta: "write",
   createRoi: "write",
