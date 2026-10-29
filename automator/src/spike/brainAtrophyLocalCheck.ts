@@ -170,6 +170,58 @@ async function main(): Promise<void> {
     check(srcLen > 50_000, "レポート HTML が iframe に入っている（自己完結の大きさ）", srcLen);
     await viewer.screenshot({ path: path.join(OUT_DIR, "d-result.png"), fullPage: false });
 
+    console.log("\n[D2] 処理の確認（段ごとの画像）");
+    await viewer.getByTestId("ba-tab-stages").click();
+    await viewer.getByTestId("ba-stage-btn-input").waitFor({ state: "visible", timeout: 60_000 });
+    try {
+      await viewer.waitForFunction(() => !!(window as unknown as { __brainAtrophyState: { stageView?: { stage?: string } } }).__brainAtrophyState.stageView?.stage, null, { timeout: 60_000 });
+    } catch (e) {
+      const dump = await viewer.evaluate(() => ({ sv: (window as unknown as { __brainAtrophyState: { stageView?: { error?: string } } }).__brainAtrophyState.stageView?.error, status: document.querySelector('[data-testid="ba-stage-status"]')?.textContent }));
+      await viewer.screenshot({ path: path.join(OUT_DIR, "stage-timeout.png") });
+      throw new Error(`段の確認が開かない: ${JSON.stringify(dump)} / ${(e as Error).message}`);
+    }
+    for (const id of ["input", "brain", "n4", "register", "segment", "zscore"]) {
+      await viewer.getByTestId(`ba-stage-btn-${id}`).click();
+      await viewer.waitForFunction((want) => (window as unknown as { __brainAtrophyState: { stageView: { stage: string } } }).__brainAtrophyState.stageView.stage === want, id, { timeout: 60_000 });
+      const sizes = await viewer.evaluate(() => (["axial", "coronal", "sagittal"] as const).map((p) => {
+        const c = document.querySelector(`[data-testid="ba-view-${p}"]`) as HTMLCanvasElement;
+        const r = c.getBoundingClientRect();
+        const ctx = c.getContext("2d")!;
+        const d = ctx.getImageData(0, 0, c.width, c.height).data;
+        let lit = 0;
+        for (let i = 0; i < d.length; i += 4) if (d[i] + d[i + 1] + d[i + 2] > 30) lit++;
+        return { plane: p, px: [c.width, c.height], css: [Math.round(r.width), Math.round(r.height)], lit: lit / (c.width * c.height) };
+      }));
+      console.log(`  ${id}: ${JSON.stringify(sizes)}`);
+      check(sizes.every((z) => z.lit > 0.02), `段 ${id}: 3 断面とも描かれている（点灯画素 > 2%）`, sizes);
+      await viewer.getByTestId("ba-pane-stages").scrollIntoViewIfNeeded();
+      await viewer.screenshot({ path: path.join(OUT_DIR, `stage-${id}.png`) });
+    }
+    await viewer.getByTestId("ba-stage-btn-input").click();
+    await viewer.waitForFunction(() => (window as unknown as { __brainAtrophyState: { stageView: { stage: string } } }).__brainAtrophyState.stageView.stage === "input", null, { timeout: 30_000 });
+    const axialAspect = await viewer.evaluate(() => { const c = document.querySelector('[data-testid="ba-view-axial"]') as HTMLCanvasElement; const r = c.getBoundingClientRect(); return { px: c.width / c.height, css: r.width / r.height }; });
+    // 入力の格子は 150×256 画素（R 1.2 mm・A 0.94 mm）。mm の比なら 画面の 幅/高さ ≒ 150*1.2/(256*0.94) = 0.748、正方画素なら 0.586
+    check(Math.abs(axialAspect.css - 0.748) < 0.03 && Math.abs(axialAspect.px - 0.586) < 0.01, "非等方の入力は mm の比で描かれる（画面 0.748・画素数の比 0.586 ではない）", axialAspect);
+    await viewer.getByTestId("ba-stage-ok").click();
+    check((((await viewer.getByTestId("ba-stage-summary").textContent()) ?? "").includes("確認した 1／6")), "［確認した］で集計が更新される");
+
+    console.log("\n[D3] 保存ボタン（HTML・PDF）");
+    const saveDir = path.join(OUT_DIR, "saved");
+    fs.rmSync(saveDir, { recursive: true, force: true });
+    fs.mkdirSync(saveDir, { recursive: true });
+    await driver.app.evaluate(({ dialog }, dir) => {
+      dialog.showSaveDialog = (async (_w: unknown, o: { defaultPath?: string }) => ({ canceled: false, filePath: `${dir}/${String(o?.defaultPath ?? "out").split("/").pop()}` })) as unknown as typeof dialog.showSaveDialog;
+    }, saveDir);
+    await viewer.getByTestId("ba-tab-report").click();
+    await viewer.getByTestId("ba-save-html").click();
+    await viewer.getByTestId("ba-save-pdf").click();
+    await viewer.waitForFunction(() => !!(window as unknown as { __brainAtrophyState: { saved?: unknown } }).__brainAtrophyState.saved, null, { timeout: 20_000 }).catch(() => undefined);
+    await viewer.waitForTimeout(1500);
+    const htmlSaved = path.join(saveDir, "brain-atrophy-report.html");
+    const pdfSaved = path.join(saveDir, "brain-atrophy-report.pdf");
+    check(fs.existsSync(htmlSaved) && /^<!doctype html>/i.test(fs.readFileSync(htmlSaved, "utf8").slice(0, 40)) && fs.statSync(htmlSaved).size > 50_000, "HTML を保存でき、中身はレポート（doctype・十分な大きさ）", fs.existsSync(htmlSaved) ? fs.statSync(htmlSaved).size : "なし");
+    check(fs.existsSync(pdfSaved) && fs.readFileSync(pdfSaved).subarray(0, 5).toString() === "%PDF-" && fs.statSync(pdfSaved).size > 100_000, "PDF を保存でき、中身は PDF（%PDF-・十分な大きさ）", fs.existsSync(pdfSaved) ? fs.statSync(pdfSaved).size : "なし");
+
     console.log("\n[E] 監査");
     const events = fs.readFileSync(AUDIT, "utf8").trim().split("\n").map((l) => JSON.parse(l) as { event: string; endpointKind?: string; host?: string; outcome?: string });
     const reqs = events.filter((e) => e.event === "egress-requested");
