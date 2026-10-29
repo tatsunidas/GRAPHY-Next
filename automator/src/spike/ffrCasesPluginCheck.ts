@@ -628,6 +628,10 @@ async function resizeCheck(page: Page, label: string): Promise<Record<string, un
   out.layout0 = await lay();
   const d0 = await dim();
   await page.screenshot({ path: path.join(OUT_DIR, `${label}-resize-0-initial.png`) });
+  // 画面の 1 辺は窓の幅で決まる: 期待 = max(240, min((幅 − 36) / 2, max(320, 高さ − 32)))。上の道具の高さには左右されない（以前は 320 px に張り付いた）。
+  const lay0 = out.layout0 as { w: number; h: number; size: number } | null;
+  const expect0 = lay0 ? Math.max(240, Math.min(Math.floor((lay0.w - 36) / 2), Math.max(320, Math.floor(lay0.h - 32)))) : -1;
+  check("[R6] 初期の窓で、画面の 1 辺は窓の幅で決まった値になり、320 px に張り付かない", !!lay0 && lay0.size === expect0 && (lay0.w < 800 || lay0.size > 330), { lay0, expect0 });
   await setWin(560, 640);
   const d1 = await dim();
   await page.screenshot({ path: path.join(OUT_DIR, `${label}-resize-1-small.png`) });
@@ -1256,6 +1260,276 @@ async function dragAnchor(page: Page, key: string, i: number, target: Pt): Promi
   await page.waitForTimeout(200);
 }
 
+/**
+ * 蛇行した仮想血管（~/graphy_sample_images/virtual-vessel-snake。FFR_VV_DIR で向ける）の、曲がりでのエッジ編集の確認（FFR_EDITCHECK=curve。方向 A）。
+ *  C0 前提: 画面の中心線の最小の曲がり半径が、真値の投影の曲がり半径と 25% 以内で合う（うねりが画面に出ている）
+ *  C1 一番きつい曲がりで「なぞる」: 右のエッジの 3 px 内側の線 → 曲がりの中ほど（±6 行）のオフセットが目標の 1 px 以内
+ *  C2 曲がりのすぐ外で「点を動かす」: 目標（3 px 内側）の 1 px 以内で、符号（右 > 0）を保つ
+ *  C3（記録のみ）折り返し（data-folds）の中ほどの数。予想は 0（曲がり半径 ÷ 半幅 ≒ 1）。合否にしない
+ *  C4 ★負例: 血管から 40 px 離れた線をなぞっても、置き換わる行は 0（オフセット不変）
+ */
+async function curveCheck(page: Page, label: string): Promise<Record<string, unknown>> {
+  const out: Record<string, unknown> = {};
+  const cv = page.getByTestId("dual-canvas-A");
+  const attr = async (n: string) => JSON.parse((await cv.getAttribute(`data-${n}`)) ?? "null");
+  const cl: Pt[] = await attr("clpts");
+  const radiusAt = (c: Pt[], i: number, h = 4): number => {
+    const a = c[Math.max(0, i - h)], b = c[i], d = c[Math.min(c.length - 1, i + h)];
+    const abx = b[0] - a[0], aby = b[1] - a[1], bdx = d[0] - b[0], bdy = d[1] - b[1];
+    const cross = Math.abs(abx * bdy - aby * bdx);
+    const la = Math.hypot(abx, aby), lb = Math.hypot(bdx, bdy), lc = Math.hypot(d[0] - a[0], d[1] - a[1]);
+    return cross < 1e-9 ? Infinity : (la * lb * lc) / (2 * cross); // 3 点を通る円の半径
+  };
+  const n = cl.length;
+  let kb = Math.floor(n * 0.1);
+  let rmin = Infinity;
+  for (let i = Math.floor(n * 0.1); i < Math.floor(n * 0.9); i++) {
+    const r = radiusAt(cl, i);
+    if (r < rmin) { rmin = r; kb = i; }
+  }
+  const truth = JSON.parse(fs.readFileSync(path.join(VV_DIR, "truth.json"), "utf8")).views.Case1_A.centerlinePx as Pt[];
+  let tmin = Infinity;
+  for (let i = Math.floor(truth.length * 0.1); i < Math.floor(truth.length * 0.9); i += 2) tmin = Math.min(tmin, radiusAt(truth, i, 8));
+  out.c0 = { screenMinRadiusPx: +rmin.toFixed(1), truthMinRadiusPx: +tmin.toFixed(1), row: kb, rows: n };
+  check("[C0] 前提: 画面の中心線の最小の曲がり半径が、真値の投影と 25% 以内で合う（うねりが出ている）", Math.abs(rmin - tmin) / tmin <= 0.25, out.c0);
+
+  await setMode(page, "edge");
+  const snap = page.getByTestId("dual-snap-edge");
+  if (await snap.count()) await snap.uncheck();
+  const rc = page.getByTestId("dual-auto-recenter");
+  if (await rc.count()) await rc.uncheck();
+  const toolSel = page.getByTestId("dual-edge-tool");
+  const rows = async () => ({ pts: (await attr("edgepts")) as number[][], off: (await attr("edgeoffsets")) as number[][] });
+  const normalOf = (pts: number[][], i: number): Pt => {
+    const l = Math.hypot(pts[i][2] - pts[i][0], pts[i][3] - pts[i][1]) || 1;
+    return [(pts[i][2] - pts[i][0]) / l, (pts[i][3] - pts[i][1]) / l];
+  };
+  const atOff = (pts: number[][], i: number, d: number): Pt => {
+    const c: Pt = [(pts[i][0] + pts[i][2]) / 2, (pts[i][1] + pts[i][3]) / 2];
+    const nm = normalOf(pts, i);
+    // 中心線の点そのものは edgepts に無いので、左右の点から、オフセット（左 < 0 < 右）の基準点を戻す
+    return [c[0] + nm[0] * d, c[1] + nm[1] * d];
+  };
+
+  // C1: なぞる
+  await toolSel.selectOption("trace");
+  const r0 = await rows();
+  const lo = Math.max(2, kb - 10), hi = Math.min(n - 3, kb + 10);
+  const target = (i: number) => Math.max(1, r0.off[i][1] - 3);
+  const line: Pt[] = [];
+  for (let i = lo; i <= hi; i++) {
+    const c: Pt = cl[i];
+    const nm = normalOf(r0.pts, i);
+    line.push([c[0] + nm[0] * target(i), c[1] + nm[1] * target(i)]);
+  }
+  const drawLine = async (pts: Pt[]) => {
+    const first = await toClient(page, "A", pts[0]);
+    await page.mouse.move(first.x, first.y);
+    await page.mouse.down();
+    for (const p of pts.slice(1)) {
+      const c = await toClient(page, "A", p);
+      await page.mouse.move(c.x, c.y, { steps: 2 });
+    }
+    await page.mouse.up();
+    await page.waitForTimeout(500);
+  };
+  await drawLine(line);
+  const r1 = await rows();
+  let replaced = 0;
+  for (let i = lo; i <= hi; i++) if (Math.abs(r1.off[i][1] - r0.off[i][1]) > 0.05) replaced++;
+  const errs: number[] = [];
+  for (let i = kb - 6; i <= kb + 6; i++) errs.push(Math.abs(r1.off[i][1] - target(i)));
+  out.c1 = { replaced, of: hi - lo + 1, maxErrPx: +Math.max(...errs).toFixed(2), medianErrPx: +errs.sort((a, b) => a - b)[Math.floor(errs.length / 2)].toFixed(2), leftMoved: r1.off.some((o, i) => Math.abs(o[0] - r0.off[i][0]) > 0.05) };
+  await page.screenshot({ path: path.join(OUT_DIR, `${label}-curve-1-trace.png`) });
+  check("[C1] 一番きつい曲がりでなぞると、置き換わり、曲がりの中ほど（±6 行）のオフセットが目標の 1 px 以内（左は動かない）", replaced > 0 && Math.max(...errs) <= 1 && !(out.c1 as { leftMoved: boolean }).leftMoved, out.c1);
+
+  // C2: 点を動かす（曲がりのすぐ外）
+  await toolSel.selectOption("drag");
+  const kd = Math.min(n - 4, hi + 6);
+  const r2 = await rows();
+  const want = Math.max(1, r2.off[kd][1] - 3);
+  const from: Pt = [r2.pts[kd][2], r2.pts[kd][3]];
+  const nm = normalOf(r2.pts, kd);
+  const to: Pt = [from[0] + nm[0] * (want - r2.off[kd][1]), from[1] + nm[1] * (want - r2.off[kd][1])];
+  const a = await toClient(page, "A", from);
+  const b = await toClient(page, "A", to);
+  await page.mouse.move(a.x, a.y);
+  await page.mouse.down();
+  await page.mouse.move((a.x + b.x) / 2, (a.y + b.y) / 2, { steps: 3 });
+  await page.mouse.move(b.x, b.y, { steps: 3 });
+  await page.mouse.up();
+  await page.waitForTimeout(500);
+  const r3 = await rows();
+  out.c2 = { row: kd, before: +r2.off[kd][1].toFixed(2), want: +want.toFixed(2), after: +r3.off[kd][1].toFixed(2) };
+  check("[C2] 曲がりのすぐ外で点を動かすと、目標（3 px 内側）の 1 px 以内に動き、符号（右 > 0）を保つ", Math.abs(r3.off[kd][1] - want) <= 1 && r3.off[kd][1] > 0, out.c2);
+
+  // C3: 折り返し（記録のみ）
+  const folds = (await attr("folds")) ?? {};
+  out.c3 = folds;
+  log("[C3] 折り返し（記録のみ。予想は 0）", JSON.stringify(folds));
+
+  // C4: 負例（遠い線）
+  await toolSel.selectOption("trace");
+  const r4 = await rows();
+  const far: Pt[] = [];
+  for (let i = lo; i <= hi; i++) {
+    const nm4 = normalOf(r4.pts, i);
+    far.push([cl[i][0] + nm4[0] * 40, cl[i][1] + nm4[1] * 40]);
+  }
+  await drawLine(far);
+  const r5 = await rows();
+  const changed = r5.off.filter((o, i) => Math.abs(o[1] - r4.off[i][1]) > 0.05 || Math.abs(o[0] - r4.off[i][0]) > 0.05).length;
+  out.c4 = { changed };
+  check("[C4] ★負例: 血管から 40 px 離れた線をなぞっても、置き換わる行は 0", changed === 0, out.c4);
+  return out;
+}
+
+/**
+ * ［ガイドに合わせる］の確認（FFR_EDITCHECK=gsnap。仮想血管。連動は切る）。
+ *  G0 前提: アンカー 1 番を A の中心線に沿って約 25 点ずらす。ドラッグは取り消しに積まれないので、［元に戻す］は無効
+ *  G1 ［ガイドに合わせる］で、ずらす前の位置（B の 1 番から引いた線の交点）の近くへ戻る（ずらした位置より、元の位置に近づく）
+ *  G2 ★取り消しに積まれる: ［元に戻す］が有効になる（積まない版では、G0 のまま無効で落ちる）
+ *  G3 ［元に戻す］で、ずらした位置へ戻る（0.5 px 以内）
+ */
+async function gsnapCheck(page: Page, label: string): Promise<Record<string, unknown>> {
+  const out: Record<string, unknown> = {};
+  await setStep(page, 5);
+  const sync = page.getByTestId("dual-sync");
+  if (await sync.count()) await sync.uncheck();
+  const cA: Pt[] = JSON.parse((await page.getByTestId("dual-canvas-A").getAttribute("data-clpts")) ?? "[]");
+  const a0 = (await anchorsOf(page, "A"))[0];
+  let bi = 0;
+  cA.forEach((q, i) => { if (Math.hypot(q[0] - a0[0], q[1] - a0[1]) < Math.hypot(cA[bi][0] - a0[0], cA[bi][1] - a0[1])) bi = i; });
+  const target = cA[Math.min(cA.length - 2, bi + 25)];
+  await dragAnchor(page, "A", 0, target);
+  const dragged = (await anchorsOf(page, "A"))[0];
+  const undo = page.getByTestId("dual-undo");
+  const dist = (p: readonly unknown[], q: readonly unknown[]) => Math.hypot(Number(p[0]) - Number(q[0]), Number(p[1]) - Number(q[1]));
+  out.g0 = { moved: +dist(dragged, a0).toFixed(1), undoDisabled: await undo.isDisabled() };
+  check("[G0] 前提: アンカーを約 25 点ずらせた。ドラッグは取り消しに積まれない（［元に戻す］は無効）", dist(dragged, a0) > 5 && (await undo.isDisabled()), out.g0);
+
+  await page.getByTestId("dual-snap").click();
+  await page.waitForTimeout(500);
+  const snapped = (await anchorsOf(page, "A"))[0];
+  out.g1 = { toOrigBefore: +dist(dragged, a0).toFixed(1), toOrigAfter: +dist(snapped, a0).toFixed(1), movedFromDragged: +dist(snapped, dragged).toFixed(1) };
+  await page.screenshot({ path: path.join(OUT_DIR, `${label}-gsnap-1.png`) });
+  check("[G1] ［ガイドに合わせる］で、ずらした位置から動き、元の位置（ガイドの交点）に近づく", dist(snapped, dragged) > 3 && dist(snapped, a0) < dist(dragged, a0), out.g1);
+  check("[G2] ★［ガイドに合わせる］は取り消しに積まれ、［元に戻す］が有効になる", !(await undo.isDisabled()), { undoDisabled: await undo.isDisabled() });
+  await undo.click();
+  await page.waitForTimeout(600);
+  const back = (await anchorsOf(page, "A"))[0];
+  out.g3 = { backToDraggedPx: +dist(back, dragged).toFixed(2) };
+  check("[G3] ［元に戻す］で、アンカーがずらした位置へ戻る（0.5 px 以内）", dist(back, dragged) <= 0.5, out.g3);
+  return out;
+}
+
+/**
+ * 折り返し（中心線が行き来する所）の検出・表示・編集の停止の確認（FFR_EDITCHECK=fold。仮想血管の方向 A。連動は切る）。
+ *  F0 前提: 素直な中心線では、中ほど（両端の 10% を除く）に折り返しは検出されない（検出器の負例）。
+ *      両端は対象外: 始点・終点の押し位置が血管の端から少し外れると、先頭の数行が鉤形になり、実際に折り返す（実機で確認。赤い帯が出る）
+ *  F1 経由点を 2 つ足し、前の経由点を血管の外へ 28 px ドラッグして、中心線を横へ迂回させる（鋭い V 字） → 中ほどに折り返しの区間が出る
+ *  F2 折り返した行のエッジを動かそうとしても、オフセットは変わらず、状態欄に理由が出る
+ *  F3 ★対照: 折り返していない行のエッジは、同じ操作で動く（操作が効いている）
+ *  F4 ★負例: 経由点を戻して折り返しが無くなると、F2 と同じ行のエッジが動く（止めていたのは折り返しだけ）
+ */
+async function foldCheck(page: Page, label: string): Promise<Record<string, unknown>> {
+  const out: Record<string, unknown> = {};
+  const cv = page.getByTestId("dual-canvas-A");
+  const attr = async (n: string) => JSON.parse((await cv.getAttribute(`data-${n}`)) ?? "null");
+  const folds = async (): Promise<{ left?: [number, number][]; right?: [number, number][] }> => (await attr("folds")) ?? {};
+  const nFold = (f: { left?: [number, number][]; right?: [number, number][] }) => (f.left?.length ?? 0) + (f.right?.length ?? 0);
+  const clA: Pt[] = await attr("clpts");
+  const n = clA.length;
+
+  const rowsN = ((await attr("edgepts")) as number[][]).length;
+  const inner = (f: { left?: [number, number][]; right?: [number, number][] }) => ({ left: (f.left ?? []).filter(([a, b]) => a >= rowsN * 0.1 && b <= rowsN * 0.9), right: (f.right ?? []).filter(([a, b]) => a >= rowsN * 0.1 && b <= rowsN * 0.9) });
+  const f0 = await folds();
+  out.baseline = f0;
+  check("[F0] 前提: 素直な中心線では、中ほどに折り返しは検出されない", nFold(inner(f0)) === 0, { all: f0, rows: rowsN });
+
+  await setMode(page, "waypoint");
+  const sync = page.getByTestId("dual-sync");
+  if (await sync.count()) await sync.uncheck();
+  for (const f of [0.45, 0.55]) {
+    const c = await toClient(page, "A", clA[Math.floor(n * f)]);
+    await page.mouse.click(c.x, c.y);
+    await page.waitForTimeout(500);
+  }
+  const w0: Pt[] = (await attr("waypoints")) ?? [];
+  const from = await toClient(page, "A", w0[0]);
+  // 中心線に垂直な向きへ 28 px（画像 px）。
+  const k0 = Math.floor(n * 0.45);
+  const tg: Pt = [clA[k0 + 3][0] - clA[k0 - 3][0], clA[k0 + 3][1] - clA[k0 - 3][1]];
+  const tl = Math.hypot(tg[0], tg[1]) || 1;
+  const to = await toClient(page, "A", [w0[0][0] - (tg[1] / tl) * 28, w0[0][1] + (tg[0] / tl) * 28]);
+  await page.mouse.move(from.x, from.y);
+  await page.mouse.down();
+  for (let i = 1; i <= 12; i++) await page.mouse.move(from.x + ((to.x - from.x) * i) / 12, from.y + ((to.y - from.y) * i) / 12);
+  await page.mouse.up();
+  await page.waitForTimeout(800);
+  const f1 = inner(await folds());
+  out.folds = f1;
+  await page.screenshot({ path: path.join(OUT_DIR, `${label}-fold-1-detected.png`) });
+  check("[F1] 経由点を行き来させると、折り返しの区間が検出される（data-folds）", w0.length === 2 && nFold(f1) > 0, { waypoints: w0.length, folds: f1 });
+
+  // エッジの編集（点を動かす）。吸着・寄せ直しは切る（オフセットだけを見る）。
+  await setMode(page, "edge");
+  const snap = page.getByTestId("dual-snap-edge");
+  if (await snap.count()) await snap.uncheck();
+  const rc = page.getByTestId("dual-auto-recenter");
+  if (await rc.count()) await rc.uncheck();
+  await page.getByTestId("dual-edge-tool").selectOption("drag");
+  const dragEdge = async (row: number, side: "left" | "right"): Promise<{ before: number; after: number }> => {
+    const pts: number[][] = await attr("edgepts");
+    const off0: number[][] = await attr("edgeoffsets");
+    const q = side === "left" ? [pts[row][0], pts[row][1]] : [pts[row][2], pts[row][3]];
+    const s: Pt = [q[0], q[1]];
+    const cl: Pt = clOf(row, pts);
+    const dx = s[0] - cl[0], dy = s[1] - cl[1];
+    const l = Math.hypot(dx, dy) || 1;
+    const t: Pt = [s[0] + (dx / l) * 3, s[1] + (dy / l) * 3];
+    const a = await toClient(page, "A", s);
+    const b = await toClient(page, "A", t);
+    await page.mouse.move(a.x, a.y);
+    await page.mouse.down();
+    for (let i = 1; i <= 8; i++) await page.mouse.move(a.x + ((b.x - a.x) * i) / 8, a.y + ((b.y - a.y) * i) / 8);
+    await page.mouse.up();
+    await page.waitForTimeout(500);
+    const off1: number[][] = await attr("edgeoffsets");
+    return { before: off0[row][side === "left" ? 0 : 1], after: off1[row][side === "left" ? 0 : 1] };
+  };
+  const clOf = (row: number, pts: number[][]): Pt => [(pts[row][0] + pts[row][2]) / 2, (pts[row][1] + pts[row][3]) / 2];
+
+  const run = f1.right?.[0] ?? f1.left?.[0];
+  const side: "left" | "right" = f1.right?.length ? "right" : "left";
+  const row = run ? Math.floor((run[0] + run[1]) / 2) : 0;
+  const d2 = await dragEdge(row, side);
+  const st = (await page.getByTestId("dual-status-A").textContent()) ?? "";
+  out.blocked = { row, side, ...d2, status: st.slice(0, 160) };
+  await page.screenshot({ path: path.join(OUT_DIR, `${label}-fold-2-blocked.png`) });
+  check("[F2] 折り返した行のエッジは動かず（オフセット不変）、状態欄に理由が出る", Math.abs(d2.after - d2.before) < 1e-6 && /折り返/.test(st), out.blocked);
+
+  const clean = Math.floor(n * 0.15);
+  const d3 = await dragEdge(clean, "right");
+  out.clean = { row: clean, ...d3 };
+  check("[F3] ★対照: 折り返していない行のエッジは、同じ操作で動く", Math.abs(d3.after - d3.before) > 1, out.clean);
+
+  // 経由点を消して折り返しを無くす → 同じ行が動く
+  await setMode(page, "waypoint");
+  for (const w of ((await attr("waypoints")) ?? []) as Pt[]) {
+    const c = await toClient(page, "A", w);
+    await page.mouse.click(c.x, c.y, { button: "right" });
+    await page.waitForTimeout(500);
+  }
+  await setMode(page, "edge");
+  const nf = nFold(inner(await folds()));
+  const d4 = await dragEdge(Math.floor(n * 0.5), side);
+  out.afterRemove = { folds: nf, ...d4 };
+  check("[F4] ★負例: 経由点を戻して折り返しが無くなると、同じ辺りのエッジが動く", nf === 0 && Math.abs(d4.after - d4.before) > 1, out.afterRemove);
+  await page.screenshot({ path: path.join(OUT_DIR, `${label}-fold-3-cleared.png`) });
+  return out;
+}
+
 async function setFrame(page: Page, key: string, frame: number): Promise<void> {
   await page.evaluate(
     `(() => { const el = document.querySelector('[data-testid="dual-frame-${key}"]'); const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set; set.call(el, '${frame}'); el.dispatchEvent(new Event('input', { bubbles: true })); })()`,
@@ -1561,6 +1835,9 @@ async function main(): Promise<void> {
         : process.env.FFR_EDITCHECK === "propose" ? await proposeCheck(viewer, spec)
         : process.env.FFR_EDITCHECK === "cands" ? await candsCheck(viewer, spec)
         : process.env.FFR_EDITCHECK === "imgtools" ? await imgToolsCheck(viewer, spec.label)
+        : process.env.FFR_EDITCHECK === "fold" ? await foldCheck(viewer, spec.label)
+        : process.env.FFR_EDITCHECK === "gsnap" ? await gsnapCheck(viewer, spec.label)
+        : process.env.FFR_EDITCHECK === "curve" ? await curveCheck(viewer, spec.label)
         : await editCheck(viewer, spec.label);
       fs.writeFileSync(path.join(OUT_DIR, `${spec.label}.json`), JSON.stringify({ ...report, checks: results }, null, 1));
       return;
