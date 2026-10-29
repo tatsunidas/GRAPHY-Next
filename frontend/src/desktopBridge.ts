@@ -540,20 +540,21 @@ export interface GraphyDesktop {
   assistantRequestLogSummary?: () => Promise<{
     ok: boolean;
     count?: number;
-    byModel?: { provider: string | null; model: string | null; requests: number; tokensIn: number; tokensOut: number; unknownUsage: number }[];
+    byModel?: { provider: string | null; model: string | null; requests: number; tokensIn: number; tokensOut: number; unknownUsage: number; latency: { n: number; p50: number; p95: number } | null }[];
     recent?: Record<string, unknown>[];
     error?: string;
   }>;
   assistantRequestLogClear?: () => Promise<{ ok: boolean; error?: string }>;
   /** 回帰評価の結果の保存と一覧（質問 id と一致/不一致だけ。本文は保存しない）。アシスタント窓だけ。 */
   assistantEvalAppend?: (run: {
+    suite: "basic" | "basic-b" | "plugin-pos";
     suiteVersion: number;
     meta: { provider: string | null; modelId: string | null; modelVersion: string | null };
-    cases: { id: string; pass: boolean }[];
+    cases: { id: string; pass: boolean; passes: number; n: number; latencyMs?: number }[];
   }) => Promise<{ ok: boolean; error?: string }>;
   assistantEvalList?: () => Promise<{
     ok: boolean;
-    runs?: { ts: string; suiteVersion: number; provider: string | null; modelId: string | null; modelVersion: string | null; total: number; passed: number; cases: { id: string; pass: boolean }[] }[];
+    runs?: { ts: string; suite: "basic" | "basic-b" | "plugin-pos"; suiteVersion: number; provider: string | null; modelId: string | null; modelVersion: string | null; total: number; passed: number; totalLatencyMs: number | null; cases: { id: string; pass: boolean; passes: number; n: number; latencyMs?: number }[] }[];
     error?: string;
   }>;
   assistantMacrosList?: () => Promise<{ ok: boolean; macros?: import("./assistant/macros/macroModel").Macro[]; error?: string }>;

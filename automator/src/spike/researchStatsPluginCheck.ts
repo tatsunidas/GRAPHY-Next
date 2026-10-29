@@ -214,7 +214,7 @@ async function main(): Promise<void> {
 
     console.log("\n[2] 結合の結果（手計算: 4 行・3 患者／臨床 3 患者／結合 2 人）");
     await page.getByTestId("rs-seed").fill("7");
-    await page.getByTestId("rs-seed").dispatchEvent("change");
+    await page.getByTestId("rs-seed").press("Enter");
     await page.getByTestId("rs-run").click();
     await page.getByTestId("rs-result").waitFor({ state: "visible" });
     check((await page.getByTestId("rs-joined").innerText()).includes("2 人"), "結合できた患者は 2 人", await page.getByTestId("rs-joined").innerText());
@@ -267,6 +267,23 @@ async function main(): Promise<void> {
     await page.getByTestId("rs-joined").waitFor({ state: "visible" });
     check((await page.getByTestId("rs-joined").innerText()).includes("2 人"), "正しい臨床の表に戻すと、また結合できる");
 
+    console.log("\n[4b] 一括抽出の 1 表: 患者の列（SubjectCode）が既定で選ばれる");
+    const bHead = "CaseLabel,SubjectCode,Album,StudyInstanceUID,SourceSeriesUID,MaskSeriesUID,Roi_SegmentNumber,RowStatus,Provenance_SpecSha256,f1,f2";
+    const bRow = (c: string, s2: string, f1: number, f2: number) => `${c},${s2},A,1.2.3,1.2.3.1,1.2.3.2,1,OK,abc123,${f1},${f2}`;
+    const batchFeat = write("batch_feat.csv", [bHead, bRow("C001", "S1", 1, 10), bRow("C002", "S1", 3, 12), bRow("C003", "S2", 5, 20), bRow("C004", "S3", 7, 30)].join("\r\n") + "\r\n");
+    const batchClin = write("batch_clin.csv", "SubjectCode,time,event\r\nS1,12,1\r\nS2,8,0\r\nS9,5,1\r\n");
+    await page.getByTestId("rs-file-features").setInputFiles([batchFeat]);
+    await page.getByTestId("rs-file-clinical").setInputFiles(batchClin);
+    await page.waitForFunction(() => document.querySelector('[data-testid="rs-run"]') && !(document.querySelector('[data-testid="rs-run"]') as HTMLButtonElement).disabled, null, { timeout: 15_000 });
+    const picks = [await page.getByTestId("rs-feature-id").inputValue(), await page.getByTestId("rs-patient").inputValue(), await page.getByTestId("rs-clinical-id").inputValue()];
+    check(picks.join("|") === "CaseLabel|SubjectCode|SubjectCode", "特徴量の ID＝CaseLabel・患者＝SubjectCode・臨床の ID＝SubjectCode が既定で入る", picks);
+    check(/特徴量として使う列: 2 個/.test(await page.getByTestId("rs-feature-count").innerText()), "特徴量の列は f1・f2 の 2 個（識別・記録・状態の列が混ざらない）", await page.getByTestId("rs-feature-count").innerText());
+    await page.getByTestId("rs-run").click();
+    await page.getByTestId("rs-result").waitFor({ state: "visible" });
+    check((await page.getByTestId("rs-joined").innerText()).includes("2 人"), "既定のまま結合すると 2 人（S1・S2）", await page.getByTestId("rs-joined").innerText());
+    check((await page.getByTestId("rs-counts").innerText()) === "特徴量の表 4 行（3 患者）／臨床の表 3 患者／特徴量にだけいる 1 人／臨床にだけいる 1 人", "件数が手計算と一致（患者は SubjectCode で数える）", await page.getByTestId("rs-counts").innerText());
+    await page.getByTestId("rs-root").screenshot({ path: path.join(OUT_DIR, "01b-batch-table-defaults.png") });
+
     console.log("\n[5] 予後との関係（R1）: 別実装（statsmodels）との突き合わせ");
     const r1 = synthR1(100);
     const r1Feat = write("r1_feat.csv", r1.feat), r1Clin = write("r1_clin.csv", r1.clin);
@@ -281,7 +298,7 @@ async function main(): Promise<void> {
     await page.getByTestId("rs-skill").selectOption("r1-prognosis");
     await page.getByTestId("rs-covariates").locator("label", { hasText: "age" }).locator("input").check();
     await page.getByTestId("rs-bootstrap").fill("30");
-    await page.getByTestId("rs-bootstrap").dispatchEvent("change");
+    await page.getByTestId("rs-bootstrap").press("Enter");
     await page.getByTestId("rs-run").click();
     await page.getByTestId("rs-r1").waitFor({ state: "visible", timeout: 60_000 });
     const tableRows = await page.getByTestId("rs-r1-row").evaluateAll((rs) => rs.map((r) => ({ f: (r as HTMLElement).dataset.feature ?? "", cells: Array.from(r.querySelectorAll("td")).map((c) => c.textContent ?? "") })));
@@ -330,7 +347,7 @@ async function main(): Promise<void> {
     console.log("\n[6] 最適しきい値: 進み具合・取り消し・補正 p、補正なしの表示");
     await page.getByTestId("rs-group-mode").selectOption("optimal");
     await page.getByTestId("rs-permutations").fill("20000");
-    await page.getByTestId("rs-permutations").dispatchEvent("change");
+    await page.getByTestId("rs-permutations").press("Enter");
     check(/特徴量 5 個 × 並べ替え 20000 回/.test(await page.getByTestId("rs-heavy").innerText()), "重い実行の前に、特徴量数×並べ替え回数が出る");
     await page.getByTestId("rs-run").click();
     await page.getByTestId("rs-progress").waitFor({ state: "visible", timeout: 15_000 });
@@ -345,7 +362,7 @@ async function main(): Promise<void> {
     await page.getByTestId("rs-errors").waitFor({ state: "visible", timeout: 30_000 });
     check(/取り消されました/.test(await page.getByTestId("rs-errors").innerText()) && (await page.getByTestId("rs-r1").count()) === 0, "取り消すと、その旨が出て、途中の結果は表に出さない");
     await page.getByTestId("rs-permutations").fill("199");
-    await page.getByTestId("rs-permutations").dispatchEvent("change");
+    await page.getByTestId("rs-permutations").press("Enter");
     await page.getByTestId("rs-run").click();
     await page.getByTestId("rs-r1").waitFor({ state: "visible", timeout: 120_000 });
     const optRows = await page.getByTestId("rs-r1-row").evaluateAll((rs) => rs.map((r) => ({ f: (r as HTMLElement).dataset.feature ?? "", cells: Array.from(r.querySelectorAll("td")).map((c) => c.textContent ?? "") })));
@@ -383,7 +400,7 @@ async function main(): Promise<void> {
     await page.getByTestId("rs-positive").selectOption("resp");
     await page.getByTestId("rs-tree-on").check();
     await page.getByTestId("rs-mc").fill("300");
-    await page.getByTestId("rs-mc").dispatchEvent("change");
+    await page.getByTestId("rs-mc").press("Enter");
     await page.getByTestId("rs-run").click();
     await page.getByTestId("rs-r2").waitFor({ state: "visible", timeout: 120_000 });
     const r2Rows = await page.getByTestId("rs-r2-row").evaluateAll((rs) => rs.map((r) => ({ f: (r as HTMLElement).dataset.feature ?? "", cells: Array.from(r.querySelectorAll("td")).map((c) => c.textContent ?? "") })));
@@ -519,7 +536,7 @@ async function main(): Promise<void> {
     await page.waitForFunction(() => !(document.querySelector('[data-testid="rs-run"]') as HTMLButtonElement | null)?.disabled, null, { timeout: 15_000 });
     await page.getByTestId("rs-outcome").selectOption("outcome");
     await page.getByTestId("rs-seed").fill("11");
-    await page.getByTestId("rs-seed").dispatchEvent("change");
+    await page.getByTestId("rs-seed").press("Enter");
     check((await page.getByTestId("rs-p4-examples").innerText()).includes("既定値なし"), "分割数などは既定値なしで、文献の使用例を出典つきで示す");
     check((await page.getByTestId("rs-p4-outer").inputValue()) === "" && (await page.getByTestId("rs-p4-k").inputValue()) === "", "分割数・候補の欄は空で始まる");
     await page.getByTestId("rs-run").click();
@@ -528,7 +545,7 @@ async function main(): Promise<void> {
     await page.getByTestId("rs-p4-kind").selectOption("binary");
     await page.getByTestId("rs-positive").selectOption("resp");
     await page.getByTestId("rs-p4-lock").selectOption("create");
-    const setNum = async (id: string, v: string) => { await page.getByTestId(id).fill(v); await page.getByTestId(id).dispatchEvent("change"); };
+    const setNum = async (id: string, v: string) => { await page.getByTestId(id).fill(v); await page.getByTestId(id).press("Enter"); };
     await setNum("rs-p4-frac", "0.25");
     await setNum("rs-p4-outer", "5");
     await setNum("rs-p4-inner", "4");
@@ -610,7 +627,7 @@ async function main(): Promise<void> {
     await page.getByTestId("rs-file-clinical").setInputFiles(r5Clin);
     await page.waitForFunction(() => !(document.querySelector('[data-testid="rs-run"]') as HTMLButtonElement | null)?.disabled, null, { timeout: 15_000 });
     await page.getByTestId("rs-seed").fill("5");
-    await page.getByTestId("rs-seed").dispatchEvent("change");
+    await page.getByTestId("rs-seed").press("Enter");
     check((await page.getByTestId("rs-r5-examples").innerText()).includes("既定値なし") && (await page.getByTestId("rs-r5-corr").inputValue()) === "" && (await page.getByTestId("rs-r5-nu").inputValue()) === "", "論文に無い値（相関のしきい値・ν）は空欄で始まり、使用例を示す");
     check((await page.getByTestId("rs-r5-iter").inputValue()) === "100" && (await page.getByTestId("rs-r5-boot").inputValue()) === "2000" && (await page.getByTestId("rs-r5-max").inputValue()) === "4", "論文の値（100 反復・2000 回・5 未満 → 4）が既定で入る");
     await page.getByTestId("rs-run").click();

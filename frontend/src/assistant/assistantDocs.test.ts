@@ -28,7 +28,8 @@ describe("docsIndex", () => {
     expect(top("プラグインの作り方")).toBe("plugins.md");
   });
   it("negative: unrelated questions attach nothing", () => {
-    expect(searchDocs(chunks, "今日の天気と夕食のレシピを教えて", opt)).toEqual([]);
+    // 「今日」はデータベースウィンドウの日付ボタンの語として資料にある。無関係な問いは、資料にない語だけで作る
+    expect(searchDocs(chunks, "明日の天気と夕食のレシピを教えて", opt)).toEqual([]);
     expect(searchDocs(chunks, "", opt)).toEqual([]);
   });
   it("the docs exist (guards against a vacuous pass)", () => {

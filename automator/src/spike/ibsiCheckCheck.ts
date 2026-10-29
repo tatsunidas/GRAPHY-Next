@@ -8,6 +8,7 @@
  *   3. 絞り込み: 「不合格だけ」は不合格の数、「不合格と計算されず」は不合格＋計算されずの数、
  *      検索は件数を減らす（絞り込みが効いていることを、すべて表示との差で確かめる）。
  *   4. CT ファントム（構成 C・D）は「リリース時の記録」として出て、構成 C の不合格 1 件が見える。
+ *      記録に書かれた RadiomicsJ の版が、載せている版（backend/pom.xml）と一致する。
  *   5. スクリーンショット（out/）で見た目を人が判定する。
  *
  * 専用ポート 19850〜19852。前提: backend jar（今のビルド）。
@@ -23,6 +24,13 @@ import { openFirstSeriesInViewer } from "../checklist/items/shared/helpers.js";
 import { createStepRecorder } from "../checklist/types.js";
 
 const OUT_DIR = path.join(AUTOMATOR_ROOT, ".results", "ibsi-check");
+/** 本体が載せている RadiomicsJ の版（記録の版と食い違えば取り直しが要る）。 */
+const RADIOMICSJ_VERSION = (() => {
+  const pom = fs.readFileSync(path.join(AUTOMATOR_ROOT, "..", "backend", "pom.xml"), "utf8");
+  const m = /<radiomicsj\.version>([^<]+)<\/radiomicsj\.version>/.exec(pom);
+  if (!m) throw new Error("backend/pom.xml に radiomicsj.version がありません");
+  return m[1].trim();
+})();
 const failures: string[] = [];
 let passed = 0;
 function check(cond: boolean, label: string, detail?: unknown): void {
@@ -154,6 +162,8 @@ async function main(): Promise<void> {
     check((await dd.count()) === 1, "構成 D の記録が出る");
     const cText = await c.innerText();
     check(cText.includes("不合格") && cText.includes("IntensityAtVolumeFraction") || cText.includes("Intensity at"), "構成 C の不合格 1 件の行が見える", cText);
+    check((await c.innerText()).includes(`RadiomicsJ ${RADIOMICSJ_VERSION}`), `構成 C の記録の版が ${RADIOMICSJ_VERSION}`, cText.slice(0, 80));
+    check((await dd.innerText()).includes(`RadiomicsJ ${RADIOMICSJ_VERSION}`), `構成 D の記録の版が ${RADIOMICSJ_VERSION}`);
     check((await page.getByText("この PC では実行していません").count()) >= 1, "「この PC では実行していない」と明記");
     await c.scrollIntoViewIfNeeded();
     await page.evaluate("window.scrollBy(0, 250)");

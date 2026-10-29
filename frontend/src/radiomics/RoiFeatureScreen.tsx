@@ -32,6 +32,9 @@ import {
   type Series,
 } from "../api";
 import { formatFeatureValue } from "./GlamFeatureTable";
+import { RoiSummaryPanels } from "./RoiSummaryPanels";
+import { ScaleCompareTable } from "./ScaleCompareTable";
+import { RoiFeatureSettingsFields } from "./RoiFeatureSettingsFields";
 import { formatAreaMm2, formatPositionMm, tiePositions } from "./maxSection";
 import { requestRemoteReveal } from "../viewer/roiRevealBridge";
 import { compareRows, roiFeature2dFiles, type CompareRow } from "./roiFeatureModes";
@@ -51,6 +54,7 @@ import {
 import {
   ROI_FEATURE_FAMILIES,
   LOG_PADDINGS,
+  rangeBounds,
   SCALE_CONVERSIONS,
   anyFamilyOn,
   roiFeatureScaleRequest,
@@ -124,6 +128,8 @@ export function RoiFeatureScreen() {
   const [error, setError] = useState<string | null>(null);
   const [fullResult, setResult] = useState<RoiFeatureResult | null>(null);
   const [scaleIndex, setScaleIndex] = useState(0);
+  /** true なら「スケール比較」のタブを表示している（個別のスケールの表の代わり）。 */
+  const [compare, setCompare] = useState(false);
   // 空間スケールを選んだときは、選んだタブのスケールの結果を表示する（表・CSV の元・要約は既存のまま result を読む）
   const result = useMemo(() => {
     const sc = fullResult?.scales;
@@ -314,6 +320,7 @@ export function RoiFeatureScreen() {
       jobIdRef.current = status.jobId;
       setResult(null);
       setScaleIndex(0);
+      setCompare(false);
       setResultFor({
         seriesNumber: allSeries.find((s) => s.seriesInstanceUid === sourceSeriesUid)?.seriesNumber,
         maskChannel,
@@ -382,8 +389,7 @@ export function RoiFeatureScreen() {
     return t("roiFeat.summary.settings", { disc, resampling: rs, filter, on, total: ROI_FEATURE_FAMILIES.length });
   }, [result, t]);
 
-  const setFamily = (key: string, on: boolean) =>
-    setForm((f) => ({ ...f, families: { ...f.families, [key]: on } }));
+  const rangeProblem = rangeBounds(form).problem;
 
   const seriesLabel = (s: Series) =>
     `#${s.seriesNumber ?? "?"} ${s.modality ?? ""} ${s.seriesDescription ?? ""}`.trim();
@@ -462,7 +468,7 @@ export function RoiFeatureScreen() {
         {maskSeriesUid !== "" && maskNC > 1 && (
           <Field label={t("texture.field.maskChannel")}>
             <select value={maskChannel} onChange={(e) => setMaskChannel(Number(e.target.value))}
-              disabled={busy} style={input}>
+              disabled={busy} style={input} data-testid="roifeat-mask-channel">
               {Array.from({ length: maskNC }, (_, i) => (
                 <option key={i} value={i}>{maskSegmentNames[i] ? `${i}: ${maskSegmentNames[i]}` : String(i)}</option>
               ))}
@@ -519,40 +525,10 @@ export function RoiFeatureScreen() {
         </Field>
         {(sectionOn || slicesOn) && <div style={note}>{t("roiFeat.mode.note2d")}</div>}
 
-        <Field label={t("roiFeat.field.discretisation")}>
-          <span style={{ display: "inline-flex", gap: 8, alignItems: "center", justifyContent: "flex-end" }}>
-            <label>
-              <input type="radio" checked={form.fixedBinNumber} disabled={busy}
-                onChange={() => setForm((f) => ({ ...f, fixedBinNumber: true }))} /> {t("roiFeat.disc.binCount")}
-            </label>
-            <span data-testid="roifeat-bincount">
-              <NumberField value={form.binCount} onChange={(v) => setForm((f) => ({ ...f, binCount: v }))}
-                min={2} max={1024} disabled={busy || !form.fixedBinNumber} style={{ ...input, width: 64 }} />
-            </span>
-            <label>
-              <input type="radio" checked={!form.fixedBinNumber} disabled={busy}
-                onChange={() => setForm((f) => ({ ...f, fixedBinNumber: false }))} /> {t("roiFeat.disc.binWidth")}
-            </label>
-            <NumberField value={form.binWidth} onChange={(v) => setForm((f) => ({ ...f, binWidth: v }))}
-              min={0.001} max={100000} step={0.5} disabled={busy || form.fixedBinNumber} style={{ ...input, width: 64 }} />
-          </span>
-        </Field>
-        <Field label={t("roiFeat.field.resampling")}>
-          <span style={{ display: "inline-flex", gap: 8, alignItems: "center", justifyContent: "flex-end" }}>
-            <select value={form.resampleMm == null ? "none" : "iso"} disabled={busy} style={{ ...input, width: 110 }}
-              onChange={(e) => setForm((f) => ({ ...f, resampleMm: e.target.value === "none" ? null : 1 }))}>
-              <option value="none">{t("roiFeat.resampling.none")}</option>
-              <option value="iso">{t("roiFeat.resampling.iso")}</option>
-            </select>
-            {form.resampleMm != null && (
-              <>
-                <NumberField value={form.resampleMm} onChange={(v) => setForm((f) => ({ ...f, resampleMm: v }))}
-                  min={0.05} max={20} step={0.1} disabled={busy} style={{ ...input, width: 64 }} />
-                <span>mm</span>
-              </>
-            )}
-          </span>
-        </Field>
+        <RoiFeatureSettingsFields form={form} setForm={setForm} disabled={busy} testIdPrefix="roifeat"
+          layout={{ labelMinWidth: 150, align: "right" }} showRange showPreset
+          middleSlot={(
+            <>
         <Field label={t("roiFeat.field.filter")}>
           <span style={{ display: "inline-flex", gap: 8, alignItems: "center", justifyContent: "flex-end", flexWrap: "wrap" }}>
             <label>
@@ -642,19 +618,12 @@ export function RoiFeatureScreen() {
             <div style={note}>{t("roiFeat.filter.note")}</div>
           </>
         )}
-        <div style={{ ...fieldLabel, marginTop: 6 }}>{t("roiFeat.field.families")}</div>
-        <div style={familyGrid}>
-          {ROI_FEATURE_FAMILIES.map((f) => (
-            <label key={f.key}>
-              <input type="checkbox" checked={!!form.families[f.key]} disabled={busy}
-                onChange={(e) => setFamily(f.key, e.target.checked)} /> {familyLabel(f.key)}
-            </label>
-          ))}
-        </div>
+            </>
+          )} />
         {form.families.GLAM && <div style={note}>{t("roiFeat.glamNote")}</div>}
 
         <div style={{ display: "flex", gap: 6, marginTop: 10, justifyContent: "flex-end" }}>
-          <button onClick={() => void run(false)} disabled={busy || !studyUid}
+          <button onClick={() => void run(false)} disabled={busy || !studyUid || rangeProblem !== null}
             style={{ ...btnPrimary, opacity: busy ? 0.6 : 1 }} data-testid="roifeat-run">
             {t("roiFeat.run")}
           </button>
@@ -707,16 +676,22 @@ export function RoiFeatureScreen() {
             <div data-testid="roifeat-scale-tabs" style={{ marginBottom: 8 }}>
               <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
                 {fullResult.scales.map((s, i) => (
-                  <button key={s.scaleMm} onClick={() => setScaleIndex(i)} data-testid={`roifeat-scale-tab-${i}`}
-                    style={{ ...miniBtn, fontWeight: i === scaleIndex ? 700 : 400, borderWidth: i === scaleIndex ? 2 : 1 }}>
+                  <button key={s.scaleMm} onClick={() => { setScaleIndex(i); setCompare(false); }} data-testid={`roifeat-scale-tab-${i}`}
+                    style={{ ...miniBtn, fontWeight: i === scaleIndex && !compare ? 700 : 400, borderWidth: i === scaleIndex && !compare ? 2 : 1 }}>
                     {s.inputNotation === "width_px"
                       ? t("roiFeat.scale.tabWidth", { w: s.inputValue, r: s.scaleMm })
                       : t("roiFeat.scale.tab", { r: s.scaleMm })}
                     {s.legacyLabel ? t("roiFeat.scale.labelSuffix", { label: s.legacyLabel }) : ""}
                   </button>
                 ))}
+                {fullResult.scales.length > 1 && (
+                  <button onClick={() => setCompare(true)} data-testid="roifeat-scale-tab-compare"
+                    style={{ ...miniBtn, fontWeight: compare ? 700 : 400, borderWidth: compare ? 2 : 1 }}>
+                    {t("roiFeat.compare.tab")}
+                  </button>
+                )}
               </div>
-              {(() => {
+              {!compare && (() => {
                 const s = fullResult.scales[Math.min(scaleIndex, fullResult.scales.length - 1)];
                 return (
                   <div style={note} data-testid="roifeat-scale-info">
@@ -735,6 +710,9 @@ export function RoiFeatureScreen() {
               })()}
             </div>
           )}
+          {compare && fullResult?.scales && fullResult.scales.length > 1 ? (
+            <ScaleCompareTable full={fullResult} t={t} fileBase={fileBase()} caseLabel={caseLabel.trim()} onDownload={download} />
+          ) : (<>
           <div style={summaryRow} data-testid="roifeat-summary">
             <span style={result.fromCache ? cachePill : infoPill}>
               {result.fromCache
@@ -783,6 +761,7 @@ export function RoiFeatureScreen() {
               volume: result.roiSize.volumeMm3 == null ? "?" : result.roiSize.volumeMm3.toFixed(1),
             })}
           </div>
+          {!(result.section || result.slices) && <RoiSummaryPanels rows={result.rows} t={t} />}
           <div style={note}>{t("roiFeat.count", { n: result.rows.length })}</div>
           {(result.section || result.slices) && <Modes2dPanel result={result} t={t} />}
 
@@ -806,6 +785,7 @@ export function RoiFeatureScreen() {
             </tbody>
           </table>
           )}
+          </>)}
         </div>
       )}
     </div>
@@ -995,9 +975,6 @@ const panel: React.CSSProperties = {
   border: "1px solid #dfe5ec", borderRadius: 8, padding: 12, marginTop: 10, maxWidth: 640,
 };
 const fieldLabel: React.CSSProperties = { color: "#5a6672" };
-const familyGrid: React.CSSProperties = {
-  display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(190px, 1fr))", gap: "2px 10px", marginTop: 4,
-};
 const input: React.CSSProperties = {
   width: "100%", boxSizing: "border-box", border: "1px solid #cdd5de", borderRadius: 4, fontSize: 12, padding: "3px 6px",
 };

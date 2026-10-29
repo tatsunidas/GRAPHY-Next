@@ -38,7 +38,42 @@ export const ROI_FEATURE_FAMILIES: readonly RoiFeatureFamily[] = [
   { key: "NGLDM", setting: "BOOL_enableNGLDM", defaultOn: true },
   { key: "Fractal", setting: "BOOL_enableFractal", defaultOn: true },
   { key: "GLAM", setting: "BOOL_enableGLAM", defaultOn: false },
+  // IBSI にない補助的な統計（値 > 0 の平均・割合など）。既定はオフで、オンにしても既存の列は変わらない。
+  { key: "AuxiliaryStatistics", setting: "BOOL_enableAuxiliaryStatistics", defaultOn: false },
 ];
+
+/** プリセット「6 統計」: 一次統計・強度ヒストグラム・補助統計だけを有効にする。 */
+export const SIX_STATISTICS_FAMILIES: ReadonlySet<string> = new Set([
+  "IntensityBasedStatistical", "IntensityHistogram", "AuxiliaryStatistics",
+]);
+
+/** 6 統計のプリセットを当てる（族のスイッチだけを変える。ほかの欄は触らない）。 */
+export function applySixStatistics(form: RoiFeatureForm): RoiFeatureForm {
+  return {
+    ...form,
+    families: Object.fromEntries(ROI_FEATURE_FAMILIES.map((f) => [f.key, SIX_STATISTICS_FAMILIES.has(f.key)])),
+  };
+}
+
+/** プリセット「36 特徴」: 6 統計を、半径 0, 2, 3, 4, 5, 6 mm の LoG（0 はフィルタなし）で。 */
+export function applyScale36(form: RoiFeatureForm): RoiFeatureForm {
+  return {
+    ...applySixStatistics(form),
+    logOn: true,
+    logByRadius: true,
+    scalesText: DEFAULT_SCALES,
+    scaleNotation: "RADIUS_MM",
+  };
+}
+
+/** 「36 特徴」のプリセットがいま当たっているか（換算・名札などは見ない）。 */
+export const isScale36 = (form: RoiFeatureForm): boolean =>
+  isSixStatistics(form) && form.logOn && form.logByRadius && form.scaleNotation === "RADIUS_MM"
+  && form.scalesText === DEFAULT_SCALES;
+
+/** 「6 統計」のプリセットがいま当たっているか。 */
+export const isSixStatistics = (form: RoiFeatureForm): boolean =>
+  ROI_FEATURE_FAMILIES.every((f) => !!form.families[f.key] === SIX_STATISTICS_FAMILIES.has(f.key));
 
 /**
  * 離散化（ビン数かビン幅）を使う族。RadiomicsJ の `extractAll` が `BOOL_USE_FixedBinNumber`・
@@ -57,6 +92,9 @@ export interface RoiFeatureForm {
   resampleMm: number | null;
   /** 族の key → 有効か。 */
   families: Record<string, boolean>;
+  /** 範囲で除く（再セグメント）の下限・上限（強度の単位）。空欄は未指定。 */
+  rangeMinText: string;
+  rangeMaxText: string;
   /** 画像フィルタ LoG（RadiomicsJ 2.5 以降）。オンなら σ ごとの列が元の列の後ろに足される。 */
   logOn: boolean;
   /** σ（mm）。カンマか空白で区切って複数。 */
@@ -101,6 +139,8 @@ export function defaultRoiFeatureForm(): RoiFeatureForm {
     binCount: 32,
     binWidth: 25,
     resampleMm: null,
+    rangeMinText: "",
+    rangeMaxText: "",
     logOn: false,
     logSigmaMm: "1.5",
     logTruncate: 4,
@@ -133,6 +173,25 @@ export function roiFeatureScaleRequest(form: RoiFeatureForm): {
   };
 }
 
+export type RangeProblem = "ORDER" | "INVALID";
+
+/**
+ * 範囲で除く欄を数にする。下限・上限はどちらか片方だけでも有効（RadiomicsJ 2.7.0 から。空の側は開いたまま）。
+ * 数でない入力と、下限が上限より大きい入力は問題として返す（送らない）。
+ */
+export function rangeBounds(form: RoiFeatureForm):
+  { min: number | null; max: number | null; problem: RangeProblem | null } {
+  const lo = form.rangeMinText.trim();
+  const hi = form.rangeMaxText.trim();
+  const min = lo === "" ? null : Number(lo);
+  const max = hi === "" ? null : Number(hi);
+  if ((min !== null && !Number.isFinite(min)) || (max !== null && !Number.isFinite(max))) {
+    return { min: null, max: null, problem: "INVALID" };
+  }
+  if (min !== null && max !== null && min > max) return { min, max, problem: "ORDER" };
+  return { min, max, problem: null };
+}
+
 export const anyFamilyOn = (form: RoiFeatureForm) => ROI_FEATURE_FAMILIES.some((f) => form.families[f.key]);
 
 /**
@@ -151,6 +210,11 @@ export function roiFeatureSettings(form: RoiFeatureForm): Record<string, string>
     s.DOUBLEARRAY_resamplingFactorXYZ = `${v},${v},${v}`;
   }
   for (const f of ROI_FEATURE_FAMILIES) s[f.setting] = form.families[f.key] ? "1" : "0";
+  const range = rangeBounds(form);
+  if (range.problem === null) {
+    if (range.min !== null) s.DOUBLE_rangeMin = String(range.min);
+    if (range.max !== null) s.DOUBLE_rangeMax = String(range.max);
+  }
   if (form.logOn) {
     // 半径で指定するときの σ は backend がスケールごとに換算して足す
     const sigmas = form.logByRadius ? null : parseSigmaList(form.logSigmaMm);

@@ -4,6 +4,7 @@
  */
 package com.vis.graphynext.radiomics;
 
+import io.github.tatsunidas.radiomics.features.AuxiliaryStatisticsFeatureType;
 import io.github.tatsunidas.radiomics.features.FractalFeatureType;
 import io.github.tatsunidas.radiomics.features.GLAMFeatureType;
 import io.github.tatsunidas.radiomics.features.GLCMFeatureType;
@@ -43,6 +44,16 @@ final class RoiFeatureDefinitions {
     static final String NOTE_EXCESS_KURTOSIS = "EXCESS_KURTOSIS";
     /** 離散化したヒストグラムのエントロピーで、対数の底は 2。 */
     static final String NOTE_LOG2_DISCRETISED = "LOG2_DISCRETISED";
+    /** 母標準偏差（n で割る）。標本標準偏差（n−1 で割る）ではない。 */
+    static final String NOTE_POPULATION_SD = "POPULATION_SD";
+    /** 値が 0 より大きいボクセルだけで数える（0 は正に数えない）。 */
+    static final String NOTE_POSITIVE_ONLY = "POSITIVE_ONLY";
+    /** ln(SD) / ln(N)。N は強度マスクのボクセル数（3D）で、SD が 1 未満なら負になる。 */
+    static final String NOTE_LN_RATIO = "LN_RATIO";
+    /** 1 / (過剰尖度 + 3)。 */
+    static final String NOTE_RECIPROCAL_KURTOSIS = "RECIPROCAL_KURTOSIS";
+    /** 値が 0 より大きいボクセルの確率の二乗和。ビンは ROI 全体を離散化したもの（正のボクセルだけで作り直さない）。 */
+    static final String NOTE_UNIFORMITY_POSITIVE = "UNIFORMITY_POSITIVE";
     /** IBSI の定義の外にある特徴。 */
     static final String NOTE_NON_IBSI = "NON_IBSI";
 
@@ -75,6 +86,7 @@ final class RoiFeatureDefinitions {
         FAMILIES.put("NGLDM", n -> NGLDMFeatureType.valueOf(n).id());
         FAMILIES.put("Fractal", n -> FractalFeatureType.valueOf(n).id());
         FAMILIES.put("GLAM", n -> GLAMFeatureType.valueOf(n).id());
+        FAMILIES.put("AuxiliaryStatistics", n -> AuxiliaryStatisticsFeatureType.valueOf(n).id());
     }
 
     private RoiFeatureDefinitions() {}
@@ -113,6 +125,24 @@ final class RoiFeatureDefinitions {
         }
         if ("Entropy".equals(feature) && "IntensityHistogram".equals(family)) {
             notes.add(NOTE_LOG2_DISCRETISED);
+        }
+        if ("StandardDeviation".equals(feature) && "IntensityBasedStatistical".equals(family)) {
+            notes.add(NOTE_POPULATION_SD);
+        }
+        if ("AuxiliaryStatistics".equals(family)) {
+            switch (feature) {
+                case "MeanOfPositiveIntensities", "ProportionOfPositiveIntensities" -> notes.add(NOTE_POSITIVE_ONLY);
+                case "NormalisedStandardDeviation" -> {
+                    notes.add(NOTE_POPULATION_SD);
+                    notes.add(NOTE_LN_RATIO);
+                }
+                case "ReciprocalKurtosis" -> notes.add(NOTE_RECIPROCAL_KURTOSIS);
+                case "UniformityOfPositiveIntensities" -> {
+                    notes.add(NOTE_POSITIVE_ONLY);
+                    notes.add(NOTE_UNIFORMITY_POSITIVE);
+                }
+                default -> { }
+            }
         }
         return new RoiFeatureResult.Row(column, family, feature, ibsi, value, List.copyOf(notes));
     }

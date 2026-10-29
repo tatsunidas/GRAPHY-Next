@@ -52,6 +52,7 @@ public class RoiFeatureService {
 
     /** 患者名・ID・生年月日を DICOM から書く族。常に切る（版と設定の記録は Next が付ける）。 */
     static final String OPERATIONAL_INFO_KEY = SettingParams.BOOL_enableOperationalInfo.name();
+    static final String USE_GPU_KEY = SettingParams.BOOL_USE_GPU.name();
     static final String LABEL_KEY = SettingParams.INT_label.name();
     static final String FORCE_2D_KEY = SettingParams.BOOL_force2D.name();
     static final String GLAM_KEY = SettingParams.BOOL_enableGLAM.name();
@@ -127,13 +128,25 @@ public class RoiFeatureService {
             throw new IllegalArgumentException("Radiomics 特徴量には ROI マスクシリーズが必要です。");
         }
         effectiveSettings(req.settings(), labelOf(req.settings()));
-        smallRoiThreshold();
+        smallRoiThreshold(req);
         threshold(smallRoiSetting2d, "小さい ROI の警告（画素数、2D）");
     }
 
     /** 環境設定の基準値。空・未設定なら null。整数でない・1 未満なら例外（黙って警告を止めない）。 */
     Integer smallRoiThreshold() {
         return threshold(smallRoiSetting, "小さい ROI の警告（ボクセル数）");
+    }
+
+    /** 要求の基準値があればそれ（1 以上）、無ければ環境設定の値。 */
+    Integer smallRoiThreshold(RoiFeatureRequest req) {
+        Integer own = req.smallRoiWarnVoxels();
+        if (own == null) {
+            return smallRoiThreshold();
+        }
+        if (own < 1) {
+            throw new IllegalArgumentException("要求の「小さい ROI の警告（ボクセル数）」は 1 以上の整数にしてください: " + own);
+        }
+        return own;
     }
 
     private static Integer threshold(Supplier<String> setting, String label) {
@@ -201,6 +214,8 @@ public class RoiFeatureService {
             throw new IllegalArgumentException(
                     "BOOL_force2D は指定できません。2D は「計算の単位」（roiModes: MAX_SECTION_2D・SLICES_2D）で選びます。");
         }
+        // 本体の抽出は既定で CPU（RadiomicsJ 2.5.2 までと同じ計算経路。値と再現性を変えない）。要求が明示すれば尊重する。
+        out.putIfAbsent(USE_GPU_KEY, "0");
         out.put(OPERATIONAL_INFO_KEY, "0");
         out.put(DIAGNOSTICS_KEY, "1");
         out.put(LABEL_KEY, Integer.toString(label));
@@ -397,7 +412,7 @@ public class RoiFeatureService {
     private RoiFeatureResult compute3d(RoiFeatureRequest req, RadiomicsMapEngine.LoadedVolume vol, int label,
                                        Map<String, String> settings, java.util.function.Consumer<Phase> phase)
             throws IOException {
-        Integer threshold = smallRoiThreshold();
+        Integer threshold = smallRoiThreshold(req);
 
         long roiVoxels = GlamAnalysisService.countRoiVoxels(vol.mask(), label);
         if (roiVoxels < 1) {
