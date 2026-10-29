@@ -107,8 +107,8 @@ async function toClient(page: Page, key: string, p: Pt): Promise<{ x: number; y:
   return { x: b.x + (p[0] / IMG) * b.width, y: b.y + (p[1] / IMG) * b.height };
 }
 
-/** 2 方向窓は手順式（①シリーズ ②解析範囲 ③中心線 ④アンカー ⑤エッジ ⑥3D・QFR）。手順のボタンを押して、その手順の道具を出す。 */
-const MODE_STEP: Record<string, number> = { range: 2, waypoint: 3, anchor: 4, edge: 5 };
+/** 2 方向窓は手順式（①シリーズ ②解析範囲 ③中心線 ④エッジ ⑤アンカー ⑥3D・QFR）。手順のボタンを押して、その手順の道具を出す。 */
+const MODE_STEP: Record<string, number> = { range: 2, waypoint: 3, edge: 4, anchor: 5 };
 async function setStep(page: Page, n: number): Promise<void> {
   await page.getByTestId(`dual-step-${n}`).click();
   await page.waitForTimeout(200);
@@ -758,7 +758,7 @@ async function anchorSyncCheck(page: Page, label: string): Promise<Record<string
   const arcsOf = (c: Pt[]) => { const a = [0]; for (let i = 1; i < c.length; i++) a.push(a[i - 1] + Math.hypot(c[i][0] - c[i - 1][0], c[i][1] - c[i - 1][1])); return a; };
   const arcAt = (c: Pt[], arcs: number[], p: Pt) => { let bi = 0, bd = Infinity; c.forEach((q, i) => { const d = Math.hypot(q[0] - p[0], q[1] - p[1]); if (d < bd) { bd = d; bi = i; } }); return arcs[bi]; };
   const pointAt = (c: Pt[], arcs: number[], s: number): Pt => { let i = 0; while (i + 2 < arcs.length && arcs[i + 1] < s) i++; const t = arcs[i + 1] > arcs[i] ? (s - arcs[i]) / (arcs[i + 1] - arcs[i]) : 0; return [c[i][0] + t * (c[i + 1][0] - c[i][0]), c[i][1] + t * (c[i + 1][1] - c[i][1])]; };
-  await setStep(page, 4); // アンカーを動かすのは手順 ④（アンカー）
+  await setStep(page, 5); // アンカーを動かすのは手順 ⑤（アンカー）
   const cA = await cl("A"), cB = await cl("B");
   const aA = arcsOf(cA), aB = arcsOf(cB);
   const a0 = await anchorsOf(page, "A"), b0 = await anchorsOf(page, "B");
@@ -917,7 +917,8 @@ async function edgeSyncCheck(page: Page, label: string): Promise<Record<string, 
 /**
  * 手順式の窓の確認（FFR_EDITCHECK=steps。仮想血管。両方向の中心線を引いた直後から）。
  *  T1 中心線が両方向に引けると、手順 ②（解析範囲）は済み、［次へ］で ③（中心線）へ進み、③ の道具だけが見える
- *  T2 ④（アンカー）: 未確認の間は「0/3」で［次へ］が押せない。★負例: 確認前に押せない
+ *  T2 ⑤（アンカー）: 未確認の間は「0/3」で［次へ］が押せない。★負例: 確認前に押せない
+ *  T2b ④（エッジ）が ⑤（アンカー）より前にある（手順の並び）
  *  T3 3 点とも動かして確認すると「3/3」になり、［次へ］が押せる
  *  T4 ★負例: ［3D に再構成］は ⑥ に進むまで見えず、⑥ では見える
  */
@@ -938,9 +939,11 @@ async function stepsCheck(page: Page, label: string): Promise<Record<string, unk
   const vis2 = await page.getByTestId("dual-panel-step-2").isVisible();
   check("[T1b] ［次へ］で ③（中心線）へ進み、③ の道具だけが見える", c1[0] === "dual-step-3" && vis3 && !vis2, { c1, vis3, vis2 });
   await page.screenshot({ path: path.join(OUT_DIR, `${label}-steps-2-centerline.png`) });
-  await setStep(page, 4);
-  const l4a = await lbl(4);
-  check("[T2] ④: 未確認の間は「0/3」で、［次へ］が押せない（★負例）", /0\/3/.test(l4a) && !(await next.isEnabled()), { l4a, enabled: await next.isEnabled() });
+  const order = await page.evaluate(() => Array.from(document.querySelectorAll("[data-testid^=dual-step-]")).map((e) => (e.querySelector(".aq-lbl") as HTMLElement).textContent));
+  check("[T2b] 手順の並びは、④ エッジ → ⑤ アンカー", /^エッジ/.test(String(order[3])) && /^アンカー/.test(String(order[4])), { order });
+  await setStep(page, 5);
+  const l4a = await lbl(5);
+  check("[T2] ⑤: 未確認の間は「0/3」で、［次へ］が押せない（★負例）", /0\/3/.test(l4a) && !(await next.isEnabled()), { l4a, enabled: await next.isEnabled() });
   await page.screenshot({ path: path.join(OUT_DIR, `${label}-steps-3-anchors-before.png`) });
   const a = await anchorsOf(page, "A");
   const b = await anchorsOf(page, "B");
@@ -948,10 +951,10 @@ async function stepsCheck(page: Page, label: string): Promise<Record<string, unk
     await dragAnchor(page, "A", i, [a[i][0] + 2, a[i][1] + 2]);
     await dragAnchor(page, "B", i, [b[i][0] + 2, b[i][1] + 2]);
   }
-  const l4b = await lbl(4);
+  const l4b = await lbl(5);
   check("[T3] 3 点とも動かして確認すると「3/3」になり、［次へ］が押せる", /3\/3/.test(l4b) && (await next.isEnabled()), { l4b, enabled: await next.isEnabled() });
   await page.screenshot({ path: path.join(OUT_DIR, `${label}-steps-4-anchors-after.png`) });
-  const reconAt4 = await page.getByTestId("dual-recon").isVisible();
+  const reconAt4 = await page.getByTestId("dual-recon").isVisible(); // ⑤ で見えないこと
   await setStep(page, 6);
   const reconAt6 = await page.getByTestId("dual-recon").isVisible();
   check("[T4] ★負例: ［3D に再構成］は ⑥ に進むまで見えず、⑥ では見える", !reconAt4 && reconAt6, { reconAt4, reconAt6 });
@@ -1001,6 +1004,75 @@ async function bifUiCheck(viewer: Page, imp: Record<"A" | "B", { study: string; 
   check("[U3] ［近位母血管…］で 2 方向窓が開き、同じ 2 シリーズが読まれ、役割が近位母血管で、手順 ② にいる", /フレーム/.test(stA) && /フレーム/.test(stB) && role === "proximal" && cur[0] === "dual-step-2", { stA: stA.slice(0, 30), stB: stB.slice(0, 30), role, cur });
   const note = (await viewer.getByTestId("dual-preset-note").innerText().catch(() => "")) ?? "";
   check("[U4] 2 方向窓の上に、その役割の定義の案内（近位母血管・向きの約束）が出る", /近位母血管/.test(note) && /向き/.test(note), { note: note.slice(0, 60) });
+  return out;
+}
+
+/**
+ * 方向 B の始点・終点の候補（FFR_EDITCHECK=cands。仮想血管。方向 A の始点・終点だけを押す）。
+ *  C1 B に、始点に対応するエピポーラ線と谷の候補が出て（data-cands）、真値（B の始点）から 6 px 以内の候補が 1 つ以上ある
+ *  C2 その候補の輪の近く（画面 8 px ずらして）を押すと、候補の位置が始点になり、次は終点の候補（which=1）に変わる
+ *  C3 終点の候補を押すと、B の中心線が引かれ、始点は候補の位置と一致（1.5 px 以内）、端が真値から 6 px 以内
+ *  C4 ★負例: 候補から遠い所（画面 30 px 以上）を押すと、吸着せず、押した位置が始点になる（2 px 以内）
+ *  C5 ★負例: チェックを切ると、候補が出ない（data-cands が空）
+ */
+async function candsCheck(page: Page, spec: Spec): Promise<Record<string, unknown>> {
+  const out: Record<string, unknown> = {};
+  const cvB = page.getByTestId("dual-canvas-B");
+  const cands = async (): Promise<{ which: number; line: number[][]; cands: [number, number, boolean, number][] } | null> => {
+    const a = await cvB.getAttribute("data-cands");
+    return a ? JSON.parse(a) : null;
+  };
+  const clB = async (): Promise<Pt[]> => JSON.parse((await cvB.getAttribute("data-clpts")) ?? "[]");
+  const d = (a: Pt, b: Pt) => Math.hypot(a[0] - b[0], a[1] - b[1]);
+  await setStep(page, 2);
+  const c0 = await cands();
+  await page.screenshot({ path: path.join(OUT_DIR, `${spec.label}-cands-1-start.png`) });
+  const nearStart = c0 ? c0.cands.filter((c) => d([c[0], c[1]], spec.ends.B.start) <= 6) : [];
+  check("[C1] B に、始点に対応するエピポーラ線と谷の候補が出て、真値の始点から 6 px 以内の候補がある", !!c0 && c0.which === 0 && c0.line.length === 2 && nearStart.length >= 1, { which: c0?.which, n: c0?.cands.length, near: nearStart.length });
+  if (!c0 || nearStart.length === 0) return out;
+  const startCand: Pt = [nearStart[0][0], nearStart[0][1]];
+  const cs = await toClient(page, "B", startCand);
+  await page.mouse.click(cs.x + 6, cs.y + 5);
+  await page.waitForTimeout(600);
+  const c1 = await cands();
+  await page.screenshot({ path: path.join(OUT_DIR, `${spec.label}-cands-2-end.png`) });
+  check("[C2] 候補の輪の近くを押すと、次は終点の候補（which=1）に変わる", !!c1 && c1.which === 1, { which: c1?.which });
+  const nearEnd = c1 ? c1.cands.filter((c) => d([c[0], c[1]], spec.ends.B.end) <= 6) : [];
+  if (!c1 || nearEnd.length === 0) {
+    check("[C3] 終点の候補が真値の近くにある", false, { nearEnd: nearEnd.length });
+    return out;
+  }
+  const endCand: Pt = [nearEnd[0][0], nearEnd[0][1]];
+  const ce = await toClient(page, "B", endCand);
+  await page.mouse.click(ce.x - 5, ce.y + 4);
+  await page.waitForTimeout(1_500);
+  const cl = await clB();
+  await page.screenshot({ path: path.join(OUT_DIR, `${spec.label}-cands-3-drawn.png`) });
+  const eS = cl.length ? d(cl[0], startCand) : NaN, eT = cl.length ? d(cl[cl.length - 1], spec.ends.B.end) : NaN;
+  out.c3 = { n: cl.length, startToCandPx: +eS.toFixed(2), endToTruthPx: +eT.toFixed(2) };
+  check("[C3] 終点の候補を押すと、B の中心線が引かれ、始点は候補の位置と一致し、端が真値から 6 px 以内", cl.length > 5 && eS <= 1.5 && eT <= 6, out.c3);
+
+  // C4: 引き直して、候補から遠い、血管の上の点を始点として押す
+  await page.getByTestId("dual-redefine-B").click();
+  await page.waitForTimeout(400);
+  const c2 = await cands();
+  const box = await cvB.boundingBox();
+  const truth = JSON.parse(fs.readFileSync(path.join(VV_DIR, "truth.json"), "utf8")).views.Case1_B.centerlinePx as Pt[];
+  const far = truth[400] as Pt;
+  const scale = (box?.width ?? 1) / IMG;
+  const minScreen = c2 ? Math.min(...c2.cands.map((c) => d([c[0], c[1]], far) * scale)) : Infinity;
+  const cf = await toClient(page, "B", far);
+  await page.mouse.click(cf.x, cf.y);
+  await page.waitForTimeout(500);
+  const c3 = await cands();
+  check("[C4] ★負例: 候補から遠い所（画面 30 px 以上）を押すと、吸着せず、押した位置が始点になる（次は終点の候補に変わり、候補の位置には動かない）", minScreen >= 30 && !!c3 && c3.which === 1, { minScreenPx: +minScreen.toFixed(1), which: c3?.which });
+  // C5: チェックを切る
+  await page.getByTestId("dual-redefine-B").click();
+  await page.waitForTimeout(300);
+  await page.getByTestId("dual-show-cands").uncheck();
+  await page.waitForTimeout(400);
+  const c5 = await cands();
+  check("[C5] ★負例: チェックを切ると、候補が出ない", c5 === null, { c5: c5 ? "出ている" : "空" });
   return out;
 }
 
@@ -1292,7 +1364,7 @@ async function main(): Promise<void> {
     await setFrame(viewer, "A", spec.frames.A);
     await setFrame(viewer, "B", spec.frames.B);
     // 中心線: 始点・終点をクリック。方向 B への自動提案は、propose の検査以外では切る（B の始点・終点を spec のとおりに置くため）。
-    const proposeMode = process.env.FFR_EDITCHECK === "propose";
+    const proposeMode = process.env.FFR_EDITCHECK === "propose" || process.env.FFR_EDITCHECK === "cands";
     const autoPropose = viewer.getByTestId("dual-auto-propose");
     if (!proposeMode && (await autoPropose.count())) await autoPropose.uncheck();
     for (const k of (proposeMode ? ["A"] : ["A", "B"]) as ("A" | "B")[]) {
@@ -1321,13 +1393,14 @@ async function main(): Promise<void> {
         : process.env.FFR_EDITCHECK === "esync" ? await edgeSyncCheck(viewer, spec.label)
         : process.env.FFR_EDITCHECK === "async" ? await anchorSyncCheck(viewer, spec.label)
         : process.env.FFR_EDITCHECK === "propose" ? await proposeCheck(viewer, spec)
+        : process.env.FFR_EDITCHECK === "cands" ? await candsCheck(viewer, spec)
         : await editCheck(viewer, spec.label);
       fs.writeFileSync(path.join(OUT_DIR, `${spec.label}.json`), JSON.stringify({ ...report, checks: results }, null, 1));
       return;
     }
 
     // アンカーを 3 → 必要数へ（使う + 検算用）。
-    await setStep(viewer, 4);
+    await setStep(viewer, 5);
     const want = spec.anchors.length + (spec.heldOut ? 1 : 0);
     for (let n = (await anchorsOf(viewer, "A")).length; n < want; n++) {
       await viewer.getByTestId("dual-add-anchor").click();
