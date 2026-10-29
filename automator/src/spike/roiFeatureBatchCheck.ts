@@ -543,11 +543,22 @@ async function main(): Promise<void> {
     check((await voxels.inputValue()) === "100", "定義を読み込むと基準値が復元される");
     check((await page.getByTestId("batch-spec-sha").getAttribute("title")) === shownV, "SHA-256 の表示が保存時と同じ");
     // 数字でない値は確定せず、定義は変わらない（赤枠）
+    // 定義の SHA-256 の表示は、非同期のハッシュ計算（crypto.subtle.digest）のあとで更新される。入力の直後に読むと、
+    // 「変わっていない」のか「まだ更新されていない」のか区別できないので、変わる側は変わるまで待ち、変わらない側は十分待ってから見る
     await voxels.fill("12a");
+    await page.waitForTimeout(800);
     check((await page.getByTestId("batch-spec-sha").getAttribute("title")) === shownV, "数字でない入力は定義に反映されない（負例）");
     await page.screenshot({ path: path.join(OUT_DIR, "08e-qc-voxels-invalid.png"), fullPage: true });
     await voxels.fill("");
-    check((await page.getByTestId("batch-spec-sha").getAttribute("title")) !== shownV, "空欄にすると基準値なしの定義になる（SHA-256 が変わる）");
+    const shaImmediate = await page.getByTestId("batch-spec-sha").getAttribute("title");
+    const tFill = Date.now();
+    let shaAfter = shaImmediate;
+    while (shaAfter === shownV && Date.now() - tFill < 5000) {
+      await page.waitForTimeout(50);
+      shaAfter = await page.getByTestId("batch-spec-sha").getAttribute("title");
+    }
+    console.log(`  sha: 入力の直後=${shaImmediate === shownV ? "変更前のまま" : "更新済み"}、${Date.now() - tFill} ms 待って=${shaAfter === shownV ? "変更前のまま" : "更新済み"}`);
+    check(shaAfter !== shownV, "空欄にすると基準値なしの定義になる（SHA-256 が変わる。ハッシュの更新を待って確かめる）");
     await put("1000");
 
     // ---- 7. 定義 ----
