@@ -17,6 +17,7 @@
  *                最大 FFR_MANUAL_TIMEOUT_S 秒 = 既定 2700）。FFR_MANUAL_AUTO=1 は編集なしでスクリプトが再構成する（ハーネスの確認）。
  * FFR_RESUME=1   解析状態の再開。DB の初期化でプラグイン保存領域だけ残し（keepPluginStore）、2 方向窓でシリーズを選んだところで止まる（自動で始点・終点・アンカーを置かない）。
  *                窓の［保存した解析状態を復元］で再開する。終わりの合図は FFR_MANUAL と同じ .results/ffr-plugin/manual-done。
+ * FFR_DUALQFR=1  再構成のあと、2 方向窓の QFR 欄（Pa・流速モデル・計算・3D への色）を確かめる（`dualQfrCheck`）。
  * FFR_GUIDE=1    補正に使うアンカーを、B を基準に［ガイドに合わせる］で A へ寄せて決める（点の選定用。検算用は寄せない）。
  *                寄せた後の位置は report.finalAnchors に出る（それを ffr-cases-segments-C.json に写して固定する）。
  *                ガイドで選んだ対応点は再投影ゲートが循環になるので、通過は「整合性ゲート通過」としか言えない。
@@ -965,8 +966,10 @@ async function stepsCheck(page: Page, label: string): Promise<Record<string, unk
   const l4b = await lbl(5);
   check("[T3] 3 点とも動かして確認すると「3/3」になり、［次へ］が押せる", /3\/3/.test(l4b) && (await next.isEnabled()), { l4b, enabled: await next.isEnabled() });
   await page.screenshot({ path: path.join(OUT_DIR, `${label}-steps-4-anchors-after.png`) });
-  // T3b: 検算用オン（4 組要る）
+  // T3b: 検算用オン（4 組要る）。チェックは ⑥ の画面にあるので、⑥ で入れて ⑤ へ戻って読む。
+  await setStep(page, 6);
   await page.getByTestId("dual-holdout").check();
+  await setStep(page, 5);
   await page.waitForTimeout(300);
   const l5a = await lbl(5);
   const info5a = await txt(page, "dual-info");
@@ -978,15 +981,19 @@ async function stepsCheck(page: Page, label: string): Promise<Record<string, unk
   await page.getByTestId("dual-add-anchor").click();
   await page.waitForTimeout(500);
   const a4 = await anchorsOf(page, "A"), b4 = await anchorsOf(page, "B");
-  await dragAnchor(page, "A", 3, [a4[3][0] + 2, a4[3][1] + 2]);
-  await dragAnchor(page, "B", 3, [b4[3][0] + 2, b4[3][1] + 2]);
+  // 足したアンカーは、中心線の間に入る（番号は末尾とは限らない）。未確認のものを動かして確認する。
+  const iNew = a4.findIndex((g) => !g[2]);
+  await dragAnchor(page, "A", iNew, [a4[iNew][0] + 2, a4[iNew][1] + 2]);
+  await dragAnchor(page, "B", iNew, [b4[iNew][0] + 2, b4[iNew][1] + 2]);
   const l5b = await lbl(5);
   const nextB = await next.isEnabled();
   await setStep(page, 6);
   const reconB = await page.getByTestId("dual-recon").isEnabled();
   await setStep(page, 5);
   check("[T3b] 検算用オン: 3 組では「3/4」で［次へ］・［3D に再構成］とも無効（理由の 1 行あり）。4 組目で「4/4」になり、どちらも有効", /3\/4/.test(l5a) && !nextA && !reconA && /4 組要ります/.test(info5a) && /4\/4/.test(l5b) && nextB && reconB, { l5a, nextA, reconA, info5a: info5a.slice(-80), l5b, nextB, reconB });
+  await setStep(page, 6);
   await page.getByTestId("dual-holdout").uncheck();
+  await setStep(page, 5);
   const reconAt4 = await page.getByTestId("dual-recon").isVisible(); // ⑤ で見えないこと
   await setStep(page, 6);
   const reconAt6 = await page.getByTestId("dual-recon").isVisible();
@@ -1640,6 +1647,7 @@ async function resumeCheck(page: Page, spec: Spec, imp: Record<"A" | "B", { stud
   check("[U1] 経由点を足すと、自動で保存される（「自動保存しました」）", wpSaved === 1 && /自動保存しました/.test(p1), out.u1);
 
   // 選び直し（定義は消える）→ 保存済みが見つかる
+  await setStep(page, 1); // ［シリーズを選ぶ］は手順 ① の画面にある
   await pickAB(page, imp);
   const label2 = await restore.innerText();
   const enabled2 = await restore.isEnabled();
@@ -1652,6 +1660,7 @@ async function resumeCheck(page: Page, spec: Spec, imp: Record<"A" | "B", { stud
   await page.screenshot({ path: path.join(OUT_DIR, `${spec.label}-resume-2-restored.png`) });
 
   // ★上書きの安全弁
+  await setStep(page, 1); // ［シリーズを選ぶ］は手順 ① の画面にある
   await pickAB(page, imp);
   const pendingNote = await persist();
   await redefine();
@@ -1868,6 +1877,128 @@ async function colorCheck3d(driver: DesktopDriver, viewer: Page, mode: string): 
   out.negRun = { neg, legendNeg };
   await geo.screenshot({ path: path.join(OUT_DIR, "color3d-3-otherrun.png") }).catch(() => {});
   check("[L3-6] ★負例: 別の runId では色も凡例も出ない", legendNeg === 0 && !!neg && neg.neutral === 0, { legendNeg, neg });
+  return out;
+}
+
+/**
+ * 2 方向窓の QFR 欄（FFR_DUALQFR=1。再構成のあと）。
+ *  D0 再構成のあと QFR 欄が出る
+ *  D1 ★負例: Pa 未入力では［QFR を計算して 3D に色を乗せる］が無効で、理由に Pa が出る
+ *  D2 ★負例: 近位端が未確認（FFR_PROXIMAL=none）なら、Pa を入れても無効で、理由に近位端が出る
+ *  D3 シネが使えなければ cQFR / aQFR は選べず、理由が出る（単一フレームの仮想血管）。使えれば選べる
+ *  D4 ★負例: 計算する前は、3D 画面に凡例も勾配も無い
+ *  D5 fQFR: 計算すると数値が出て、「3D に色を乗せました」と出て、3D 画面に凡例と勾配が乗る
+ *  D6 cQFR（シネが使えるときだけ。使えなければ未達）: フレームカウントの窓が開き、ROI が両端に置かれている。確定すると cQFR と fQFR が並ぶ
+ */
+async function dualQfrCheck(viewer: Page, spec: Spec, outDir: string): Promise<Record<string, unknown>> {
+  const out: Record<string, unknown> = {};
+  const root = viewer.getByTestId("dual-qfr");
+  const visible = await root.isVisible().catch(() => false);
+  check("[D0] 再構成のあと、QFR 欄が出る", visible, { visible });
+  if (!visible) return out;
+  const run = viewer.getByTestId("dual-qfr-run");
+  const note = viewer.getByTestId("dual-qfr-note");
+  const geoPage = (): Page | undefined => viewer.context().pages().find((p) => p.url().includes("geometry3d"));
+  await root.scrollIntoViewIfNeeded().catch(() => {});
+
+  out.runEnabledNoPa = await run.isEnabled();
+  out.noteNoPa = ((await note.textContent()) ?? "").slice(0, 120);
+  // 理由の優先順は、モデル → 近位端 → Pa。近位端が未確認なら、Pa 未入力でも近位端の理由が先に出る。
+  check("[D1] ★負例: Pa 未入力では計算ボタンが無効で、理由が出る（近位端が確認済みなら Pa、未確認なら近位端）", !out.runEnabledNoPa && (spec.proximal === "" ? /近位端/ : /Pa/).test(String(out.noteNoPa)), { enabled: out.runEnabledNoPa, note: out.noteNoPa });
+
+  const contrastOpt = viewer.getByTestId("dual-qfr-velocity").locator('option[value="contrast"]');
+  const contrastDisabled = await contrastOpt.isDisabled();
+  out.contrastDisabled = contrastDisabled;
+  out.cineNote = ((await viewer.getByTestId("dual-qfr-cine-note").textContent()) ?? "").slice(0, 200);
+  if (contrastDisabled) check("[D3] シネが使えないので cQFR は選べず、理由が出る", /使えません/.test(String(out.cineNote)), { note: out.cineNote });
+  else check("[D3] シネが使えるので cQFR を選べる（フレーム数・fps が出る）", /フレーム/.test(String(out.cineNote)) && /fps/.test(String(out.cineNote)), { note: out.cineNote });
+
+  if (spec.pa === undefined) {
+    results.push({ name: "[D4〜D6] Pa が仕様に無いので計算せず", ok: null });
+    return out;
+  }
+  await viewer.getByTestId("dual-qfr-velocity").selectOption("fixed");
+  await viewer.getByTestId("dual-qfr-pa").fill(String(spec.pa));
+  await viewer.waitForTimeout(300);
+  out.runEnabledWithPa = await run.isEnabled();
+  out.noteWithPa = ((await note.textContent()) ?? "").slice(0, 160);
+  if (spec.proximal === "") {
+    check("[D2] ★負例: 近位端が未確認なら、Pa を入れても計算ボタンが無効で、理由に近位端が出る", !out.runEnabledWithPa && /近位端/.test(String(out.noteWithPa)), { enabled: out.runEnabledWithPa, note: out.noteWithPa });
+    return out;
+  }
+  check("[D2] 近位端を選んであれば、Pa を入れると計算ボタンが有効になる", !!out.runEnabledWithPa, { enabled: out.runEnabledWithPa, note: out.noteWithPa });
+  if (!out.runEnabledWithPa) return out;
+
+  // 計算の前: 3D 画面は（再構成で）開いている。色も凡例も無いこと。
+  const g0 = geoPage();
+  if (!g0) {
+    results.push({ name: "[D4] 3D 画面が開いていない（再構成の自動表示 H74 が働いていない）", ok: false, detail: viewer.context().pages().map((p) => p.url().slice(-40)) });
+  } else {
+    await g0.getByTestId("geometry3d-root").waitFor({ state: "visible", timeout: 30_000 });
+    await g0.waitForTimeout(2_000);
+    const s0 = await geo3dStats(g0);
+    const lg0 = await g0.getByTestId("vessel-legend").count();
+    out.before3d = { stats: s0, legend: lg0 };
+    check("[D4] ★負例: 計算する前は、3D 画面に凡例も勾配も無い", lg0 === 0 && !!s0 && s0.neutral === 0, out.before3d);
+  }
+
+  await run.click();
+  const val = viewer.getByTestId("dual-qfr-result").getByTestId("qfr-value");
+  await val.waitFor({ state: "visible", timeout: 20_000 }).catch(() => {});
+  out.value = ((await val.first().innerText().catch(() => "")) ?? "").replace(/\s+/g, " ");
+  const put = ((await viewer.getByTestId("dual-qfr-put").textContent().catch(() => "")) ?? "").replace(/\s+/g, " ");
+  out.put = put.slice(0, 160);
+  await viewer.screenshot({ path: path.join(outDir, `${spec.label}-4-dualqfr.png`) });
+  const g1 = geoPage();
+  if (g1) {
+    await g1.waitForTimeout(3_500);
+    const s1 = await geo3dStats(g1);
+    const lg1 = await g1.getByTestId("vessel-legend").count();
+    out.after3d = { stats: s1, legend: lg1 };
+    await g1.screenshot({ path: path.join(outDir, `${spec.label}-4-dualqfr-3d.png`) }).catch(() => {});
+    check("[D5] fQFR: 数値が出て、「3D に色を乗せました」と出て、3D 画面に凡例と勾配が乗る", /\d\.\d{2,}/.test(String(out.value)) && /3D に色を乗せました/.test(put) && lg1 === 1 && !!s1 && s1.neutral > 0 && s1.cool > 0, { value: out.value, put: out.put, after3d: out.after3d });
+  } else {
+    check("[D5] fQFR: 3D 画面に色が乗る", false, { value: out.value, put: out.put, note: "3D 画面が見つからない" });
+  }
+
+  if (contrastDisabled) {
+    results.push({ name: "[D6] cQFR: シネが使えないため未実施（フレームカウントの窓は開けない）", ok: null, detail: out.cineNote });
+    return out;
+  }
+  await viewer.getByTestId("dual-qfr-velocity").selectOption("contrast");
+  const reuse = viewer.getByTestId("dual-qfr-reuse");
+  if (await reuse.isVisible().catch(() => false)) await reuse.uncheck();
+  await run.click();
+  const tdc = viewer.getByTestId("tdc-panel");
+  await tdc.waitFor({ state: "visible", timeout: 20_000 }).catch(() => {});
+  await viewer.waitForTimeout(2_500);
+  const tdcText = ((await tdc.textContent().catch(() => "")) ?? "").replace(/\s+/g, " ");
+  out.tdcOpened = await tdc.isVisible().catch(() => false);
+  out.roiPreset = /近位端 設定済み/.test(tdcText) && /遠位端 設定済み/.test(tdcText);
+  await viewer.screenshot({ path: path.join(outDir, `${spec.label}-5-tdc.png`) });
+  check("[D6-1] cQFR: フレームカウントの窓が開き、ROI が両端に置かれている", !!out.tdcOpened && !!out.roiPreset, { opened: out.tdcOpened, preset: out.roiPreset, text: tdcText.slice(0, 160) });
+  if (!out.tdcOpened) return out;
+  await viewer.getByTestId("tdc-build").click();
+  await viewer.getByTestId("tdc-confirm").waitFor({ state: "visible", timeout: 180_000 }).catch(() => {});
+  const cand = ((await tdc.textContent().catch(() => "")) ?? "").replace(/\s+/g, " ");
+  out.candidates = (cand.match(/候補[^。]{0,30}/g) ?? []).slice(0, 4);
+  await viewer.screenshot({ path: path.join(outDir, `${spec.label}-5-tdc-curve.png`) });
+  // 候補が出なかった（造影の流入が無いデータ）ときは、手入力のフレームで確定する経路を確かめる。候補の検出そのものは未達として分けて数える。
+  const frameInputs = tdc.locator('input[type="number"]');
+  const vals = await frameInputs.evaluateAll((els) => els.map((e) => (e as HTMLInputElement).value));
+  out.frameInputsBefore = vals;
+  if (vals.length === 2 && vals.some((v) => v === "")) {
+    results.push({ name: "[D6-3] 立ち上がりの候補（自動）: この検査データ（造影の流入が無い雑音のシネ）では出ないため未達。実症例で確かめる", ok: null, detail: { frameInputs: vals } });
+    await frameInputs.nth(0).fill("6");
+    await frameInputs.nth(1).fill("30");
+  }
+  await viewer.getByTestId("tdc-confirm").click();
+  await viewer.getByTestId("dual-qfr-result").getByTestId("qfr-velocity-compare").waitFor({ state: "visible", timeout: 20_000 }).catch(() => {});
+  const cmp = ((await viewer.getByTestId("qfr-velocity-compare").first().innerText().catch(() => "")) ?? "").replace(/\s+/g, " ");
+  out.compare = cmp.slice(0, 200);
+  const put2 = ((await viewer.getByTestId("dual-qfr-put").textContent().catch(() => "")) ?? "").replace(/\s+/g, " ");
+  await viewer.screenshot({ path: path.join(outDir, `${spec.label}-5-cqfr.png`) });
+  check("[D6-2] cQFR: 確定すると cQFR と fQFR が並び、3D に色を乗せた", /cQFR/.test(cmp) && /fQFR/.test(cmp) && /3D に色を乗せました/.test(put2), { compare: out.compare, put: put2.slice(0, 120) });
   return out;
 }
 
@@ -2122,6 +2253,8 @@ async function main(): Promise<void> {
     check("[6] 再構成が結果を出した（ブロック警告なし）", !!rec && !/結果を出しません|再構成できませんでした/.test(rec), rec.slice(0, 160));
     if (spec.heldOut) check("[7] 検算用アンカーの誤差が表示された（数値）", report.heldOutPx !== null, held.slice(0, 160));
     check("[8] 径の食い違いが表示された、または出せない理由が分かる", /2 方向の径の差|断面積・狭窄率は出せません/.test(rec + " " + agree), agree.slice(0, 120));
+
+    if (process.env.FFR_DUALQFR === "1") report.dualQfr = await dualQfrCheck(viewer, spec, OUT_DIR);
 
     /* ── QFR 窓 ── */
     if (process.env.FFR_QFR !== "0") {
