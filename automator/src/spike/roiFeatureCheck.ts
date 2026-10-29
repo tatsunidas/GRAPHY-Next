@@ -31,6 +31,16 @@ import { AUTOMATOR_ROOT } from "../fixtures/manifest.js";
 
 const OUT_DIR = path.join(AUTOMATOR_ROOT, ".results", "roi-feature-check");
 
+/** 本体が同梱する RadiomicsJ の版。`backend/pom.xml` から読む（期待値を書き写すと、版を上げるたびに古くなる）。 */
+const RADIOMICSJ_VERSION = (() => {
+  const pom = fs.readFileSync(path.join(AUTOMATOR_ROOT, "..", "backend", "pom.xml"), "utf8");
+  const m = /<radiomicsj\.version>([^<]+)<\/radiomicsj\.version>/.exec(pom);
+  if (!m) throw new Error("backend/pom.xml に radiomicsj.version がありません");
+  return m[1].trim();
+})();
+/** 既定でオンの族の数 / 族の総数（`ROI_FEATURE_FAMILIES`。族を足したら更新する）。 */
+const DEFAULT_FAMILIES_SUMMARY = "12/15";
+
 const failures: string[] = [];
 let passed = 0;
 function check(cond: boolean, label: string, detail?: unknown): void {
@@ -360,15 +370,15 @@ async function main(): Promise<void> {
       check(rec.CaseLabel === CASE_LABEL, "CaseLabel 列", rec.CaseLabel);
       check(rec.Provenance_GraphyNextVersion === status.version, "GraphyNext の版が /api/status と同じ",
         { csv: rec.Provenance_GraphyNextVersion, status: status.version });
-      check(rec.Provenance_RadiomicsJVersion === "2.4.1", "RadiomicsJ の版が 2.4.1（jar の中で取り違えていない）",
+      check(rec.Provenance_RadiomicsJVersion === RADIOMICSJ_VERSION, `RadiomicsJ の版が pom の ${RADIOMICSJ_VERSION}（jar の中で取り違えていない）`,
         rec.Provenance_RadiomicsJVersion);
       check(/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?Z$/.test(rec.Provenance_ExtractedAt), "抽出日時は ISO 8601",
         rec.Provenance_ExtractedAt);
       check(rec.Provenance_SettingsSha256 === sha256(propsDl.text), "CSV のハッシュ = 設定ファイルの SHA-256");
       check(propsDl.text === direct32.settingsProperties, "設定ファイルは API の本文と同じバイト列");
-      check(provText.includes(status.version) && provText.includes("2.4.1")
+      check(provText.includes(status.version) && provText.includes(RADIOMICSJ_VERSION)
         && provText.includes(rec.Provenance_SettingsSha256.slice(0, 4)), "表の上に版とハッシュ", provText);
-      check(/ビン数 32|32 bins/.test(summaryText) && /なし|no resampling/.test(summaryText) && summaryText.includes("12/14"),
+      check(/ビン数 32|32 bins/.test(summaryText) && /なし|no resampling/.test(summaryText) && summaryText.includes(DEFAULT_FAMILIES_SUMMARY),
         "表の上に設定の要約", summaryText);
       // ROI の大きさ（基準値は未設定）
       check(rec.Roi_InitialVoxels === "5760" && rec.Roi_IntensityMaskVoxels === "5760" && rec.Roi_MorphMaskVoxels === "5760",
