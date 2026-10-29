@@ -19,7 +19,6 @@
  */
 import type { DimScope, RoiScope } from "./roiMaskStore";
 import { isContourTool } from "./roiContourTools";
-import { dropAnalysesFor, mergeAnalyses, sanitizeAnalysis, type SavedQcaAnalysis } from "./qcaAnalysisState";
 
 /** 保存フォーマットの版。互換性を壊す変更をしたら上げ、読み込み側で分岐する。 */
 export const ROI_SCHEMA_VERSION = 1;
@@ -50,6 +49,15 @@ export interface SavedRoi {
    * 今見ているフレーム番号を書く**（`t` を保存していないのも同じ理由）。
    */
   frame?: number;
+  /**
+   * 保存時の world の基準の画素間隔 `[row, col]`（mm/px）。**患者位置（IPP）を持たない画像（XA など）の ROI にだけ付く。**
+   *
+   * <p>🚨 IPP の無い画像の world は「画像が作られたときの画素間隔 × 画素位置」で決まり、空間校正の有無で変わる
+   * （未校正 0.214 → 校正済み 0.0371 など）。座標だけ保存すると、校正した回を再読込したとき線が 5.8 倍ずれる。
+   * 復元時に今の基準との比で座標を換算する（{@link rescaleRoiToSpacing}）。
+   * 無い（この項目を持たない旧保存・IPP のある画像）は換算しない。
+   */
+  worldSpacing?: [number, number];
   /** ハンドル座標（患者座標 LPS mm）。 */
   points: number[][];
   /** 輪郭系ツールの polyline（患者座標 LPS mm）。無いツールでは省略。 */
@@ -129,14 +137,13 @@ export interface RoiSaveFile {
   /** 削除済み ROI の墓標。 */
   deleted?: RoiTombstone[];
   /**
-   * QCA / QVA の解析状態（`qcaAnalysisState.ts`。`fw/angio-design.md` §14.5）。
+   * 旧版が書いた QCA / QVA の解析状態。**中身は読まず、そのまま持ち越す**（2D QCA は本体から外れたが、
+   * 古い保存ファイルを上書きしても失わないため。プラグイン側が使う余地も残す）。
    *
-   * <p>🔴 **これを足すために `schema` を上げていない。** {@link parseSaveFile} は
-   * 「自分より新しい版は読まない」ので、版を上げると**古いアプリがその患者の ROI を
-   * 丸ごと空として読む**（＝画面から注釈が消える）。知らないキーは無視される、という
-   * 形に留めてある。古いアプリが上書き保存すると解析状態だけは失われるが、ROI は無傷。
+   * <p>🔴 これを足すために `schema` を上げていない。{@link parseSaveFile} は「自分より新しい版は読まない」ので、
+   * 版を上げると古いアプリがその患者の ROI を丸ごと空として読む（＝画面から注釈が消える）。
    */
-  analyses?: SavedQcaAnalysis[];
+  analyses?: unknown[];
   /**
    * 3D 球 ROI。🔴 **これを足すために `schema` を上げていない**（`analyses` と同じ理由）。
    * 古いアプリは無視して読む（ROI は無傷）。古いアプリが上書き保存すると球だけは失われる。
@@ -148,8 +155,8 @@ export interface RoiSaveFile {
 export interface ParsedRoiFile {
   rois: SavedRoi[];
   deleted: RoiTombstone[];
-  /** 解析状態（無ければ空配列）。 */
-  analyses: SavedQcaAnalysis[];
+  /** 旧版の解析状態（中身は読まない。無ければ空配列）。 */
+  analyses: unknown[];
   /** 3D 球 ROI（無ければ空配列）。 */
   spheres: SavedSphere[];
 }
@@ -184,6 +191,11 @@ export interface RoiSaveContext {
    * 省略するとフレームを記録しない＝マルチフレームで復元先を誤る。
    */
   frameOf?: (imageId: string) => number | null;
+  /**
+   * annotation の referencedImageId → world の基準の画素間隔 `[row, col]`。IPP のある画像は null（換算が要らない）。
+   * 省略すると記録しない。
+   */
+  worldSpacingOf?: (imageId: string) => [number, number] | null;
   /** annotationUID → ROI マネージャのメタ。 */
   metaOf: (roiUid: string) => {
     label?: string;
@@ -206,6 +218,26 @@ const points3 = (arr: unknown): number[][] => {
   // 3 要素へ切り詰める（Cornerstone は Point3 だが余分が付くことがある）。
   return arr.filter(isPoint3).map((p) => [p[0], p[1], p[2]]);
 };
+
+const isSpacing = (v: unknown): v is [number, number] =>
+  Array.isArray(v) && v.length === 2 && v.every((n) => typeof n === "number" && Number.isFinite(n) && n > 0);
+
+/**
+ * 保存時の world の基準（{@link SavedRoi.worldSpacing}）と今の基準が違うとき、座標を今の基準へ換算した ROI を返す（純関数）。
+ * world は x = 列 × 列間隔・y = 行 × 行間隔（z は変えない）。基準を持たない・同じ・今の基準が不明なら元のまま。
+ */
+export function rescaleRoiToSpacing(roi: SavedRoi, current: [number, number] | null): SavedRoi {
+  const old = roi.worldSpacing;
+  if (!old || !current || !isSpacing(current)) return roi;
+  // 画素位置を保つ: 画素 = world ÷ 保存時の間隔、新しい world = 画素 × 今の間隔。
+  const fx = current[1] / old[1];
+  const fy = current[0] / old[0];
+  if (Math.abs(fx - 1) < 1e-9 && Math.abs(fy - 1) < 1e-9) return roi;
+  const scale = (pts: number[][]) => pts.map((p) => [p[0] * fx, p[1] * fy, p[2]]);
+  const out: SavedRoi = { ...roi, points: scale(roi.points), worldSpacing: [current[0], current[1]] };
+  if (roi.polyline) out.polyline = scale(roi.polyline);
+  return out;
+}
 
 /**
  * annotation → 保存形（純関数）。**保存できない ROI は null**（黙って壊れた形で保存しない）。
@@ -236,6 +268,8 @@ export function toSavedRoi(ann: AnnotationLike, ctx: RoiSaveContext): SavedRoi |
   // マルチフレームの復元先。**その ROI 自身の imageId** から取る（表示中の値ではない）。
   const frame = ctx.frameOf?.(refId);
   if (typeof frame === "number" && Number.isFinite(frame) && frame >= 0) out.frame = frame;
+  const spacing = ctx.worldSpacingOf?.(refId);
+  if (isSpacing(spacing)) out.worldSpacing = [spacing[0], spacing[1]];
   // スプライン系は補間方法も保存する（復元時に同じ形へ戻すため）
   const splineType = (ann.data as { spline?: { type?: string } } | undefined)?.spline?.type;
   if (typeof splineType === "string" && splineType) out.splineType = splineType;
@@ -269,13 +303,12 @@ export function buildSaveFile(
   rois: SavedRoi[],
   deleted: RoiTombstone[] = [],
   writer?: string,
-  analyses: SavedQcaAnalysis[] = [],
+  analyses: unknown[] = [],
   spheres: SavedSphere[] = [],
 ): RoiSaveFile {
   const trimmed = [...deleted]
     .sort((a, b) => (a.at < b.at ? 1 : a.at > b.at ? -1 : 0))
     .slice(0, MAX_TOMBSTONES);
-  // 元の計測が消えた解析は道連れにする（残しても復元先が無い）。
   const buried = new Set(trimmed.map((t) => t.roiUid));
   const liveSpheres = spheres.filter((sp) => !buried.has(sp.uid));
   return {
@@ -283,7 +316,7 @@ export function buildSaveFile(
     writer,
     rois,
     deleted: trimmed,
-    analyses: dropAnalysesFor(analyses, buried),
+    analyses,
     // 球が無いときはキー自体を出さない（球を使わない患者の保存内容を変えない）。
     ...(liveSpheres.length ? { spheres: liveSpheres } : {}),
   };
@@ -341,6 +374,7 @@ export function parseSaveFile(json: string | null | undefined): ParsedRoiFile {
     if (typeof s.c === "number") item.c = s.c;
     if (typeof s.t === "number") item.t = s.t;
     if (typeof s.frame === "number" && Number.isFinite(s.frame) && s.frame >= 0) item.frame = s.frame;
+    if (isSpacing(s.worldSpacing)) item.worldSpacing = [s.worldSpacing[0], s.worldSpacing[1]];
     if (typeof s.label === "string") item.label = s.label;
     if (typeof s.description === "string") item.description = s.description;
     if (s.scope && typeof s.scope === "object") item.scope = sanitizeScope(s.scope);
@@ -354,14 +388,9 @@ export function parseSaveFile(json: string | null | undefined): ParsedRoiFile {
     if (s.isLocked === true) item.isLocked = true;
     out.push(item);
   }
-  // 解析状態（`fw/angio-design.md` §14.5）。壊れた要素は個別に落とす。
-  const analyses: SavedQcaAnalysis[] = [];
-  if (Array.isArray((file as { analyses?: unknown }).analyses)) {
-    for (const a of (file as { analyses: unknown[] }).analyses) {
-      const parsed = sanitizeAnalysis(a);
-      if (parsed && !buried.has(parsed.pickUid)) analyses.push(parsed);
-    }
-  }
+  // 旧版の解析状態は中身を検証せず素通しにする（読めない形でも失わない。墓標との突き合わせもしない）。
+  const analysesRaw = (file as { analyses?: unknown }).analyses;
+  const analyses: unknown[] = Array.isArray(analysesRaw) ? analysesRaw : [];
   const spheres: SavedSphere[] = [];
   if (Array.isArray((file as { spheres?: unknown }).spheres)) {
     const seen = new Set<string>();
@@ -548,9 +577,9 @@ export function mergeSaveFiles(remote: ParsedRoiFile, local: ParsedRoiFile): Par
   for (const uid of tombs.keys()) byUid.delete(uid);
 
   const cmp = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
-  // 🔴 解析状態は**和集合ではなく新しい方**を採る（同じ計測の解析は上書きしていくもの）。
-  //    元の計測が墓標に載っていれば道連れに落とす。
-  const analyses = dropAnalysesFor(mergeAnalyses(remote.analyses, local.analyses), tombs.keys());
+  // 旧版の解析状態は中身を読まないので突き合わせられない。いまの保存内容（remote）を正とし、
+  // 空のときだけローカルが持ち越したものを使う。
+  const analyses = remote.analyses.length ? remote.analyses : local.analyses;
   // 球も `uid` で和集合（同じ uid はローカル）。墓標に載った球は落とす。
   const sphereByUid = new Map<string, SavedSphere>();
   for (const sp of remote.spheres) sphereByUid.set(sp.uid, sp);

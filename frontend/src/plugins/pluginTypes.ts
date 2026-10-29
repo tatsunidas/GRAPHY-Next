@@ -97,10 +97,8 @@ export type {
  * **プラグイン由来であることの表示が必須**（区切り線 ＋ 印。`fw/subtraction-design.md` §15.8）。
  * host の中身は `viewer2d.menu` と完全に同一で、違うのは出る場所だけである。
  *
- * <p>`viewer2d.xa3d` は **3D QCA のダイアログの中**にボタンとして出す（**H63・0.3.7 以降**）。
- * ダイアログは全画面の背景を持ちメニューを押せないので、「再構成を見ながら解析を掛ける」
- * （QFR など）にはこの面が要る。押してもダイアログは閉じない。host の中身は `viewer2d.menu` と同一。
- * 旧本体はこの面を知らないだけで、宣言しても害は無い（`contributes` で絞るだけ）。
+ * <p>`viewer2d.xa3d` は、本体の 3D QCA ダイアログ（H63・0.3.7 以降）の中に出す面だった。3D QCA はプラグインへ移ったので
+ * **本体はこの面をどこにも出さない**。宣言しても害は無い（読み込めるが現れない）。型は旧プラグインの宣言を読めるよう残している。
  */
 import type { AiGenerationOptions, AiGenerationOutcome } from "./pluginAiApi";
 import type { ComputeRunJobOptions, ComputeRunOutcome, ComputeEndpointStatus, ComputeReleaseOutcome } from "./pluginComputeApi";

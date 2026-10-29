@@ -19,7 +19,8 @@ import { registerSegMetadataProvider } from "./segMetadata";
 import { setSpacingBetweenSlicesReader } from "./sliceInfoMeta";
 import { registerThickSlabLoader } from "./thickSlab";
 import { registerPluginVolumeLoader } from "../plugins/pluginVolumeScheme";
-import { registerXaCalibrationProvider } from "./xaCalibrationProvider";
+import { loaderSpacingFor, registerXaCalibrationProvider } from "./xaCalibrationProvider";
+import { registerLoaderSpacing } from "./roiRestore";
 import { registerDsaLoader } from "./dsaLoader";
 import { WandTool } from "./wandTool";
 import { LevelSetTool } from "./levelSetsTool";
@@ -216,6 +217,7 @@ export function ensureCornerstoneInitialized(): Promise<void> {
       // imagePlaneModule へ注入する。未校正なら spacing を落として px 表示に戻す
       // （fw/angio-design.md §7）。
       registerXaCalibrationProvider();
+      registerLoaderSpacing(loaderSpacingFor);
       // DSA（サブトラクション）: graphy-dsa: スキームの合成ローダ＋メタデータ委譲
       // （modalityLUT 恒等・差分用 VOI）。fw/angio-design.md §6。
       registerDsaLoader();

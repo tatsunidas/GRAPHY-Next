@@ -6,7 +6,7 @@
  * 解析タスクの「段（ステップ）」モデル（`fw/angio-design.md` §21.6・A13-1）。
  *
  * <h3>なぜ要るか</h3>
- * QCA は 7 段あるのに、UI では**いま何段目にいて何が未確定かが分からない**。
+ * 解析は段が多いのに、UI では**いま何段目にいて何が未確定かが分からない**。
  * 特に困るのは次の 2 つで、どちらも「数値は出ているのに信用してよいか分からない」形で出る:
  * - **未校正のまま解析すると px で出る**。結果表を見ただけでは mm との区別が付きにくい
  * - **自動の中心線は血管から外れていても必ず結果を出す**（§8.6）。誰も見ていない自動値と、
@@ -14,7 +14,7 @@
  *
  * <h3>設計上の約束</h3>
  * 1. **状態を二重に持たない。** 段の状態は UI の状態（結果があるか・手修正が入っているか）から
- *    **毎回導出する**（{@link deriveQcaSteps}）。段側にフラグを持たせると必ず実体とずれる。
+ *    **毎回導出する**（{@link deriveQlvSteps} など）。段側にフラグを持たせると必ず実体とずれる。
  * 2. **`skipped` を `done` と同じに見せない。** 「やった」と「飛ばした」が同じ見た目になると、
  *    **未校正のまま出た数値が承認済みに見える**（§21.6 の警告）。色も文言も分ける。
  * 3. **`invalidates` は「直接の依存」だけ書く。** 推移的な波及は {@link invalidatedBy} が閉包を取る。
@@ -74,18 +74,12 @@ export interface TaskStepDef {
 
 /**
  * 手修正の実体（ダイアログの状態に対応）。
- * QCA（`waypoints`〜`reference`）と QLV（`frames`〜`esContour`）で共有する。
+ * QLV（`frames`〜`esContour`）と TIMI で使う。
  */
 export type ManualInputKey =
-  | "waypoints"
-  | "edges"
-  | "trim"
-  | "reference"
   | "frames"
   | "edContour"
   | "esContour"
-  | "views"
-  | "anchors"
   // TIMI（A15）。`frames` は QLV の ED/ES 用なので流用しない
   // （同じ鍵にすると、片方をやり直したときにもう片方の状態まで捨てる）。
   | "vessel"
@@ -101,51 +95,11 @@ export interface TaskStep extends TaskStepDef {
 }
 
 /**
- * QCA タスクの段。**表示順＝この配列の順**。
- *
- * <p>段の切り方は §8.1 の 7 段（アルゴリズムの段）そのままではなく、
- * **人が決める単位**にしてある（人が触れない段を並べても意味が無い）。
- */
-export const QCA_STEPS: readonly TaskStepDef[] = [
-  { id: "input", labelKey: "xa.step.input", invalidates: ["analysis"], owns: [], clears: [] },
-  // 校正は入力とは独立した入口（先に校正してから計測を引いてもよい）。だから `input` から
-  // 辺が出ていない。**根が 2 つある**のは意図的で、テストでもそれを固定している。
-  { id: "calibration", labelKey: "xa.step.calibration", invalidates: ["analysis"], owns: [], clears: [] },
-  {
-    id: "analysis",
-    labelKey: "xa.step.analysis",
-    invalidates: ["centerline", "edges"],
-    owns: [],
-    // 「解析からやり直す」＝全部自動に戻す（既存の「手修正をすべて破棄」と同じ）。
-    clears: ["waypoints", "edges", "trim", "reference"],
-  },
-  {
-    id: "centerline",
-    labelKey: "xa.step.centerline",
-    // 🚨 中心線が変わるとエッジ修正の宛先（path インデックス）が**範囲内のまま別の物理位置**を
-    //    指す。だから centerline → edges は必須（§8.6 の centerlineToken と同じ話）。
-    invalidates: ["edges", "range"],
-    owns: ["waypoints"],
-    // 同じ理由で、中心線をやり直すときはエッジ修正も捨てる（指し先が無意味になるため）。
-    clears: ["waypoints", "edges"],
-  },
-  { id: "edges", labelKey: "xa.step.edges", invalidates: ["range"], owns: ["edges"], clears: ["edges"] },
-  {
-    id: "range",
-    labelKey: "xa.step.range",
-    invalidates: ["save"],
-    owns: ["trim", "reference"],
-    clears: ["trim", "reference"],
-  },
-  { id: "save", labelKey: "xa.step.save", invalidates: [], owns: [], clears: [] },
-] as const;
-
-/**
  * `from` をやり直したときに無効になる段（**推移閉包**。`from` 自身は含まない）。
  *
  * <p>幅優先で辿るだけ。巡回があっても止まる（`seen` で刈る）が、**巡回はテストで禁止**している。
  */
-export function invalidatedBy(from: string, steps: readonly TaskStepDef[] = QCA_STEPS): string[] {
+export function invalidatedBy(from: string, steps: readonly TaskStepDef[]): string[] {
   const byId = new Map(steps.map((s) => [s.id, s]));
   const seen = new Set<string>();
   const queue = [...(byId.get(from)?.invalidates ?? [])];
@@ -165,115 +119,9 @@ export function invalidatedBy(from: string, steps: readonly TaskStepDef[] = QCA_
  * <p>🚨 **`invalidates` を辿らない。** 「無効（計算し直す）」と「捨てる（人の入力を消す）」は
  * 別物で、辿ると校正のやり直しだけで手修正が全部消える（{@link TaskStepDef.clears} 参照）。
  */
-export function clearedBy(from: string, steps: readonly TaskStepDef[] = QCA_STEPS): ManualInputKey[] {
+export function clearedBy(from: string, steps: readonly TaskStepDef[]): ManualInputKey[] {
   const byId = new Map(steps.map((s) => [s.id, s]));
   return [...(byId.get(from)?.clears ?? [])];
-}
-
-/** {@link deriveQcaSteps} の入力。**UI の状態をそのまま写したもの**（新しい状態を増やさない）。 */
-export interface QcaTaskState {
-  /** 入力の Length 計測を選べているか。 */
-  hasPick: boolean;
-  /** mm を出してよい校正か（`isXaCalibrated()` の結果）。 */
-  calibrated: boolean;
-  /** 校正の出自（`XaCalibration.source`）。`done` の注記に出す。 */
-  calibrationSource: string | null;
-  /** 解析結果があるか。 */
-  hasResult: boolean;
-  /** 手修正の通過点の数。 */
-  waypoints: number;
-  /** 手修正したエッジの数。 */
-  editedEdges: number;
-  /** 区間を切り詰めたか。 */
-  trimmed: boolean;
-  /** 参照径の決め方（`ends` は QVA の既定＝両端を健常と見なす）。 */
-  referenceKind: "auto" | "segments" | "fixed" | "ends";
-  /** 中心線が変わってエッジ修正が捨てられたか（`warnings` に `edgeEditsDropped`）。 */
-  edgeEditsDropped: boolean;
-  /** 保存先の元インスタンスを特定できているか。 */
-  canSave: boolean;
-  /** 保存済みか。 */
-  saved: boolean;
-}
-
-/**
- * UI の状態から段の状態を導出する。**ここが唯一の判定**（各所で個別に判定しない）。
- *
- * <p>`active` は「`todo` のうち最初の 1 つ」。`skipped` / `invalid` は `active` にしない
- * （飛ばした段を「次にやること」として指し続けると、ずっと前に進めないように見える）。
- */
-export function deriveQcaSteps(s: QcaTaskState): TaskStep[] {
-  const steps: TaskStep[] = QCA_STEPS.map((def): TaskStep => {
-    switch (def.id) {
-      case "input":
-        return { ...def, state: s.hasPick ? "done" : "todo" };
-
-      case "calibration":
-        // 🚨 未校正は `todo` ではなく **`skipped`**。「まだやっていない」ではなく
-        //    「やらずに進める（＝px で出る）」が起きうる段なので、飛ばした事実として出す。
-        return s.calibrated
-          ? {
-              ...def,
-              state: "done",
-              note: { key: `xa.calib.source.${s.calibrationSource ?? "none"}` },
-            }
-          : { ...def, state: "skipped", reasonKey: "xa.step.reason.uncalibrated" };
-
-      case "analysis":
-        return { ...def, state: s.hasResult ? "done" : "todo" };
-
-      case "centerline":
-        if (!s.hasResult) return { ...def, state: "todo" };
-        return {
-          ...def,
-          state: "done",
-          // 「自動のまま」と「人が直した」を必ず見分けられるようにする。
-          note:
-            s.waypoints > 0
-              ? { key: "xa.step.note.waypoints", params: { n: String(s.waypoints) } }
-              : { key: "xa.step.note.auto" },
-        };
-
-      case "edges":
-        if (!s.hasResult) return { ...def, state: "todo" };
-        if (s.edgeEditsDropped) {
-          return { ...def, state: "invalid", reasonKey: "xa.step.reason.edgeEditsDropped" };
-        }
-        return {
-          ...def,
-          state: "done",
-          note:
-            s.editedEdges > 0
-              ? { key: "xa.step.note.edges", params: { n: String(s.editedEdges) } }
-              : { key: "xa.step.note.auto" },
-        };
-
-      case "range":
-        if (!s.hasResult) return { ...def, state: "todo" };
-        return {
-          ...def,
-          state: "done",
-          note:
-            s.trimmed || s.referenceKind !== "auto"
-              ? {
-                  key: "xa.step.note.range",
-                  params: { reference: s.referenceKind, trim: s.trimmed ? "1" : "0" },
-                }
-              : { key: "xa.step.note.auto" },
-        };
-
-      case "save":
-        if (!s.canSave) return { ...def, state: "invalid", reasonKey: "xa.step.reason.noReference" };
-        return { ...def, state: s.saved ? "done" : "todo" };
-
-      default:
-        return { ...def, state: "todo" };
-    }
-  });
-
-  const first = steps.find((x) => x.state === "todo");
-  if (first) first.state = "active";
-  return steps;
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -283,7 +131,7 @@ export function deriveQcaSteps(s: QcaTaskState): TaskStep[] {
 /**
  * QLV タスクの段。
  *
- * <p>QCA とは**必要な入力が違う**（ED/ES フレームの決定が要り、中心線・エッジは無い）。
+ * <p>ED/ES フレームの決定が要り、中心線・エッジは無い。
  * 段をタスクごとの純データにしてある理由がここに出る（§21.2-3）。
  */
 export const QLV_STEPS: readonly TaskStepDef[] = [
@@ -366,113 +214,6 @@ export function deriveQlvSteps(s: QlvTaskState): TaskStep[] {
 
       case "save":
         if (!s.canSave) return { ...def, state: "invalid", reasonKey: "xa.step.reason.noReference" };
-        return { ...def, state: s.saved ? "done" : "todo" };
-
-      default:
-        return { ...def, state: "todo" };
-    }
-  });
-
-  const first = steps.find((x) => x.state === "todo");
-  if (first) first.state = "active";
-  return steps;
-}
-
-// ─────────────────────────────────────────────────────────────────────────
-// 3D QCA — `fw/angio-design.md` §10.2 / A6a
-// ─────────────────────────────────────────────────────────────────────────
-
-/**
- * 3D QCA タスクの段。
- *
- * <p>QCA / QLV と違い、**この段は 1 枚の画像の上では完結しない**（2 方向が要る）。
- * だから最初の段が「方向を選ぶ」になっている。
- *
- * <p>保存の段は、品質基準を満たすまで `invalid` のまま。**保存できない理由を、結果を出す前に
- * 見せておく**（品質基準を満たさない結果は保存させない＝§10.3 の「無言で歪んだモデルを出さない」を
- * 保存物にも適用する）。
- */
-export const QCA3D_STEPS: readonly TaskStepDef[] = [
-  {
-    id: "views",
-    labelKey: "xa3d.step.views",
-    // 🚨 アンカーは**特定の 2 方向の画素座標**なので、方向を選び直したら意味を失う。
-    invalidates: ["anchors", "recon"],
-    owns: ["views"],
-    clears: ["views", "anchors"],
-  },
-  { id: "anchors", labelKey: "xa3d.step.anchors", invalidates: ["recon"], owns: ["anchors"], clears: ["anchors"] },
-  { id: "recon", labelKey: "xa3d.step.recon", invalidates: ["save"], owns: [], clears: [] },
-  { id: "save", labelKey: "xa.step.save", invalidates: [], owns: [], clears: [] },
-] as const;
-
-export interface Qca3dTaskState {
-  /** 選べている方向の数（0〜2）。 */
-  viewCount: number;
-  /** 2 方向の視線がなす角 [deg]。未選択なら null。 */
-  separationDeg: number | null;
-  minSeparationDeg: number;
-  /** アンカーの数（端点 2 つを含む）。 */
-  anchorCount: number;
-  hasResult: boolean;
-  acceptable: boolean;
-  /** 結果を止めている警告コード（`ReconWarningCode`）。 */
-  blockingWarning: string | null;
-  /** 角度補正が掛かったか。 */
-  refined: boolean;
-  /** 保存できるか（品質基準を満たし、2 方向の元インスタンスが分かっている）。 */
-  canSave: boolean;
-  saved: boolean;
-}
-
-/**
- * 3D QCA の段の状態を導出する。
- *
- * <p>🚨 **アンカーが端点 2 つだけの状態を `done` にしない。** 2 点では角度補正が退化して
- * 掛けられず（§10.2.2）、装置の機械誤差がそのまま形の歪みになる。**「飛ばした」として出す** ——
- * §21.6 の「未校正を done と同じ顔で出さない」と同じ話で、こちらのほうが害が大きい
- * （未校正なら単位が px になって気付けるが、こちらは**もっともらしい mm が出る**）。
- */
-export function deriveQca3dSteps(s: Qca3dTaskState): TaskStep[] {
-  const steps: TaskStep[] = QCA3D_STEPS.map((def): TaskStep => {
-    switch (def.id) {
-      case "views":
-        if (s.viewCount < 2) return { ...def, state: "todo" };
-        if (s.separationDeg != null && s.separationDeg < s.minSeparationDeg) {
-          return { ...def, state: "invalid", reasonKey: "xa3d.step.reason.insufficientSeparation" };
-        }
-        return {
-          ...def,
-          state: "done",
-          note: {
-            key: "xa3d.step.note.separation",
-            params: { deg: s.separationDeg != null ? s.separationDeg.toFixed(0) : "?" },
-          },
-        };
-
-      case "anchors":
-        if (s.viewCount < 2) return { ...def, state: "todo" };
-        if (s.anchorCount === 0) {
-          return { ...def, state: "invalid", reasonKey: "xa3d.step.reason.geometryUnverified" };
-        }
-        if (s.anchorCount < 3) {
-          return { ...def, state: "skipped", reasonKey: "xa3d.step.reason.tooFewAnchors" };
-        }
-        return { ...def, state: "done", note: { key: "xa3d.step.note.anchors", params: { n: String(s.anchorCount) } } };
-
-      case "recon":
-        if (!s.hasResult) return { ...def, state: "todo" };
-        if (!s.acceptable) {
-          return { ...def, state: "invalid", reasonKey: `xa3d.step.reason.${s.blockingWarning ?? "rejected"}` };
-        }
-        return {
-          ...def,
-          state: "done",
-          note: { key: s.refined ? "xa3d.step.note.refined" : "xa3d.step.note.notRefined" },
-        };
-
-      case "save":
-        if (!s.canSave) return { ...def, state: "invalid", reasonKey: "xa3d.step.reason.saveNotImplemented" };
         return { ...def, state: s.saved ? "done" : "todo" };
 
       default:
