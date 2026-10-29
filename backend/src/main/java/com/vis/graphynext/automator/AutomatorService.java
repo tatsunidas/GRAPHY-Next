@@ -90,6 +90,16 @@ public class AutomatorService {
      */
     @Transactional
     public ResetResult reset() {
+        return reset(false);
+    }
+
+    /**
+     * @param keepPluginStore true なら、プラグイン保存領域（H8）だけ消さない（他は従来どおり全部消す）。
+     *     プラグインの「解析状態の保存と再開」を、検証用ランチャーの起動をまたいで確かめるため。
+     *     症例（DICOM）は消すので、保存側の鍵（検査 UID・シリーズ UID・患者キー）が同じ症例を取り込み直したときだけ、保存が見つかる。
+     */
+    @Transactional
+    public ResetResult reset(boolean keepPluginStore) {
         List<DicomInstance> instances = dicomRepo.findAll();
         for (DicomInstance inst : instances) {
             Path file = layout.resolveForWrite(inst);
@@ -115,8 +125,8 @@ public class AutomatorService {
         long roiMaskCount = roiMaskRepo.count();
         roiMaskRepo.deleteAll();
 
-        long pluginCount = pluginRepo.count();
-        pluginRepo.deleteAll();
+        long pluginCount = keepPluginStore ? 0 : pluginRepo.count();
+        if (!keepPluginStore) pluginRepo.deleteAll();
 
         int calibCount = settings.deleteByPrefix(SettingsService.XA_CALIBRATION_PREFIX);
 

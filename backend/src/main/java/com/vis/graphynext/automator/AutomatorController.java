@@ -28,9 +28,9 @@ public class AutomatorController {
         this.service = service;
     }
 
-    /** 症例データ（DICOM索引・実ファイル・レポート・ROI 保存）を全削除する。環境設定(Setting)は対象外。 */
+    /** 症例データ（DICOM索引・実ファイル・レポート・ROI 保存）を全削除する。環境設定(Setting)は対象外。`?keepPluginStore=true` でプラグイン保存領域だけ残す。 */
     @PostMapping("/reset")
-    public AutomatorService.ResetResult reset() {
-        return service.reset();
+    public AutomatorService.ResetResult reset(@org.springframework.web.bind.annotation.RequestParam(defaultValue = "false") boolean keepPluginStore) {
+        return service.reset(keepPluginStore);
     }
 }

@@ -156,6 +156,26 @@ class AutomatorServiceResetTest {
     }
 
     @Test
+    void reset_keepPluginStore_keepsPluginDocumentsButStillDeletesTheRest() {
+        // 検証用ランチャーの起動をまたいで、プラグインの解析状態の保存を残す指定。他（ROI など）は従来どおり消える。
+        pluginService.save("angio-quant", "PAT-KEEP",
+                new SavePluginDocumentRequest("{\"schema\":1,\"dual\":{}}", null));
+        roiService.save("PAT-KEEP", new SaveRoiDocumentRequest(JSON, 1, null));
+        assertEquals(1, pluginRepo.count(), "前提: プラグイン保存がある");
+        assertEquals(1, roiRepo.count(), "前提: ROI 保存がある");
+
+        AutomatorService.ResetResult r = automator.reset(true);
+
+        assertEquals(0, r.deletedPluginDocuments(), "消していないので 0 件");
+        assertEquals(1, pluginRepo.count(), "プラグイン保存が残っている");
+        assertEquals("{\"schema\":1,\"dual\":{}}", pluginService.get("angio-quant", "PAT-KEEP").json());
+        assertEquals(0, roiRepo.count(), "★負例: ROI 保存は消えている（残すのはプラグイン保存だけ）");
+
+        automator.reset(false); // 後始末（他のテストへ持ち越さない）
+        assertEquals(0, pluginRepo.count(), "指定なし（既定）では従来どおり消える");
+    }
+
+    @Test
     void reset_isIdempotent() {
         automator.reset();
         AutomatorService.ResetResult again = automator.reset();
