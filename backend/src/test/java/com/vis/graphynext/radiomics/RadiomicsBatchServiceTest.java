@@ -32,6 +32,7 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -107,6 +108,32 @@ class RadiomicsBatchServiceTest {
         assertEquals(0, s.failed());
         assertEquals(17, computed.get(), "空のマスクの組は compute を呼ばない（呼ぶと全面マスクで誤った値が出る）");
         assertEquals(17, svc.results(s.jobId()).size());
+    }
+
+    /**
+     * 完了と読めた状態には、「待機」「実行中」の組が残っていない。状態を組より先に読む（終わりの状態は組の更新が
+     * すべて済んだあとに書かれる）ことで守る。スリープせずに読み続けて、終わる瞬間の窓に当てる。
+     */
+    @Test
+    void aFinishedJobNeverShowsAPairThatIsStillPendingOrRunning() throws Exception {
+        RadiomicsBatchService svc = service((req, c) -> stub(false));
+        String bad = null;
+        for (int n = 0; n < 1500 && bad == null; n++) {
+            Status first = svc.submit(request(List.of(auto(0), auto(1), auto(2))));
+            long end = System.currentTimeMillis() + 10_000;
+            while (System.currentTimeMillis() < end) {
+                Status s = svc.get(first.jobId());
+                if (s.state() != JobState.QUEUED && s.state() != JobState.RUNNING) {
+                    boolean stale = s.pairs().stream()
+                            .anyMatch(p -> p.state() == PairState.PENDING || p.state() == PairState.RUNNING);
+                    if (stale) {
+                        bad = "反復 " + n + ": 状態は " + s.state() + " なのに、組が " + s.pairs().stream().map(p -> p.state().name()).toList();
+                    }
+                    break;
+                }
+            }
+        }
+        assertNull(bad, bad);
     }
 
     @Test
