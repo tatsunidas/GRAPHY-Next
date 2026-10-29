@@ -638,6 +638,17 @@ export interface XaSeriesInfo {
   geometry: XaViewGeometry | null;
   missing: "noDataSet" | "noAngles" | "noDistances" | "noImagerSpacing" | "noImageSize" | null;
   perFrameAngles: boolean;
+  /**
+   * 撮影情報（fps の決め方は `getXaCine` と同じ）。読めなければ null。古い本体は返さない（undefined）。
+   * `fpsSource === "default"` は測定値ではない。
+   */
+  cine?: {
+    numberOfFrames: number;
+    fps: number;
+    fpsSource: "frameTimeVector" | "frameTime" | "cineRate" | "recommendedDisplayFrameRate" | "default";
+    frameStartTimesMs: number[];
+    uniform: boolean;
+  } | null;
 }
 
 /** `host.readXaSeriesFrame()` の戻り。**H42**。 */

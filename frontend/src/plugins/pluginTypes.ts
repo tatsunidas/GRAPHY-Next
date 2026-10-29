@@ -732,6 +732,9 @@ export interface Viewer2DPluginHost extends PluginHostBase {
    *
    * <p>`pixelIntensityRelationship` は `PixelIntensityRelationship (0028,1040)`（LIN / LOG。無ければ null）。
    * 径の測り方（対数変換の要否）を決めるのに要る。古い本体はこのフィールドを返さない（undefined）。
+   *
+   * <p>`cine` は撮影情報（fps・各フレームの開始時刻・出自）。cQFR / aQFR のフレームカウントを、開いていないシネで
+   * 数えるのに要る（H40 `getXaCine` と同じ決め方）。dataSet が読めなければ null。古い本体は返さない（undefined）。
    */
   readXaSeries: (ref: PluginSeriesRef) => Promise<import("./pluginXaSeriesApi").PluginXaSeriesInfo | null>;
   /**
