@@ -116,5 +116,8 @@ class IbsiCheckServiceTest {
         // 構成 C は Intensity at 10% volume の 1 件が不合格、構成 D は 0（RadiomicsJ の記録どおり）
         assertEquals(1, c.get("counts").get("FAIL").asInt());
         assertEquals(0, d.get("counts").get("FAIL").asInt());
+        // 記録の版が、載せている RadiomicsJ の版と食い違ったら取り直す（docs/benchmark の IbsiBenchmarkRecorder）
+        assertEquals(RadiomicsJ.version, c.get("radiomicsjVersion").asText());
+        assertEquals(RadiomicsJ.version, d.get("radiomicsjVersion").asText());
     }
 }

@@ -231,6 +231,46 @@ class RoiFeatureServiceTest {
         assertNull(RadiomicsJ.discretiseImp);
     }
 
+    /**
+     * 保存後に、JSON として読めたまま数字が 1 文字化けたキャッシュは、そのまま返さずに捨てて再計算する。
+     * （ヘッダ・長さの検査だけでは、化けた値が黙って研究の表に入る。）
+     */
+    @Test
+    void aCachedValueThatChangedAfterSaving_isNotReturned_butRecomputed(@TempDir Path dir) throws Exception {
+        FixedEngine engine = new FixedEngine(volume(phantom(), mask(0)));
+        RoiFeatureService svc = service(engine, dir, "t1");
+        RoiFeatureRequest request = req("1.2.9", settings("INT_binCount", "16"), false);
+
+        RoiFeatureResult first = svc.compute(request, p -> { });
+        assertEquals(1, extractions.get());
+        Path ckpt;
+        try (Stream<Path> s = Files.list(dir)) {
+            ckpt = s.filter(p -> p.getFileName().toString().endsWith(".ckpt")).findFirst().orElseThrow();
+        }
+        byte[] raw = Files.readAllBytes(ckpt);
+        // 本体（ヘッダ 16 バイトの後ろ）の "value": の直後の数字を、別の数字にする。JSON としては読めたままになる。
+        String body = new String(raw, 16, raw.length - 16 - 32, java.nio.charset.StandardCharsets.UTF_8);
+        int at = body.indexOf("\"value\":");
+        assertTrue(at >= 0, "本体に値がある");
+        int digit = -1;
+        for (int i = at + 8; i < body.length(); i++) {
+            if (Character.isDigit(body.charAt(i))) { digit = i; break; }
+        }
+        assertTrue(digit >= 0);
+        raw[16 + digit] = (byte) (raw[16 + digit] == '7' ? '3' : '7');
+        Files.write(ckpt, raw);
+
+        RoiFeatureResult second = svc.compute(request, p -> { });
+        assertEquals(2, extractions.get(), "化けたキャッシュは使わず、計算し直す");
+        assertFalse(second.fromCache());
+        assertEquals(values(first), values(second), "値は元の計算と全列で一致する");
+
+        RoiFeatureResult third = svc.compute(request, p -> { });
+        assertEquals(2, extractions.get(), "作り直したキャッシュは使える");
+        assertTrue(third.fromCache());
+        assertEquals(values(first), values(third));
+    }
+
     @Test
     void cacheHit_andWhatInvalidatesIt(@TempDir Path dir) throws Exception {
         FixedEngine engine = new FixedEngine(volume(phantom(), mask(0)));
@@ -545,6 +585,42 @@ class RoiFeatureServiceTest {
     }
 
     @Test
+    void theThresholdInTheRequestOverridesTheSettingAndIsNotPartOfTheCacheKey(@TempDir Path dir) throws Exception {
+        RoiFeatureService svc = service(new FixedEngine(box()), dir, "t");
+        RoiFeatureResult.RoiSize unsetSize = svc.compute(req("1.2.10", Map.of(), false), p -> { }).roiSize();
+        assertNull(unsetSize.smallRoi(), "環境設定も要求も無ければ判定しない");
+        assertEquals(1, extractions.get());
+
+        // 環境設定は未設定のまま、要求の基準値だけで判定する（1000 ボクセルの箱）
+        RoiFeatureResult over = svc.compute(withThreshold("1.2.10", 1001), p -> { });
+        assertTrue(over.fromCache(), "基準値はキャッシュの鍵に入らない");
+        assertEquals(1, extractions.get());
+        assertEquals(1001, over.roiSize().smallRoiWarnVoxels());
+        assertEquals(Boolean.TRUE, over.roiSize().smallRoi());
+
+        // 環境設定 1000 でも、要求の 100 が優先される
+        smallRoi.set("1000");
+        assertEquals(Boolean.FALSE, svc.compute(withThreshold("1.2.10", 100), p -> { }).roiSize().smallRoi());
+        assertEquals(100, svc.compute(withThreshold("1.2.10", 100), p -> { }).roiSize().smallRoiWarnVoxels());
+        // 要求に無ければ環境設定
+        assertEquals(1000, svc.compute(req("1.2.10", Map.of(), false), p -> { }).roiSize().smallRoiWarnVoxels());
+        assertEquals(1, extractions.get());
+
+        for (int bad : new int[] {0, -3}) {
+            IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                    () -> svc.check(withThreshold("1.2.10", bad)), "" + bad);
+            assertTrue(e.getMessage().contains("小さい ROI"), e.getMessage());
+        }
+    }
+
+    private static RoiFeatureRequest withThreshold(String series, Integer voxels) {
+        RoiFeatureRequest r = req(series, Map.of(), false);
+        return new RoiFeatureRequest(r.studyInstanceUid(), r.sourceSeriesUid(), r.maskSeriesUid(), r.maskChannel(),
+                r.channel(), r.timePoint(), r.settings(), r.recompute(), r.roiModes(), r.scales(), r.scaleNotation(),
+                r.scaleLabels(), r.scaleConversion(), r.scaleCoefficient(), voxels);
+    }
+
+    @Test
     void smallRoiWarningBoundaryAndCacheUsesTheCurrentSetting(@TempDir Path dir) throws Exception {
         RoiFeatureService svc = service(new FixedEngine(box()), dir, "t");
         smallRoi.set("1001");
@@ -571,5 +647,115 @@ class RoiFeatureServiceTest {
             assertTrue(e.getMessage().contains("小さい ROI"), e.getMessage());
         }
         assertEquals(1, extractions.get());
+    }
+
+    // ---- 補助統計（6 統計・副次量）----
+
+    /** phantom() と mask(0) の ROI のボクセル値（強度マスク。リサンプリングなし）。 */
+    private static double[] roiVoxels(double rangeMin) {
+        ImagePlus img = phantom();
+        ImagePlus m = mask(0);
+        java.util.List<Double> out = new java.util.ArrayList<>();
+        for (int z = 0; z < D; z++) for (int y = 0; y < H; y++) for (int x = 0; x < W; x++) {
+            if (m.getStack().getProcessor(z + 1).get(x, y) == 1) {
+                double v = img.getStack().getProcessor(z + 1).getf(x, y);
+                if (v >= rangeMin) out.add(v);
+            }
+        }
+        return out.stream().mapToDouble(Double::doubleValue).toArray();
+    }
+
+    private static void assertRel(double expected, double actual, String what) {
+        assertEquals(expected, actual, Math.abs(expected) * 1e-9, what);
+    }
+
+    @Test
+    void auxiliaryStatisticsAreOffByDefaultAndExplainedWhenOn(@TempDir Path dir) throws Exception {
+        FixedEngine engine = new FixedEngine(volume(phantom(), mask(0)));
+        RoiFeatureResult off = service(engine, dir.resolve("a"), "t").compute(req("1.2.9", Map.of(), false), p -> { });
+        assertTrue(off.rows().stream().noneMatch(x -> x.family().equals("AuxiliaryStatistics")));
+
+        RoiFeatureResult on = service(engine, dir.resolve("b"), "t")
+                .compute(req("1.2.9", settings("BOOL_enableAuxiliaryStatistics", "1"), false), p -> { });
+        for (String f : new String[] {"MeanOfPositiveIntensities", "ProportionOfPositiveIntensities",
+                "NormalisedStandardDeviation", "ReciprocalKurtosis", "UniformityOfPositiveIntensities"}) {
+            RoiFeatureResult.Row x = row(on, "AuxiliaryStatistics_" + f);
+            assertNull(x.ibsi(), f);
+            assertTrue(x.notes().contains("NON_IBSI"), f);
+            assertNotNull(x.value(), f + " は定義できる ROI なので null ではない");
+        }
+        assertTrue(row(on, "AuxiliaryStatistics_MeanOfPositiveIntensities").notes().contains("POSITIVE_ONLY"));
+        assertTrue(row(on, "AuxiliaryStatistics_NormalisedStandardDeviation").notes().containsAll(
+                java.util.List.of("POPULATION_SD", "LN_RATIO")));
+        assertTrue(row(on, "AuxiliaryStatistics_ReciprocalKurtosis").notes().contains("RECIPROCAL_KURTOSIS"));
+        assertTrue(row(on, "AuxiliaryStatistics_UniformityOfPositiveIntensities").notes()
+                .contains("UNIFORMITY_POSITIVE"));
+        assertTrue(row(on, "IntensityBasedStatistical_StandardDeviation").notes().contains("POPULATION_SD"));
+        // 族を足しても、ほかの列は 1 つも変わらない（ビットまで同じ）
+        Map<String, Double> a = values(off), b = values(on);
+        for (Map.Entry<String, Double> e : a.entrySet()) {
+            assertTrue(b.containsKey(e.getKey()), e.getKey());
+            assertEquals(e.getValue() == null ? null : Double.doubleToLongBits(e.getValue()),
+                    b.get(e.getKey()) == null ? null : Double.doubleToLongBits(b.get(e.getKey())), e.getKey());
+        }
+    }
+
+    @Test
+    void auxiliaryStatisticsMatchTheDefinitionsOnTheRoiVoxels(@TempDir Path dir) throws Exception {
+        FixedEngine engine = new FixedEngine(volume(phantom(), mask(0)));
+        Map<String, Double> v = values(service(engine, dir, "t")
+                .compute(req("1.2.9", settings("BOOL_enableAuxiliaryStatistics", "1"), false), p -> { }));
+        double[] x = roiVoxels(Double.NEGATIVE_INFINITY);
+        int n = x.length;
+        double mean = java.util.Arrays.stream(x).sum() / n;
+        double m2 = 0, m4 = 0;
+        for (double e : x) { m2 += Math.pow(e - mean, 2); m4 += Math.pow(e - mean, 4); }
+        m2 /= n; m4 /= n;
+        long pos = java.util.Arrays.stream(x).filter(e -> e > 0).count();
+        assertRel(java.util.Arrays.stream(x).filter(e -> e > 0).sum() / pos,
+                v.get("AuxiliaryStatistics_MeanOfPositiveIntensities"), "MPP");
+        assertRel((double) pos / n, v.get("AuxiliaryStatistics_ProportionOfPositiveIntensities"), "PPP");
+        assertRel(Math.log(Math.sqrt(m2)) / Math.log(n), v.get("AuxiliaryStatistics_NormalisedStandardDeviation"), "nSD");
+        assertRel(m2 * m2 / m4, v.get("AuxiliaryStatistics_ReciprocalKurtosis"), "1/(kurtosis+3)");
+        // 画面の「6 統計」が引く既存の列とも矛盾しない: SD² = Variance
+        double sd = v.get("IntensityBasedStatistical_StandardDeviation");
+        assertRel(v.get("IntensityBasedStatistical_Variance"), sd * sd, "Variance = SD^2");
+    }
+
+    @Test
+    void bothRangeBoundsNarrowTheIntensityMaskByTheExpectedCount(@TempDir Path dir) throws Exception {
+        FixedEngine engine = new FixedEngine(volume(phantom(), mask(0)));
+        String col = "Diagnostics_DiagnosticsResegmentedROIIntMaskVoxelCount";
+        double all = values(service(engine, dir.resolve("a"), "t").compute(req("1.2.9", Map.of(), false), p -> { })).get(col);
+        double cut = values(service(engine, dir.resolve("b"), "t")
+                .compute(req("1.2.9", settings("DOUBLE_rangeMin", "200", "DOUBLE_rangeMax", "100000"), false), p -> { }))
+                .get(col);
+        // 下限だけでも効く（RadiomicsJ 2.7.0 から。これまでは両方ないと黙って無視された）
+        double lowerOnly = values(service(engine, dir.resolve("c"), "t")
+                .compute(req("1.2.9", settings("DOUBLE_rangeMin", "200"), false), p -> { })).get(col);
+        assertEquals(roiVoxels(200).length, lowerOnly, 0d);
+        double upperOnly = values(service(engine, dir.resolve("d"), "t")
+                .compute(req("1.2.9", settings("DOUBLE_rangeMax", "200"), false), p -> { })).get(col);
+        assertEquals(java.util.Arrays.stream(roiVoxels(Double.NEGATIVE_INFINITY)).filter(v -> v <= 200).count(),
+                upperOnly, 0d);
+        assertEquals(roiVoxels(Double.NEGATIVE_INFINITY).length, all, 0d);
+        assertEquals(roiVoxels(200).length, cut, 0d);
+        assertTrue(cut < all, "下限で除くとボクセル数が減る（検査が効いている）");
+    }
+
+    @Test
+    void gpuIsOffByDefaultAndRecorded(@TempDir Path dir) throws Exception {
+        assertEquals("0", RoiFeatureService.effectiveSettings(Map.of(), 1).get("BOOL_USE_GPU"));
+        assertEquals("1", RoiFeatureService.effectiveSettings(Map.of("BOOL_USE_GPU", "1"), 1).get("BOOL_USE_GPU"));
+        java.util.concurrent.atomic.AtomicBoolean gpuDuringExtract = new java.util.concurrent.atomic.AtomicBoolean(true);
+        FixedEngine engine = new FixedEngine(volume(phantom(), mask(0)));
+        RoiFeatureService s = new RoiFeatureService(engine, new MapCheckpointStore(new CacheStore(dir, 0), "t"),
+                standalone(), JSON, (rj, img, m, label) -> {
+                    gpuDuringExtract.set(RadiomicsJ.BOOL_USE_GPU);
+                    return rj.extractAll(img, m, label);
+                }, NEXT_VERSION, () -> null);
+        RoiFeatureResult r = s.compute(req("1.2.9", Map.of(), false), p -> { });
+        assertFalse(gpuDuringExtract.get(), "抽出の間は GPU を使わない（RadiomicsJ の既定は true）");
+        assertTrue(r.settingsProperties().contains("BOOL_USE_GPU=0"), "設定の記録に残る");
     }
 }

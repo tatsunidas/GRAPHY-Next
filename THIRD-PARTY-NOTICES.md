@@ -18,6 +18,7 @@ trees can be generated from the build manifests:
 | dcm4che (`org.dcm4che:dcm4che-core/-net/-imageio/-json`) | 5.34.3 | MPL-1.1 / LGPL-3.0 / GPL-3.0 (tri-license; used under LGPL) |
 | Bouncy Castle (`bcprov`) | — | Bouncy Castle License (MIT-style) |
 | RadiomicsJ (`radiomicsj`) | 2.4.1 | Apache-2.0 |
+| JmDNS (`org.jmdns:jmdns`) | 3.6.4 | Apache-2.0 |
 
 ## Frontend / Desktop (JavaScript)
 

@@ -99,8 +99,16 @@ export function studyUidsOfCtx(raw: string | null): string[] {
   }
 }
 
-/** ルート（#mpr など）の窓が、起動コンテキストの検査を開いている間、使用中と知らせる。 */
-export function useCtxWindowInUse(screen: string): void {
+/** 使用中の登録は standalone だけ。そうでない（web・まだ分からない）間は何も知らせない。 */
+export function gateUids(uids: string[], enabled: boolean): string[] {
+  return enabled ? uids : [];
+}
+
+/**
+ * ルート（#mpr など）の窓が、起動コンテキストの検査を開いている間、使用中と知らせる。
+ * @param enabled 登録を受ける backend（standalone）だと分かっているとき true。web では 404 になるので呼ばない。
+ */
+export function useCtxWindowInUse(screen: string, enabled = true): void {
   const target = (CTX_WINDOWS as readonly string[]).includes(screen);
   const ctxKey = `graphy-${screen}-ctx`;
   const read = () => {
@@ -121,5 +129,5 @@ export function useCtxWindowInUse(screen: string): void {
     return () => window.removeEventListener("storage", on);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ctxKey, target]);
-  useStudyInUse(uids);
+  useStudyInUse(gateUids(uids, enabled));
 }

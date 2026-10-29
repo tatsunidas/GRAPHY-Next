@@ -6,7 +6,7 @@
 // 読み取りと消去は main の IPC だけ（記録ファイルを直接読まない）。消去は利用者が押したときだけで、画面内の 2 段階（ダイアログは使わない）。
 import { useCallback, useEffect, useState, type CSSProperties } from "react";
 import { EvalSection, type EvalApi } from "./EvalSection";
-import { modelRows, recentRows, shortText, tokenText, totalIsPartial, type RequestLogSummary } from "./requestLogView";
+import { isLatencyReference, modelRows, secondsText, recentRows, shortText, tokenText, totalIsPartial, type RequestLogSummary } from "./requestLogView";
 
 type T = (k: string, v?: Record<string, string | number>) => string;
 
@@ -63,6 +63,7 @@ export function RequestLogPanel({ api, evalApi, busy, t }: { api: RequestLogApi;
                   <th style={S.thNum}>{t("assistant.requestlog.tokensIn")}</th>
                   <th style={S.thNum}>{t("assistant.requestlog.tokensOut")}</th>
                   <th style={S.thNum}>{t("assistant.requestlog.unknownUsage")}</th>
+                  <th style={S.thNum}>{t("assistant.requestlog.latency")}</th>
                 </tr>
               </thead>
               <tbody>
@@ -73,6 +74,10 @@ export function RequestLogPanel({ api, evalApi, busy, t }: { api: RequestLogApi;
                     <td style={S.tdNum}>{m.requests === m.unknownUsage ? unknown : m.tokensIn}</td>
                     <td style={S.tdNum}>{m.requests === m.unknownUsage ? unknown : m.tokensOut}</td>
                     <td style={S.tdNum}>{m.unknownUsage}</td>
+                    <td style={S.tdNum} data-testid="assistant-requestlog-latency">
+                      {m.latency ? `${secondsText(m.latency.p50)} / ${secondsText(m.latency.p95)}` : t("assistant.requestlog.notObtained")}
+                      {m.latency && isLatencyReference(m.latency.n) && <span style={S.dim}> {t("assistant.requestlog.latencyReference", { n: m.latency.n })}</span>}
+                    </td>
                   </tr>
                 ))}
               </tbody>

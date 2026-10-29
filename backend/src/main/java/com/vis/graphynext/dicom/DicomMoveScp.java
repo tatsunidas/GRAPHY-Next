@@ -15,8 +15,6 @@ import org.dcm4che3.net.ApplicationEntity;
 import org.dcm4che3.net.Association;
 import org.dcm4che3.net.Commands;
 import org.dcm4che3.net.Connection;
-import org.dcm4che3.net.DataWriter;
-import org.dcm4che3.net.DataWriterAdapter;
 import org.dcm4che3.net.Device;
 import org.dcm4che3.net.Dimse;
 import org.dcm4che3.net.Status;
@@ -36,7 +34,6 @@ import java.nio.file.Path;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -239,52 +236,18 @@ public class DicomMoveScp extends BasicCMoveSCP {
     }
 
     /** 宛先への C-STORE を、保管庫のファイルから行う。転送構文の選び方は DICOM Send（{@link DicomStoreScu}）と同じ。 */
-    private static final class MoveTask extends BasicRetrieveTask<InstanceLocator> {
+    private static final class MoveTask extends StoredFileRetrieveTask {
 
-        private final PixelCodec codec;
         private final ExecutorService executor;
         private final ScheduledExecutorService scheduled;
         private final String dest;
 
         MoveTask(Association as, PresentationContext pc, Attributes rq, List<InstanceLocator> insts, Association storeas,
                  PixelCodec codec, ExecutorService executor, ScheduledExecutorService scheduled, String dest) {
-            super(Dimse.C_MOVE_RQ, as, pc, rq, insts, storeas);
-            this.codec = codec;
+            super(Dimse.C_MOVE_RQ, as, pc, rq, insts, storeas, codec);
             this.executor = executor;
             this.scheduled = scheduled;
             this.dest = dest;
-        }
-
-        @Override
-        protected String selectTransferSyntaxFor(Association storeas, InstanceLocator inst) throws Exception {
-            if (inst.uri == null) {
-                throw new DicomServiceException(Status.ProcessingFailure, "ファイルを読めません: " + inst.iuid);
-            }
-            Set<String> accepted = storeas.getTransferSyntaxesFor(inst.cuid);
-            if (inst.tsuid != null && accepted.contains(inst.tsuid)) {
-                return inst.tsuid;
-            }
-            if (codec != null && DicomStoreScu.isLosslessStored(inst.tsuid) && accepted.contains(UID.ExplicitVRLittleEndian)) {
-                return UID.ExplicitVRLittleEndian;
-            }
-            throw new DicomServiceException(Status.ProcessingFailure,
-                    "宛先が転送構文 " + inst.tsuid + " を受け付けません: " + inst.iuid);
-        }
-
-        @Override
-        protected DataWriter createDataWriter(InstanceLocator inst, String tsuid) throws Exception {
-            // ファイルは送る前に読み切って閉じる（ネットワーク I/O 中にファイルを掴まない。Windows のロック対策）
-            if (tsuid.equals(inst.tsuid)) {
-                try (DicomInputStream din = new DicomInputStream(inst.getFile())) {
-                    din.readFileMetaInformation();
-                    return new DataWriterAdapter(din.readDataset());
-                }
-            }
-            PixelCodec.Uncompressed u = codec.toUncompressed(inst.getFile().toPath());
-            if (u == null) {
-                throw new DicomServiceException(Status.ProcessingFailure, "圧縮画像を復号できません: " + inst.iuid);
-            }
-            return new DataWriterAdapter(u.ds());
         }
 
         @Override

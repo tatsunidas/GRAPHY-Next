@@ -4,7 +4,7 @@
  */
 import { describe, expect, it } from "vitest";
 import {
-  anyFamilyOn, defaultRoiFeatureForm, parseSigmaList, roiFeatureSettings, ROI_FEATURE_FAMILIES, splitFilteredFamily,
+  anyFamilyOn, applyScale36, isScale36, isSixStatistics, defaultRoiFeatureForm, parseSigmaList, roiFeatureScaleRequest, roiFeatureSettings, ROI_FEATURE_FAMILIES, splitFilteredFamily,
 } from "./roiFeatureSettings";
 import { discretisationOf } from "./roiFeatureCsv";
 
@@ -23,7 +23,7 @@ const SETTING_PARAMS = new Set([
   "BOOL_enableIntensityBasedStatistics", "BOOL_enableLocalIntensityFeatures", "BOOL_enableIntensityHistogram",
   "BOOL_enableIntensityVolumeHistogram", "BOOL_enableMorphological", "BOOL_enableShape2D", "BOOL_enableGLCM",
   "BOOL_enableGLRLM", "BOOL_enableGLSZM", "BOOL_enableGLDZM", "BOOL_enableGLAM", "BOOL_enableNGTDM",
-  "BOOL_enableNGLDM", "BOOL_enableHomological", "BOOL_enableFractal", "BOOL_enableOperationalInfo",
+  "BOOL_enableNGLDM", "BOOL_enableHomological", "BOOL_enableFractal", "BOOL_enableAuxiliaryStatistics", "BOOL_enableOperationalInfo",
   "BOOL_enableDiagnostics",
   "DOUBLEARRAY_logSigmaMm", "DOUBLE_logTruncate", "STRING_logPadding",
 ]);
@@ -98,5 +98,17 @@ describe("LoG フィルタ", () => {
     const d = { fixedBinNumber: true, nBins: 32, binWidth: 25, ivhMode: 0, ivhBinCount: 1000, ivhBinWidth: 2.5 };
     expect(discretisationOf("log_sigma1.5mm_GLCM", d)).toBe("fixedBinNumber=32");
     expect(discretisationOf("log_sigma1.5mm_IntensityBasedStatistical", d)).toBe("");
+  });
+
+  it("プリセット「36 特徴」は 6 統計と半径 0, 2, 3, 4, 5, 6 を入れ、何かを変えると外れる", () => {
+    const f = defaultRoiFeatureForm();
+    expect(isScale36(f)).toBe(false);
+    const p = applyScale36(f);
+    expect(isScale36(p)).toBe(true);
+    expect(isSixStatistics(p)).toBe(true);
+    expect(roiFeatureScaleRequest(p)).toEqual({ scales: [0, 2, 3, 4, 5, 6], scaleNotation: "RADIUS_MM", scaleConversion: "SQRT_D" });
+    expect(isScale36({ ...p, scalesText: "0, 2" })).toBe(false);
+    expect(isScale36({ ...p, families: { ...p.families, GLCM: true } })).toBe(false);
+    expect(isScale36({ ...p, logByRadius: false })).toBe(false);
   });
 });

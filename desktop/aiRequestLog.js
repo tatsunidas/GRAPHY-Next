@@ -18,6 +18,11 @@ const ID_RE = /^[A-Za-z0-9._\-\/:]{1,120}$/;
 const MAX_TOOL_CALLS = 16;
 
 const natural = (v) => (typeof v === "number" && Number.isInteger(v) && v >= 0 ? v : null);
+/** 最近順位法（p = ⌈q·n⌉ 番目、昇順）。空なら null（0 にしない）。 */
+function quantile(sorted, q) {
+  if (sorted.length === 0) return null;
+  return sorted[Math.max(1, Math.ceil(q * sorted.length)) - 1];
+}
 const word = (v, re) => (typeof v === "string" && re.test(v) ? v : undefined);
 
 /**
@@ -96,15 +101,21 @@ function createRequestLog({ file, maxBytes = DEFAULT_MAX_BYTES, now = Date.now }
     const byModel = new Map();
     for (const r of rows) {
       const key = `${r.provider ?? "?"}\u0000${r.modelVersion ?? r.modelId ?? "?"}`;
-      const m = byModel.get(key) ?? { provider: r.provider ?? null, model: r.modelVersion ?? r.modelId ?? null, requests: 0, tokensIn: 0, tokensOut: 0, unknownUsage: 0 };
+      const m = byModel.get(key) ?? { provider: r.provider ?? null, model: r.modelVersion ?? r.modelId ?? null, requests: 0, tokensIn: 0, tokensOut: 0, unknownUsage: 0, latencies: [] };
       m.requests++;
+      // 応答時間は成功した要求だけ（失敗・中断は応答の速さでない）
+      if (r.outcome === "ok" && natural(r.latencyMs) !== null) m.latencies.push(r.latencyMs);
       // 合計は取れた値だけ。片方でも不明な要求は unknownUsage に数える（合計が下限であることが分かるように）
       if (r.usage && r.usage.in !== null) m.tokensIn += r.usage.in;
       if (r.usage && r.usage.out !== null) m.tokensOut += r.usage.out;
       if (!r.usage || r.usage.in === null || r.usage.out === null) m.unknownUsage++;
       byModel.set(key, m);
     }
-    return { ok: true, count: rows.length, byModel: [...byModel.values()], recent: rows.slice(-limit).reverse() };
+    const models = [...byModel.values()].map(({ latencies, ...m }) => {
+      const sorted = latencies.sort((a, b) => a - b);
+      return { ...m, latency: sorted.length === 0 ? null : { n: sorted.length, p50: quantile(sorted, 0.5), p95: quantile(sorted, 0.95) } };
+    });
+    return { ok: true, count: rows.length, byModel: models, recent: rows.slice(-limit).reverse() };
   }
 
   function clear() {
@@ -125,6 +136,9 @@ function createRequestLog({ file, maxBytes = DEFAULT_MAX_BYTES, now = Date.now }
 const EVAL_MAX_BYTES = 512 * 1024;
 const EVAL_ID_RE = /^[a-z0-9-]{1,24}$/;
 const MAX_EVAL_CASES = 200;
+const MAX_EVAL_LATENCY_MS = 60 * 60 * 1000;
+const EVAL_SUITES = ["basic", "basic-b", "plugin-pos"];
+const MAX_EVAL_REPEATS = 20;
 
 /**
  * レンダラから届いた評価結果を保存できる形に整える（許可リスト）。形が違えば null。
@@ -135,19 +149,37 @@ function buildEvalRecord(o) {
   const cases = [];
   for (const c of o.cases) {
     if (!c || typeof c.id !== "string" || !EVAL_ID_RE.test(c.id) || typeof c.pass !== "boolean") return null;
-    cases.push({ id: c.id, pass: c.pass });
+    // 応答時間は任意。範囲外・非整数はこの項目だけ捨てる（質問の合否は残す）
+    const ms = natural(c.latencyMs);
+    // 反復の集計（passes/n）は任意（無い・古い行は 1 回として扱う）。あるときは pass と矛盾してはならない
+    let n = 1;
+    let passes = c.pass ? 1 : 0;
+    if (c.n !== undefined || c.passes !== undefined) {
+      const nn = natural(c.n);
+      const pp = natural(c.passes);
+      if (nn === null || pp === null || nn < 1 || nn > MAX_EVAL_REPEATS || pp > nn || (pp === nn) !== c.pass) return null;
+      n = nn;
+      passes = pp;
+    }
+    cases.push(ms !== null && ms <= MAX_EVAL_LATENCY_MS ? { id: c.id, pass: c.pass, passes, n, latencyMs: ms } : { id: c.id, pass: c.pass, passes, n });
   }
+  // 合計は 1 問でも欠ければ不明（欠けを 0 として足さない）
+  const totalLatencyMs = cases.every((c) => c.latencyMs !== undefined) ? cases.reduce((a, c) => a + c.latencyMs, 0) : null;
   const passed = cases.filter((c) => c.pass).length;
   const suiteVersion = natural(o.suiteVersion);
   if (suiteVersion === null || suiteVersion < 1) return null;
+  const suite = o.suite === undefined ? "basic" : o.suite;
+  if (!EVAL_SUITES.includes(suite)) return null;
   const meta = o.meta && typeof o.meta === "object" ? o.meta : {};
   return {
+    suite,
     suiteVersion,
     provider: word(meta.provider, NAME_RE) ?? null,
     modelId: word(meta.modelId, ID_RE) ?? null,
     modelVersion: word(meta.modelVersion, ID_RE) ?? null,
     total: cases.length,
     passed,
+    totalLatencyMs,
     cases,
   };
 }

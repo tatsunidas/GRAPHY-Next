@@ -25,7 +25,6 @@ import type { PluginSkillEntry, Skill } from "./skills/skillModel";
 import { PluginToolPanel } from "./PluginToolPanel";
 import { RequestLogPanel, type RequestLogApi } from "./RequestLogPanel";
 import type { EvalApi } from "./EvalSection";
-import { EVAL_CASES, EVAL_SUITE_VERSION } from "./eval/cases";
 import { runEval } from "./eval/runEval";
 import { planEligible, toToolDef, type PluginToolEntry, type PluginToolResult } from "./pluginTools";
 import { candidatesFromActions } from "./macros/macroModel";
@@ -385,11 +384,19 @@ export function AssistantScreen() {
     const ok = resolved?.ok === true && resolved.toolMode !== "none";
     return {
       list: bridge.assistantEvalList,
-      append: (run) => bridge.assistantEvalAppend!({ suiteVersion: EVAL_SUITE_VERSION, meta: run.meta, cases: run.cases.map((c) => ({ id: c.id, pass: c.pass })) }),
-      run: (onProgress) =>
+      append: (suite, run) =>
+        bridge.assistantEvalAppend!({
+          suite: suite.id,
+          suiteVersion: suite.version,
+          meta: run.meta,
+          cases: run.cases.map((c) => ({ id: c.id, pass: c.pass, passes: c.passes, n: c.n, ...(c.latencyMs !== undefined ? { latencyMs: c.latencyMs } : {}) })),
+        }),
+      run: (suite, k, onProgress) =>
         runEval({
-          cases: EVAL_CASES,
-          systemPrompt: buildSystemPrompt(locale, [], { canOperate: true }),
+          cases: suite.cases,
+          k,
+          pluginTools: suite.pluginTools,
+          systemPrompt: buildSystemPrompt(locale, [], { canOperate: true, pluginTools: (suite.pluginTools?.length ?? 0) > 0 }),
           tools: buildTools(),
           chat: (sessionId, messages, tools) => bridge.aiChat!({ sessionId, messages, tools, temperature: 0 }),
           onProgress,

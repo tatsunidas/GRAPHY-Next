@@ -19,6 +19,8 @@ THICK = 2.0
 study, series, forr = (generate_uid() for _ in range(3))
 # 実行ごとに画素を変える（同じ画素だと前回の実行のキャッシュが当たり、「新しく計算した」検査にならない）。
 rng = np.random.default_rng(int(sys.argv[2]) if len(sys.argv) > 2 else None)
+# 第 3 引数: RescaleIntercept（既定 -1000＝全部負の値。正の値を含めたいときに変える）
+INTERCEPT = int(sys.argv[3]) if len(sys.argv) > 3 else -1000
 yy, xx = np.meshgrid(np.arange(H) - 24, np.arange(W) - 24, indexing="ij")
 vol = (rng.integers(0, 300, (D, H, W)) + np.hypot(xx, yy)[None] * 4).astype(np.uint16)
 
@@ -34,7 +36,7 @@ for z in range(D):
     d.SOPClassUID = CTImageStorage
     d.SOPInstanceUID = sop
     d.PatientName = "SYNTH^ROIFEAT"
-    d.PatientID = "SYNTHROIFEAT"
+    d.PatientID = sys.argv[4] if len(sys.argv) > 4 else "SYNTHROIFEAT"
     d.PatientBirthDate = "19010203"
     d.PatientSex = "O"
     d.StudyInstanceUID = study
@@ -58,7 +60,7 @@ for z in range(D):
     d.PhotometricInterpretation = "MONOCHROME2"
     d.PixelRepresentation = 0
     d.RescaleSlope = 1
-    d.RescaleIntercept = -1000
+    d.RescaleIntercept = INTERCEPT
     d.WindowCenter = -800
     d.WindowWidth = 600
     d.PixelData = vol[z].tobytes()
