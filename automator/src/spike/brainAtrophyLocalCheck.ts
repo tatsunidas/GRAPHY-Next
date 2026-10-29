@@ -27,6 +27,7 @@ import { consentWindow, createChecker, openAnalysisPlugin } from "./computeSpike
 const { check, summary } = createChecker();
 const MODE = process.argv[2] === "missing-deps" ? "missing-deps" : "full";
 const PLUGIN_ID = "vis-brain-atrophy";
+const HIPPO_DB = process.env.BA_HIPPO_DB ?? "";   // 指定すると「海馬も解析する」を選んで通す（HippoDeep は ~/hippodeep_pytorch か GN_BA_HIPPODEEP）
 const PLUGIN_REPO = path.resolve(AUTOMATOR_ROOT, "..", "..", "graphy-next-plugin-brain-atrophy");
 const OUT_DIR = path.join(AUTOMATOR_ROOT, ".results", `brain-atrophy-${MODE}`);
 const AUDIT = path.join(DESKTOP_RUN_DATA_DIR, "compute-audit.jsonl");
@@ -88,7 +89,7 @@ async function main(): Promise<void> {
     await main.getByTestId("search-patientid-input").waitFor({ state: "visible", timeout: 60_000 });
     await driver.app.evaluate(({ dialog }, p) => {
       dialog.showMessageBoxSync = (() => 0) as typeof dialog.showMessageBoxSync;
-      dialog.showOpenDialog = (async () => ({ canceled: false, filePaths: [p] })) as unknown as typeof dialog.showOpenDialog;
+      dialog.showOpenDialog = (async (_w: unknown, o: { title?: string }) => ({ canceled: false, filePaths: [String(o?.title ?? "").includes("海馬") ? process.env.BA_HIPPO_DB ?? p : p] })) as unknown as typeof dialog.showOpenDialog;
     }, db);
 
     const rec = createStepRecorder();
@@ -124,6 +125,12 @@ async function main(): Promise<void> {
     await viewer.getByTestId("ba-db-pick").click();
     await viewer.waitForFunction(() => !!(window as unknown as { __brainAtrophyState: { db?: string } }).__brainAtrophyState.db, null, { timeout: 10_000 });
     check(((await viewer.getByTestId("ba-db-path").textContent()) ?? "") === db, "基準 DB の選択が画面に反映される");
+    if (HIPPO_DB) {
+      await viewer.getByTestId("ba-hippo").check();
+      await viewer.getByTestId("ba-hippo-db-pick").click();
+      await viewer.waitForFunction(() => !!(window as unknown as { __brainAtrophyState: { hippoDb?: string } }).__brainAtrophyState.hippoDb, null, { timeout: 10_000 });
+      check(((await viewer.getByTestId("ba-hippo-db-path").textContent()) ?? "") === HIPPO_DB, "海馬の基準の選択が画面に反映される");
+    }
     await viewer.getByTestId("ba-run").click();
 
     if (MODE === "missing-deps") {
@@ -170,6 +177,25 @@ async function main(): Promise<void> {
     check(srcLen > 50_000, "レポート HTML が iframe に入っている（自己完結の大きさ）", srcLen);
     await viewer.screenshot({ path: path.join(OUT_DIR, "d-result.png"), fullPage: false });
 
+    if (HIPPO_DB) {
+      console.log("\n[D4] 海馬");
+      await viewer.getByTestId("ba-hippo-result").waitFor({ state: "visible", timeout: 10_000 });
+      const left = (await viewer.getByTestId("ba-hippo-left").textContent()) ?? "";
+      const right = (await viewer.getByTestId("ba-hippo-right").textContent()) ?? "";
+      console.log(`  ${left}\n  ${right}`);
+      const hs = (await viewer.evaluate(() => (window as unknown as { __brainAtrophyState: { hippoResult: { left: { z: number; volume_ml: number }; right: { z: number; volume_ml: number } } } }).__brainAtrophyState.hippoResult));
+      check(/左: Z [+-]\d/.test(left) && /右: Z [+-]\d/.test(right), "画面に左右の Z・体積・百分位が出る", { left, right });
+      check(left.includes(hs.left.z.toFixed(2)) && right.includes(hs.right.z.toFixed(2)), "画面の Z が結果ファイルの値と一致する");
+      const expP = process.env.BA_HIPPO_EXPECT;
+      if (expP) {
+        const e = JSON.parse(fs.readFileSync(expP, "utf8")) as { left: { z: number; volume_ml: number }; right: { z: number; volume_ml: number } };
+        console.log(`  直接実行: 左 Z ${e.left.z.toFixed(2)}・${e.left.volume_ml} mL／右 Z ${e.right.z.toFixed(2)}・${e.right.volume_ml} mL`);
+        check(Math.abs(hs.left.z - e.left.z) < 0.15 && Math.abs(hs.right.z - e.right.z) < 0.15, "海馬の Z が CLI の直接実行と 0.15 以内（HippoDeep は本体経路でも同じ値）", { app: hs, direct: e });
+      }
+      await viewer.getByTestId("ba-hippo-result").scrollIntoViewIfNeeded();
+      await viewer.screenshot({ path: path.join(OUT_DIR, "d4-hippo.png") });
+    }
+
     console.log("\n[D2] 処理の確認（段ごとの画像）");
     await viewer.getByTestId("ba-tab-stages").click();
     await viewer.getByTestId("ba-stage-btn-input").waitFor({ state: "visible", timeout: 60_000 });
@@ -180,7 +206,7 @@ async function main(): Promise<void> {
       await viewer.screenshot({ path: path.join(OUT_DIR, "stage-timeout.png") });
       throw new Error(`段の確認が開かない: ${JSON.stringify(dump)} / ${(e as Error).message}`);
     }
-    for (const id of ["input", "brain", "n4", "register", "segment", "zscore"]) {
+    for (const id of ["input", "brain", "n4", "register", "segment", "zscore", ...(HIPPO_DB ? ["hippo"] : [])]) {
       await viewer.getByTestId(`ba-stage-btn-${id}`).click();
       await viewer.waitForFunction((want) => (window as unknown as { __brainAtrophyState: { stageView: { stage: string } } }).__brainAtrophyState.stageView.stage === want, id, { timeout: 60_000 });
       const sizes = await viewer.evaluate(() => (["axial", "coronal", "sagittal"] as const).map((p) => {
@@ -203,7 +229,7 @@ async function main(): Promise<void> {
     // 入力の格子は 150×256 画素（R 1.2 mm・A 0.94 mm）。mm の比なら 画面の 幅/高さ ≒ 150*1.2/(256*0.94) = 0.748、正方画素なら 0.586
     check(Math.abs(axialAspect.css - 0.748) < 0.03 && Math.abs(axialAspect.px - 0.586) < 0.01, "非等方の入力は mm の比で描かれる（画面 0.748・画素数の比 0.586 ではない）", axialAspect);
     await viewer.getByTestId("ba-stage-ok").click();
-    check((((await viewer.getByTestId("ba-stage-summary").textContent()) ?? "").includes("確認した 1／6")), "［確認した］で集計が更新される");
+    check((((await viewer.getByTestId("ba-stage-summary").textContent()) ?? "").includes(`確認した 1／${HIPPO_DB ? 7 : 6}`)), "［確認した］で集計が更新される");
 
     console.log("\n[D3] 保存ボタン（HTML・PDF）");
     const saveDir = path.join(OUT_DIR, "saved");
