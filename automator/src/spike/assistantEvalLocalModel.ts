@@ -3,7 +3,7 @@
  *
  * 実行:  cd automator && LLAMA_SERVER=<llama-server> MODEL_GGUF=<.gguf> MODEL_ID=<manifest の id> \
  *          npx tsx src/spike/assistantEvalLocalModel.ts
- *   任意: SUITES（既定 basic,plugin-pos。basic-b も可）、RUN_TAG（結果ファイル名の接尾辞）、EVAL_K（既定 5）、LOCAL_PORT（既定 19430）、CPU_THREADS（既定は製品と同じ defaultThreads）
+ *   任意: SUITES（既定 basic,plugin-pos。basic-b も可）、RUN_TAG（結果ファイル名の接尾辞）、LLAMA_EXTRA（llama-server への追加引数。例 "--lora a.gguf"）、EVAL_K（既定 5）、LOCAL_PORT（既定 19430）、CPU_THREADS（既定は製品と同じ defaultThreads）
  *
  * 製品と同じ起動引数（desktop/localLlm.js の serverArgs。--jinja・文脈長・--reasoning はマニフェストの値）で llama-server を
  * 専用ポートに立て、本物の Electron のアシスタント窓から［評価を実行］を押す。結果は .results/assistant-eval-local/<MODEL_ID>.json。
@@ -39,6 +39,8 @@ const K = Number(process.env.EVAL_K ?? 5);
 const LOCAL_PORT = Number(process.env.LOCAL_PORT ?? 19430);
 const SUITES = (process.env.SUITES ?? "basic,plugin-pos").split(",").map((x) => x.trim()).filter(Boolean);
 const TAG = process.env.RUN_TAG ?? "";
+/** llama-server への追加引数（例: `--lora <adapter.gguf>`）。空白区切り。製品の引数に足すだけで、他は変えない。 */
+const EXTRA = (process.env.LLAMA_EXTRA ?? "").split(/\s+/).filter(Boolean);
 const PORTS = { http: 19490, scp: 19491, vite: 19493 };
 const OUT_DIR = path.join(AUTOMATOR_ROOT, ".results", "assistant-eval-local");
 
@@ -63,11 +65,11 @@ async function waitHealth(port: number, ms: number): Promise<void> {
 
 async function main(): Promise<void> {
   fs.mkdirSync(OUT_DIR, { recursive: true });
-  const args = L.serverArgs({ modelPath: GGUF, port: LOCAL_PORT, mark: L.newMark(), jinja: md!.toolMode === "native", reasoning: md!.reasoning ?? null, threads });
+  const args = [...L.serverArgs({ modelPath: GGUF, port: LOCAL_PORT, mark: L.newMark(), jinja: md!.toolMode === "native", reasoning: md!.reasoning ?? null, threads }), ...EXTRA];
   console.log("llama-server", args.join(" "));
   const server: ChildProcess = spawn(LLAMA, args, { stdio: ["ignore", "ignore", "ignore"], cwd: path.dirname(LLAMA), env: { ...process.env, LD_LIBRARY_PATH: path.dirname(LLAMA) } });
   const driver = new DesktopDriver(PORTS);
-  const result: Record<string, unknown> = { model: MODEL_ID, threads, k: K, ctx: 8192, reasoning: md!.reasoning ?? null, llamaArgs: args.filter((a) => a !== GGUF) };
+  const result: Record<string, unknown> = { model: MODEL_ID, threads, k: K, ctx: 8192, reasoning: md!.reasoning ?? null, llamaArgs: args.filter((a) => a !== GGUF), extra: EXTRA };
   try {
     const tLoad = Date.now();
     await waitHealth(LOCAL_PORT, 10 * 60_000);
