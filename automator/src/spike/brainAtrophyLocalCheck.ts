@@ -28,6 +28,8 @@ const { check, summary } = createChecker();
 const MODE = process.argv[2] === "missing-deps" ? "missing-deps" : "full";
 const PLUGIN_ID = "vis-brain-atrophy";
 const HIPPO_DB = process.env.BA_HIPPO_DB ?? "";   // 指定すると「海馬も解析する」を選んで通す（HippoDeep は ~/hippodeep_pytorch か GN_BA_HIPPODEEP）
+const MAKER = process.env.BA_MAKER ?? "";   // 指定すると装置メーカーを選んで通す（Philips/GE/Siemens/other）
+const VOI_DB = process.env.BA_VOI_DB ?? "";   // 指定すると「鑑別の参考指標」を選んで通す（背側脳幹の白質の基準）
 const PLUGIN_REPO = path.resolve(AUTOMATOR_ROOT, "..", "..", "graphy-next-plugin-brain-atrophy");
 const OUT_DIR = path.join(AUTOMATOR_ROOT, ".results", `brain-atrophy-${MODE}`);
 const AUDIT = path.join(DESKTOP_RUN_DATA_DIR, "compute-audit.jsonl");
@@ -96,7 +98,7 @@ async function main(): Promise<void> {
     await main.getByTestId("search-patientid-input").waitFor({ state: "visible", timeout: 60_000 });
     await driver.app.evaluate(({ dialog }, p) => {
       dialog.showMessageBoxSync = (() => 0) as typeof dialog.showMessageBoxSync;
-      dialog.showOpenDialog = (async (_w: unknown, o: { title?: string }) => ({ canceled: false, filePaths: [String(o?.title ?? "").includes("海馬") ? process.env.BA_HIPPO_DB ?? p : p] })) as unknown as typeof dialog.showOpenDialog;
+      dialog.showOpenDialog = (async (_w: unknown, o: { title?: string }) => ({ canceled: false, filePaths: [String(o?.title ?? "").includes("海馬") ? process.env.BA_HIPPO_DB ?? p : String(o?.title ?? "").includes("背側脳幹") ? process.env.BA_VOI_DB ?? p : p] })) as unknown as typeof dialog.showOpenDialog;
     }, db);
 
     const rec = createStepRecorder();
@@ -122,7 +124,7 @@ async function main(): Promise<void> {
     await viewer.getByTestId("ba-run").click();
     await viewer.waitForTimeout(500);
     const invalid = (await viewer.getByTestId("ba-status").textContent()) ?? "";
-    check((birth || /年齢/.test(invalid)) && /基準 DB/.test(invalid), "未入力では計算機へ行かず、不足を画面に出す", invalid);
+    check((birth || /年齢|磁場/.test(invalid)) && /基準 DB/.test(invalid), "未入力では計算機へ行かず、不足を画面に出す", invalid);
     check(!fs.existsSync(AUDIT) || fs.readFileSync(AUDIT, "utf8").trim() === "", "🔴 その間、監査に送信が無い");
 
     console.log("\n[C] 入力して実行");
@@ -148,6 +150,7 @@ async function main(): Promise<void> {
       await viewer.getByTestId("ba-sex").selectOption(sex);
     }
     await viewer.getByTestId("ba-field").selectOption(field);
+    if (MAKER) await viewer.getByTestId("ba-maker").selectOption(MAKER);
     await viewer.getByTestId("ba-db-pick").click();
     await viewer.waitForFunction(() => !!(window as unknown as { __brainAtrophyState: { db?: string } }).__brainAtrophyState.db, null, { timeout: 10_000 });
     check(((await viewer.getByTestId("ba-db-path").textContent()) ?? "") === db, "基準 DB の選択が画面に反映される");
@@ -156,6 +159,12 @@ async function main(): Promise<void> {
       await viewer.getByTestId("ba-hippo-db-pick").click();
       await viewer.waitForFunction(() => !!(window as unknown as { __brainAtrophyState: { hippoDb?: string } }).__brainAtrophyState.hippoDb, null, { timeout: 10_000 });
       check(((await viewer.getByTestId("ba-hippo-db-path").textContent()) ?? "") === HIPPO_DB, "海馬の基準の選択が画面に反映される");
+    }
+    if (VOI_DB) {
+      await viewer.getByTestId("ba-voi").check();
+      await viewer.getByTestId("ba-voi-db-pick").click();
+      await viewer.waitForFunction(() => !!(window as unknown as { __brainAtrophyState: { voiDb?: string } }).__brainAtrophyState.voiDb, null, { timeout: 10_000 });
+      check(((await viewer.getByTestId("ba-voi-db-path").textContent()) ?? "") === VOI_DB, "背側脳幹（白質）の基準の選択が画面に反映される");
     }
     await viewer.getByTestId("ba-run").click();
 
@@ -220,6 +229,25 @@ async function main(): Promise<void> {
       }
       await viewer.getByTestId("ba-hippo-result").scrollIntoViewIfNeeded();
       await viewer.screenshot({ path: path.join(OUT_DIR, "d4-hippo.png") });
+    }
+
+    if (VOI_DB) {
+      console.log("\n[D5] 鑑別の参考指標");
+      await viewer.getByTestId("ba-voi-result").waitFor({ state: "visible", timeout: 10_000 });
+      const mtl = (await viewer.getByTestId("ba-voi-mtl").textContent()) ?? "";
+      const dbs = (await viewer.getByTestId("ba-voi-dbs").textContent()) ?? "";
+      console.log(`  ${mtl}\n  ${dbs}`);
+      const vs = (await viewer.evaluate(() => (window as unknown as { __brainAtrophyState: { voiResult: { mtl: { score: number }; dbs_white: { score: number }; ratio_white: number | null } } }).__brainAtrophyState.voiResult));
+      check(/MTL_Z.*\d\.\d\d/.test(mtl) && /DBS_Z_white.*\d\.\d\d/.test(dbs), "画面に MTL_Z・DBS_Z_white・比が出る", { mtl, dbs });
+      check(mtl.includes(vs.mtl.score.toFixed(2)) && dbs.includes(vs.dbs_white.score.toFixed(2)), "画面の値が結果ファイルの値と一致する");
+      const ev = process.env.BA_VOI_EXPECT;
+      if (ev) {
+        const e = JSON.parse(fs.readFileSync(ev, "utf8")) as { mtl: { score: number }; dbs_white: { score: number } };
+        console.log(`  直接実行: MTL_Z ${e.mtl.score.toFixed(3)}・DBS_Z_white ${e.dbs_white.score.toFixed(3)}`);
+        check(Math.abs(vs.mtl.score - e.mtl.score) < 0.1 && Math.abs(vs.dbs_white.score - e.dbs_white.score) < 0.1, "参考指標が CLI の直接実行と 0.1 以内（本体経路でも同じ値）", { app: vs, direct: e });
+      }
+      await viewer.getByTestId("ba-voi-result").scrollIntoViewIfNeeded();
+      await viewer.screenshot({ path: path.join(OUT_DIR, "d5-voi.png") });
     }
 
     console.log("\n[D2] 処理の確認（段ごとの画像）");
