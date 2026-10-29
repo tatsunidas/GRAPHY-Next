@@ -107,6 +107,16 @@ async function toClient(page: Page, key: string, p: Pt): Promise<{ x: number; y:
   return { x: b.x + (p[0] / IMG) * b.width, y: b.y + (p[1] / IMG) * b.height };
 }
 
+/** 2 方向窓は手順式（①シリーズ ②解析範囲 ③中心線 ④アンカー ⑤エッジ ⑥3D・QFR）。手順のボタンを押して、その手順の道具を出す。 */
+const MODE_STEP: Record<string, number> = { range: 2, waypoint: 3, anchor: 4, edge: 5 };
+async function setStep(page: Page, n: number): Promise<void> {
+  await page.getByTestId(`dual-step-${n}`).click();
+  await page.waitForTimeout(200);
+}
+async function setMode(page: Page, mode: string): Promise<void> {
+  await setStep(page, MODE_STEP[mode]);
+}
+
 async function anchorsOf(page: Page, key: string): Promise<[number, number, boolean][]> {
   return JSON.parse((await page.getByTestId(`dual-canvas-${key}`).getAttribute("data-anchors")) ?? "[]");
 }
@@ -154,7 +164,7 @@ async function editCheck(page: Page, label: string): Promise<Record<string, unkn
     await page.waitForTimeout(150);
   };
 
-  await page.getByTestId("dual-mode").selectOption("edge");
+  await setMode(page, "edge");
   const snap = page.getByTestId("dual-snap-edge");
   if (await snap.count()) await snap.uncheck();
   // 中心線の寄せ直しは FFR_EDITCHECK=recenter で見る。ここでは、なぞる側の選択だけを見るので切る（寄せ直すと中心線からの距離が変わる）。
@@ -228,7 +238,7 @@ async function waypointCheck(page: Page, label: string): Promise<Record<string, 
   const truth = JSON.parse(fs.readFileSync(path.join(VV_DIR, "truth.json"), "utf8")).views as Record<string, { centerlinePx: Pt[] }>;
   const nearestIdx = (pts: Pt[], p: Pt) => pts.reduce((bi, q, i) => (dist(q, p) < dist(pts[bi], p) ? i : bi), 0);
 
-  await page.getByTestId("dual-mode").selectOption("waypoint");
+  await setMode(page, "waypoint");
   const sync = page.getByTestId("dual-sync");
   check("[W0] 連動のチェックボックスがあり、既定で ON", (await sync.count()) === 1 && (await sync.isChecked()), null);
   const clA: Pt[] = await attrOf("A", "clpts");
@@ -314,7 +324,7 @@ async function rangeAnchorCheck(page: Page, label: string): Promise<Record<strin
   const nearestIdx = (pts: Pt[], p: Pt) => pts.reduce((bi, q, i) => (dist(q, p) < dist(pts[bi], p) ? i : bi), 0);
 
   // 1. 経由点で中心線を更新
-  await page.getByTestId("dual-mode").selectOption("waypoint");
+  await setMode(page, "waypoint");
   const clA0: Pt[] = await attrOf("A", "clpts");
   const aBefore = await anchors("A");
   const bBefore = await anchors("B");
@@ -335,7 +345,7 @@ async function rangeAnchorCheck(page: Page, label: string): Promise<Record<strin
   check("[R2] 置き直したアンカーは未確認になっている（A で 1 つ以上）", aAfter.filter((a) => !a[2]).length >= 1, out.anchorCounts);
 
   // 2. 区間の連動（切り詰め）
-  await page.getByTestId("dual-mode").selectOption("range");
+  await setMode(page, "range");
   await page.getByTestId("dual-range-tool").selectOption("trim");
   const clA: Pt[] = await attrOf("A", "clpts");
   const p1 = clA[Math.floor(clA.length * 0.3)];
@@ -398,7 +408,7 @@ async function endpointCheck(page: Page, label: string): Promise<Record<string, 
   };
   const lenOf = (pts: Pt[]) => pts.reduce((s, q, i) => (i ? s + dist(q, pts[i - 1]) : 0), 0);
 
-  await page.getByTestId("dual-mode").selectOption("waypoint");
+  await setMode(page, "waypoint");
   const a0 = await cl("A");
   const b0 = await cl("B");
   const nA0 = await anchorsN("A");
@@ -487,7 +497,7 @@ async function eraseCheck(page: Page, label: string): Promise<Record<string, unk
   const edited = async (): Promise<number[]> => (await attr("edited-edges")) ?? [];
   const mouseAt = async (p: Pt) => toClient(page, "A", p);
 
-  await page.getByTestId("dual-mode").selectOption("edge");
+  await setMode(page, "edge");
   await page.getByTestId("dual-edge-tool").selectOption("trace");
   const snap = page.getByTestId("dual-snap-edge");
   if (await snap.count()) await snap.uncheck();
@@ -573,11 +583,12 @@ async function redefineCheck(page: Page, label: string): Promise<Record<string, 
   const nCl = async (k: "A" | "B") => Number((await page.getByTestId(`dual-canvas-${k}`).getAttribute("data-centerline")) ?? "0");
   const btn = (k: "A" | "B") => page.getByTestId(`dual-redefine-${k}`);
   const where = await btn("A").evaluate((el) => {
-    const recon = document.querySelector("[data-testid=dual-recon]");
-    return { sameRowAsRecon: !!recon && el.parentElement === recon.parentElement, inColumn: !!el.closest("[data-testid=dual-canvas-A],[data-testid=dual-canvas-B]"), text: el.textContent };
+    // 手順式の窓では、［3D に再構成］は手順 ⑥ の中。［中心線を引き直す］は、どの手順でも見える共通の道具の行（元に戻すと同じ行）にある。
+    const undo = document.querySelector("[data-testid=dual-undo]");
+    return { sameRowAsRecon: !!undo && el.parentElement === undo.parentElement, inColumn: !!el.closest("[data-testid=dual-canvas-A],[data-testid=dual-canvas-B]"), text: el.textContent };
   });
   out.where = where;
-  check("[B1] ボタンは、再構成ボタンと同じツールバーにあり、ラベルに方向が付く", where.sameRowAsRecon && /中心線を引き直す: A/.test(String(where.text)), where);
+  check("[B1] ボタンは、共通の道具の行（元に戻すと同じ行）にあり、ラベルに方向が付く", where.sameRowAsRecon && /中心線を引き直す: A/.test(String(where.text)), where);
   const before = { a: await nCl("A"), b: await nCl("B") };
   await page.screenshot({ path: path.join(OUT_DIR, `${label}-redef-1-before.png`) });
   await btn("A").click();
@@ -631,7 +642,7 @@ async function resizeCheck(page: Page, label: string): Promise<Record<string, un
   const bk = await page.getByTestId("dual-canvas-A").evaluate((el) => ({ backing: (el as HTMLCanvasElement).width, client: el.clientWidth }));
   check("[R3] canvas の実寸 = CSS の幅 × devicePixelRatio", Math.abs(bk.backing - bk.client * dpr) <= 1, { ...bk, dpr });
 
-  await page.getByTestId("dual-mode").selectOption("waypoint");
+  await setMode(page, "waypoint");
   const tolFor = async () => (IMG / (await box("A")).width) * 1.5;
   const place = async (frac: number, shiftPx: number) => {
     const cl: Pt[] = JSON.parse((await page.getByTestId("dual-canvas-A").getAttribute("data-clpts")) ?? "[]");
@@ -679,7 +690,7 @@ async function recenterCheck(page: Page, label: string): Promise<Record<string, 
   const cl = async (): Promise<Pt[]> => await attr("clpts");
   const maxMove = (a: Pt[], b: Pt[]) => a.reduce((m, p, i) => Math.max(m, Math.hypot(p[0] - b[i][0], p[1] - b[i][1])), 0);
 
-  await page.getByTestId("dual-mode").selectOption("edge");
+  await setMode(page, "edge");
   const snap = page.getByTestId("dual-snap-edge");
   if (await snap.count()) await snap.uncheck();
   await page.getByTestId("dual-edge-tool").selectOption("brush");
@@ -723,7 +734,7 @@ async function recenterCheck(page: Page, label: string): Promise<Record<string, 
   // C5: 寄せ直した状態で経由点を足す
   await brushOut();
   const clR = await cl();
-  await page.getByTestId("dual-mode").selectOption("waypoint");
+  await setMode(page, "waypoint");
   const mp = clR[Math.floor(clR.length * 0.7)];
   const cw = await toClient(page, key, mp);
   await page.mouse.click(cw.x, cw.y);
@@ -747,6 +758,7 @@ async function anchorSyncCheck(page: Page, label: string): Promise<Record<string
   const arcsOf = (c: Pt[]) => { const a = [0]; for (let i = 1; i < c.length; i++) a.push(a[i - 1] + Math.hypot(c[i][0] - c[i - 1][0], c[i][1] - c[i - 1][1])); return a; };
   const arcAt = (c: Pt[], arcs: number[], p: Pt) => { let bi = 0, bd = Infinity; c.forEach((q, i) => { const d = Math.hypot(q[0] - p[0], q[1] - p[1]); if (d < bd) { bd = d; bi = i; } }); return arcs[bi]; };
   const pointAt = (c: Pt[], arcs: number[], s: number): Pt => { let i = 0; while (i + 2 < arcs.length && arcs[i + 1] < s) i++; const t = arcs[i + 1] > arcs[i] ? (s - arcs[i]) / (arcs[i + 1] - arcs[i]) : 0; return [c[i][0] + t * (c[i + 1][0] - c[i][0]), c[i][1] + t * (c[i + 1][1] - c[i][1])]; };
+  await setStep(page, 4); // アンカーを動かすのは手順 ④（アンカー）
   const cA = await cl("A"), cB = await cl("B");
   const aA = arcsOf(cA), aB = arcsOf(cB);
   const a0 = await anchorsOf(page, "A"), b0 = await anchorsOf(page, "B");
@@ -829,7 +841,7 @@ async function edgeSyncCheck(page: Page, label: string): Promise<Record<string, 
   const cv = (k: "A" | "B") => page.getByTestId(`dual-canvas-${k}`);
   const attr = async (k: "A" | "B", n: string) => JSON.parse((await cv(k).getAttribute(`data-${n}`)) ?? "null");
   const offs = async (k: "A" | "B"): Promise<number[][]> => (await attr(k, "edgeoffsets")) ?? [];
-  await page.getByTestId("dual-mode").selectOption("edge");
+  await setMode(page, "edge");
   await page.getByTestId("dual-edge-tool").selectOption("drag");
   const snap = page.getByTestId("dual-snap-edge");
   if (await snap.count()) await snap.uncheck();
@@ -899,6 +911,51 @@ async function edgeSyncCheck(page: Page, label: string): Promise<Record<string, 
   const bFar = await offs("B");
   check("[Y4] ★負例: 外れ値から遠い場所（85%）を A で直しても、B の外れ値は残る", Math.abs(dev(bFar, kB) - outlier) < 0.05, { bDev: +dev(bFar, kB).toFixed(2), outlier: +outlier.toFixed(2) });
   out.rows = { nA, nB, kA, kB, kFar, farB: rowsOfTruth(1000).b };
+  return out;
+}
+
+/**
+ * 手順式の窓の確認（FFR_EDITCHECK=steps。仮想血管。両方向の中心線を引いた直後から）。
+ *  T1 中心線が両方向に引けると、手順 ②（解析範囲）は済み、［次へ］で ③（中心線）へ進み、③ の道具だけが見える
+ *  T2 ④（アンカー）: 未確認の間は「0/3」で［次へ］が押せない。★負例: 確認前に押せない
+ *  T3 3 点とも動かして確認すると「3/3」になり、［次へ］が押せる
+ *  T4 ★負例: ［3D に再構成］は ⑥ に進むまで見えず、⑥ では見える
+ */
+async function stepsCheck(page: Page, label: string): Promise<Record<string, unknown>> {
+  const out: Record<string, unknown> = {};
+  const cur = async () => page.evaluate(() => Array.from(document.querySelectorAll("[data-testid^=dual-step-]")).filter((e) => e.getAttribute("aria-current") === "step").map((e) => e.getAttribute("data-testid")));
+  const state = async (n: number) => (await page.getByTestId(`dual-step-${n}`).getAttribute("data-state")) ?? "";
+  const lbl = async (n: number) => ((await page.getByTestId(`dual-step-${n}`).innerText()) ?? "").replace(/s+/g, " ").trim();
+  const next = page.getByTestId("dual-next-step");
+  const c0 = await cur();
+  check("[T0] 前提: シリーズを選ぶと、手順 ② に進んでいる", c0.length === 1 && c0[0] === "dual-step-2", c0);
+  check("[T1a] 中心線が両方向に引けると、手順 ② は済み、［次へ］が押せる", (await state(2)) === "done" && (await next.isEnabled()), { s2: await state(2) });
+  await page.screenshot({ path: path.join(OUT_DIR, `${label}-steps-1-range.png`) });
+  await next.click();
+  await page.waitForTimeout(250);
+  const c1 = await cur();
+  const vis3 = await page.getByTestId("dual-panel-step-3").isVisible();
+  const vis2 = await page.getByTestId("dual-panel-step-2").isVisible();
+  check("[T1b] ［次へ］で ③（中心線）へ進み、③ の道具だけが見える", c1[0] === "dual-step-3" && vis3 && !vis2, { c1, vis3, vis2 });
+  await page.screenshot({ path: path.join(OUT_DIR, `${label}-steps-2-centerline.png`) });
+  await setStep(page, 4);
+  const l4a = await lbl(4);
+  check("[T2] ④: 未確認の間は「0/3」で、［次へ］が押せない（★負例）", /0\/3/.test(l4a) && !(await next.isEnabled()), { l4a, enabled: await next.isEnabled() });
+  await page.screenshot({ path: path.join(OUT_DIR, `${label}-steps-3-anchors-before.png`) });
+  const a = await anchorsOf(page, "A");
+  const b = await anchorsOf(page, "B");
+  for (let i = 0; i < 3; i++) {
+    await dragAnchor(page, "A", i, [a[i][0] + 2, a[i][1] + 2]);
+    await dragAnchor(page, "B", i, [b[i][0] + 2, b[i][1] + 2]);
+  }
+  const l4b = await lbl(4);
+  check("[T3] 3 点とも動かして確認すると「3/3」になり、［次へ］が押せる", /3\/3/.test(l4b) && (await next.isEnabled()), { l4b, enabled: await next.isEnabled() });
+  await page.screenshot({ path: path.join(OUT_DIR, `${label}-steps-4-anchors-after.png`) });
+  const reconAt4 = await page.getByTestId("dual-recon").isVisible();
+  await setStep(page, 6);
+  const reconAt6 = await page.getByTestId("dual-recon").isVisible();
+  check("[T4] ★負例: ［3D に再構成］は ⑥ に進むまで見えず、⑥ では見える", !reconAt4 && reconAt6, { reconAt4, reconAt6 });
+  await page.screenshot({ path: path.join(OUT_DIR, `${label}-steps-5-recon.png`) });
   return out;
 }
 
@@ -1209,6 +1266,7 @@ async function main(): Promise<void> {
         : process.env.FFR_EDITCHECK === "redef" ? await redefineCheck(viewer, spec.label)
         : process.env.FFR_EDITCHECK === "resize" ? await resizeCheck(viewer, spec.label)
         : process.env.FFR_EDITCHECK === "recenter" ? await recenterCheck(viewer, spec.label)
+        : process.env.FFR_EDITCHECK === "steps" ? await stepsCheck(viewer, spec.label)
         : process.env.FFR_EDITCHECK === "esync" ? await edgeSyncCheck(viewer, spec.label)
         : process.env.FFR_EDITCHECK === "async" ? await anchorSyncCheck(viewer, spec.label)
         : process.env.FFR_EDITCHECK === "propose" ? await proposeCheck(viewer, spec)
@@ -1218,6 +1276,7 @@ async function main(): Promise<void> {
     }
 
     // アンカーを 3 → 必要数へ（使う + 検算用）。
+    await setStep(viewer, 4);
     const want = spec.anchors.length + (spec.heldOut ? 1 : 0);
     for (let n = (await anchorsOf(viewer, "A")).length; n < want; n++) {
       await viewer.getByTestId("dual-add-anchor").click();
@@ -1268,6 +1327,7 @@ async function main(): Promise<void> {
     log("要求位置と実際の位置の差(px) A:", JSON.stringify(report.anchorOffsetPx));
     check("[4] アンカーがすべて確認済み", gotA.every((g) => g[2]) && gotB.every((g) => g[2]), { A: gotA.map((g) => g[2]), B: gotB.map((g) => g[2]) });
 
+    await setStep(viewer, 6);
     if (spec.heldOut) await viewer.getByTestId("dual-holdout").check();
     if (spec.proximal) await viewer.getByTestId("dual-proximal").selectOption(spec.proximal);
     await viewer.waitForTimeout(300);
