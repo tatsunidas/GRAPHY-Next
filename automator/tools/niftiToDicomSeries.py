@@ -1,7 +1,7 @@
 """NIfTI の 3D T1 を、DICOM MR の 1 シリーズ（1 スライス 1 ファイル）に書き出す。実機検証（spike）用。
 
 向きは NIfTI のアフィンをそのまま DICOM の患者座標（LPS）へ写す（再サンプルしない）。
-使い方: python niftiToDicomSeries.py <in.nii.gz> <out_dir> --age 72 --sex M --field 3
+使い方: python niftiToDicomSeries.py <in.nii.gz> <out_dir> --age 72 --sex M --field 3 [--patient-name X --birth-date YYYYMMDD --study-date YYYYMMDD]
 依存: nibabel, numpy, pydicom
 """
 import argparse
@@ -24,6 +24,9 @@ def main() -> None:
     ap.add_argument("--sex", choices=["M", "F"], required=True)
     ap.add_argument("--field", type=float, required=True)
     ap.add_argument("--patient-id", default="SPIKE-IXI-0001")
+    ap.add_argument("--patient-name", default="SPIKE^IXI")
+    ap.add_argument("--birth-date", default="", help="YYYYMMDD（PatientBirthDate。空なら書かない）")
+    ap.add_argument("--study-date", default="20260101", help="YYYYMMDD（StudyDate）")
     a = ap.parse_args()
 
     img = nib.load(a.nifti)
@@ -51,9 +54,11 @@ def main() -> None:
         ds = FileDataset(None, {}, file_meta=meta, preamble=b"\0" * 128)
         ds.SOPClassUID, ds.SOPInstanceUID = MR_STORAGE, sop
         ds.StudyInstanceUID, ds.SeriesInstanceUID, ds.FrameOfReferenceUID = study, series, frame
-        ds.PatientName, ds.PatientID = "SPIKE^IXI", a.patient_id
+        ds.PatientName, ds.PatientID = a.patient_name, a.patient_id
+        if a.birth_date:
+            ds.PatientBirthDate = a.birth_date
         ds.PatientSex, ds.PatientAge = a.sex, f"{a.age:03d}Y"
-        ds.StudyDate, ds.StudyID, ds.AccessionNumber = "20260101", "1", "SPIKE1"
+        ds.StudyDate, ds.StudyID, ds.AccessionNumber = a.study_date, "1", "SPIKE1"
         ds.Modality, ds.SeriesNumber, ds.InstanceNumber = "MR", 1, k + 1
         ds.StudyDescription, ds.SeriesDescription = "spike", "T1 3D (IXI)"
         ds.MagneticFieldStrength = a.field

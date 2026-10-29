@@ -70,6 +70,13 @@ async function main(): Promise<void> {
   const age = need("BA_AGE");
   const sex = need("BA_SEX");
   const field = need("BA_FIELD");
+  // 患者情報の自動入力の検査（任意）。DICOM に入れた値と同じものを環境変数で渡す: 生年月日 YYYYMMDD・検査日 YYYYMMDD（既定 20260101）・患者名・患者 ID
+  const birth = process.env.BA_BIRTH ?? "";
+  const studyYmd = process.env.BA_STUDY ?? "20260101";
+  const pname = process.env.BA_PNAME ?? "";
+  const pid = process.env.BA_PID ?? "";
+  const iso = (d: string): string => `${d.slice(0, 4)}-${d.slice(4, 6)}-${d.slice(6, 8)}`;
+  const expectAge = birth ? Math.round(((Date.parse(iso(studyYmd)) - Date.parse(iso(birth))) / 86400000 / 365.2425) * 10) / 10 : null;
   fs.mkdirSync(OUT_DIR, { recursive: true });
 
   const dst = path.join(DESKTOP_RUN_DATA_DIR, "plugins", PLUGIN_ID);
@@ -115,12 +122,31 @@ async function main(): Promise<void> {
     await viewer.getByTestId("ba-run").click();
     await viewer.waitForTimeout(500);
     const invalid = (await viewer.getByTestId("ba-status").textContent()) ?? "";
-    check(/年齢/.test(invalid) && /基準 DB/.test(invalid), "未入力では計算機へ行かず、不足を画面に出す", invalid);
+    check((birth || /年齢/.test(invalid)) && /基準 DB/.test(invalid), "未入力では計算機へ行かず、不足を画面に出す", invalid);
     check(!fs.existsSync(AUDIT) || fs.readFileSync(AUDIT, "utf8").trim() === "", "🔴 その間、監査に送信が無い");
 
     console.log("\n[C] 入力して実行");
-    await viewer.getByTestId("ba-age").fill(age);
-    await viewer.getByTestId("ba-sex").selectOption(sex);
+    if (birth) {
+      await viewer.waitForFunction(() => (window as unknown as { __brainAtrophyState: { patientFill?: string } }).__brainAtrophyState.patientFill !== "pending", null, { timeout: 10_000 });
+      const fill = await viewer.evaluate(() => (window as unknown as { __brainAtrophyState: { patientFill?: string } }).__brainAtrophyState.patientFill);
+      check(fill === "ok", "本体の患者情報（searchPatients）から自動入力できた", fill);
+      const got = {
+        name: await viewer.getByTestId("ba-patient-name").inputValue(), id: await viewer.getByTestId("ba-patient-id").inputValue(),
+        birth: await viewer.getByTestId("ba-birth").inputValue(), study: await viewer.getByTestId("ba-study").inputValue(),
+        age: await viewer.getByTestId("ba-age").inputValue(), sex: await viewer.getByTestId("ba-sex").inputValue(),
+      };
+      console.log(`  自動入力: ${JSON.stringify(got)}`);
+      check(got.name === pname.replace(/\^/g, "^") || got.name.replace(/[\s^]+/g, "") === pname.replace(/[\s^]+/g, ""), "患者名が DICOM と一致する", got.name);
+      check(got.id === pid, "患者 ID が DICOM と一致する", got.id);
+      check(got.birth === iso(birth) && got.study === iso(studyYmd), "生年月日と検査日が DICOM と一致する", { b: got.birth, s: got.study });
+      check(Number(got.age) === expectAge, "年齢が (検査日−生年月日) の計算値と一致する", { app: got.age, expect: expectAge });
+      check(got.sex === sex, "性別が DICOM と一致する", got.sex);
+      await viewer.screenshot({ path: path.join(OUT_DIR, "c-autofill.png") });
+      await viewer.getByTestId("ba-patient-name").fill("編集後 太郎");   // 編集できること。レポート表紙にこの値が出るはず
+    } else {
+      await viewer.getByTestId("ba-age").fill(age);
+      await viewer.getByTestId("ba-sex").selectOption(sex);
+    }
     await viewer.getByTestId("ba-field").selectOption(field);
     await viewer.getByTestId("ba-db-pick").click();
     await viewer.waitForFunction(() => !!(window as unknown as { __brainAtrophyState: { db?: string } }).__brainAtrophyState.db, null, { timeout: 10_000 });
@@ -170,7 +196,7 @@ async function main(): Promise<void> {
     console.log(`  ${shown}\n  ${used}`);
     const m = st.metrics!;
     check(shown.includes((m.frac_z_gt2 * 100).toFixed(2)) && shown.includes(String(Math.round(m.gm_ml))), "画面の指標が結果ファイルの値と一致する", { shown, m });
-    check(used.includes(`${Number(age)} 歳`) && used.includes(`${field} T`), "『解析に使った値』に入力が再掲される", used);
+    check(used.includes(`${birth ? expectAge : Number(age)} 歳`) && used.includes(`${field} T`), "『解析に使った値』に入力が再掲される", used);
     const frame = viewer.getByTestId("ba-report");
     await frame.scrollIntoViewIfNeeded();
     const srcLen = await frame.evaluate((e) => (e as HTMLIFrameElement).srcdoc.length);
@@ -255,6 +281,11 @@ async function main(): Promise<void> {
     check(events.filter((e) => e.event === "compute-finished").every((e) => e.outcome === "ok"), "監査: 終了はすべて ok");
     const auditText = fs.readFileSync(AUDIT, "utf8");
     check(!auditText.includes("SPIKE-IXI-0001"), "🔴 監査に患者 ID が無い");
+    if (birth) {
+      check(!auditText.includes("編集後") && !auditText.includes("太郎") && !auditText.includes(pid), "🔴 監査・台帳に患者名・患者 ID・編集後の氏名が残らない");
+      const html = fs.existsSync(htmlSaved) ? fs.readFileSync(htmlSaved, "utf8") : "";
+      check(html.includes("編集後 太郎") && html.includes(pid) && html.includes(iso(birth)), "レポート表紙に、編集後の患者名・患者 ID・生年月日が載る");
+    }
 
     const expectPath = process.env.BA_EXPECT;
     if (expectPath) {
