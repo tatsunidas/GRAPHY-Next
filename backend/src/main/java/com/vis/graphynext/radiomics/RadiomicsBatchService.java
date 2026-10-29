@@ -135,6 +135,10 @@ public class RadiomicsBatchService {
         }
 
         Status toStatus() {
+            // 終わりの状態は、組の更新がすべて済んだあとに最後に書かれる。**先に状態を読めば**、終わりと読めたときは
+            // 組の更新がすべて見える（組を先に走査して、あとから状態を読むと、完了なのに最後の組が「実行中」のままの
+            // 食い違った状態が返りうる）。
+            JobState stateNow = state;
             int done = 0, failed = 0, skipped = 0, notRun = 0, cancelled = 0;
             List<PairStatus> list = new ArrayList<>(status.length);
             for (PairStatus p : status) {
@@ -148,7 +152,7 @@ public class RadiomicsBatchService {
                     default -> { }
                 }
             }
-            return new Status(id, state, elapsedMs(), status.length, done, failed, skipped, notRun, cancelled,
+            return new Status(id, stateNow, elapsedMs(), status.length, done, failed, skipped, notRun, cancelled,
                     stopReason, stopKind, stopIndex, list);
         }
     }
