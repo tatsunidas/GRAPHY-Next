@@ -15,6 +15,8 @@
  * FFR_DUMP2D=1   再構成の後、両方向の 2D の中心線・経路番号・径を .results/ffr-plugin/<label>-2d.json へ書く（試行 E2。ローカルのみ）。
  * FFR_MANUAL=1   試行 G。［3D に再構成］の手前で止まり、利用者がエッジを手で直して再構成するのを待つ（<label>-manual。完了の合図は .results/ffr-plugin/manual-done、
  *                最大 FFR_MANUAL_TIMEOUT_S 秒 = 既定 2700）。FFR_MANUAL_AUTO=1 は編集なしでスクリプトが再構成する（ハーネスの確認）。
+ * FFR_RESUME=1   解析状態の再開。DB の初期化でプラグイン保存領域だけ残し（keepPluginStore）、2 方向窓でシリーズを選んだところで止まる（自動で始点・終点・アンカーを置かない）。
+ *                窓の［保存した解析状態を復元］で再開する。終わりの合図は FFR_MANUAL と同じ .results/ffr-plugin/manual-done。
  * FFR_GUIDE=1    補正に使うアンカーを、B を基準に［ガイドに合わせる］で A へ寄せて決める（点の選定用。検算用は寄せない）。
  *                寄せた後の位置は report.finalAnchors に出る（それを ffr-cases-segments-C.json に写して固定する）。
  *                ガイドで選んだ対応点は再投影ゲートが循環になるので、通過は「整合性ゲート通過」としか言えない。
@@ -1575,6 +1577,105 @@ async function foldCheck(page: Page, label: string): Promise<Record<string, unkn
   return out;
 }
 
+/** 2 方向窓の［シリーズを選ぶ］で A → B の順に選ぶ。 */
+async function pickAB(viewer: Page, imp: Record<"A" | "B", { study: string; series: string }>): Promise<void> {
+  await viewer.getByTestId("dual-pick").click();
+  await viewer.getByTestId("pickseries-dialog").waitFor({ state: "visible", timeout: 10_000 });
+  await viewer.waitForTimeout(1_000);
+  for (const st of new Set([imp.A.study, imp.B.study])) {
+    const exp = viewer.getByTestId(`pickseries-expand-${st}`);
+    if ((await exp.count()) && (await exp.getAttribute("aria-expanded")) !== "true") await exp.click();
+  }
+  await viewer.waitForTimeout(800);
+  // 選択順がそのまま A → B になる。
+  await viewer.getByTestId(`pickseries-series-check-${imp.A.series}`).check();
+  await viewer.getByTestId(`pickseries-series-check-${imp.B.series}`).check();
+  await viewer.getByTestId("pickseries-ok").click();
+  await viewer.waitForTimeout(4_000);
+}
+
+/**
+ * 解析状態の自動保存と再開の確認（FFR_EDITCHECK=resume。仮想血管。保存領域は起動時に空）。
+ *  U0 前提: 保存済みは無く、復元ボタンは無効
+ *  U1 経由点を足すと、数秒で「自動保存しました」と出る
+ *  U2 同じ 2 シリーズを選び直すと、復元ボタンが「前回の解析状態（日時）を復元」になって有効。押すと、経由点が保存時の数に戻る
+ *  U3 ★上書きの安全弁: 選び直して中心線を引き直し（保存済みは未復元）、経由点を足しても、「自動保存していません」と出る。
+ *      復元すると、経由点が U1 の保存時の数に戻る（＝保存済みは上書きされていない）
+ *  U4 復元したあとの変更は、再び自動保存される（「自動保存しました」）
+ */
+async function resumeCheck(page: Page, spec: Spec, imp: Record<"A" | "B", { study: string; series: string }>): Promise<Record<string, unknown>> {
+  const out: Record<string, unknown> = {};
+  const cvA = page.getByTestId("dual-canvas-A");
+  const attr = async (n: string) => JSON.parse((await cvA.getAttribute(`data-${n}`)) ?? "null");
+  const nWp = async (): Promise<number> => (((await attr("waypoints")) as Pt[] | null) ?? []).length;
+  const persist = async (): Promise<string> => txt(page, "dual-persist");
+  const restore = page.getByTestId("dual-restore-def");
+  const addWaypointAt = async (f: number): Promise<void> => {
+    await setMode(page, "waypoint");
+    const cl: Pt[] = await attr("clpts");
+    const c = await toClient(page, "A", cl[Math.floor(cl.length * f)]);
+    await page.mouse.click(c.x, c.y);
+    await page.waitForTimeout(600);
+  };
+  const redefine = async (): Promise<void> => {
+    const autoPropose = page.getByTestId("dual-auto-propose");
+    if (await autoPropose.count()) await autoPropose.uncheck();
+    for (const k of ["A", "B"] as const) {
+      await setFrame(page, k, spec.frames[k]);
+      for (const p of [spec.ends[k].start, spec.ends[k].end]) {
+        const c = await toClient(page, k, p);
+        await page.mouse.click(c.x, c.y);
+        await page.waitForTimeout(400);
+      }
+      await page.waitForTimeout(1_500);
+    }
+  };
+  check("[U0] 前提: 保存済みは無く、復元ボタンは無効", !(await restore.isEnabled()), { enabled: await restore.isEnabled() });
+
+  await addWaypointAt(0.5);
+  const wpSaved = await nWp();
+  await page.waitForTimeout(3_000);
+  const p1 = await persist();
+  out.u1 = { wpSaved, persist: p1.slice(0, 120) };
+  check("[U1] 経由点を足すと、自動で保存される（「自動保存しました」）", wpSaved === 1 && /自動保存しました/.test(p1), out.u1);
+
+  // 選び直し（定義は消える）→ 保存済みが見つかる
+  await pickAB(page, imp);
+  const label2 = await restore.innerText();
+  const enabled2 = await restore.isEnabled();
+  const wpAfterPick = await nWp();
+  await restore.click();
+  await page.waitForTimeout(3_000);
+  const wpRestored = await nWp();
+  out.u2 = { label: label2, enabled: enabled2, wpAfterPick, wpRestored };
+  check("[U2] 選び直すと「前回の解析状態（日時）を復元」が有効になり、押すと経由点が保存時の数に戻る", /前回の解析状態/.test(label2) && enabled2 && wpAfterPick === 0 && wpRestored === wpSaved, out.u2);
+  await page.screenshot({ path: path.join(OUT_DIR, `${spec.label}-resume-2-restored.png`) });
+
+  // ★上書きの安全弁
+  await pickAB(page, imp);
+  const pendingNote = await persist();
+  await redefine();
+  await addWaypointAt(0.3);
+  await addWaypointAt(0.7);
+  const wpNew = await nWp();
+  await page.waitForTimeout(3_500);
+  const p3 = await persist();
+  await restore.click(); // 保存済み（U1 の内容）を復元
+  await page.waitForTimeout(3_000);
+  const wpBack = await nWp();
+  out.u3 = { pendingNote: pendingNote.slice(0, 100), wpNew, persistAfterEdit: p3.slice(0, 120), wpBack };
+  check("[U3] ★上書きの安全弁: 保存済みが未復元の間に経由点を足しても「自動保存していません」と出て、復元すると保存時の数に戻る", wpNew === 2 && /自動保存していません/.test(p3) && !/自動保存しました/.test(p3) && wpBack === wpSaved, out.u3);
+
+  // 復元後の変更は保存される
+  await addWaypointAt(0.8);
+  await page.waitForTimeout(3_500);
+  const p4 = await persist();
+  out.u4 = { persist: p4.slice(0, 120) };
+  check("[U4] 復元したあとの変更は、再び自動保存される", /自動保存しました/.test(p4), out.u4);
+  await page.screenshot({ path: path.join(OUT_DIR, `${spec.label}-resume-3-after.png`) });
+  return out;
+}
+
 async function setFrame(page: Page, key: string, frame: number): Promise<void> {
   await page.evaluate(
     `(() => { const el = document.querySelector('[data-testid="dual-frame-${key}"]'); const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set; set.call(el, '${frame}'); el.dispatchEvent(new Event('input', { bubbles: true })); })()`,
@@ -1795,7 +1896,7 @@ async function main(): Promise<void> {
     page.on("pageerror", (e) => log("PAGEERROR:", String(e.stack ?? e).slice(0, 300)));
     page.on("dialog", (d) => void d.accept().catch(() => {}));
     const base = `http://127.0.0.1:${driver.ports.http}/api`;
-    await resetDb(driver.ports.http);
+    await resetDb(driver.ports.http, { keepPluginStore: process.env.FFR_RESUME === "1" });
     const imp: Record<"A" | "B", { study: string; series: string }> = {} as never;
     for (const k of ["A", "B"] as const) {
       const before = new Set((await listSeries(base)).map((s) => s.series));
@@ -1829,23 +1930,27 @@ async function main(): Promise<void> {
     }
     await viewer.getByTestId("angio-quant-dual").click();
     await viewer.getByTestId("dual-panel").waitFor({ state: "visible", timeout: 10_000 });
-    await viewer.getByTestId("dual-pick").click();
-    await viewer.getByTestId("pickseries-dialog").waitFor({ state: "visible", timeout: 10_000 });
-    await viewer.waitForTimeout(1_000);
-    for (const st of new Set([imp.A.study, imp.B.study])) {
-      const exp = viewer.getByTestId(`pickseries-expand-${st}`);
-      if ((await exp.count()) && (await exp.getAttribute("aria-expanded")) !== "true") await exp.click();
-    }
-    await viewer.waitForTimeout(800);
-    // 選択順がそのまま A → B になる。
-    await viewer.getByTestId(`pickseries-series-check-${imp.A.series}`).check();
-    await viewer.getByTestId(`pickseries-series-check-${imp.B.series}`).check();
-    await viewer.getByTestId("pickseries-ok").click();
-    await viewer.waitForTimeout(4_000);
+    await pickAB(viewer, imp);
     const stA0 = await txt(viewer, "dual-status-A");
     const stB0 = await txt(viewer, "dual-status-B");
     check("[1] 2 方向が読み込まれた", /フレーム/.test(stA0) && /フレーム/.test(stB0), { stA0: stA0.slice(0, 80), stB0: stB0.slice(0, 80) });
 
+    if (process.env.FFR_RESUME === "1") {
+      // 解析状態の再開（保存領域を消さずに起動）。自動で始点・終点・アンカーを置かず、利用者が［保存した解析状態を復元］する。
+      const note = await txt(viewer, "dual-persist");
+      const restoreText = await viewer.getByTestId("dual-restore-def").innerText().catch(() => "");
+      report.resume = { persist: note.slice(0, 200), restoreButton: restoreText, restoreEnabled: await viewer.getByTestId("dual-restore-def").isEnabled().catch(() => false) };
+      log("【再開】保存済みの通知:", note.slice(0, 200), "／ 復元ボタン:", restoreText);
+      await viewer.screenshot({ path: path.join(OUT_DIR, `${spec.label}-resume-1-opened.png`) });
+      const marker = path.join(OUT_DIR, "manual-done");
+      fs.rmSync(marker, { force: true });
+      const limitS = Number(process.env.FFR_MANUAL_TIMEOUT_S ?? "2700");
+      log(`【再開】窓で［保存した解析状態を復元］して続けてください。終わったら ${marker} を作ってください（最大 ${limitS} 秒待ちます）。`);
+      const deadline = Date.now() + limitS * 1000;
+      while (!fs.existsSync(marker) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 2_000));
+      fs.writeFileSync(path.join(OUT_DIR, `${spec.label}.json`), JSON.stringify({ ...report, checks: results }, null, 1));
+      return;
+    }
     await setFrame(viewer, "A", spec.frames.A);
     await setFrame(viewer, "B", spec.frames.B);
     // 中心線: 始点・終点をクリック。方向 B への自動提案は、propose の検査以外では切る（B の始点・終点を spec のとおりに置くため）。
@@ -1883,6 +1988,7 @@ async function main(): Promise<void> {
         : process.env.FFR_EDITCHECK === "fold" ? await foldCheck(viewer, spec.label)
         : process.env.FFR_EDITCHECK === "gsnap" ? await gsnapCheck(viewer, spec.label)
         : process.env.FFR_EDITCHECK === "curve" ? await curveCheck(viewer, spec.label)
+        : process.env.FFR_EDITCHECK === "resume" ? await resumeCheck(viewer, spec, imp)
         : await editCheck(viewer, spec.label);
       fs.writeFileSync(path.join(OUT_DIR, `${spec.label}.json`), JSON.stringify({ ...report, checks: results }, null, 1));
       return;

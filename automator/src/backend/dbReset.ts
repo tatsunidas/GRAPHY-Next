@@ -18,8 +18,9 @@ export interface ResetResult {
  * 設定されているときだけこのルートを公開する（backend/.../automator/AutomatorController.java）。
  * automator が spawn する backend には常にこの環境変数を設定すること（driver/*.ts 参照）。
  */
-export async function resetDb(httpPort: number): Promise<ResetResult> {
-  const url = `http://127.0.0.1:${httpPort}/api/automator/reset`;
+export async function resetDb(httpPort: number, opts: { keepPluginStore?: boolean } = {}): Promise<ResetResult> {
+  // keepPluginStore: プラグイン保存領域（H8）だけ消さない。プラグインの「解析状態の保存と再開」を、起動をまたいで確かめるため。
+  const url = `http://127.0.0.1:${httpPort}/api/automator/reset${opts.keepPluginStore ? "?keepPluginStore=true" : ""}`;
   const res = await fetch(url, { method: "POST" });
   if (res.status === 404) {
     throw new Error(
