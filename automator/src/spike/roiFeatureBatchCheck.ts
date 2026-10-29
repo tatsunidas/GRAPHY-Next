@@ -336,9 +336,9 @@ async function main(): Promise<void> {
     console.log("\n[5] 取り消しと続きからの再実行（重い設定）");
     await page.getByTestId("batch-bincount").locator("input").fill("16");
     await page.getByTestId("batch-bincount").locator("input").press("Enter");
-    await page.locator('[data-testid="batch-settings"] select').selectOption("iso");
-    await page.locator('[data-testid="batch-settings"] input[type="number"]').last().fill("0.35");
-    await page.locator('[data-testid="batch-settings"] input[type="number"]').last().press("Enter");
+    await page.getByTestId("batch-resampling").selectOption("iso");
+    await page.getByTestId("batch-resample-mm").locator("input").fill("0.35");
+    await page.getByTestId("batch-resample-mm").locator("input").press("Enter");
     await page.waitForTimeout(300);
     await page.getByTestId("batch-run").click();
     // 途中の状態を観測できるだけ重い設定にしてある。観測できずに終わったら、検査できていないので失敗にする（合格にしない）
