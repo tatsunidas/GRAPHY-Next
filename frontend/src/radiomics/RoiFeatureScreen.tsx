@@ -34,6 +34,7 @@ import {
 import { formatFeatureValue } from "./GlamFeatureTable";
 import { RoiSummaryPanels } from "./RoiSummaryPanels";
 import { ScaleCompareTable } from "./ScaleCompareTable";
+import { RoiFeatureSettingsFields } from "./RoiFeatureSettingsFields";
 import { formatAreaMm2, formatPositionMm, tiePositions } from "./maxSection";
 import { requestRemoteReveal } from "../viewer/roiRevealBridge";
 import { compareRows, roiFeature2dFiles, type CompareRow } from "./roiFeatureModes";
@@ -53,10 +54,6 @@ import {
 import {
   ROI_FEATURE_FAMILIES,
   LOG_PADDINGS,
-  applySixStatistics,
-  isSixStatistics,
-  applyScale36,
-  isScale36,
   rangeBounds,
   SCALE_CONVERSIONS,
   anyFamilyOn,
@@ -394,9 +391,6 @@ export function RoiFeatureScreen() {
 
   const rangeProblem = rangeBounds(form).problem;
 
-  const setFamily = (key: string, on: boolean) =>
-    setForm((f) => ({ ...f, families: { ...f.families, [key]: on } }));
-
   const seriesLabel = (s: Series) =>
     `#${s.seriesNumber ?? "?"} ${s.modality ?? ""} ${s.seriesDescription ?? ""}`.trim();
 
@@ -531,55 +525,10 @@ export function RoiFeatureScreen() {
         </Field>
         {(sectionOn || slicesOn) && <div style={note}>{t("roiFeat.mode.note2d")}</div>}
 
-        <Field label={t("roiFeat.field.discretisation")}>
-          <span style={{ display: "inline-flex", gap: 8, alignItems: "center", justifyContent: "flex-end" }}>
-            <label>
-              <input type="radio" checked={form.fixedBinNumber} disabled={busy}
-                onChange={() => setForm((f) => ({ ...f, fixedBinNumber: true }))} /> {t("roiFeat.disc.binCount")}
-            </label>
-            <span data-testid="roifeat-bincount">
-              <NumberField value={form.binCount} onChange={(v) => setForm((f) => ({ ...f, binCount: v }))}
-                min={2} max={1024} disabled={busy || !form.fixedBinNumber} style={{ ...input, width: 64 }} />
-            </span>
-            <label>
-              <input type="radio" checked={!form.fixedBinNumber} disabled={busy}
-                onChange={() => setForm((f) => ({ ...f, fixedBinNumber: false }))} /> {t("roiFeat.disc.binWidth")}
-            </label>
-            <NumberField value={form.binWidth} onChange={(v) => setForm((f) => ({ ...f, binWidth: v }))}
-              min={0.001} max={100000} step={0.5} disabled={busy || form.fixedBinNumber} style={{ ...input, width: 64 }} />
-          </span>
-        </Field>
-        <Field label={t("roiFeat.field.resampling")}>
-          <span style={{ display: "inline-flex", gap: 8, alignItems: "center", justifyContent: "flex-end" }}>
-            <select value={form.resampleMm == null ? "none" : "iso"} disabled={busy} style={{ ...input, width: 110 }}
-              data-testid="roifeat-resampling"
-              onChange={(e) => setForm((f) => ({ ...f, resampleMm: e.target.value === "none" ? null : 1 }))}>
-              <option value="none">{t("roiFeat.resampling.none")}</option>
-              <option value="iso">{t("roiFeat.resampling.iso")}</option>
-            </select>
-            {form.resampleMm != null && (
-              <>
-                <NumberField value={form.resampleMm} onChange={(v) => setForm((f) => ({ ...f, resampleMm: v }))}
-                  min={0.05} max={20} step={0.1} disabled={busy} style={{ ...input, width: 64 }} />
-                <span>mm</span>
-              </>
-            )}
-          </span>
-        </Field>
-        <Field label={t("roiFeat.field.range")}>
-          <span style={{ display: "inline-flex", gap: 6, alignItems: "center", justifyContent: "flex-end" }}>
-            <input value={form.rangeMinText} disabled={busy} style={{ ...input, width: 72 }} inputMode="decimal"
-              placeholder={t("roiFeat.range.min")} data-testid="roifeat-range-min"
-              onChange={(e) => setForm((f) => ({ ...f, rangeMinText: e.target.value }))} />
-            <span>〜</span>
-            <input value={form.rangeMaxText} disabled={busy} style={{ ...input, width: 72 }} inputMode="decimal"
-              placeholder={t("roiFeat.range.max")} data-testid="roifeat-range-max"
-              onChange={(e) => setForm((f) => ({ ...f, rangeMaxText: e.target.value }))} />
-          </span>
-        </Field>
-        {rangeProblem && (
-          <div style={warnBand} data-testid="roifeat-range-problem">{t(`roiFeat.range.problem.${rangeProblem}`)}</div>
-        )}
+        <RoiFeatureSettingsFields form={form} setForm={setForm} disabled={busy} testIdPrefix="roifeat"
+          layout={{ labelMinWidth: 150, align: "right" }} showRange showPreset
+          middleSlot={(
+            <>
         <Field label={t("roiFeat.field.filter")}>
           <span style={{ display: "inline-flex", gap: 8, alignItems: "center", justifyContent: "flex-end", flexWrap: "wrap" }}>
             <label>
@@ -669,27 +618,8 @@ export function RoiFeatureScreen() {
             <div style={note}>{t("roiFeat.filter.note")}</div>
           </>
         )}
-        <Field label={t("roiFeat.field.preset")}>
-          <select value={isScale36(form) ? "scale36" : isSixStatistics(form) ? "six" : "custom"} disabled={busy}
-            style={{ ...input, width: 260 }} data-testid="roifeat-preset"
-            onChange={(e) => {
-              if (e.target.value === "six") setForm((f) => applySixStatistics(f));
-              if (e.target.value === "scale36") setForm((f) => applyScale36(f));
-            }}>
-            <option value="custom">{t("roiFeat.preset.custom")}</option>
-            <option value="six">{t("roiFeat.preset.six")}</option>
-            <option value="scale36">{t("roiFeat.preset.scale36")}</option>
-          </select>
-        </Field>
-        <div style={{ ...fieldLabel, marginTop: 6 }}>{t("roiFeat.field.families")}</div>
-        <div style={familyGrid}>
-          {ROI_FEATURE_FAMILIES.map((f) => (
-            <label key={f.key}>
-              <input type="checkbox" checked={!!form.families[f.key]} disabled={busy}
-                onChange={(e) => setFamily(f.key, e.target.checked)} /> {familyLabel(f.key)}
-            </label>
-          ))}
-        </div>
+            </>
+          )} />
         {form.families.GLAM && <div style={note}>{t("roiFeat.glamNote")}</div>}
 
         <div style={{ display: "flex", gap: 6, marginTop: 10, justifyContent: "flex-end" }}>
@@ -1045,9 +975,6 @@ const panel: React.CSSProperties = {
   border: "1px solid #dfe5ec", borderRadius: 8, padding: 12, marginTop: 10, maxWidth: 640,
 };
 const fieldLabel: React.CSSProperties = { color: "#5a6672" };
-const familyGrid: React.CSSProperties = {
-  display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(190px, 1fr))", gap: "2px 10px", marginTop: 4,
-};
 const input: React.CSSProperties = {
   width: "100%", boxSizing: "border-box", border: "1px solid #cdd5de", borderRadius: 4, fontSize: 12, padding: "3px 6px",
 };
