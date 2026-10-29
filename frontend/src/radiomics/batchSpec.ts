@@ -26,10 +26,23 @@ export type SpecQcMode = "FLAG" | "STOP";
 
 export type SpecForm = Pick<RoiFeatureForm, "fixedBinNumber" | "binCount" | "binWidth" | "resampleMm" | "families">;
 
+/**
+ * QC の設定。`smallRoiVoxels` は小さい ROI の基準値（ボクセル数、1 以上の整数）。null は環境設定の値を使う。
+ * null のときは正準 JSON にキーを出さない（基準値の無い従来の定義の SHA-256 を変えない）。
+ */
+export interface SpecQc {
+  smallRoi: SpecQcMode;
+  lossy: SpecQcMode;
+  smallRoiVoxels: number | null;
+}
+
+/** 基準値の上限（バックエンドの Integer と同じ）。 */
+export const SMALL_ROI_VOXELS_MAX = 2147483647;
+
 /** ハッシュの対象になる中身。 */
 export interface SpecContent {
   form: SpecForm;
-  qc: { smallRoi: SpecQcMode; lossy: SpecQcMode };
+  qc: SpecQc;
   selection: { segmentLabels: string[] };
 }
 
@@ -51,7 +64,7 @@ export function defaultSpecContent(): SpecContent {
   const f = defaultRoiFeatureForm();
   return {
     form: { fixedBinNumber: f.fixedBinNumber, binCount: f.binCount, binWidth: f.binWidth, resampleMm: f.resampleMm, families: f.families },
-    qc: { smallRoi: "FLAG", lossy: "FLAG" },
+    qc: { smallRoi: "FLAG", lossy: "FLAG", smallRoiVoxels: null },
     selection: { segmentLabels: [] },
   };
 }
@@ -71,6 +84,9 @@ export function parseLabelInput(text: string): string[] {
   return normalizeLabels(text.split(/[,、\n]/));
 }
 
+const qcJson = (q: SpecQc) =>
+  q.smallRoiVoxels == null ? { smallRoi: q.smallRoi, lossy: q.lossy } : { smallRoi: q.smallRoi, lossy: q.lossy, smallRoiVoxels: q.smallRoiVoxels };
+
 /** 正準な JSON。キーの並びを固定して組み立てる（族は `ROI_FEATURE_FAMILIES` の順）。 */
 export function canonicalContentJson(c: SpecContent): string {
   const families = ROI_FEATURE_FAMILIES.map((f) => [f.key, !!c.form.families[f.key]] as const);
@@ -82,7 +98,7 @@ export function canonicalContentJson(c: SpecContent): string {
       resampleMm: c.form.resampleMm,
       families: Object.fromEntries(families),
     },
-    qc: { smallRoi: c.qc.smallRoi, lossy: c.qc.lossy },
+    qc: qcJson(c.qc),
     selection: { segmentLabels: normalizeLabels(c.selection.segmentLabels) },
   });
 }
@@ -102,14 +118,15 @@ export async function buildSpec(c: SpecContent, prefix: string): Promise<BatchSp
       fixedBinNumber: c.form.fixedBinNumber, binCount: c.form.binCount, binWidth: c.form.binWidth,
       resampleMm: c.form.resampleMm, families: Object.fromEntries(ROI_FEATURE_FAMILIES.map((f) => [f.key, !!c.form.families[f.key]])),
     },
-    qc: { smallRoi: c.qc.smallRoi, lossy: c.qc.lossy },
+    qc: { ...c.qc },
     selection: { segmentLabels: normalizeLabels(c.selection.segmentLabels) },
     output: { prefix: prefix.slice(0, PREFIX_MAX_LEN) },
     sha256: await contentSha256(c),
   };
 }
 
-export const specText = (spec: BatchSpec): string => `${JSON.stringify(spec, null, 2)}\n`;
+/** 保存するテキスト。基準値が null のときは、正準 JSON と同じくキーを書かない。 */
+export const specText = (spec: BatchSpec): string => `${JSON.stringify({ ...spec, qc: qcJson(spec.qc) }, null, 2)}\n`;
 
 /** 定義のファイル名。接頭辞に使えない文字は `_`、空なら `roi-features-batch`。 */
 export const batchSpecFileName = (prefix: string): string =>
@@ -165,6 +182,13 @@ export async function parseSpec(text: string): Promise<SpecParse> {
   const smallRoi = own(qc, "smallRoi");
   const lossy = own(qc, "lossy");
   if ((smallRoi !== "FLAG" && smallRoi !== "STOP") || (lossy !== "FLAG" && lossy !== "STOP")) return fail("type", "qc");
+  const voxelsRaw = own(qc, "smallRoiVoxels");
+  let smallRoiVoxels: number | null = null;
+  if (voxelsRaw !== undefined && voxelsRaw !== null) {
+    if (typeof voxelsRaw !== "number") return fail("type", "qc.smallRoiVoxels");
+    if (!Number.isInteger(voxelsRaw) || voxelsRaw < 1 || voxelsRaw > SMALL_ROI_VOXELS_MAX) return fail("range", "qc.smallRoiVoxels");
+    smallRoiVoxels = voxelsRaw;
+  }
 
   const labelsRaw = own(sel, "segmentLabels");
   if (!Array.isArray(labelsRaw)) return fail("type", "selection.segmentLabels");
@@ -185,7 +209,7 @@ export async function parseSpec(text: string): Promise<SpecParse> {
 
   const content: SpecContent = {
     form: { fixedBinNumber, binCount, binWidth, resampleMm: resampleMm as number | null, families },
-    qc: { smallRoi, lossy },
+    qc: { smallRoi, lossy, smallRoiVoxels },
     selection: { segmentLabels: normalizeLabels(labels) },
   };
   const actual = await contentSha256(content);

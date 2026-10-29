@@ -46,7 +46,7 @@ import {
   specContentFrom,
   specText,
   type BatchSpec,
-  type SpecQcMode,
+  type SpecContent,
 } from "./batchSpec";
 import { BatchSettingsPanel } from "./BatchSettingsPanel";
 import { assignSubjectCodes, datasetFiles, type DatasetRow } from "./datasetCsv";
@@ -101,7 +101,7 @@ export function RoiFeatureBatchDialog({
   const [trial, setTrial] = useState<BatchPairResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [written, setWritten] = useState<number | null>(null);
-  const [qc, setQc] = useState<{ smallRoi: SpecQcMode; lossy: SpecQcMode }>({ smallRoi: "FLAG", lossy: "FLAG" });
+  const [qc, setQc] = useState<SpecContent["qc"]>({ smallRoi: "FLAG", lossy: "FLAG", smallRoiVoxels: null });
   const [labelsText, setLabelsText] = useState("");
   const [specSha, setSpecSha] = useState("");
   /** QC で止まったあとに「許容して続ける」で許容した組のキー。設定を変えたら空に戻す。 */
@@ -230,7 +230,7 @@ export function RoiFeatureBatchDialog({
     try {
       const spec = await buildSpec(specContentFrom(form, qc, labels), prefix);
       const st = await submitBatch(buildBatchRequest(chosen.map((c) => c.pair), form, {
-        qc: isTrial ? null : qc, acknowledged: ack,
+        qc: isTrial ? null : { smallRoi: qc.smallRoi, lossy: qc.lossy }, acknowledged: ack, smallRoiVoxels: qc.smallRoiVoxels,
       }));
       runRef.current = {
         jobId: st.jobId, labels: chosen.map((c) => c.caseLabel), keys: chosen.map((c) => pairKey(c.pair)),

@@ -585,6 +585,42 @@ class RoiFeatureServiceTest {
     }
 
     @Test
+    void theThresholdInTheRequestOverridesTheSettingAndIsNotPartOfTheCacheKey(@TempDir Path dir) throws Exception {
+        RoiFeatureService svc = service(new FixedEngine(box()), dir, "t");
+        RoiFeatureResult.RoiSize unsetSize = svc.compute(req("1.2.10", Map.of(), false), p -> { }).roiSize();
+        assertNull(unsetSize.smallRoi(), "環境設定も要求も無ければ判定しない");
+        assertEquals(1, extractions.get());
+
+        // 環境設定は未設定のまま、要求の基準値だけで判定する（1000 ボクセルの箱）
+        RoiFeatureResult over = svc.compute(withThreshold("1.2.10", 1001), p -> { });
+        assertTrue(over.fromCache(), "基準値はキャッシュの鍵に入らない");
+        assertEquals(1, extractions.get());
+        assertEquals(1001, over.roiSize().smallRoiWarnVoxels());
+        assertEquals(Boolean.TRUE, over.roiSize().smallRoi());
+
+        // 環境設定 1000 でも、要求の 100 が優先される
+        smallRoi.set("1000");
+        assertEquals(Boolean.FALSE, svc.compute(withThreshold("1.2.10", 100), p -> { }).roiSize().smallRoi());
+        assertEquals(100, svc.compute(withThreshold("1.2.10", 100), p -> { }).roiSize().smallRoiWarnVoxels());
+        // 要求に無ければ環境設定
+        assertEquals(1000, svc.compute(req("1.2.10", Map.of(), false), p -> { }).roiSize().smallRoiWarnVoxels());
+        assertEquals(1, extractions.get());
+
+        for (int bad : new int[] {0, -3}) {
+            IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                    () -> svc.check(withThreshold("1.2.10", bad)), "" + bad);
+            assertTrue(e.getMessage().contains("小さい ROI"), e.getMessage());
+        }
+    }
+
+    private static RoiFeatureRequest withThreshold(String series, Integer voxels) {
+        RoiFeatureRequest r = req(series, Map.of(), false);
+        return new RoiFeatureRequest(r.studyInstanceUid(), r.sourceSeriesUid(), r.maskSeriesUid(), r.maskChannel(),
+                r.channel(), r.timePoint(), r.settings(), r.recompute(), r.roiModes(), r.scales(), r.scaleNotation(),
+                r.scaleLabels(), r.scaleConversion(), r.scaleCoefficient(), voxels);
+    }
+
+    @Test
     void smallRoiWarningBoundaryAndCacheUsesTheCurrentSetting(@TempDir Path dir) throws Exception {
         RoiFeatureService svc = service(new FixedEngine(box()), dir, "t");
         smallRoi.set("1001");

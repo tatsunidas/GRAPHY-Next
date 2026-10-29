@@ -15,6 +15,8 @@
  *      計算済みの組はキャッシュ表示になる。
  *   6. QC: 環境設定の小さい ROI の基準値を 1000 にして「止める」で実行 → 400 ボクセルの組で止まり、許容して続けると完了。
  *      止めた組の値・旗が予測（400 ＜ 1000）と一致。基準値が未設定なら止まらず「判定していません」（負例）。
+ *   6d. 小さい ROI の基準値を定義に持たせる: 環境設定が未設定でも定義の 1000 で止まり、環境設定 1000 でも定義の 100 が優先
+ *      （旗なし・キャッシュを使い回す）。保存・読込で復元、数字でない入力は反映しない（負例）。
  *   7. 定義: 保存 → 開き直して読み込む → 欄と SHA-256 が復元。書き換えたファイル・SHA-256 の無いファイルは断られ、
  *      欄は変わらない。読み込んで実行した結果の Provenance_SettingsSha256 が、手で同じ設定にして実行した結果と同じ。
  *
@@ -497,6 +499,57 @@ async function main(): Promise<void> {
     check(/3\/3 完了/.test(doneEx), "両方を外すと、残りの 3 組で完了", doneEx);
     await page.screenshot({ path: path.join(OUT_DIR, "08b-qc-excluded.png"), fullPage: true });
 
+    // ---- 6d. 基準値を定義に持たせる ----
+    console.log("\n[6d] 基準値を定義に持たせる（環境設定が未設定でも効く・環境設定より優先・キャッシュは使い回す）");
+    const voxels = page.getByTestId("batch-qc-voxels");
+    await put("");
+    await reopen();
+    check((await voxels.inputValue()) === "", "基準値の欄は既定で空（環境設定の値を使う）");
+    await radio("batch-qc-small", 1).check();
+    await voxels.fill("1000");
+    await page.getByTestId("batch-run").click();
+    await page.getByTestId("batch-qc-hold").waitFor({ state: "visible", timeout: 300_000 });
+    const holdV = await page.getByTestId("batch-qc-hold").innerText();
+    console.log(`  holdV: ${holdV.replace(/\n/g, " ")}`);
+    check(/C002/.test(holdV) && /400 ボクセル/.test(holdV) && /1000/.test(holdV),
+      "環境設定が未設定でも、定義の基準値 1000 で C002（400 ボクセル）が止まる（予測 400 ＜ 1000 と一致）", holdV);
+    check((await page.getByTestId("batch-unset-threshold").count()) === 0, "基準値があるので「判定していません」は出ない");
+    check(/キャッシュ/.test(await page.getByTestId("batch-state-0").innerText()), "基準値を足しても計算し直さず、キャッシュを使う");
+    await page.screenshot({ path: path.join(OUT_DIR, "08c-qc-voxels-hold.png"), fullPage: true });
+    await acceptUntilDone(/^完了 — 5\/5 完了/, 5);
+
+    await put("1000");
+    await reopen();
+    await radio("batch-qc-small", 1).check();
+    await voxels.fill("100");
+    await page.getByTestId("batch-run").click();
+    await waitText(page, "batch-progress", /完了 — 5\/5 完了/, 300_000);
+    check(!(await page.getByTestId("batch-qc-hold").isVisible().catch(() => false)), "環境設定 1000・定義の基準値 100 → 止まらない（定義が優先）");
+    check((await page.locator('[data-testid^="batch-flags-"]').count()) === 0, "小さい ROI の旗は 1 つも付かない（400 ≧ 100）");
+    const states = (await page.locator('[data-testid^="batch-state-"]').allInnerTexts()).filter((x) => x.startsWith("完了"));
+    check(states.length === 5 && states.every((x) => /キャッシュ/.test(x)), "基準値を変えても 5 組すべてキャッシュから（再計算しない）", states);
+    await page.screenshot({ path: path.join(OUT_DIR, "08d-qc-voxels-override.png"), fullPage: true });
+    const shownV = await page.getByTestId("batch-spec-sha").getAttribute("title");
+    await page.getByTestId("batch-spec-save").click();
+    const [savedV] = await takeDownloads(page, 1);
+    fs.writeFileSync(path.join(OUT_DIR, "voxels_spec.json"), savedV.text);
+    const specV = JSON.parse(savedV.text) as { sha256: string; qc: { smallRoiVoxels?: number } };
+    check(specV.qc.smallRoiVoxels === 100 && specV.sha256 === shownV, "保存した定義に基準値が入り、sha256 が画面の表示と一致", { v: specV.qc.smallRoiVoxels, file: specV.sha256, shown: shownV });
+    await reopen();
+    check((await voxels.inputValue()) === "", "開き直すと基準値の欄は空に戻る");
+    await page.getByTestId("batch-spec-file").setInputFiles(path.join(OUT_DIR, "voxels_spec.json"));
+    await waitText(page, "batch-info", /読み込みました/, 20_000);
+    await page.waitForTimeout(400);
+    check((await voxels.inputValue()) === "100", "定義を読み込むと基準値が復元される");
+    check((await page.getByTestId("batch-spec-sha").getAttribute("title")) === shownV, "SHA-256 の表示が保存時と同じ");
+    // 数字でない値は確定せず、定義は変わらない（赤枠）
+    await voxels.fill("12a");
+    check((await page.getByTestId("batch-spec-sha").getAttribute("title")) === shownV, "数字でない入力は定義に反映されない（負例）");
+    await page.screenshot({ path: path.join(OUT_DIR, "08e-qc-voxels-invalid.png"), fullPage: true });
+    await voxels.fill("");
+    check((await page.getByTestId("batch-spec-sha").getAttribute("title")) !== shownV, "空欄にすると基準値なしの定義になる（SHA-256 が変わる）");
+    await put("1000");
+
     // ---- 7. 定義 ----
     console.log("\n[7] 定義の保存・読込・改ざんの拒否・SHA-256");
     await reopen();
@@ -532,6 +585,7 @@ async function main(): Promise<void> {
     check(await bincount.inputValue() === "32" && (await page.getByTestId("batch-labels").inputValue()) === "", "開き直すと欄は既定");
     const shaDefault = await page.getByTestId("batch-spec-sha").getAttribute("title");
     check(shaDefault !== shownA, "既定の定義の SHA-256 は保存した定義と違う");
+    check(shaDefault === "9e08bec6fc61105a4113e5ea626ac8640c405c1b7ec31343b0b928419e43dced", "基準値の無い既定の定義の SHA-256 は、基準値の項目を足す前の値と同じ（実アプリ）", shaDefault);
     await page.getByTestId("batch-spec-file").setInputFiles(path.join(OUT_DIR, savedSpec.name));
     await waitText(page, "batch-info", /読み込みました/, 20_000);
     await page.waitForTimeout(400);

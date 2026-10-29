@@ -27,6 +27,8 @@ import java.util.Map;
  *                      あれば {@code scales} と同じ数
  * @param scaleConversion r → σ の換算（{@code SQRT_D}〔既定〕・{@code IDENTITY}・{@code COEFFICIENT}）
  * @param scaleCoefficient {@code COEFFICIENT} の k（σ = k·r）
+ * @param smallRoiWarnVoxels 小さい ROI の基準値（ボクセル数、3D）。null は環境設定の値を使う。計算結果のキャッシュには
+ *                      影響しない（基準値は読み出しのときに適用する）
  */
 public record RoiFeatureRequest(
         String studyInstanceUid,
@@ -42,14 +44,15 @@ public record RoiFeatureRequest(
         String scaleNotation,
         java.util.List<String> scaleLabels,
         String scaleConversion,
-        Double scaleCoefficient) {
+        Double scaleCoefficient,
+        Integer smallRoiWarnVoxels) {
 
     /** スケールを指定しない（従来の要求）。 */
     public RoiFeatureRequest(String studyInstanceUid, String sourceSeriesUid, String maskSeriesUid,
                              int maskChannel, int channel, int timePoint, Map<String, String> settings,
                              boolean recompute, java.util.Set<RoiMode> roiModes) {
         this(studyInstanceUid, sourceSeriesUid, maskSeriesUid, maskChannel, channel, timePoint, settings,
-                recompute, roiModes, null, null, null, null, null);
+                recompute, roiModes, null, null, null, null, null, null);
     }
 
     public enum RoiMode { WHOLE_3D, MAX_SECTION_2D, SLICES_2D }

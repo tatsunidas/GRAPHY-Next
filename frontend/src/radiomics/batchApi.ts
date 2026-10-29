@@ -57,6 +57,8 @@ export interface BatchRequest {
   qc: BatchQc | null;
   /** 許容した組のキー（`pairKey`）。この組は QC で止めない。 */
   qcAcknowledged: string[] | null;
+  /** 小さい ROI の基準値（ボクセル数）。null は環境設定の値。`qc` とは別（試行は `qc` を送らないが基準値は効かせる）。 */
+  smallRoiWarnVoxels: number | null;
 }
 
 export type BatchJobState = "QUEUED" | "RUNNING" | "DONE" | "STOPPED" | "CANCELLED";

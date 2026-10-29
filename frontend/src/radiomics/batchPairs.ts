@@ -136,6 +136,8 @@ export interface BatchRunOptions {
   qc?: BatchQc | null;
   /** 許容した組のキー（`pairKey`）。 */
   acknowledged?: readonly string[];
+  /** 小さい ROI の基準値（ボクセル数）。null か無しは環境設定の値。 */
+  smallRoiVoxels?: number | null;
 }
 
 export function buildBatchRequest(pairs: readonly BatchPair[], form: RoiFeatureForm, opts: BatchRunOptions = {}): BatchRequest {
@@ -153,6 +155,7 @@ export function buildBatchRequest(pairs: readonly BatchPair[], form: RoiFeatureF
     recompute: opts.recompute ?? false,
     qc: opts.qc ?? null,
     qcAcknowledged: opts.acknowledged ? [...opts.acknowledged] : null,
+    smallRoiWarnVoxels: opts.smallRoiVoxels ?? null,
   };
 }
 

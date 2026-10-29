@@ -128,13 +128,25 @@ public class RoiFeatureService {
             throw new IllegalArgumentException("Radiomics 特徴量には ROI マスクシリーズが必要です。");
         }
         effectiveSettings(req.settings(), labelOf(req.settings()));
-        smallRoiThreshold();
+        smallRoiThreshold(req);
         threshold(smallRoiSetting2d, "小さい ROI の警告（画素数、2D）");
     }
 
     /** 環境設定の基準値。空・未設定なら null。整数でない・1 未満なら例外（黙って警告を止めない）。 */
     Integer smallRoiThreshold() {
         return threshold(smallRoiSetting, "小さい ROI の警告（ボクセル数）");
+    }
+
+    /** 要求の基準値があればそれ（1 以上）、無ければ環境設定の値。 */
+    Integer smallRoiThreshold(RoiFeatureRequest req) {
+        Integer own = req.smallRoiWarnVoxels();
+        if (own == null) {
+            return smallRoiThreshold();
+        }
+        if (own < 1) {
+            throw new IllegalArgumentException("要求の「小さい ROI の警告（ボクセル数）」は 1 以上の整数にしてください: " + own);
+        }
+        return own;
     }
 
     private static Integer threshold(Supplier<String> setting, String label) {
@@ -400,7 +412,7 @@ public class RoiFeatureService {
     private RoiFeatureResult compute3d(RoiFeatureRequest req, RadiomicsMapEngine.LoadedVolume vol, int label,
                                        Map<String, String> settings, java.util.function.Consumer<Phase> phase)
             throws IOException {
-        Integer threshold = smallRoiThreshold();
+        Integer threshold = smallRoiThreshold(req);
 
         long roiVoxels = GlamAnalysisService.countRoiVoxels(vol.mask(), label);
         if (roiVoxels < 1) {

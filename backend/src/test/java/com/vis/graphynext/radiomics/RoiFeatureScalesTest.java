@@ -41,7 +41,7 @@ class RoiFeatureScalesTest {
     private static RoiFeatureRequest req(Map<String, String> settings, List<Double> scales, String conversion,
                                          Double k, EnumSet<RoiFeatureRequest.RoiMode> modes) {
         return new RoiFeatureRequest("1.2", "1.2.9", "1.2.8", 0, 0, 0, settings, false, modes, scales, null, null,
-                conversion, k);
+                conversion, k, null);
     }
 
     private static List<Double> range(double from, double to, double step) {
