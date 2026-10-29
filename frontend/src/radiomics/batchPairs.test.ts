@@ -140,6 +140,16 @@ describe("buildBatchRequest", () => {
     expect(req.timePoint).toBe(0);
     expect(Object.keys(req.settings).filter((k) => /logSigma|logTruncate|logPadding/.test(k))).toEqual([]);
     expect(req.settings.INT_binCount).toBe("32");
+    expect(req.kind).toBeNull();
+  });
+
+  it("voiStats turns on the first-order family only, on the original grid, without a range", () => {
+    const form = { ...defaultRoiFeatureForm(), resampleMm: 2, rangeMinText: "-500", rangeMaxText: "100", logOn: true };
+    const req = buildBatchRequest([pair()], form, { kind: "voiStats" });
+    expect(req.kind).toBe("voiStats");
+    const on = Object.entries(req.settings).filter(([k, v]) => k.startsWith("BOOL_enable") && v === "1").map(([k]) => k);
+    expect(on).toEqual(["BOOL_enableIntensityBasedStatistics"]);
+    expect(Object.keys(req.settings).filter((k) => /^DOUBLE_range|resamplingFactor|logSigma|logTruncate|logPadding/.test(k))).toEqual([]);
   });
 });
 

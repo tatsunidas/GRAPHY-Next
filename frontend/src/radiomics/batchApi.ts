@@ -59,6 +59,8 @@ export interface BatchRequest {
   qcAcknowledged: string[] | null;
   /** 小さい ROI の基準値（ボクセル数）。null は環境設定の値。`qc` とは別（試行は `qc` を送らないが基準値は効かせる）。 */
   smallRoiWarnVoxels: number | null;
+  /** 抽出の種類。null は `radiomics`（従来）。`voiStats` は一次統計だけ（PET の組は断られる）。 */
+  kind: "radiomics" | "voiStats" | null;
 }
 
 export type BatchJobState = "QUEUED" | "RUNNING" | "DONE" | "STOPPED" | "CANCELLED";

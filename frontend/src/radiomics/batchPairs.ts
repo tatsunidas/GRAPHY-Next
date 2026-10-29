@@ -9,8 +9,8 @@
  */
 import type { RoiFeatureResult } from "../api";
 import type { BatchPair, BatchQc, BatchRequest } from "./batchApi";
-import { normalizeLabels } from "./batchSpec";
-import { roiFeatureSettings, type RoiFeatureForm } from "./roiFeatureSettings";
+import { normalizeLabels, type SpecKind } from "./batchSpec";
+import { ROI_FEATURE_FAMILIES, roiFeatureSettings, type RoiFeatureForm } from "./roiFeatureSettings";
 
 export interface PairRow {
   pair: BatchPair;
@@ -138,12 +138,20 @@ export interface BatchRunOptions {
   acknowledged?: readonly string[];
   /** 小さい ROI の基準値（ボクセル数）。null か無しは環境設定の値。 */
   smallRoiVoxels?: number | null;
+  /** 抽出の種類。`voiStats` は族を一次統計だけ・元の格子・範囲なしにして送る。 */
+  kind?: SpecKind;
+}
+
+/** VOI 統計の設定: 一次統計の族だけを有効にし、再標本化・範囲は使わない（値が元の格子の値になるように）。 */
+export function voiStatsForm(base: RoiFeatureForm): RoiFeatureForm {
+  const families = Object.fromEntries(ROI_FEATURE_FAMILIES.map((f) => [f.key, f.key === "IntensityBasedStatistical"]));
+  return { ...base, families, resampleMm: null, rangeMinText: "", rangeMaxText: "", logOn: false };
 }
 
 export function buildBatchRequest(pairs: readonly BatchPair[], form: RoiFeatureForm, opts: BatchRunOptions = {}): BatchRequest {
   return {
     pairs: [...pairs],
-    settings: roiFeatureSettings({ ...form, logOn: false }),
+    settings: roiFeatureSettings(opts.kind === "voiStats" ? voiStatsForm(form) : { ...form, logOn: false }),
     roiModes: ["WHOLE_3D"],
     scales: null,
     scaleNotation: null,
@@ -156,6 +164,7 @@ export function buildBatchRequest(pairs: readonly BatchPair[], form: RoiFeatureF
     qc: opts.qc ?? null,
     qcAcknowledged: opts.acknowledged ? [...opts.acknowledged] : null,
     smallRoiWarnVoxels: opts.smallRoiVoxels ?? null,
+    kind: opts.kind === "voiStats" ? "voiStats" : null,
   };
 }
 

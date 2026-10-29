@@ -239,6 +239,9 @@
   },
   "batch-default": {
     "testids": [
+      "batch-kind",
+      "batch-kind-radiomics",
+      "batch-kind-voiStats",
       "batch-bincount",
       "batch-resampling",
       "batch-range-min",
@@ -251,6 +254,9 @@
       "batch-preset"
     ],
     "lines": [
+      "種類",
+      "特徴量（radiomics）",
+      "VOI 統計",
       "離散化",
       "ビン数",
       "ビン幅",
@@ -294,6 +300,9 @@
   },
   "batch-iso": {
     "testids": [
+      "batch-kind",
+      "batch-kind-radiomics",
+      "batch-kind-voiStats",
       "batch-bincount",
       "batch-resampling",
       "batch-resample-mm",
@@ -307,6 +316,9 @@
       "batch-preset"
     ],
     "lines": [
+      "種類",
+      "特徴量（radiomics）",
+      "VOI 統計",
       "離散化",
       "ビン数",
       "ビン幅",

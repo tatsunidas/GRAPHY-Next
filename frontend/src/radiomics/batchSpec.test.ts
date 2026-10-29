@@ -302,3 +302,61 @@ describe("parseSpec hardening", () => {
     expect((await parseSpec(JSON.stringify(spec))).ok).toBe(true);
   });
 });
+
+describe("kind in the definition", () => {
+  const voi = (over: Partial<SpecContent> = {}): SpecContent => content({ kind: "voiStats", ...over });
+
+  it("a definition without a kind keeps the SHA-256 it had before the field existed", async () => {
+    // 種類を足す前に取った固定値（上の「基準値」の節と同じ値）。radiomics のときはキーを出さない
+    expect(await contentSha256(defaultSpecContent())).toBe("9e08bec6fc61105a4113e5ea626ac8640c405c1b7ec31343b0b928419e43dced");
+    expect(canonicalContentJson(defaultSpecContent())).not.toContain("kind");
+    expect(specText(await buildSpec(defaultSpecContent(), "p"))).not.toContain("kind");
+  });
+
+  it("the kind changes the SHA-256, and is written to the file only when it is voiStats", async () => {
+    const a = await contentSha256(defaultSpecContent());
+    const b = await contentSha256(voi());
+    expect(b).not.toBe(a);
+    expect(canonicalContentJson(voi())).toContain('"kind":"voiStats"');
+    expect(JSON.parse(specText(await buildSpec(voi(), "p"))).kind).toBe("voiStats");
+  });
+
+  it("hidden feature settings do not change the SHA-256 of a voiStats definition", async () => {
+    const f = defaultSpecContent().form;
+    const other = voi({ form: { ...f, binCount: 64, resampleMm: 2, rangeMin: -100, families: { ...f.families, GLCM: false } } });
+    expect(await contentSha256(other)).toBe(await contentSha256(voi()));
+    // radiomics では同じ変更でハッシュが変わる（上の固定が空振りでないことの対照）
+    const rad = content({ form: { ...f, binCount: 64 } });
+    expect(await contentSha256(rad)).not.toBe(await contentSha256(defaultSpecContent()));
+  });
+
+  it("round-trips through save and load", async () => {
+    const r = await parseSpec(specText(await buildSpec(voi({ qc: { smallRoi: "STOP", lossy: "FLAG", smallRoiVoxels: 50 } }), "x")));
+    expect(r.ok && r.spec.kind).toBe("voiStats");
+    expect(r.ok && r.spec.qc.smallRoiVoxels).toBe(50);
+    expect(r.ok && r.spec.sha256).toBe(await contentSha256(voi({ qc: { smallRoi: "STOP", lossy: "FLAG", smallRoiVoxels: 50 } })));
+  });
+
+  it("accepts an explicit radiomics or null kind (same SHA-256), rejects anything else", async () => {
+    for (const k of ["radiomics", null]) {
+      const r = await parseSpec(await text((o) => { o.kind = k; }));
+      expect(r.ok && r.spec.kind, String(k)).toBe("radiomics");
+    }
+    for (const k of ["dynamic", 5, ["voiStats"], true, {}]) {
+      const r = await parseSpec(await text((o) => { o.kind = k; }));
+      expect(r.ok ? "ok" : r.error, JSON.stringify(k)).toBe("type");
+    }
+  });
+
+  it("rejects a kind edited after saving (the hash no longer matches)", async () => {
+    const r = await parseSpec(await text((o) => { o.kind = "voiStats"; }));
+    expect(r.ok ? "ok" : r.error).toBe("sha_mismatch");
+  });
+
+  it("specContentFrom carries the kind and loading a voiStats file sets it back", async () => {
+    const base = defaultRoiFeatureForm();
+    expect(specContentFrom(base, defaultSpecContent().qc, [], "voiStats").kind).toBe("voiStats");
+    expect(specContentFrom(base, defaultSpecContent().qc, []).kind).toBe("radiomics");
+  });
+});
+

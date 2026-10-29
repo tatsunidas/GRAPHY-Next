@@ -4,7 +4,7 @@
  */
 import { useEffect, useState } from "react";
 import { useI18n } from "../i18n/i18n";
-import { SMALL_ROI_VOXELS_MAX, type SpecQc, type SpecQcMode } from "./batchSpec";
+import { SMALL_ROI_VOXELS_MAX, type SpecKind, type SpecQc, type SpecQcMode } from "./batchSpec";
 import { RoiFeatureSettingsFields } from "./RoiFeatureSettingsFields";
 import type { RoiFeatureForm } from "./roiFeatureSettings";
 
@@ -20,6 +20,8 @@ export function BatchSettingsPanel({
   setQc,
   labelsText,
   setLabelsText,
+  kind,
+  setKind,
 }: {
   form: RoiFeatureForm;
   setForm: (f: (prev: RoiFeatureForm) => RoiFeatureForm) => void;
@@ -28,13 +30,11 @@ export function BatchSettingsPanel({
   setQc: (q: SpecQc) => void;
   labelsText: string;
   setLabelsText: (s: string) => void;
+  kind: SpecKind;
+  setKind: (k: SpecKind) => void;
 }) {
   const { t } = useI18n();
-  return (
-    <div data-testid="batch-settings" style={{ fontSize: 12 }}>
-      <RoiFeatureSettingsFields form={form} setForm={setForm} disabled={disabled} testIdPrefix="batch"
-        layout={{ labelMinWidth: 110, align: "left" }} showRange showPreset presetScale36={false}
-        middleSlot={(
+  const labelsAndQc = (
           <>
             <div style={row}>
               <span style={label}>{t("roiFeat.batch.labels")}</span>
@@ -56,7 +56,28 @@ export function BatchSettingsPanel({
             </div>
             <div style={hint}>{t("roiFeat.batch.qc.help")} {t("roiFeat.batch.qc.voxelsHelp")}</div>
           </>
-        )} />
+  );
+  return (
+    <div data-testid="batch-settings" style={{ fontSize: 12 }}>
+      <div style={row} data-testid="batch-kind">
+        <span style={label}>{t("roiFeat.batch.kind.title")}</span>
+        {(["radiomics", "voiStats"] as const).map((k) => (
+          <label key={k}>
+            <input type="radio" name="batch-kind" checked={kind === k} disabled={disabled} data-testid={`batch-kind-${k}`}
+              onChange={() => setKind(k)} /> {t(`roiFeat.batch.kind.${k}`)}
+          </label>
+        ))}
+      </div>
+      {kind === "voiStats" ? (
+        <>
+          <div style={hint} data-testid="batch-kind-voi-help">{t("roiFeat.batch.kind.voiHelp")}</div>
+          {labelsAndQc}
+        </>
+      ) : (
+        <RoiFeatureSettingsFields form={form} setForm={setForm} disabled={disabled} testIdPrefix="batch"
+          layout={{ labelMinWidth: 110, align: "left" }} showRange showPreset presetScale36={false}
+          middleSlot={labelsAndQc} />
+      )}
     </div>
   );
 }
