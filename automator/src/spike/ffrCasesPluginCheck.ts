@@ -18,6 +18,7 @@
  * FFR_RESUME=1   解析状態の再開。DB の初期化でプラグイン保存領域だけ残し（keepPluginStore）、2 方向窓でシリーズを選んだところで止まる（自動で始点・終点・アンカーを置かない）。
  *                窓の［保存した解析状態を復元］で再開する。終わりの合図は FFR_MANUAL と同じ .results/ffr-plugin/manual-done。
  * FFR_DUALQFR=1  再構成のあと、2 方向窓の QFR 欄（Pa・流速モデル・計算・3D への色）を確かめる（`dualQfrCheck`）。
+ * FFR_QFR3D=1   FFR_DUALQFR=1 のとき、QFR 結果ダイアログ（3D・図・造影像）を確かめる（`qfr3dCheck`）。FFR_QFR3D=0 で省く。QFR 窓から開く経路（D7-5）はこの値が 1 のときだけ。
  * FFR_GUIDE=1    補正に使うアンカーを、B を基準に［ガイドに合わせる］で A へ寄せて決める（点の選定用。検算用は寄せない）。
  *                寄せた後の位置は report.finalAnchors に出る（それを ffr-cases-segments-C.json に写して固定する）。
  *                ガイドで選んだ対応点は再投影ゲートが循環になるので、通過は「整合性ゲート通過」としか言えない。
@@ -1711,6 +1712,10 @@ const num = (s: string, re: RegExp): number | null => {
 async function runQfr(viewer: Page, spec: Spec, outDir: string): Promise<Record<string, unknown>> {
   const q: Record<string, unknown> = {};
   // 2 方向窓が QFR ボタンを覆うので閉じる。登録した血管モデルはセッション中は残る（QFR 窓の説明）。
+  // 結果ダイアログ（自動で開く）が 2 方向窓を覆っているので、先に閉じる。
+  const resDlg = viewer.getByRole("dialog", { name: /QFR 結果/ });
+  if ((await resDlg.count()) > 0) await resDlg.last().getByRole("button", { name: "×" }).click().catch(() => {});
+  await viewer.waitForTimeout(300);
   const dualWin = viewer.getByRole("dialog", { name: /アンギオ 3D/ });
   await dualWin.getByRole("button", { name: "×" }).click();
   await viewer.waitForTimeout(400);
@@ -1727,8 +1732,16 @@ async function runQfr(viewer: Page, spec: Spec, outDir: string): Promise<Record<
   q.modelOptions = await viewer.getByTestId("qfr-model").locator("option").count();
   q.directionRowVisible = await viewer.getByTestId("qfr-direction").isVisible().catch(() => false);
   const run = viewer.getByTestId("qfr-run");
+  // 2 方向窓で QFR を計算していると、その Pa がモデル単位の保存から QFR 窓に戻る（#101）。戻っているなら正例として数え、
+  // 負例（Pa が空）は欄を空にして確かめる。
+  q.paRestored = await viewer.getByTestId("qfr-pa").inputValue();
+  if (process.env.FFR_DUALQFR === "1" && spec.pa !== undefined) {
+    check("[Q1r] 2 方向窓で入れた Pa が、QFR 窓に戻っている", q.paRestored === String(spec.pa), { restored: q.paRestored, expected: spec.pa });
+  }
+  await viewer.getByTestId("qfr-pa").fill("");
+  await viewer.waitForTimeout(300);
   q.runEnabledWithoutPa = await run.isEnabled();
-  check("[Q1] ★Pa 未入力では「QFR を計算する」が無効（計算しない）", !q.runEnabledWithoutPa, { enabled: q.runEnabledWithoutPa });
+  check("[Q1] ★Pa 未入力では「QFR を計算する」が無効（計算しない）", !q.runEnabledWithoutPa, { enabled: q.runEnabledWithoutPa, paRestoredBeforeClearing: q.paRestored });
   if (spec.pa !== undefined) {
     // 流速モデルは固定流速（fQFR）に明示する。cQFR は造影フレームカウント（別窓での ROI 操作）が要り、この検査では未達として扱う。
     await viewer.getByTestId("qfr-velocity").selectOption("fixed");
@@ -1755,6 +1768,7 @@ async function runQfr(viewer: Page, spec: Spec, outDir: string): Promise<Record<
       log("QFR:", q.value, "| 主:", q.primary, "| 検算:", q.cross, "| 差:", q.diff);
       check("[Q3] QFR の値が出た（数値）", /\d\.\d{2,}/.test(String(q.value)), { value: q.value });
       await viewer.screenshot({ path: path.join(outDir, `${spec.label}-3-qfr.png`) });
+      if (process.env.FFR_QFR3D === "1") q.qfr3d = await qfr3dFromQfrWindow(viewer, spec, outDir);
     }
   }
   return q;
@@ -1961,6 +1975,11 @@ async function dualQfrCheck(viewer: Page, spec: Spec, outDir: string): Promise<R
     check("[D5] fQFR: 3D 画面に色が乗る", false, { value: out.value, put: out.put, note: "3D 画面が見つからない" });
   }
 
+  if (process.env.FFR_QFR3D !== "0") {
+    const distal = ((await viewer.getByTestId("dual-qfr-result").getByTestId("qfr-primary").first().innerText().catch(() => "")) ?? "").replace(/\s+/g, " ");
+    out.qfr3d = await qfr3dCheck(viewer, spec, outDir, distal);
+  }
+
   if (contrastDisabled) {
     results.push({ name: "[D6] cQFR: シネが使えないため未実施（フレームカウントの窓は開けない）", ok: null, detail: out.cineNote });
     return out;
@@ -1999,6 +2018,190 @@ async function dualQfrCheck(viewer: Page, spec: Spec, outDir: string): Promise<R
   const put2 = ((await viewer.getByTestId("dual-qfr-put").textContent().catch(() => "")) ?? "").replace(/\s+/g, " ");
   await viewer.screenshot({ path: path.join(outDir, `${spec.label}-5-cqfr.png`) });
   check("[D6-2] cQFR: 確定すると cQFR と fQFR が並び、3D に色を乗せた", /cQFR/.test(cmp) && /fQFR/.test(cmp) && /3D に色を乗せました/.test(put2), { compare: out.compare, put: put2.slice(0, 120) });
+  return out;
+}
+
+/**
+ * QFR 結果ダイアログ（3D・図・造影像）。2 方向窓の fQFR 計算のあと、自動で開く。
+ *  D7-1 ダイアログが開き、3D の canvas に色のある画素がある（空でない）
+ *  D7-2 プルバック図をクリックすると距離が位置に比例して動き、QFR が単調に下がり、右端では結果欄の QFR と一致する
+ *  D7-3 3D の管（色のある画素）をクリックするとカーソルが動き、その画素の色相が表示中の QFR の色と合う
+ *  D7-4 造影像 A/B の位置の印が、近位端（arc=0）で青い側・遠位端（arc=L）でもう一方の側に出る（向きの確認。FFR_PROXIMAL=end でも同じ）
+ */
+const RAMP: readonly (readonly [number, number, number])[] = [
+  [0.85, 0.11, 0.09], [0.95, 0.52, 0.09], [0.95, 0.87, 0.15], [0.3, 0.76, 0.33], [0.15, 0.44, 0.86],
+];
+function rampRgb(q: number): [number, number, number] {
+  const t = Math.min(1, Math.max(0, (q - 0.6) / 0.4));
+  const pos = t * 4, i = Math.min(3, Math.floor(pos)), f = pos - i;
+  return [0, 1, 2].map((k) => (RAMP[i][k] + (RAMP[i + 1][k] - RAMP[i][k]) * f) * 255) as [number, number, number];
+}
+const cosine = (a: number[], b: number[]): number => {
+  const d = a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+  return d / (Math.hypot(a[0], a[1], a[2]) * Math.hypot(b[0], b[1], b[2]) || 1);
+};
+
+async function qfr3dCheck(viewer: Page, spec: Spec, outDir: string, distalText: string): Promise<Record<string, unknown>> {
+  const out: Record<string, unknown> = {};
+  const dlg = viewer.getByTestId("qfr3d-dialog").last();
+  await dlg.waitFor({ state: "visible", timeout: 20_000 }).catch(() => {});
+  const opened = await dlg.isVisible().catch(() => false);
+  check("[D7-1a] QFR を計算すると、結果ダイアログが開く", opened, { opened });
+  if (!opened) return out;
+  await viewer.waitForTimeout(3_000); // 造影像の読み込み
+  const cv = viewer.getByTestId("qfr3d-canvas").last();
+  const canvasStats = async (): Promise<{ w: number; h: number; nonBg: number; sat: number; pick: { x: number; y: number } | null; rgb: number[] | null }> =>
+    JSON.parse((await viewer.evaluate(`(() => {
+      const cs = document.querySelectorAll('[data-testid="qfr3d-canvas"]');
+      const c = cs[cs.length - 1];
+      const t = document.createElement('canvas'); t.width = c.width; t.height = c.height;
+      const x = t.getContext('2d'); x.drawImage(c, 0, 0);
+      const d = x.getImageData(0, 0, t.width, t.height).data;
+      let nonBg = 0, sat = 0; const xs = []; const ys = [];
+      for (let i = 0; i < d.length; i += 4) {
+        const r = d[i], g = d[i + 1], b = d[i + 2];
+        if (Math.abs(r - 23) > 6 || Math.abs(g - 26) > 6 || Math.abs(b - 31) > 6) nonBg++;
+        if (Math.max(r, g, b) - Math.min(r, g, b) > 60) { sat++; const p = i / 4; xs.push(p % t.width); ys.push(Math.floor(p / t.width)); }
+      }
+      let pick = null, rgb = null;
+      if (xs.length) {
+        const order = xs.map((v, i) => i).sort((a, b) => xs[a] - xs[b]);
+        const k = order[Math.floor(order.length / 2)];
+        pick = { x: xs[k], y: ys[k] };
+        const rect = c.getBoundingClientRect();
+        pick = { x: rect.left + (xs[k] + 0.5) / c.width * rect.width, y: rect.top + (ys[k] + 0.5) / c.height * rect.height };
+        const o = (ys[k] * t.width + xs[k]) * 4; rgb = [d[o], d[o + 1], d[o + 2]];
+      }
+      return JSON.stringify({ w: t.width, h: t.height, nonBg, sat, pick, rgb });
+    })()`)) as string);
+  const st = await canvasStats();
+  out.canvas = st;
+  await viewer.screenshot({ path: path.join(outDir, `${spec.label}-6-qfr3d.png`) });
+  check("[D7-1] 3D の canvas に色のある画素がある（空でない）", st.sat >= 200 && st.nonBg > st.sat, st);
+
+  const txt = async (id: string): Promise<string> => ((await viewer.getByTestId(id).last().innerText({ timeout: 3_000 }).catch(() => "")) ?? "").replace(/\s+/g, " ").trim();
+  const slider = viewer.getByTestId("qfr3d-slider").last();
+  const L = Number(await slider.getAttribute("max"));
+  const setArc = async (v: number): Promise<void> => {
+    await slider.evaluate((el, val) => { (el as HTMLInputElement).value = String(val); el.dispatchEvent(new Event("input", { bubbles: true })); }, v);
+    await viewer.waitForTimeout(150);
+  };
+  const numOf = (s: string): number => Number(s.replace(/[^0-9.\-]/g, ""));
+
+  // D7-2: プルバック図
+  const ov = viewer.getByTestId("qfr3d-chart-qfr").last();
+  const bb = (await ov.boundingBox())!;
+  const clickAt = async (f: number): Promise<{ arc: number; qfr: string }> => {
+    await viewer.mouse.click(bb.x + 44 + f * (bb.width - 44 - 12), bb.y + bb.height / 2);
+    await viewer.waitForTimeout(150);
+    return { arc: numOf(await txt("qfr3d-v-arc")), qfr: await txt("qfr3d-v-qfr") };
+  };
+  const c1 = await clickAt(0.25);
+  const c2 = await clickAt(0.75);
+  const c3 = await clickAt(1.0);
+  out.chartClicks = { L, c1, c2, c3 };
+  const prop = Math.abs(c1.arc - 0.25 * L) < 0.6 && Math.abs(c2.arc - 0.75 * L) < 0.6 && Math.abs(c3.arc - L) < 0.6;
+  // 🔴 単調減少は期待しない: 狭窄の後ろでは圧の回復で QFR が 0.02 ほど戻る（モデルの pullback 自体がそう。単体で確認済み）。
+  const mono = Number(c1.qfr) > Number(c3.qfr) && Number(c1.qfr) <= 1 && Number(c3.qfr) > 0.6 && Number(c2.qfr) > 0.6 && Number(c2.qfr) <= 1;
+  check("[D7-2a] 図のクリック位置に比例して距離が動く（25%・75%・右端）", prop, out.chartClicks);
+  check("[D7-2b] QFR が近位（25%）より遠位（右端）で小さく、すべて 0.6〜1 に収まる", mono, out.chartClicks);
+  check("[D7-2c] 右端の QFR が、結果欄の QFR（3 桁）と一致する", c3.qfr === distalText.trim(), { cursor: c3.qfr, result: distalText });
+
+  // D7-3: 3D の管をクリック
+  await setArc(0);
+  const before = numOf(await txt("qfr3d-v-arc"));
+  const st2 = await canvasStats();
+  if (!st2.pick) {
+    check("[D7-3] 3D の管をクリックするとカーソルが動く", false, { note: "色のある画素が無く、クリック位置を決められない" });
+  } else {
+    await viewer.mouse.click(st2.pick.x, st2.pick.y);
+    await viewer.waitForTimeout(300);
+    const after = numOf(await txt("qfr3d-v-arc"));
+    const qv = Number(await txt("qfr3d-v-qfr"));
+    const cs = cosine(st2.rgb ?? [0, 0, 0], rampRgb(qv));
+    out.pick3d = { before, after, qfr: qv, rgb: st2.rgb, cosine: cs };
+    check("[D7-3a] 3D の管をクリックすると、カーソルが動く", Math.abs(after - before) > 1, out.pick3d);
+    check("[D7-3b] クリックした画素の色相が、表示中の QFR の色と合う（コサイン類似度 > 0.95）", cs > 0.95, out.pick3d);
+  }
+
+  // D7-4: 造影像の印の向き
+  const angio = async (k: "A" | "B"): Promise<{ white: number[] | null; blue: number[] | null; far: number[] | null } | null> => {
+    const raw = await viewer.evaluate(`(() => {
+      const cs = document.querySelectorAll('[data-testid="qfr3d-angio-${k}"]'); const c = cs[cs.length - 1];
+      if (!c) return null;
+      const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
+      const acc = { white: [0, 0, 0], blue: [0, 0, 0], far: [0, 0, 0] };
+      for (let i = 0; i < d.length; i += 4) {
+        const r = d[i], g = d[i + 1], b = d[i + 2], p = i / 4, x = p % c.width, y = Math.floor(p / c.width);
+        const k = (r > 230 && b > 200 && g < 90) ? 'white' : (b > r + 50 && b > g) ? 'blue' : (Math.max(r, g, b) - Math.min(r, g, b) > 60) ? 'far' : null;
+        if (k) { acc[k][0] += x; acc[k][1] += y; acc[k][2]++; }
+      }
+      const f = (a) => a[2] ? [a[0] / a[2], a[1] / a[2], a[2]] : null;
+      return JSON.stringify({ white: f(acc.white), blue: f(acc.blue), far: f(acc.far) });
+    })()`);
+    return raw ? JSON.parse(raw as string) : null;
+  };
+  const dist = (a: number[], b: number[]): number => Math.hypot(a[0] - b[0], a[1] - b[1]);
+  const orient: Record<string, unknown> = {};
+  let okAll = true;
+  // 🔴 向きの正解は、検査入力の始点・終点（画像座標。プラグインの計算とは独立）から取る。印と色は同じ配列で描かれるので、
+  //    配列の向きを取り違えても D7-4 は通る。画像上で「青い側 → もう一方の側」の向きが、始点→終点（近位が始点）またはその逆（近位が終点）に合うかを見る。
+  //    切り出しは拡大・平行移動だけで反転しないので、向きは保たれる。
+  let okTruth = true;
+  const truth: Record<string, unknown> = {};
+  for (const k of ["A", "B"] as const) {
+    await setArc(0);
+    const p = await angio(k);
+    if (p?.blue && p.far) {
+      const e = spec.ends[k];
+      const along = (p.far[0] - p.blue[0]) * (e.end[0] - e.start[0]) + (p.far[1] - p.blue[1]) * (e.end[1] - e.start[1]);
+      const want = spec.proximal === "end" ? along < 0 : along > 0;
+      truth[k] = { along, proximal: spec.proximal, ok: want };
+      if (!want) okTruth = false;
+    } else {
+      okTruth = false;
+      truth[k] = { note: "青い側または他方の色が無い" };
+    }
+    await setArc(L);
+    const d = await angio(k);
+    orient[k] = { prox: p, dist: d };
+    if (!p?.white || !p.blue || !p.far || !d?.white || !d.blue || !d.far) { okAll = false; continue; }
+    if (!(dist(p.white, p.blue) < dist(p.white, p.far) && dist(d.white, d.far) < dist(d.white, d.blue))) okAll = false;
+  }
+  out.orient = orient;
+  await viewer.screenshot({ path: path.join(outDir, `${spec.label}-6-qfr3d-end.png`) });
+  check("[D7-4] 造影像 A/B の位置の印が、近位端（arc=0）で青い側・遠位端（arc=L）でもう一方の側に出る", okAll, orient);
+  check("[D7-4b] ★向きの正解（検査入力の始点・終点）と照らして、青い側が近位端になっている（A・B とも）", okTruth, truth);
+
+  // 見せたい物が写っているかを目で確かめるため、要素ごとに撮る（ダイアログの下側は画面の外になる）。
+  await setArc(0.55 * L);
+  for (const [id, name] of [["qfr3d-canvas", "3d"], ["qfr3d-angio-A", "angioA"], ["qfr3d-angio-B", "angioB"], ["qfr3d-section", "section"], ["qfr3d-chart-qfr", "chart"]] as const) {
+    await viewer.getByTestId(id).last().screenshot({ path: path.join(outDir, `${spec.label}-6-qfr3d-el-${name}.png`) }).catch(() => {});
+  }
+  // 後の検査（cQFR など）の邪魔にならないよう閉じる。
+  await viewer.getByRole("dialog", { name: /QFR 結果/ }).last().getByRole("button", { name: "×" }).click().catch(() => {});
+  await viewer.waitForTimeout(300);
+  return out;
+}
+
+/** QFR 窓（別窓）から開いたとき: 造影像は出さず、断面は等価径の円。 */
+async function qfr3dFromQfrWindow(viewer: Page, spec: Spec, outDir: string): Promise<Record<string, unknown>> {
+  const out: Record<string, unknown> = {};
+  const btn = viewer.getByTestId("qfr-open3d");
+  const has = await btn.isVisible().catch(() => false);
+  check("[D7-5a] QFR 窓の結果に［QFR 結果を 3D で見る］がある", has, { has });
+  if (!has) return out;
+  await btn.click();
+  const dlg = viewer.getByTestId("qfr3d-dialog").last();
+  await dlg.waitFor({ state: "visible", timeout: 15_000 }).catch(() => {});
+  await viewer.waitForTimeout(1_500);
+  const text = ((await dlg.innerText().catch(() => "")) ?? "").replace(/\s+/g, " ");
+  out.angioNote = /2 方向窓の QFR 欄から開いたときに出ます/.test(text);
+  out.circleNote = /等価径の円/.test(text);
+  out.angioCanvases = await viewer.getByTestId("qfr3d-angio-A").count();
+  await viewer.screenshot({ path: path.join(outDir, `${spec.label}-7-qfr3d-from-qfr-window.png`) });
+  check("[D7-5b] 造影像は出さず理由を書き、断面は等価径の円で示す", !!out.angioNote && !!out.circleNote && out.angioCanvases === 0, out);
+  await viewer.getByRole("dialog", { name: /QFR 結果/ }).last().getByRole("button", { name: "×" }).click().catch(() => {});
   return out;
 }
 
