@@ -55,7 +55,7 @@ public class RadiomicsBatchService {
     /** QC の条件ごとの扱い。null は {@code FLAG}。 */
     public record Qc(QcMode smallRoi, QcMode lossy) {}
 
-    /** 旗。{@code SMALL_ROI}＝強度マスクのボクセル数が環境設定の基準値より少ない（基準値が未設定なら立たない）。 */
+    /** 旗。{@code SMALL_ROI}＝強度マスクのボクセル数が基準値（要求の値、無ければ環境設定）より少ない。基準値が無ければ立たない。 */
     public static final String FLAG_SMALL_ROI = "SMALL_ROI";
     public static final String FLAG_LOSSY = "LOSSY_COMPRESSION";
 
@@ -66,18 +66,21 @@ public class RadiomicsBatchService {
      * @param pairs          利用者が確認した組。計算するのは {@code AUTO} と、元画像を選んだ {@code NEEDS_CONFIRMATION}
      * @param qc             QC の扱い。null は両方とも記録だけ
      * @param qcAcknowledged 許容した組のキー（{@link BatchPair#pairKey()}）。この組は QC で止めない
+     * @param smallRoiWarnVoxels 小さい ROI の基準値（ボクセル数）。null は環境設定の値。{@code qc} とは別の項目
+     *                       （試行は {@code qc} を送らないが、基準値は効かせる）
      */
     public record BatchRequest(List<BatchPair> pairs, Map<String, String> settings,
                                Set<RoiFeatureRequest.RoiMode> roiModes, List<Double> scales, String scaleNotation,
                                List<String> scaleLabels, String scaleConversion, Double scaleCoefficient,
-                               int channel, int timePoint, boolean recompute, Qc qc, List<String> qcAcknowledged) {
+                               int channel, int timePoint, boolean recompute, Qc qc, List<String> qcAcknowledged,
+                               Integer smallRoiWarnVoxels) {
         /** QC を指定しない（従来の要求）。 */
         public BatchRequest(List<BatchPair> pairs, Map<String, String> settings,
                             Set<RoiFeatureRequest.RoiMode> roiModes, List<Double> scales, String scaleNotation,
                             List<String> scaleLabels, String scaleConversion, Double scaleCoefficient,
                             int channel, int timePoint, boolean recompute) {
             this(pairs, settings, roiModes, scales, scaleNotation, scaleLabels, scaleConversion, scaleCoefficient,
-                    channel, timePoint, recompute, null, null);
+                    channel, timePoint, recompute, null, null, null);
         }
     }
 
@@ -268,7 +271,8 @@ public class RadiomicsBatchService {
     private static RoiFeatureRequest toRequest(BatchRequest req, BatchPair p) {
         return new RoiFeatureRequest(p.studyUid(), p.sourceSeriesUid(), p.maskSeriesUid(), p.maskChannel(),
                 req.channel(), req.timePoint(), req.settings(), req.recompute(), req.roiModes(), req.scales(),
-                req.scaleNotation(), req.scaleLabels(), req.scaleConversion(), req.scaleCoefficient());
+                req.scaleNotation(), req.scaleLabels(), req.scaleConversion(), req.scaleCoefficient(),
+                req.smallRoiWarnVoxels());
     }
 
     private void set(Job job, int i, PairState state, FailureKind kind, String error, boolean fromCache, long ms) {

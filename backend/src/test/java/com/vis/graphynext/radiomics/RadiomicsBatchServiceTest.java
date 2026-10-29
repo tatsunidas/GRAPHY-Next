@@ -374,7 +374,7 @@ class RadiomicsBatchServiceTest {
     private static RadiomicsBatchService.BatchRequest requestQc(List<BatchPair> pairs,
             RadiomicsBatchService.Qc qc, List<String> acknowledged) {
         return new RadiomicsBatchService.BatchRequest(pairs, new HashMap<>(), null, null, null, null, null, null, 0,
-                0, false, qc, acknowledged);
+                0, false, qc, acknowledged, null);
     }
 
     private static final RadiomicsBatchService.Qc STOP_SMALL =
@@ -457,14 +457,50 @@ class RadiomicsBatchServiceTest {
         RadiomicsBatchService.BatchRequest a = JSON.readValue(old, RadiomicsBatchService.BatchRequest.class);
         assertEquals(null, a.qc());
         assertEquals(null, a.qcAcknowledged());
+        assertEquals(null, a.smallRoiWarnVoxels(), "基準値の無い従来の要求は null（環境設定を使う）");
 
         String withQc = old.substring(0, old.length() - 1)
                 + ",\"qc\":{\"smallRoi\":\"STOP\",\"lossy\":\"FLAG\"},\"qcAcknowledged\":[\"1.2|M|0\"]}";
         RadiomicsBatchService.BatchRequest b = JSON.readValue(withQc, RadiomicsBatchService.BatchRequest.class);
         assertEquals(RadiomicsBatchService.QcMode.STOP, b.qc().smallRoi());
         assertEquals(List.of("1.2|M|0"), b.qcAcknowledged());
+        assertEquals(null, b.smallRoiWarnVoxels());
+        RadiomicsBatchService.BatchRequest c = JSON.readValue(
+                old.substring(0, old.length() - 1) + ",\"smallRoiWarnVoxels\":1000}", RadiomicsBatchService.BatchRequest.class);
+        assertEquals(1000, c.smallRoiWarnVoxels());
         assertEquals("1.2|M|0", b.pairs().get(0).pairKey(), "画面の pairKey と同じ並び");
         assertFalse(JSON.writeValueAsString(b.pairs().get(0)).contains("pairKey"), "キーは JSON に出さない");
+    }
+
+    @Test
+    void theThresholdInTheRequestStopsTheRunEvenWhenTheEnvironmentSettingIsUnset(@TempDir Path dir) throws Exception {
+        // 環境設定は未設定（null）。要求の基準値 100000 だけで、324 ボクセルの ROI が小さいと判定され、STOP で止まる
+        MockEnvironment env = new MockEnvironment();
+        env.setActiveProfiles("standalone");
+        RoiFeatureService features = new RoiFeatureService(new PairEngine(),
+                new MapCheckpointStore(new CacheStore(dir, 0), "v"), new RadiomicsMode(env), JSON,
+                (rj, img, m, label) -> {
+                    extractions.incrementAndGet();
+                    return rj.extractAll(img, m, label);
+                }, "9.9.9-test", () -> null);
+        RadiomicsBatchService svc = new RadiomicsBatchService(
+                (req, c) -> features.compute(req, p -> { }, (d, t) -> { }, c), features::check, null, null);
+        List<BatchPair> pairs = List.of(auto(0), auto(1));
+
+        RadiomicsBatchService.BatchRequest none = requestQc(pairs, STOP_SMALL, null);
+        Status s0 = await(svc, svc.submit(none));
+        assertEquals(JobState.DONE, s0.state(), "基準値がどこにも無ければ判定せず、止まらない");
+        assertNull(svc.results(s0.jobId()).get(0).result().roiSize().smallRoi());
+
+        RadiomicsBatchService.BatchRequest withThreshold = new RadiomicsBatchService.BatchRequest(pairs, new HashMap<>(),
+                null, null, null, null, null, null, 0, 0, false, STOP_SMALL, null, 100000);
+        Status s1 = await(svc, svc.submit(withThreshold));
+        assertEquals(JobState.STOPPED, s1.state());
+        assertEquals(0, s1.stopIndex());
+        RoiFeatureResult.RoiSize size = svc.results(s1.jobId()).get(0).result().roiSize();
+        assertEquals(100000, size.smallRoiWarnVoxels());
+        assertEquals(Boolean.TRUE, size.smallRoi());
+        assertEquals(2, extractions.get() , "1 回目に 2 組を計算済み。基準値を足した 2 回目は計算し直さない");
     }
 
     @Test

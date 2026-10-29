@@ -2,9 +2,10 @@
  * Copyright (c) Visionary Imaging Services, Inc. All rights reserved.
  * Author: Tatsuaki Kobayashi
  */
+import { useEffect, useState } from "react";
 import { NumberField } from "../hooks/NumberField";
 import { useI18n } from "../i18n/i18n";
-import type { SpecQcMode } from "./batchSpec";
+import { SMALL_ROI_VOXELS_MAX, type SpecQc, type SpecQcMode } from "./batchSpec";
 import { ROI_FEATURE_FAMILIES, type RoiFeatureForm } from "./roiFeatureSettings";
 
 /**
@@ -23,8 +24,8 @@ export function BatchSettingsPanel({
   form: RoiFeatureForm;
   setForm: (f: (prev: RoiFeatureForm) => RoiFeatureForm) => void;
   disabled: boolean;
-  qc: { smallRoi: SpecQcMode; lossy: SpecQcMode };
-  setQc: (q: { smallRoi: SpecQcMode; lossy: SpecQcMode }) => void;
+  qc: SpecQc;
+  setQc: (q: SpecQc) => void;
   labelsText: string;
   setLabelsText: (s: string) => void;
 }) {
@@ -82,8 +83,11 @@ export function BatchSettingsPanel({
         <span style={{ marginLeft: 10 }}>{t("roiFeat.batch.qc.lossy")}</span>
         <QcRadios name="qc-lossy" value={qc.lossy} disabled={disabled} testId="batch-qc-lossy"
           onChange={(v) => setQc({ ...qc, lossy: v })} />
+        <span style={{ marginLeft: 10 }}>{t("roiFeat.batch.qc.voxels")}</span>
+        <VoxelsField value={qc.smallRoiVoxels} disabled={disabled} onChange={(v) => setQc({ ...qc, smallRoiVoxels: v })} />
+        <span>{t("roiFeat.batch.qc.voxelsUnit")}</span>
       </div>
-      <div style={hint}>{t("roiFeat.batch.qc.help")}</div>
+      <div style={hint}>{t("roiFeat.batch.qc.help")} {t("roiFeat.batch.qc.voxelsHelp")}</div>
       <div style={{ ...label, marginTop: 6 }}>{t("roiFeat.field.families")}</div>
       <div style={grid}>
         {ROI_FEATURE_FAMILIES.map((fam) => (
@@ -95,6 +99,35 @@ export function BatchSettingsPanel({
         ))}
       </div>
     </div>
+  );
+}
+
+/** 基準値の入力欄。空欄は null（環境設定の値を使う）。整数以外・範囲外の打鍵は確定せず、赤枠で知らせる。 */
+function VoxelsField({ value, disabled, onChange }: { value: number | null; disabled: boolean; onChange: (v: number | null) => void }) {
+  const { t } = useI18n();
+  const [text, setText] = useState(value == null ? "" : String(value));
+  useEffect(() => {
+    // 定義の読み込みなど、外から値が変わったときだけ追従する
+    if ((text.trim() === "" ? null : Number(text)) !== value) setText(value == null ? "" : String(value));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [value]);
+  const parsed = (s: string): number | null | undefined => {
+    const x = s.trim();
+    if (x === "") return null;
+    if (!/^\d+$/.test(x)) return undefined;
+    const n = Number(x);
+    return n >= 1 && n <= SMALL_ROI_VOXELS_MAX ? n : undefined;
+  };
+  const bad = parsed(text) === undefined;
+  return (
+    <input data-testid="batch-qc-voxels" type="text" inputMode="numeric" value={text} disabled={disabled}
+      placeholder={t("roiFeat.batch.qc.voxelsEmpty")} title={t("roiFeat.batch.qc.voxelsHelp")}
+      style={{ ...input, width: 110, ...(bad ? { border: "1px solid #c0392b" } : {}) }}
+      onChange={(e) => {
+        setText(e.target.value);
+        const v = parsed(e.target.value);
+        if (v !== undefined) onChange(v);
+      }} />
   );
 }
 

@@ -24,7 +24,7 @@ class RoiFeatureScaleNotationTest {
 
     private static RoiFeatureRequest req(List<Double> scales, String notation, List<String> labels) {
         return new RoiFeatureRequest("1.2", "1.2.9", "1.2.8", 0, 0, 0, Map.of(), false, null,
-                scales, notation, labels, null, null);
+                scales, notation, labels, null, null, null);
     }
 
     private static void assertSameRows(RoiFeatureResult a, RoiFeatureResult b) {

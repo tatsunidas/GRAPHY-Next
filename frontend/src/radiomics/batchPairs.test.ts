@@ -198,6 +198,14 @@ describe("QC in the request", () => {
     expect(b.qc).toEqual({ smallRoi: "STOP", lossy: "FLAG" });
     expect(b.qcAcknowledged).toEqual(["1.2.3|SEG|0"]);
   });
+  it("carries the small-ROI threshold on its own, also for a trial (qc null)", () => {
+    const form = defaultRoiFeatureForm();
+    expect(buildBatchRequest([pair()], form).smallRoiWarnVoxels).toBeNull();
+    expect(buildBatchRequest([pair()], form, { smallRoiVoxels: null }).smallRoiWarnVoxels).toBeNull();
+    const trial = buildBatchRequest([pair()], form, { qc: null, smallRoiVoxels: 1000 });
+    expect(trial.qc).toBeNull();
+    expect(trial.smallRoiWarnVoxels).toBe(1000);
+  });
 });
 
 describe("smallRoiThresholdUnset", () => {
