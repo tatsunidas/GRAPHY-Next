@@ -14,6 +14,7 @@ import warnings
 
 import numpy as np
 import scipy.stats as st
+import sklearn
 from sklearn.linear_model import LogisticRegression
 from statsmodels.duration.hazard_regression import PHReg
 
@@ -89,7 +90,11 @@ def p4lasso(feat_path, clin_path, lock_path, lam, drop, out):
     X = standardize(np.array([[float(r[fh.index(n)]) for n in names] for r in dev]))
     y = np.array([1 if clin[r[0]][ch.index("outcome")] == "resp" else 0 for r in dev])
     n = len(y)
-    m = LogisticRegression(C=1.0 / (n * lam), l1_ratio=1.0, solver="saga", tol=1e-12, max_iter=1_000_000, random_state=0)
+    # scikit-learn 1.8 より前は、l1_ratio は penalty="elasticnet" のときだけ使われる（指定しないと L2 で解いてしまう）。
+    # 1.9.1 では penalty なしで L1 になることと、1.6.1 では下の指定で L1 になることを確かめた（1.7・1.8 は未確認）
+    legacy = tuple(int(x) for x in sklearn.__version__.split(".")[:2]) < (1, 8)
+    extra = {"penalty": "elasticnet"} if legacy else {}
+    m = LogisticRegression(C=1.0 / (n * lam), l1_ratio=1.0, solver="saga", tol=1e-12, max_iter=1_000_000, random_state=0, **extra)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         m.fit(X, y)
