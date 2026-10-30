@@ -12,6 +12,7 @@
  *
  * 結果の数値の突き合わせ（CLI の直接実行との比較）は、BA_EXPECT（metrics.json）が与えられたときだけ行う。
  */
+import { execSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import type { Page } from "@playwright/test";
@@ -28,6 +29,7 @@ const { check, summary } = createChecker();
 const MODE = process.argv[2] === "missing-deps" ? "missing-deps" : "full";
 const PLUGIN_ID = "vis-brain-atrophy";
 const HIPPO_DB = process.env.BA_HIPPO_DB ?? "";   // 指定すると「海馬も解析する」を選んで通す（HippoDeep は ~/hippodeep_pytorch か GN_BA_HIPPODEEP）
+const CANCEL_AT = (process.env.BA_CANCEL_AT ?? "").split(",").filter(Boolean);   // 例 bet,register: そのプロセスの実行中に［キャンセル］を押し、止まるまでの時間を測る
 const MAKER = process.env.BA_MAKER ?? "";   // 指定すると装置メーカーを選んで通す（Philips/GE/Siemens/other）
 const GN_DB = process.env.BA_GN_DB ?? "";   // 指定すると「全脳規格化後の Z」を選んで通す
 const VOI_DB = process.env.BA_VOI_DB ?? "";   // 指定すると「鑑別の参考指標」を選んで通す（背側脳幹の白質の基準）
@@ -215,6 +217,27 @@ async function main(): Promise<void> {
       return;
     }
 
+    if (CANCEL_AT.length) {
+      console.log(`\n[C] キャンセル（${CANCEL_AT.join("・")} の実行中に押す）`);
+      for (const [i, stage] of CANCEL_AT.entries()) {
+        await approveUntil(driver, viewer, (s) => ((s.procs ?? {}) as Record<string, string>)[stage] === "running", 900_000);
+        check(((await viewer.getByTestId("ba-run").textContent()) ?? "") === "キャンセル", `実行中の主ボタンは［キャンセル］（${stage}）`);
+        const tClick = Date.now();
+        await viewer.getByTestId("ba-run").click();
+        check(((await viewer.getByTestId("ba-run").textContent()) ?? "") === "キャンセル中…", "押すと『キャンセル中…』になる");
+        await viewer.waitForFunction(() => (window as unknown as { __brainAtrophyState: { phase: string } }).__brainAtrophyState.phase === "cancelled", null, { timeout: 900_000 });
+        const secs = (Date.now() - tClick) / 1000;
+        console.log(`  ${stage} の実行中のキャンセルが効くまで: ${secs.toFixed(1)} 秒`);
+        check(((await viewer.getByTestId("ba-run").textContent()) ?? "") === "実行" && (await viewer.getByTestId("ba-run").isEnabled()), "止まったあとは［実行］に戻り、押せる");
+        const procs = (await viewer.evaluate(() => (window as unknown as { __brainAtrophyState: { procs: Record<string, string> } }).__brainAtrophyState.procs));
+        check(procs[stage] === "cancelled", `${stage} の行が「キャンセル」になる`, procs);
+        const busy = execSync("ps -eo pid,pcpu,etimes,args").toString().split("\n").filter((l) => /hd-bet|HD_BET|ipykernel_launcher|gn_brain_atrophy/.test(l) && !/ps -eo/.test(l)).map((l) => l.trim().slice(0, 140));
+        console.log(`  計算機側の関連プロセス（キャンセル直後）: ${busy.length} 件\n    ${busy.join("\n    ")}`);
+        await viewer.screenshot({ path: path.join(OUT_DIR, `c-cancelled-${stage}.png`) });
+        if (i < CANCEL_AT.length - 1) await viewer.getByTestId("ba-run").click();   // 次の実行（新しい実行として）
+      }
+      return;
+    }
     const t0 = Date.now();
     const r = await approveUntil(driver, viewer, (s) => ["done", "qc_failed", "failed"].includes(String(s.phase)), 1_500_000);
     console.log(`  実行 ${(Date.now() - t0) / 1000} 秒・同意の窓 ${r.n} 回`);
@@ -302,7 +325,6 @@ async function main(): Promise<void> {
     await viewer.waitForFunction(() => (document.querySelector('[data-testid="ba-stage-title"]')?.textContent ?? "").includes("④"), null, { timeout: 30_000 });
     check(((await viewer.getByTestId("ba-stage-title").textContent()) ?? "").includes("標準脳"), "「画像を見る」で該当の段（④ 標準脳へ登録）が開く", await viewer.getByTestId("ba-stage-title").textContent());
     await viewer.screenshot({ path: path.join(OUT_DIR, "d7-stage-opened.png") });
-    await viewer.getByTestId("ba-tab-report").click();
     await viewer.getByTestId("ba-preview").scrollIntoViewIfNeeded();
     const z0 = await viewer.evaluate(() => (window as unknown as { __brainAtrophyState: { previewZoom: number } }).__brainAtrophyState.previewZoom);
     await viewer.getByTestId("ba-zoom-out").click(); await viewer.getByTestId("ba-zoom-out").click();
@@ -331,8 +353,19 @@ async function main(): Promise<void> {
     console.log(`  PDF の埋め込み実験: ${JSON.stringify(pdfProbe)}`);
     await viewer.evaluate(() => document.getElementById("pdf-exp")?.remove());
 
+    {   // パネルの順序（処理の確認 → レポート）と、保存・印刷の既定のファイル名
+      const ys = await viewer.evaluate(() => ["ba-panel-stages", "ba-panel-report"].map((id) => (document.querySelector(`[data-testid="${id}"]`) as HTMLElement).getBoundingClientRect().top));
+      check(ys[0] < ys[1], "処理の確認のパネルの下にレポートのパネルがある", ys);
+      const base = await viewer.evaluate(() => (window as unknown as { __brainAtrophyState: { reportBase: string } }).__brainAtrophyState.reportBase);
+      const title = await viewer.evaluate(() => (document.querySelector('[data-testid="ba-report"]') as HTMLIFrameElement).contentDocument?.title ?? "");
+      console.log(`  既定のファイル名（文書の title）: ${title}`);
+      const pidShown = await viewer.getByTestId("ba-patient-id").inputValue();
+      const studyShown = (await viewer.getByTestId("ba-study").inputValue()).replace(/-/g, "");
+      check(base === `脳萎縮解析_${pidShown}_${studyShown}`.replace("__", "_") && title === base, "印刷の既定のファイル名（文書の title）が 脳萎縮解析_<患者ID>_<StudyDate> になる", { base, title });
+    }
     console.log("\n[D2] 処理の確認（段ごとの画像）");
-    await viewer.getByTestId("ba-tab-stages").click();
+    check((await viewer.getByTestId("ba-tab-stages").count()) === 0 && (await viewer.getByTestId("ba-tab-report").count()) === 0, "タブが無い（処理の確認とレポートは縦に並ぶパネル）");
+    check((await viewer.getByTestId("ba-label").count()) === 0, "症例名の欄が無い");
     await viewer.getByTestId("ba-stage-btn-input").waitFor({ state: "visible", timeout: 60_000 });
     try {
       await viewer.waitForFunction(() => !!(window as unknown as { __brainAtrophyState: { stageView?: { stage?: string } } }).__brainAtrophyState.stageView?.stage, null, { timeout: 60_000 });
@@ -364,7 +397,10 @@ async function main(): Promise<void> {
     // 入力の格子は 150×256 画素（R 1.2 mm・A 0.94 mm）。mm の比なら 画面の 幅/高さ ≒ 150*1.2/(256*0.94) = 0.748、正方画素なら 0.586
     check(Math.abs(axialAspect.css - 0.748) < 0.03 && Math.abs(axialAspect.px - 0.586) < 0.01, "非等方の入力は mm の比で描かれる（画面 0.748・画素数の比 0.586 ではない）", axialAspect);
     await viewer.getByTestId("ba-stage-ok").click();
-    check((((await viewer.getByTestId("ba-stage-summary").textContent()) ?? "").includes(`確認した 1／${HIPPO_DB ? 7 : 6}`)), "［確認した］で集計が更新される");
+    check((((await viewer.getByTestId("ba-stage-summary").textContent()) ?? "").includes(`クリア 1／${HIPPO_DB ? 7 : 6}`)), "［クリア（合格）］で集計が更新される");
+    check(((await viewer.getByTestId("ba-stage-verdict").textContent()) ?? "").includes("クリア済み（合格）"), "押した段に『クリア済み（合格）』の表示が出る");
+    await viewer.getByTestId("ba-stage-verdict").scrollIntoViewIfNeeded();
+    await viewer.screenshot({ path: path.join(OUT_DIR, "d2-verdict.png") });
 
     console.log("\n[D3] 保存ボタン（HTML・PDF）");
     const saveDir = path.join(OUT_DIR, "saved");
@@ -373,13 +409,13 @@ async function main(): Promise<void> {
     await driver.app.evaluate(({ dialog }, dir) => {
       dialog.showSaveDialog = (async (_w: unknown, o: { defaultPath?: string }) => ({ canceled: false, filePath: `${dir}/${String(o?.defaultPath ?? "out").split("/").pop()}` })) as unknown as typeof dialog.showSaveDialog;
     }, saveDir);
-    await viewer.getByTestId("ba-tab-report").click();
     await viewer.getByTestId("ba-save-html").click();
     await viewer.getByTestId("ba-save-pdf").click();
     await viewer.waitForFunction(() => !!(window as unknown as { __brainAtrophyState: { saved?: unknown } }).__brainAtrophyState.saved, null, { timeout: 20_000 }).catch(() => undefined);
     await viewer.waitForTimeout(1500);
-    const htmlSaved = path.join(saveDir, "brain-atrophy-report.html");
-    const pdfSaved = path.join(saveDir, "brain-atrophy-report.pdf");
+    const reportBase = await viewer.evaluate(() => (window as unknown as { __brainAtrophyState: { reportBase: string } }).__brainAtrophyState.reportBase);
+    const htmlSaved = path.join(saveDir, `${reportBase}.html`);   // 既定のファイル名: 脳萎縮解析_<患者ID>_<StudyDate>
+    const pdfSaved = path.join(saveDir, `${reportBase}.pdf`);
     check(fs.existsSync(htmlSaved) && /^<!doctype html>/i.test(fs.readFileSync(htmlSaved, "utf8").slice(0, 40)) && fs.statSync(htmlSaved).size > 50_000, "HTML を保存でき、中身はレポート（doctype・十分な大きさ）", fs.existsSync(htmlSaved) ? fs.statSync(htmlSaved).size : "なし");
     check(fs.existsSync(pdfSaved) && fs.readFileSync(pdfSaved).subarray(0, 5).toString() === "%PDF-" && fs.statSync(pdfSaved).size > 100_000, "PDF を保存でき、中身は PDF（%PDF-・十分な大きさ）", fs.existsSync(pdfSaved) ? fs.statSync(pdfSaved).size : "なし");
 
