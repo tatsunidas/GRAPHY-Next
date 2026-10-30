@@ -35,6 +35,7 @@ const PLUGIN_REPO = path.resolve(AUTOMATOR_ROOT, "..", "..", "graphy-next-plugin
 const OUT_DIR = path.join(AUTOMATOR_ROOT, ".results", `brain-atrophy-${MODE}`);
 const AUDIT = path.join(DESKTOP_RUN_DATA_DIR, "compute-audit.jsonl");
 
+const PROC_SEEN: string[] = [];   // 実行中に「実行中」になったプロセスの順（ポーリングで観測）
 const need = (k: string): string => {
   const v = process.env[k];
   if (!v) throw new Error(`${k} を設定してください`);
@@ -48,6 +49,8 @@ async function approveUntil(driver: DesktopDriver, viewer: Page, done: (s: Recor
   const shots: string[] = [];
   while (Date.now() - t0 < timeoutMs) {
     const st = (await viewer.evaluate(() => (window as unknown as { __brainAtrophyState?: Record<string, unknown> }).__brainAtrophyState ?? {})) as Record<string, unknown>;
+    const procs = (st.procs ?? null) as Record<string, string> | null;
+    if (procs) { const run = Object.entries(procs).filter(([, v]) => v === "running").map(([k]) => k).join(","); if (run && PROC_SEEN[PROC_SEEN.length - 1] !== run) PROC_SEEN.push(run); }
     if (done(st)) return { n, shots };
     const win = driver.app.windows().find((w) => w.url().endsWith("computeConsent.html"));
     if (win) {
@@ -281,6 +284,52 @@ async function main(): Promise<void> {
       await viewer.getByTestId("ba-voi-result").scrollIntoViewIfNeeded();
       await viewer.screenshot({ path: path.join(OUT_DIR, "d5-voi.png") });
     }
+
+    console.log("\n[D7] プロセスごとの進捗・結果画像・プレビュー・印刷");
+    console.log(`  実行中に観測したプロセスの順: ${PROC_SEEN.join(" → ")}`);
+    check(PROC_SEEN.includes("bet") && PROC_SEEN.includes("register") && PROC_SEEN.includes("segment"), "実行中にプロセスが順に「実行中」になる（脳抽出・登録・分割を観測）", PROC_SEEN);
+    const order = ["bet", "n4", "register", "segment", "modulate", "zscore"];
+    const idx = order.map((k) => PROC_SEEN.findIndex((x) => x === k));
+    check(idx.every((v, i) => i === 0 || v < 0 || idx[i - 1] < 0 || v > idx[i - 1]), "観測した順序が解析の順序と一致する", { idx });
+    const finalProcs = (await viewer.evaluate(() => (window as unknown as { __brainAtrophyState: { procs: Record<string, string> } }).__brainAtrophyState.procs));
+    check(["bet", "n4", "register", "segment", "modulate", "zscore", "report"].every((k) => finalProcs[k] === "done"), "完了後は全プロセスが「完了」", finalProcs);
+    await viewer.getByTestId("ba-thumb-register").waitFor({ state: "attached", timeout: 60_000 });
+    check((await viewer.locator('[data-testid^="ba-thumb-"]').count()) >= 5, "完了したプロセスにサムネイルが出る");
+    await viewer.getByTestId("ba-procs").scrollIntoViewIfNeeded();
+    await viewer.screenshot({ path: path.join(OUT_DIR, "d7-procs.png") });
+    await viewer.getByTestId("ba-proc-view-register").click();
+    await viewer.getByTestId("ba-stage-title").waitFor({ state: "visible", timeout: 30_000 });
+    await viewer.waitForFunction(() => (document.querySelector('[data-testid="ba-stage-title"]')?.textContent ?? "").includes("④"), null, { timeout: 30_000 });
+    check(((await viewer.getByTestId("ba-stage-title").textContent()) ?? "").includes("標準脳"), "「画像を見る」で該当の段（④ 標準脳へ登録）が開く", await viewer.getByTestId("ba-stage-title").textContent());
+    await viewer.screenshot({ path: path.join(OUT_DIR, "d7-stage-opened.png") });
+    await viewer.getByTestId("ba-tab-report").click();
+    await viewer.getByTestId("ba-preview").scrollIntoViewIfNeeded();
+    const z0 = await viewer.evaluate(() => (window as unknown as { __brainAtrophyState: { previewZoom: number } }).__brainAtrophyState.previewZoom);
+    await viewer.getByTestId("ba-zoom-out").click(); await viewer.getByTestId("ba-zoom-out").click();
+    const z1 = await viewer.evaluate(() => (window as unknown as { __brainAtrophyState: { previewZoom: number } }).__brainAtrophyState.previewZoom);
+    check(z1 < z0 && ((await viewer.getByTestId("ba-zoom").textContent()) ?? "") === `${Math.round(z1 * 100)}%`, "プレビューの縮小が効き、倍率の表示が変わる", { z0, z1 });
+    const probe = await viewer.evaluate(() => {
+      const f = document.querySelector('[data-testid="ba-report"]') as HTMLIFrameElement;
+      const w = f.contentWindow as Window & { print: () => void; __calls?: number };
+      w.__calls = 0; w.print = () => { w.__calls = (w.__calls ?? 0) + 1; };
+      return { sameOrigin: !!f.contentDocument, text: (f.contentDocument?.body?.innerText ?? "").slice(0, 40), h: f.contentDocument?.documentElement.scrollHeight ?? 0 };
+    });
+    check(probe.sameOrigin && probe.text.includes("脳萎縮定量レポート"), "印刷の対象（iframe）がレポートの文書そのものである（本体の画面ではない）", probe);
+    await viewer.getByTestId("ba-print").click();
+    const calls = await viewer.evaluate(() => ((document.querySelector('[data-testid="ba-report"]') as HTMLIFrameElement).contentWindow as unknown as { __calls: number }).__calls);
+    check(calls === 1, "［印刷］でレポートの iframe の print が 1 回呼ばれる（OS のダイアログ自体は自動検査できない）", calls);
+    await viewer.screenshot({ path: path.join(OUT_DIR, "d7-preview.png") });
+    // 実験: blob: の PDF を iframe に出せるか（本体の Electron・CSP）
+    const pdfProbe = await viewer.evaluate(async () => {
+      const pdf = "%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 200 100]>>endobj\ntrailer<</Root 1 0 R/Size 4>>\n%%EOF";
+      const url = URL.createObjectURL(new Blob([pdf], { type: "application/pdf" }));
+      const f = document.createElement("iframe"); f.id = "pdf-exp"; f.style.cssText = "width:300px;height:200px"; f.src = url;
+      const loaded = await new Promise<boolean>((res) => { f.onload = () => res(true); f.onerror = () => res(false); document.body.append(f); setTimeout(() => res(false), 8000); });
+      const plugins = Array.from(navigator.plugins).map((p) => p.name).join(",");
+      return { loaded, plugins, pdfViewer: (navigator as unknown as { pdfViewerEnabled?: boolean }).pdfViewerEnabled };
+    });
+    console.log(`  PDF の埋め込み実験: ${JSON.stringify(pdfProbe)}`);
+    await viewer.evaluate(() => document.getElementById("pdf-exp")?.remove());
 
     console.log("\n[D2] 処理の確認（段ごとの画像）");
     await viewer.getByTestId("ba-tab-stages").click();
