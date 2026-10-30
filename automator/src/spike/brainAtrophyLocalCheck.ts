@@ -120,12 +120,22 @@ async function main(): Promise<void> {
     check(true, "解析メニューにプラグインが出て、窓が開く（免責の帯が見える）");
     check(((await viewer.getByTestId("ba-disclaimer").textContent()) ?? "").includes("診断機器ではありません"), "免責の文言が画面にある");
     await viewer.screenshot({ path: path.join(OUT_DIR, "a-opened.png") });
+    // 撮像条件の DICOM からの自動入力（本体の REST 経由）。BA_EXPECT_MAKER（例 Philips）が指定されたら、自動入力された値を検査する
+    await viewer.waitForFunction(() => (window as unknown as { __brainAtrophyState: { imagingFill?: string } }).__brainAtrophyState.imagingFill !== "pending", null, { timeout: 15_000 });
+    const autoField = await viewer.getByTestId("ba-field").inputValue();
+    const autoMaker = await viewer.getByTestId("ba-maker").inputValue();
+    console.log(`  自動入力: 磁場 ${autoField}・メーカー ${autoMaker}・ ${await viewer.getByTestId("ba-field-note").textContent()} / ${await viewer.getByTestId("ba-maker-auto").textContent()}`);
+    check(autoField === String(field), "磁場強度が DICOM から自動入力される（画面の値が DICOM の値と一致）", { autoField, field });
+    if (process.env.BA_EXPECT_MAKER) check(autoMaker === process.env.BA_EXPECT_MAKER, "装置メーカーが DICOM から自動入力される", { autoMaker });
+    await viewer.screenshot({ path: path.join(OUT_DIR, "a-imaging-auto.png") });
 
     console.log("\n[B] 入力の検査（空のまま実行）");
+    await viewer.getByTestId("ba-field").selectOption("");   // 自動入力で埋まっているので、磁場強度を空にして「不足」の状態を作る
     await viewer.getByTestId("ba-run").click();
     await viewer.waitForTimeout(500);
     const invalid = (await viewer.getByTestId("ba-status").textContent()) ?? "";
-    check(/磁場/.test(invalid), "未入力（磁場強度）では計算機へ行かず、不足を画面に出す", invalid);   // 基準 DB は前回の選択が戻ることがあるので、必ず空な磁場強度で見る
+    check(/磁場/.test(invalid), "磁場強度が未選択なら計算機へ行かず、不足を画面に出す", invalid);
+    await viewer.getByTestId("ba-field").selectOption(autoField || field);   // 元に戻す
     // 入力フォームの整理: 5 枚のカードと ⓘ（ホバーで説明のパネルが出る）
     for (const id of ["patient", "imaging", "reference", "extras", "run"]) check((await viewer.getByTestId(`ba-card-${id}`).count()) === 1, `カード ${id} がある`);
     await viewer.getByTestId("ba-tip-maker").hover();
@@ -158,7 +168,7 @@ async function main(): Promise<void> {
       await viewer.getByTestId("ba-age").fill(age);
       await viewer.getByTestId("ba-sex").selectOption(sex);
     }
-    await viewer.getByTestId("ba-field").selectOption(field);
+    if (!(await viewer.getByTestId("ba-field").inputValue())) await viewer.getByTestId("ba-field").selectOption(field);
     if (MAKER) await viewer.getByTestId("ba-maker").selectOption(MAKER);
     await viewer.getByTestId("ba-db-pick").click();
     await viewer.waitForFunction(() => !!(window as unknown as { __brainAtrophyState: { db?: string } }).__brainAtrophyState.db, null, { timeout: 10_000 });

@@ -27,6 +27,7 @@ def main() -> None:
     ap.add_argument("--patient-name", default="SPIKE^IXI")
     ap.add_argument("--birth-date", default="", help="YYYYMMDD（PatientBirthDate。空なら書かない）")
     ap.add_argument("--study-date", default="20260101", help="YYYYMMDD（StudyDate）")
+    ap.add_argument("--manufacturer", default="", help="Manufacturer（空なら書かない。撮像条件の自動入力の検査用）")
     a = ap.parse_args()
 
     img = nib.load(a.nifti)
@@ -62,6 +63,8 @@ def main() -> None:
         ds.Modality, ds.SeriesNumber, ds.InstanceNumber = "MR", 1, k + 1
         ds.StudyDescription, ds.SeriesDescription = "spike", "T1 3D (IXI)"
         ds.MagneticFieldStrength = a.field
+        if a.manufacturer:
+            ds.Manufacturer = a.manufacturer
         ds.ImageType = ["ORIGINAL", "PRIMARY", "M", "NORM"]
         pos = (aff @ np.array([0, 0, k, 1.0]))[:3]
         ds.ImagePositionPatient = [f"{v + 0.0:.6f}" for v in pos]   # +0.0 で -0.0 を 0 にする
