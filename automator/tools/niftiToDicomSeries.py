@@ -64,8 +64,8 @@ def main() -> None:
         ds.MagneticFieldStrength = a.field
         ds.ImageType = ["ORIGINAL", "PRIMARY", "M", "NORM"]
         pos = (aff @ np.array([0, 0, k, 1.0]))[:3]
-        ds.ImagePositionPatient = [f"{v:.6f}" for v in pos]
-        ds.ImageOrientationPatient = [f"{v:.8f}" for v in (*row_dir, *col_dir)]
+        ds.ImagePositionPatient = [f"{v + 0.0:.6f}" for v in pos]   # +0.0 で -0.0 を 0 にする
+        ds.ImageOrientationPatient = [f"{v + 0.0:.8f}" for v in (*row_dir, *col_dir)]
         ds.PixelSpacing = [f"{sy:.6f}", f"{sx:.6f}"]  # [行間隔（j 方向）, 列間隔（i 方向）]
         ds.SliceThickness = f"{sz:.6f}"
         ds.SpacingBetweenSlices = f"{sz:.6f}"

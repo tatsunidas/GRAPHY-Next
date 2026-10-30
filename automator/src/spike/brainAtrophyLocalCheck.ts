@@ -29,6 +29,7 @@ const MODE = process.argv[2] === "missing-deps" ? "missing-deps" : "full";
 const PLUGIN_ID = "vis-brain-atrophy";
 const HIPPO_DB = process.env.BA_HIPPO_DB ?? "";   // 指定すると「海馬も解析する」を選んで通す（HippoDeep は ~/hippodeep_pytorch か GN_BA_HIPPODEEP）
 const MAKER = process.env.BA_MAKER ?? "";   // 指定すると装置メーカーを選んで通す（Philips/GE/Siemens/other）
+const GN_DB = process.env.BA_GN_DB ?? "";   // 指定すると「全脳規格化後の Z」を選んで通す
 const VOI_DB = process.env.BA_VOI_DB ?? "";   // 指定すると「鑑別の参考指標」を選んで通す（背側脳幹の白質の基準）
 const PLUGIN_REPO = path.resolve(AUTOMATOR_ROOT, "..", "..", "graphy-next-plugin-brain-atrophy");
 const OUT_DIR = path.join(AUTOMATOR_ROOT, ".results", `brain-atrophy-${MODE}`);
@@ -98,7 +99,7 @@ async function main(): Promise<void> {
     await main.getByTestId("search-patientid-input").waitFor({ state: "visible", timeout: 60_000 });
     await driver.app.evaluate(({ dialog }, p) => {
       dialog.showMessageBoxSync = (() => 0) as typeof dialog.showMessageBoxSync;
-      dialog.showOpenDialog = (async (_w: unknown, o: { title?: string }) => ({ canceled: false, filePaths: [String(o?.title ?? "").includes("海馬") ? process.env.BA_HIPPO_DB ?? p : String(o?.title ?? "").includes("背側脳幹") ? process.env.BA_VOI_DB ?? p : p] })) as unknown as typeof dialog.showOpenDialog;
+      dialog.showOpenDialog = (async (_w: unknown, o: { title?: string }) => ({ canceled: false, filePaths: [String(o?.title ?? "").includes("海馬") ? process.env.BA_HIPPO_DB ?? p : String(o?.title ?? "").includes("背側脳幹") ? process.env.BA_VOI_DB ?? p : String(o?.title ?? "").includes("規格化") ? process.env.BA_GN_DB ?? p : p] })) as unknown as typeof dialog.showOpenDialog;
     }, db);
 
     const rec = createStepRecorder();
@@ -124,7 +125,15 @@ async function main(): Promise<void> {
     await viewer.getByTestId("ba-run").click();
     await viewer.waitForTimeout(500);
     const invalid = (await viewer.getByTestId("ba-status").textContent()) ?? "";
-    check((birth || /年齢|磁場/.test(invalid)) && /基準 DB/.test(invalid), "未入力では計算機へ行かず、不足を画面に出す", invalid);
+    check(/磁場/.test(invalid), "未入力（磁場強度）では計算機へ行かず、不足を画面に出す", invalid);   // 基準 DB は前回の選択が戻ることがあるので、必ず空な磁場強度で見る
+    // 入力フォームの整理: 5 枚のカードと ⓘ（ホバーで説明のパネルが出る）
+    for (const id of ["patient", "imaging", "reference", "extras", "run"]) check((await viewer.getByTestId(`ba-card-${id}`).count()) === 1, `カード ${id} がある`);
+    await viewer.getByTestId("ba-tip-maker").hover();
+    await viewer.waitForTimeout(300);
+    const tipPanel = viewer.getByTestId("ba-tippanel");
+    check((await tipPanel.isVisible()) && ((await tipPanel.textContent()) ?? "").includes("Siemens"), "ⓘ にホバーすると説明のパネルが画面に出る", await tipPanel.textContent());
+    await viewer.screenshot({ path: path.join(OUT_DIR, "b-tooltip.png") });
+    await viewer.getByTestId("ba-card-run").hover();
     check(!fs.existsSync(AUDIT) || fs.readFileSync(AUDIT, "utf8").trim() === "", "🔴 その間、監査に送信が無い");
 
     console.log("\n[C] 入力して実行");
@@ -159,6 +168,12 @@ async function main(): Promise<void> {
       await viewer.getByTestId("ba-hippo-db-pick").click();
       await viewer.waitForFunction(() => !!(window as unknown as { __brainAtrophyState: { hippoDb?: string } }).__brainAtrophyState.hippoDb, null, { timeout: 10_000 });
       check(((await viewer.getByTestId("ba-hippo-db-path").textContent()) ?? "") === HIPPO_DB, "海馬の基準の選択が画面に反映される");
+    }
+    if (GN_DB) {
+      await viewer.getByTestId("ba-gn").check();
+      await viewer.getByTestId("ba-gn-db-pick").click();
+      await viewer.waitForFunction(() => !!(window as unknown as { __brainAtrophyState: { gnDb?: string } }).__brainAtrophyState.gnDb, null, { timeout: 10_000 });
+      check(((await viewer.getByTestId("ba-gn-db-path").textContent()) ?? "") === GN_DB, "全脳規格化版の基準の選択が画面に反映される");
     }
     if (VOI_DB) {
       await viewer.getByTestId("ba-voi").check();
@@ -231,6 +246,13 @@ async function main(): Promise<void> {
       await viewer.screenshot({ path: path.join(OUT_DIR, "d4-hippo.png") });
     }
 
+    if (GN_DB) {
+      console.log("\n[D6] 全脳規格化後の Z");
+      await viewer.getByTestId("ba-gn-result").waitFor({ state: "visible", timeout: 10_000 });
+      const frac = (await viewer.getByTestId("ba-gn-frac").textContent()) ?? "";
+      console.log(`  ${frac}`);
+      check(/Z>2 の割合: \d+\.\d\d %/.test(frac), "画面に全脳規格化後の Z>2 の割合が出る", frac);
+    }
     if (VOI_DB) {
       console.log("\n[D5] 鑑別の参考指標");
       await viewer.getByTestId("ba-voi-result").waitFor({ state: "visible", timeout: 10_000 });
