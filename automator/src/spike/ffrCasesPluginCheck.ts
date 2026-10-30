@@ -2090,8 +2090,10 @@ async function qfr3dCheck(viewer: Page, spec: Spec, outDir: string, distalText: 
 
   // D7-2: プルバック図
   const ov = viewer.getByTestId("qfr3d-chart-qfr").last();
-  const bb = (await ov.boundingBox())!;
   const clickAt = async (f: number): Promise<{ arc: number; qfr: string }> => {
+    // 図はダイアログの下側にあり、窓の大きさによっては画面の外になる。スクロールして見える位置にしてから、座標を取り直す。
+    await ov.scrollIntoViewIfNeeded();
+    const bb = (await ov.boundingBox())!;
     await viewer.mouse.click(bb.x + 44 + f * (bb.width - 44 - 12), bb.y + bb.height / 2);
     await viewer.waitForTimeout(150);
     return { arc: numOf(await txt("qfr3d-v-arc")), qfr: await txt("qfr3d-v-qfr") };
@@ -2178,8 +2180,50 @@ async function qfr3dCheck(viewer: Page, spec: Spec, outDir: string, distalText: 
   for (const [id, name] of [["qfr3d-canvas", "3d"], ["qfr3d-angio-A", "angioA"], ["qfr3d-angio-B", "angioB"], ["qfr3d-section", "section"], ["qfr3d-chart-qfr", "chart"]] as const) {
     await viewer.getByTestId(id).last().screenshot({ path: path.join(outDir, `${spec.label}-6-qfr3d-el-${name}.png`) }).catch(() => {});
   }
+  // D8: ［この位置をレポートへ差し込む］。位置を 2 か所に動かして 2 回差し込み、本体のレポート編集画面に入った本文で確かめる。
+  const pub = viewer.getByTestId("qfr3d-publish").last();
+  const note = async (): Promise<string> => await txt("qfr3d-publish-note");
+  const first = await clickAt(0.25);
+  await pub.click();
+  await viewer.waitForTimeout(200);
+  const note1 = await note();
+  const second = await clickAt(0.75);
+  await pub.click();
+  await viewer.waitForTimeout(200);
+  const note2 = await note();
+  out.publish = { first, second, note1, note2 };
+  check("[D8-1] ［この位置をレポートへ差し込む］で、差し込めるようになったと出る（2 回とも）", /レポートへ差し込めるようになりました/.test(note1) && /レポートへ差し込めるようになりました/.test(note2), out.publish);
+
   // 後の検査（cQFR など）の邪魔にならないよう閉じる。
   await viewer.getByRole("dialog", { name: /QFR 結果/ }).last().getByRole("button", { name: "×" }).click().catch(() => {});
+  await viewer.waitForTimeout(300);
+
+  // 2 方向窓がメニューバーを覆っているので、座標のクリックではなく要素へクリックを送る。
+  await viewer.getByTestId("viewer2d-menu-tools").dispatchEvent("click");
+  await viewer.getByText("レポート", { exact: true }).first().dispatchEvent("click");
+  const sel = viewer.getByTestId("report-analysis-select");
+  await sel.waitFor({ state: "visible", timeout: 30_000 }).catch(() => {});
+  await viewer.waitForTimeout(800);
+  const opts = await sel.locator("option").allInnerTexts().catch(() => [] as string[]);
+  out.reportOptions = opts;
+  const qfrOpts = opts.filter((o) => /造影由来の圧比/.test(o));
+  check("[D8-2a] レポート編集画面の差し込み候補に QFR が 1 件だけある（同じ解析は最新版に置き換わる）", qfrOpts.length === 1, { opts });
+  if (qfrOpts.length === 1) {
+    await sel.selectOption({ label: qfrOpts[0] });
+    await viewer.getByTestId("report-analysis-insert").dispatchEvent("click"); // 2 方向窓が重なっているので、要素へ直接送る
+    await viewer.waitForTimeout(500);
+    const body = await viewer.getByTestId("report-body").inputValue();
+    out.reportBody = body.slice(0, 4000);
+    await viewer.screenshot({ path: path.join(outDir, `${spec.label}-8-report.png`) });
+    const rowOf = (label: string): string => (body.split("\n").find((l) => l.includes(`| ${label} |`)) ?? "");
+    const arcRow = rowOf("選んだ位置（近位から）");
+    const qfrRow = rowOf("その位置の QFR");
+    out.rows = { arcRow, qfrRow };
+    check("[D8-2b] 本文に、病変の行と MLD の位置の行が入っている", /\| (病変 1|病変区間) \|/.test(body) && body.includes("| MLD の位置 |"), { has: body.includes("MLD の位置") });
+    check("[D8-2c] 本文の「選んだ位置」と「その位置の QFR」が、ダイアログの値（2 回目）と一致する", arcRow.includes(`| ${second.arc.toFixed(1)} mm |`) && qfrRow.includes(`| ${second.qfr} |`), { arcRow, qfrRow, second });
+    check("[D8-3] ★負例: 1 回目の位置（距離・QFR）は本文に残っていない（最新の位置の値に置き換わっている）", !arcRow.includes(`| ${first.arc.toFixed(1)} mm |`) && first.arc.toFixed(1) !== second.arc.toFixed(1) && first.qfr !== second.qfr, { arcRow, first, second });
+  }
+  await viewer.getByTestId("report-close").dispatchEvent("click").catch(() => {});
   await viewer.waitForTimeout(300);
   return out;
 }
