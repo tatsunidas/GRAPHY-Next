@@ -23,6 +23,7 @@ import { resetDb } from "../backend/dbReset.js";
 import { importFixtureCategory } from "../fixtures/importFixtures.js";
 import { openFirstSeriesInViewer } from "../checklist/items/shared/helpers.js";
 import { createStepRecorder } from "../checklist/types.js";
+import { dismissUpdateDialog } from "./dismissUpdateDialog.js";
 import { AUTOMATOR_ROOT } from "../fixtures/manifest.js";
 
 const require = createRequire(import.meta.url);
@@ -129,7 +130,9 @@ async function main(): Promise<void> {
     await importFixtureCategory(driver.ports.http, "ct-basic");
     await main.reload({ waitUntil: "domcontentloaded" });
     await main.getByTestId("search-patientid-input").waitFor({ state: "visible", timeout: 30_000 });
+    await dismissUpdateDialog(main);
     await openFirstSeriesInViewer(main, createStepRecorder());
+    await dismissUpdateDialog(main);
     const vb = main.getByTestId("viewer2d-toolbar-button");
     console.log("  main:", main.url(), "ボタン数", await vb.count(), "無効", await vb.isDisabled(), "窓数", driver.app.windows().length);
     const viewer = await driver.waitForNewPage(() => main.getByTestId("viewer2d-toolbar-button").click({ timeout: 120_000 }), (u) => u.includes("2dviewer"));
@@ -144,6 +147,7 @@ async function main(): Promise<void> {
     const set = await main.evaluate((cfg) => (window as unknown as { graphyDesktop: { aiProvidersSet: (c: unknown) => Promise<{ ok: boolean }> } }).graphyDesktop.aiProvidersSet(cfg), { providers: [local], defaults: { "text-to-text": "local" } });
     if (!set.ok) throw new Error(`提供元を保存できない: ${JSON.stringify(set)}`);
 
+    await dismissUpdateDialog(main);
     const win = await driver.waitForNewPage(async () => {
       await main.getByTestId("mainscreen-menu-system").click();
       await main.getByTestId("menu-item-assistant").click();
