@@ -37,6 +37,7 @@ const PLUGIN_REPO = path.resolve(AUTOMATOR_ROOT, "..", "..", "graphy-next-plugin
 const OUT_DIR = path.join(AUTOMATOR_ROOT, ".results", `brain-atrophy-${MODE}`);
 const AUDIT = path.join(DESKTOP_RUN_DATA_DIR, "compute-audit.jsonl");
 
+let runShot = false;
 const PROC_SEEN: string[] = [];   // 実行中に「実行中」になったプロセスの順（ポーリングで観測）
 const need = (k: string): string => {
   const v = process.env[k];
@@ -53,6 +54,7 @@ async function approveUntil(driver: DesktopDriver, viewer: Page, done: (s: Recor
     const st = (await viewer.evaluate(() => (window as unknown as { __brainAtrophyState?: Record<string, unknown> }).__brainAtrophyState ?? {})) as Record<string, unknown>;
     const procs = (st.procs ?? null) as Record<string, string> | null;
     if (procs) { const run = Object.entries(procs).filter(([, v]) => v === "running").map(([k]) => k).join(","); if (run && PROC_SEEN[PROC_SEEN.length - 1] !== run) PROC_SEEN.push(run); }
+    if (process.env.BA_MANUAL_DIR && !runShot && procs && Object.values(procs).includes("running")) { runShot = true; await viewer.waitForTimeout(3500); fs.mkdirSync(process.env.BA_MANUAL_DIR, { recursive: true }); await viewer.getByTestId("ba-card-run").screenshot({ path: path.join(process.env.BA_MANUAL_DIR, "05a-running.png") }).catch(() => undefined); }
     if (done(st)) return { n, shots };
     const win = driver.app.windows().find((w) => w.url().endsWith("computeConsent.html"));
     if (win) {
@@ -117,6 +119,7 @@ async function main(): Promise<void> {
       if (m.type() === "error") console.log(`  [viewer error] ${m.text()}`);
     });
     await viewer.getByTestId("series-viewer-root").first().waitFor({ state: "visible", timeout: 30_000 });
+    if (process.env.BA_MANUAL_DIR) await viewer.setViewportSize({ width: 1500, height: 3400 });   // マニュアル用: 窓が縦に伸び、カードやパネルが切れずに撮れる
     await viewer.waitForTimeout(2500);
 
     console.log("\n[A] メニューから起動する");
@@ -401,6 +404,21 @@ async function main(): Promise<void> {
     check(((await viewer.getByTestId("ba-stage-verdict").textContent()) ?? "").includes("クリア済み（合格）"), "押した段に『クリア済み（合格）』の表示が出る");
     await viewer.getByTestId("ba-stage-verdict").scrollIntoViewIfNeeded();
     await viewer.screenshot({ path: path.join(OUT_DIR, "d2-verdict.png") });
+    // マニュアル用の要素別キャプチャ（BA_MANUAL_DIR を指定したときだけ）。患者情報は入力欄に出るので、撮る前に架空の値へ置き換える
+    if (process.env.BA_MANUAL_DIR) {
+      const md = process.env.BA_MANUAL_DIR; fs.mkdirSync(md, { recursive: true });
+      const shot = async (id: string, name: string) => {
+        const loc = viewer.getByTestId(id);
+        if ((await loc.count()) === 0) { console.log(`  (キャプチャ省略: ${id} が無い)`); return; }
+        await loc.scrollIntoViewIfNeeded(); await viewer.waitForTimeout(250);
+        await loc.screenshot({ path: path.join(md, `${name}.png`) });
+      };
+      for (const [id, name] of [["ba-card-patient", "01-patient"], ["ba-card-imaging", "02-imaging"], ["ba-card-reference", "03-reference"], ["ba-card-extras", "04-extras"], ["ba-card-run", "05-run"],
+        ["ba-metrics", "06-metrics"], ["ba-hippo-result", "07-hippo"], ["ba-voi-result", "08-voi"], ["ba-gn-result", "09-gn"], ["ba-procs", "10-procs"], ["ba-panel-stages", "11-stages"], ["ba-panel-report", "12-report-panel"]] as const) await shot(id, name);
+      const pages = viewer.frameLocator('[data-testid="ba-report"]').locator(".page");
+      for (let i = 0; i < (await pages.count()); i++) { await pages.nth(i).scrollIntoViewIfNeeded(); await pages.nth(i).screenshot({ path: path.join(md, `13-report-page${i + 1}.png`) }); }
+      await viewer.screenshot({ path: path.join(md, "00-window.png") });
+    }
 
     console.log("\n[D3] 保存ボタン（HTML・PDF）");
     const saveDir = path.join(OUT_DIR, "saved");
