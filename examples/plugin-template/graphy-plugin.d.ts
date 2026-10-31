@@ -629,9 +629,14 @@ export interface XaSeriesInfo {
   seriesUid: string;
   studyUid: string;
   sopInstanceUid: string;
-  /** 1 を超えるとき、ここで扱うのは先頭インスタンスだけ。 */
+  /** シリーズのインスタンス数。 */
   instanceCount: number;
-  /** 先頭インスタンスのフレーム数。タグから読めなければ null（1 で埋めない）。 */
+  /**
+   * シリーズのショット（インスタンス）の一覧。2D ビューアの「ショット」と同じ並び（InstanceNumber → SOPInstanceUID）。
+   * `ref.sopInstanceUid` に入れて、別のショットを読める。古い本体は返さない（undefined）。
+   */
+  shots?: { sopInstanceUid: string; instanceNumber: number | null }[];
+  /** 読んだインスタンス（`sopInstanceUid`）のフレーム数。タグから読めなければ null（1 で埋めない）。 */
   frameCount: number | null;
   rows: number | null;
   cols: number | null;
@@ -852,6 +857,11 @@ export interface ViewerRoi {
 export interface PluginSeriesRef {
   seriesUid: string;
   studyUid?: string;
+  /**
+   * `readXaSeries` / `readXaSeriesFrame`（H42）だけが見る。読むインスタンス（XA の「ショット」）。省略は先頭のショット。
+   * 指した SOP がシリーズに無ければ null（先頭に替えない）。一覧は `readXaSeries` の `shots`。古い本体は無視する。
+   */
+  sopInstanceUid?: string;
   /** 多次元シリーズのチャンネル / 時相（既定 0）。 */
   c?: number;
   t?: number;
@@ -2058,7 +2068,8 @@ export interface Viewer2DPluginHost extends PluginHostBase {
   getXaGeometry: (tileId?: string) => XaGeometry | null;
   /**
    * **開いていない XA シリーズ**の幾何・フレーム数・画像サイズ（**H42**）。2 方向（A・B）を 1 つのプラグイン窓で
-   * 同時に扱うための口。読めない部分は null（理由は `missing`）。対象は**先頭インスタンス**。
+   * 同時に扱うための口。読めない部分は null（理由は `missing`）。対象は `ref.sopInstanceUid` のインスタンスで、
+   * 省略すると**先頭のショット**。
    */
   readXaSeries: (ref: PluginSeriesRef) => Promise<XaSeriesInfo | null>;
   /**

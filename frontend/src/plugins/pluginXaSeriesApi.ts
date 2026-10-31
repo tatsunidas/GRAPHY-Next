@@ -12,8 +12,9 @@
  * <p>新規に計算を書いていない: 幾何は `readXaViewGeometry`（幾何の単一入口）、画素は
  * `readModalitySlice`（校正の単一入口）、imageId は `imageIdForXaFrame` に委譲する。
  *
- * <p>⚠️ 対象は**シリーズの先頭インスタンス**（XA のシネは 1 インスタンス＝マルチフレーム）。複数インスタンスの
- * シリーズは `instanceCount` で分かるようにし、黙って他を混ぜない。DSA（差分）は掛けない＝ネイティブのフレーム。
+ * <p>⚠️ 対象は、`ref.sopInstanceUid` で指したインスタンス。省略すると**先頭のショット**（XA のシネは 1 インスタンス＝
+ * マルチフレーム。並びは 2D ビューアの「ショット」と同じ。`xaShots.ts`）。複数インスタンスのシリーズは `shots` で
+ * 一覧でき、黙って他を混ぜない。DSA（差分）は掛けない＝ネイティブのフレーム。
  */
 import { fetchInstances } from "../api";
 import { imageIdForXaFrame, xaSourceUrlOf, type ViewerMode } from "../viewer/imageId";
@@ -23,6 +24,7 @@ import { readXaViewGeometry, type XaViewGeometryResult } from "../viewer/xaViewG
 import type { PluginSeriesRef } from "./pluginTypes";
 import { pixelIntensityRelationshipOf } from "./xaPixelIntensity";
 import { cineOfSource, type PluginXaSeriesCine } from "./xaSeriesCine";
+import { chooseInstance, orderShots } from "./xaShots";
 
 type StudyResolver = (seriesUid: string) => string | undefined;
 
@@ -30,9 +32,14 @@ export interface PluginXaSeriesInfo extends XaViewGeometryResult {
   seriesUid: string;
   studyUid: string;
   sopInstanceUid: string;
-  /** シリーズのインスタンス数。1 より大きいとき、ここで扱うのは先頭だけ。 */
+  /** シリーズのインスタンス数。 */
   instanceCount: number;
-  /** 先頭インスタンスのフレーム数。タグから読めなければ null（1 で埋めない）。 */
+  /**
+   * シリーズのショット（インスタンス）の一覧。2D ビューアの「ショット」と同じ並び（InstanceNumber → SOPInstanceUID）。
+   * `ref.sopInstanceUid` に入れて、別のショットを読める。古い本体は返さない（undefined）。
+   */
+  shots: { sopInstanceUid: string; instanceNumber: number | null }[];
+  /** 読んだインスタンス（`sopInstanceUid`）のフレーム数。タグから読めなければ null（1 で埋めない）。 */
   frameCount: number | null;
   rows: number | null;
   cols: number | null;
@@ -63,7 +70,10 @@ function toNum(v: unknown): number | null {
   return typeof v === "number" && Number.isFinite(v) ? v : null;
 }
 
-/** シリーズの先頭インスタンスの幾何・フレーム数・画像サイズ。読めない部分は null（理由は `missing`）。 */
+/**
+ * 指したインスタンス（省略は先頭のショット）の幾何・フレーム数・画像サイズ。読めない部分は null（理由は `missing`）。
+ * `ref.sopInstanceUid` がシリーズに無ければ null（先頭に替えない）。
+ */
 export async function readXaSeriesInfo(
   mode: ViewerMode,
   resolver: StudyResolver,
@@ -71,9 +81,10 @@ export async function readXaSeriesInfo(
 ): Promise<PluginXaSeriesInfo | null> {
   const studyUid = resolveStudy(ref, resolver);
   if (!studyUid) return null;
-  const instances = await fetchInstances(studyUid, ref.seriesUid);
-  if (!instances.length) return null;
-  const sop = instances[0].sopInstanceUid;
+  const shots = orderShots(await fetchInstances(studyUid, ref.seriesUid));
+  const chosen = chooseInstance(shots, ref.sopInstanceUid);
+  if (!chosen) return null;
+  const sop = chosen.sopInstanceUid;
   const imageId0 = imageIdForXaFrame(mode, sop, 0, studyUid, ref.seriesUid);
   try {
     await prewarmXaDataset(imageId0);
@@ -90,7 +101,8 @@ export async function readXaSeriesInfo(
     seriesUid: ref.seriesUid,
     studyUid,
     sopInstanceUid: sop,
-    instanceCount: instances.length,
+    instanceCount: shots.length,
+    shots: shots.map((s) => ({ sopInstanceUid: s.sopInstanceUid, instanceNumber: s.instanceNumber })),
     frameCount: nf != null && nf > 0 ? nf : null,
     rows,
     cols,
@@ -99,7 +111,7 @@ export async function readXaSeriesInfo(
   };
 }
 
-/** シリーズの先頭インスタンスの `frameIndex`（0 origin）フレームの校正済み画素。範囲外・取得不能は null。 */
+/** 指したインスタンス（`ref.sopInstanceUid`。省略は先頭のショット）の `frameIndex`（0 origin）フレームの校正済み画素。範囲外・取得不能は null。 */
 export async function readXaSeriesFrame(
   mode: ViewerMode,
   resolver: StudyResolver,
