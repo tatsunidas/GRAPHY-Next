@@ -16,6 +16,7 @@ import { createRequire } from "node:module";
 
 import { DesktopDriver } from "../driver/desktopDriver.js";
 import { AUTOMATOR_ROOT } from "../fixtures/manifest.js";
+import { dismissUpdateDialog } from "./dismissUpdateDialog.js";
 
 const require = createRequire(import.meta.url);
 const L = require("../../../desktop/localLlm.js") as {
@@ -91,6 +92,7 @@ async function main(): Promise<void> {
     const set = await page.evaluate((cfg) => (window as unknown as { graphyDesktop: { aiProvidersSet: (c: unknown) => Promise<{ ok: boolean; problems: string[] }> } }).graphyDesktop.aiProvidersSet(cfg), { providers: [local], defaults: { "text-to-text": "local" } });
     if (!set.ok) throw new Error(`提供元を保存できない: ${JSON.stringify(set)}`);
 
+    await dismissUpdateDialog(page, 4000);
     const win = await driver.waitForNewPage(async () => {
       await page.getByTestId("mainscreen-menu-system").click();
       await page.getByTestId("menu-item-assistant").click();
@@ -142,6 +144,7 @@ async function main(): Promise<void> {
     }
     result.suites = suites;
   } finally {
+    await driver.page.screenshot({ path: path.join(OUT_DIR, `${MODEL_ID}${TAG}-main-at-exit.png`) }).catch(() => undefined);
     result.finishedAt = new Date().toISOString();
     fs.writeFileSync(path.join(OUT_DIR, `${MODEL_ID}${TAG}.json`), JSON.stringify(result, null, 2));
     server.kill("SIGTERM");
