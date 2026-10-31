@@ -446,6 +446,11 @@ interface PluginHostBase {
 export interface PluginSeriesRef {
   seriesUid: string;
   studyUid?: string;
+  /**
+   * H42（`readXaSeries` / `readXaSeriesFrame`）だけが見る。読むインスタンス（XA の「ショット」）。省略は先頭のショット。
+   * 指した SOP がシリーズに無ければ null（先頭に替えない）。一覧は `readXaSeries` の `shots`。古い本体は無視する。
+   */
+  sopInstanceUid?: string;
   /** 多次元シリーズのチャンネル / 時相（既定 0）。 */
   c?: number;
   t?: number;
@@ -726,8 +731,9 @@ export interface Viewer2DPluginHost extends PluginHostBase {
    * **開いていない XA シリーズ**の幾何・フレーム数・画像サイズ（H42）。2 方向（A・B）を 1 つのプラグイン窓で
    * 同時に扱うための口。`getXaGeometry` はタイル単位、こちらはシリーズ単位。
    *
-   * <p>読めない部分は null（理由は `missing`）。0 や既定値で埋めない。対象は**先頭インスタンス**
-   * （XA のシネは 1 インスタンスのマルチフレーム）で、複数あれば `instanceCount` が 1 を超える。
+   * <p>読めない部分は null（理由は `missing`）。0 や既定値で埋めない。対象は `ref.sopInstanceUid` のインスタンスで、
+   * 省略すると**先頭のショット**（XA のシネは 1 インスタンスのマルチフレーム）。複数あれば `instanceCount` が 1 を超え、
+   * `shots` に 2D ビューアの「ショット」と同じ並びで入る。古い本体は `shots` を返さない（undefined）。
    * `studyUid` 省略時は開いているタイルから解決。患者をまたぐ参照は拒否。
    *
    * <p>`pixelIntensityRelationship` は `PixelIntensityRelationship (0028,1040)`（LIN / LOG。無ければ null）。
