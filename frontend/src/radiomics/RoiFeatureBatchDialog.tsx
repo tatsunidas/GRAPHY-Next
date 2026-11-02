@@ -21,7 +21,6 @@ import {
 import {
   applyLabelFilter,
   assignCaseLabels,
-  batchFileBase,
   buildBatchRequest,
   cleanLabel,
   duplicateLabels,
@@ -50,7 +49,9 @@ import {
   type SpecKind,
 } from "./batchSpec";
 import { BatchSettingsPanel } from "./BatchSettingsPanel";
-import { assignSubjectCodes, datasetFiles, type DatasetRow } from "./datasetCsv";
+import { BatchQueuePanel } from "./BatchQueuePanel";
+import { buildDatasetOutput, runQueue, type QueueEntry } from "./batchQueue";
+import { assignSubjectCodes } from "./datasetCsv";
 import { downloadText } from "./downloadText";
 import { defaultRoiFeatureForm, rangeBounds, type RoiFeatureForm } from "./roiFeatureSettings";
 
@@ -117,6 +118,11 @@ export function RoiFeatureBatchDialog({
   /** 送信中（押してから応答が来るまで）。この間に押し直すと同じ組が二重に投入される。 */
   const [starting, setStarting] = useState(false);
   const fileRef = useRef<HTMLInputElement | null>(null);
+  /** 定義の一覧（順に実行）。ダイアログを閉じたら消える。 */
+  const [queue, setQueue] = useState<QueueEntry[]>([]);
+  const [queueRunning, setQueueRunning] = useState(false);
+  const queueCancelRef = useRef(false);
+  const queueIdRef = useRef(0);
   const labels = useMemo(() => parseLabelInput(labelsText), [labelsText]);
   /** 被験者のコード。アルバムのスタディの並び順だけで決める（選んだ組には依らない）。 */
   const subjects = useMemo(
@@ -204,6 +210,8 @@ export function RoiFeatureBatchDialog({
 
   const summary = useMemo(() => (rows ? summarize(rows) : null), [rows]);
   const running = !!job && !BATCH_FINISHED.has(job.state);
+  /** 単独実行中、または一覧の実行中。設定・組・出力の欄を触らせない。 */
+  const locked = running || queueRunning;
   /** 範囲の欄が数でない・下限が上限より大きい間は、実行も定義の保存もしない（範囲なしの定義が黙って作られるのを防ぐ）。 */
   const rangeProblem = kind === "voiStats" ? null : rangeBounds(form).problem;
   const dup = rows ? duplicateLabels(assignCaseLabels(rows)) : [];
@@ -251,17 +259,51 @@ export function RoiFeatureBatchDialog({
     if (job) void cancelBatch(job.jobId).then((st) => runRef.current?.jobId === st.jobId && setJob(st)).catch((e) => setError(errText(e)));
   };
 
+  const outputContext = () => ({ albumName, subjects, includePatientId, subjectsFile, bom });
+
+  const addSpecs = async (files: File[]) => {
+    setError(null);
+    setInfo(null);
+    const added: QueueEntry[] = [];
+    const problems: string[] = [];
+    for (const f of files) {
+      if (f.size > SPEC_MAX_BYTES) { problems.push(t("roiFeat.batch.queue.addErr", { name: f.name, reason: t("roiFeat.batch.spec.err.too_large") })); continue; }
+      const r = await parseSpec(await f.text());
+      if (!r.ok) { problems.push(t("roiFeat.batch.queue.addErr", { name: f.name, reason: t(`roiFeat.batch.spec.err.${r.error}`, { detail: r.detail }) })); continue; }
+      added.push({ id: ++queueIdRef.current, spec: r.spec, enabled: true, state: "pending", message: null, files: 0 });
+    }
+    setQueue((cur) => [...cur, ...added]);
+    if (problems.length > 0) setError(problems.join("\n"));
+  };
+
+  const addCurrentSpec = async () => {
+    const spec = await buildSpec(specContentFrom(form, qc, labels, kind), prefix);
+    setQueue((cur) => [...cur, { id: ++queueIdRef.current, spec, enabled: true, state: "pending", message: null, files: 0 }]);
+  };
+
+  const runList = async () => {
+    if (!rows || queueRunning) return;
+    setError(null);
+    setInfo(null);
+    queueCancelRef.current = false;
+    setQueueRunning(true);
+    try {
+      await runQueue(queue, {
+        baseRows: rows, baseForm: form, output: outputContext(), pollMs: POLL_INTERVAL_MS, isCancelled: () => queueCancelRef.current,
+      }, {
+        submit: submitBatch, get: getBatch, results: getBatchResults, cancel: cancelBatch,
+        save: (files) => { for (const f of files) downloadText(f.text, f.name, f.mime); },
+        sleep: (ms) => new Promise((r) => window.setTimeout(r, ms)),
+      }, setQueue);
+    } finally {
+      setQueueRunning(false);
+    }
+  };
+
   const write = () => {
     const run = runRef.current;
     if (!job || !results || !run) return;
-    const byIndex = new Map(results.map((r) => [r.index, r.result]));
-    const dsRows: DatasetRow[] = job.pairs.map((p) => ({
-      caseLabel: run.labels[p.index] ?? "", status: p, result: byIndex.get(p.index) ?? null,
-    }));
-    const out = datasetFiles(dsRows, subjects, {
-      albumName, specSha256: run.spec.sha256, includePatientId, base: batchFileBase(prefix),
-      specText: specText({ ...run.spec, output: { prefix } }), subjectsFile, bom, kind: run.spec.kind,
-    });
+    const out = buildDatasetOutput(job, results, run.labels, run.spec, prefix, outputContext());
     if (!out.ok) {
       return setError(
         out.reason === "header mismatch" ? t("roiFeat.batch.err.header", { label: out.caseLabel })
@@ -322,6 +364,7 @@ export function RoiFeatureBatchDialog({
   const unsetThreshold = smallRoiThresholdUnset(trial ? [trial.result] : (results ?? []).map((r) => r.result));
 
   const close = () => {
+    queueCancelRef.current = true;
     if (running && job) void cancelBatch(job.jobId).catch(() => undefined);
     onClose();
   };
@@ -361,10 +404,10 @@ export function RoiFeatureBatchDialog({
           <div style={note}>{t("roiFeat.researchOnly")}</div>
           <div style={note}>{t("roiFeat.batch.privacy")}</div>
           <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 8 }}>
-            <button type="button" style={btn} data-testid="batch-spec-save" disabled={running || rangeProblem !== null} onClick={() => void saveSpec()}>
+            <button type="button" style={btn} data-testid="batch-spec-save" disabled={locked || rangeProblem !== null} onClick={() => void saveSpec()}>
               {t("roiFeat.batch.spec.save")}
             </button>
-            <button type="button" style={btn} data-testid="batch-spec-load" disabled={running} onClick={() => fileRef.current?.click()}>
+            <button type="button" style={btn} data-testid="batch-spec-load" disabled={locked} onClick={() => fileRef.current?.click()}>
               {t("roiFeat.batch.spec.load")}
             </button>
             <input ref={fileRef} data-testid="batch-spec-file" type="file" accept=".json,application/json" style={{ display: "none" }}
@@ -402,14 +445,14 @@ export function RoiFeatureBatchDialog({
                         <tr key={pairKey(r.pair) + i} data-testid={`batch-row-${i}`} style={{ borderTop: "1px solid #eef2f6" }}>
                           <td style={td}>
                             <input type="checkbox" data-testid={`batch-include-${i}`} checked={r.included}
-                              disabled={running || !runnable(r)}
+                              disabled={locked || !runnable(r)}
                               onChange={(e) => setRows(setIncluded(rows, i, e.target.checked))} />
                           </td>
                           <td style={td}>{studyText(r.pair.studyUid)}</td>
                           <td style={td}>
                             {r.pair.status === "AUTO" && r.source ? seriesText(r.pair.studyUid, r.source)
                               : r.pair.status === "NEEDS_CONFIRMATION" ? (
-                                <select data-testid={`batch-source-${i}`} value={r.source ?? ""} disabled={running}
+                                <select data-testid={`batch-source-${i}`} value={r.source ?? ""} disabled={locked}
                                   onChange={(e) => setRows(setSource(rows, i, e.target.value || null))}>
                                   <option value="">{t("roiFeat.batch.choose")}</option>
                                   {r.pair.sourceCandidates.map((c) => (
@@ -433,7 +476,7 @@ export function RoiFeatureBatchDialog({
                           </td>
                           <td style={td}>
                             {r.included && runnable(r) && (
-                              <input value={r.caseLabel} placeholder="C001" disabled={running} style={{ ...input, width: 80 }}
+                              <input value={r.caseLabel} placeholder="C001" disabled={locked} style={{ ...input, width: 80 }}
                                 onChange={(e) => setRows(rows.map((x, j) => (j === i ? { ...x, caseLabel: cleanLabel(e.target.value) } : x)))} />
                             )}
                           </td>
@@ -451,33 +494,36 @@ export function RoiFeatureBatchDialog({
               </div>
 
               <div style={section}>{t("roiFeat.batch.step2")}</div>
-              <BatchSettingsPanel form={form} setForm={setForm} disabled={running} qc={qc} setQc={setQc}
+              <BatchSettingsPanel form={form} setForm={setForm} disabled={locked} qc={qc} setQc={setQc}
                 labelsText={labelsText} setLabelsText={setLabelsText} kind={kind} setKind={setKind} />
               <div style={note}>{t("roiFeat.batch.scope")}</div>
 
               <div style={section}>{t("roiFeat.batch.step3")}</div>
               <label>
                 {t("roiFeat.batch.prefix")}{" "}
-                <input data-testid="batch-prefix" value={prefix} placeholder="roi-features-batch" disabled={running}
+                <input data-testid="batch-prefix" value={prefix} placeholder="roi-features-batch" disabled={locked}
                   style={{ ...input, width: 220 }} onChange={(e) => setPrefix(e.target.value)} />
               </label>
               <div style={{ marginTop: 6, display: "flex", flexDirection: "column", gap: 3 }} data-testid="batch-output-options">
                 <label>
-                  <input type="checkbox" data-testid="batch-out-subjects" checked={subjectsFile} disabled={running}
+                  <input type="checkbox" data-testid="batch-out-subjects" checked={subjectsFile} disabled={locked}
                     onChange={(e) => setSubjectsFile(e.target.checked)} /> {t("roiFeat.batch.out.subjects")}
                 </label>
                 <div style={note}>{t("roiFeat.batch.out.subjectsHelp")}</div>
                 <label>
-                  <input type="checkbox" data-testid="batch-out-patientid" checked={includePatientId} disabled={running}
+                  <input type="checkbox" data-testid="batch-out-patientid" checked={includePatientId} disabled={locked}
                     onChange={(e) => setIncludePatientId(e.target.checked)} /> {t("roiFeat.batch.out.patientId")}
                 </label>
                 {includePatientId && <div style={{ ...note, color: "#b00020" }} data-testid="batch-out-patientid-warn">{t("roiFeat.batch.out.patientIdWarn")}</div>}
                 <label>
-                  <input type="checkbox" data-testid="batch-out-bom" checked={bom} disabled={running}
+                  <input type="checkbox" data-testid="batch-out-bom" checked={bom} disabled={locked}
                     onChange={(e) => setBom(e.target.checked)} /> {t("roiFeat.batch.out.bom")}
                 </label>
               </div>
               {dup.length > 0 && <div style={errStyle}>{t("roiFeat.batch.err.duplicate", { labels: dup.join(", ") })}</div>}
+              <BatchQueuePanel entries={queue} onChange={setQueue} running={queueRunning} busy={running || starting}
+                canAddCurrent={rangeProblem === null} onAddFiles={(fs) => void addSpecs(fs)} onAddCurrent={() => void addCurrentSpec()}
+                onRun={() => void runList()} onCancel={() => { queueCancelRef.current = true; }} />
             </>
           )}
 
@@ -523,13 +569,13 @@ export function RoiFeatureBatchDialog({
           {written != null && <div style={{ ...note, color: "#2f6b2f" }} data-testid="batch-written">{t("roiFeat.batch.written", { n: written })}</div>}
         </div>
         <div style={footer}>
-          <button type="button" style={btn} data-testid="batch-trial" disabled={rangeProblem !== null || running || starting || !summary || summary.selected === 0}
+          <button type="button" style={btn} data-testid="batch-trial" disabled={rangeProblem !== null || locked || starting || !summary || summary.selected === 0}
             onClick={() => void start(true)}>{t("roiFeat.batch.trial")}</button>
-          <button type="button" style={btnPrimary} data-testid="batch-run" disabled={rangeProblem !== null || running || starting || !summary || summary.selected === 0}
+          <button type="button" style={btnPrimary} data-testid="batch-run" disabled={rangeProblem !== null || locked || starting || !summary || summary.selected === 0}
             onClick={() => void start(false)}>{t("roiFeat.batch.run")}</button>
           {running && <button type="button" style={btn} data-testid="batch-cancel" onClick={cancel}>{t("roiFeat.batch.cancel")}</button>}
           <button type="button" style={btn} data-testid="batch-write"
-            disabled={running || !results || results.length === 0} onClick={write}>{t("roiFeat.batch.write")}</button>
+            disabled={locked || !results || results.length === 0} onClick={write}>{t("roiFeat.batch.write")}</button>
         </div>
       </div>
     </div>
