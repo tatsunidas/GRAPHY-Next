@@ -30,3 +30,16 @@ test("require 以外で読むファイル（loadFile の html・preload・html �
   for (const f of ["splash.html", "splash-preload.js", "computeConsent.html", "computeConsent-preload.js",
                    "computeConsent-view.js", "computeConsent-rows.js"]) assert.ok(req.includes(f), f);
 });
+
+test("一括抽出の無人実行（batchCli.js と束ねた batch-cli/run.cjs）もインストーラに入る", () => {
+  const req = requiredFiles();
+  for (const f of ["batchCli.js", "dbFolders.js", "devDataDir.js", "portWait.js", "config.json", "batch-cli/run.cjs"]) {
+    assert.ok(req.includes(f), `たどれていない: ${f}`);
+    assert.ok(included(f), `build.files に無い: ${f}`);
+  }
+});
+
+test("extraResources に起動ラッパー（cli）がある", () => {
+  const pkg = JSON.parse(require("node:fs").readFileSync(require("node:path").join(__dirname, "package.json"), "utf8"));
+  assert.ok(pkg.build.extraResources.some((r) => r.from === "cli" && r.to === "cli"));
+});

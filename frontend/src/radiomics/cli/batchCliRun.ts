@@ -101,7 +101,7 @@ export interface CliResult {
   report: CliReport;
 }
 
-interface LoadedSpec {
+export interface LoadedSpec {
   file: string;
   spec: BatchSpec;
 }
@@ -121,25 +121,14 @@ function unconfirmedOf(rows: readonly PairRow[], labels: readonly string[]): Unc
     }));
 }
 
-export async function runBatchCli(opts: CliOptions, api: CliApi, io: CliIo): Promise<CliResult> {
-  const startedAt = io.now();
-  const errors: string[] = [];
-  const usage = (message: string): CliResult => {
-    io.error(message);
-    errors.push(message);
-    // 実行前の誤りでは何も書かない（報告も書かない）
-    return {
-      code: EXIT_USAGE,
-      report: { tool: "graphy-batch", startedAt, finishedAt: io.now(), album: null, recompute: opts.recompute, exitCode: EXIT_USAGE, specs: [], errors },
-    };
-  };
-
-  if (opts.specFiles.length === 0) return usage("定義（--spec）が 1 つも指定されていません");
-
-  // 1. 定義をすべて読む。1 つでも不正なら何も実行しない
+/**
+ * 定義ファイルをすべて読んで検査する（`parseSpec`＝大きさ・型・範囲・SHA-256、出力の接頭辞の重複）。
+ * backend に繋がなくてよいので、起動側が backend を起動する前にも呼ぶ（`checkSpecFiles`）。
+ */
+export async function loadSpecs(specFiles: readonly string[], io: Pick<CliIo, "readText">): Promise<{ loaded: LoadedSpec[]; problems: string[] }> {
   const loaded: LoadedSpec[] = [];
   const problems: string[] = [];
-  for (const file of opts.specFiles) {
+  for (const file of specFiles) {
     let text: string;
     try {
       text = io.readText(file);
@@ -159,6 +148,26 @@ export async function runBatchCli(opts: CliOptions, api: CliApi, io: CliIo): Pro
     if (other) problems.push(`${l.file}: 出力の接頭辞 "${base}" が ${other} と同じです（ファイルを上書きし合います）`);
     else byBase.set(base, l.file);
   }
+  return { loaded, problems };
+}
+
+export async function runBatchCli(opts: CliOptions, api: CliApi, io: CliIo): Promise<CliResult> {
+  const startedAt = io.now();
+  const errors: string[] = [];
+  const usage = (message: string): CliResult => {
+    io.error(message);
+    errors.push(message);
+    // 実行前の誤りでは何も書かない（報告も書かない）
+    return {
+      code: EXIT_USAGE,
+      report: { tool: "graphy-batch", startedAt, finishedAt: io.now(), album: null, recompute: opts.recompute, exitCode: EXIT_USAGE, specs: [], errors },
+    };
+  };
+
+  if (opts.specFiles.length === 0) return usage("定義（--spec）が 1 つも指定されていません");
+
+  // 1. 定義をすべて読む。1 つでも不正なら何も実行しない
+  const { loaded, problems } = await loadSpecs(opts.specFiles, io);
   if (problems.length > 0) {
     for (const p of problems) io.error(p);
     errors.push(...problems);

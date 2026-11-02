@@ -1,0 +1,22 @@
+#!/bin/sh
+# GRAPHY-Next 一括抽出の無人実行（インストール版の macOS・Linux deb）。resources/cli/ から実行ファイルと app.asar を探し、
+# ELECTRON_RUN_AS_NODE=1 で batchCli.js を動かす。使い方は docs/batch-extraction.md。
+src="$0"
+while [ -L "$src" ]; do
+  link=$(readlink "$src")
+  case "$link" in
+    /*) src="$link" ;;
+    *) src="$(dirname "$src")/$link" ;;
+  esac
+done
+here=$(cd "$(dirname "$src")" && pwd)
+res=$(dirname "$here")
+case "$(uname -s)" in
+  Darwin) exe="$res/../MacOS/GRAPHY-Next" ;;
+  *) exe="$res/../graphy-next-desktop" ;;
+esac
+if [ ! -x "$exe" ]; then
+  echo "GRAPHY-Next の実行ファイルが見つかりません: $exe" >&2
+  exit 4
+fi
+ELECTRON_RUN_AS_NODE=1 exec "$exe" "$res/app.asar/batchCli.js" "$@"

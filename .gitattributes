@@ -7,3 +7,7 @@ backend/src/main/resources/portable-launcher/*.sh text eol=lf
 backend/src/main/resources/portable-launcher/*.command text eol=lf
 backend/src/main/resources/portable-launcher/*.pl text eol=lf
 backend/src/main/resources/portable-launcher/*.html text eol=lf
+
+# 一括抽出の無人実行の起動ラッパー（インストール版に入る。CRLF の sh は動かず、LF の .cmd は壊れうる）
+desktop/cli/graphy-batch text eol=lf
+desktop/cli/*.cmd text eol=crlf

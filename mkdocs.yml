@@ -16,6 +16,7 @@ nav:
   - MPR / Slicer / Curved MPR: reformat.md
   - 3D ビューア: viewer3d.md
   - ROI・マスク・解析: analysis.md
+  - 一括抽出と無人実行: batch-extraction.md
   - DICOM 通信: dicom-network.md
   - 外部から検査を開く（RIS 連携）: external-open.md
   - プラグイン: plugins.md
