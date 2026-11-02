@@ -796,7 +796,17 @@ async function main(): Promise<void> {
     // 日付の絞り込みは「All」ボタンで外す（利用者と同じ操作。入力欄を空にするだけだと、状態が反映される前に
     // 検索が走って空振りすることがあった）。
     const dates = main.locator('input[type="date"]');
-    await main.getByRole("button", { name: "All", exact: true }).click();
+    // 「新しいバージョンがあります」の窓は、起動の後しばらくして（GitHub の最新リリースを見てから）出る。
+    // 出ていればボタンの押下を遮る（main の版が公開済みのリリースより古い間は毎回）ので、閉じてやり直す。
+    for (let attempt = 0; ; attempt++) {
+      try {
+        await main.getByRole("button", { name: "All", exact: true }).click({ timeout: 8_000 });
+        break;
+      } catch (e) {
+        if (attempt >= 4) throw e;
+        await dismissStartupDialogs(main);
+      }
+    }
     await main.waitForTimeout(500);
     console.log(`  [情報] 日付欄: ${JSON.stringify([await dates.nth(0).inputValue(), await dates.nth(1).inputValue()])}`);
     // 起動直後は backend との接続中（画面下部の「Connecting…」）で、最初の検索が空振りすることがあるので数回やり直す。
