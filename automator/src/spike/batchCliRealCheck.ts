@@ -9,7 +9,7 @@
  *   3. 画面を閉じて（backend を止めて）から、CLI（node と Electron 同梱の Node）が自前で backend を起動して
  *      定義を順に実行する。失敗する定義が混ざっても残りは続き（終了コード 1）、完了した定義の 5 ファイルは画面の出力とバイト一致。
  *      --recompute（キャッシュを使わない初回計算）でも、抽出時刻の列を除いて画面の出力と一致し、VOI 統計は予測値と一致する。
- *   4. 負例: 改変した定義→3（何も書かない）、存在しないアルバム→3。終了後に CLI の backend のポートが空く。
+ *   4. 負例: 改変した定義→3（backend を起動する前に断り、何も書かない）、存在しないアルバム→3。終了後に CLI の backend のポートが空く。
  *
  * 専用ポート（上の環境変数）。前提: backend jar（今のビルド）、frontend の npm run build:batch-cli。合成データ（2 検査 × 箱 2 つ）。
  */
@@ -345,8 +345,7 @@ async function main(): Promise<void> {
   const C = runCli("node", args(["r1_spec.json", "r_tampered_spec.json"], "cli-tampered"));
   check(C.code === 3 && /sha_mismatch/.test(C.stderr), "改変した定義が 1 つでもあれば終了コード 3", { code: C.code, stderr: C.stderr.slice(0, 200) });
   check(!fs.existsSync(path.join(OUT_DIR, "cli-tampered")), "終了コード 3 のときは何も書かない");
-  const portC = portOf(C.stdout);
-  check(portC !== null && (await portFree(portC)), "終了コード 3 のあともポートが空く", portC);
+  check(!C.stdout.includes("backend を起動します"), "定義の誤りは backend の起動前に断る（起動に約 30 秒かけない）");
   const D = runCli("node", args(["r1_spec.json"], "cli-noalbum", [], "no-such-album"));
   check(D.code === 3 && /アルバム/.test(D.stderr), "存在しないアルバムは終了コード 3", { code: D.code, stderr: D.stderr.slice(0, 200) });
   const E = runCli("node", ["--album", albumName, "--out", path.join(OUT_DIR, "x")]);

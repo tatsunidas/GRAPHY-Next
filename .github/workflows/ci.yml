@@ -87,6 +87,12 @@ jobs:
         run: |
           npm ci || npm install
           npm run build
+      # 一括抽出の無人実行（desktop/batchCli.js）が使う束ね。壊れたら PR で気付く（リリースでも同じ手順で作る）。
+      - name: Bundle batch CLI
+        working-directory: frontend
+        run: |
+          npm run build:batch-cli
+          test -s ../desktop/batch-cli/run.cjs
 
   automator:
     name: Automator (typecheck)

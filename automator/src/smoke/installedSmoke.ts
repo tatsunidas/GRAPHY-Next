@@ -35,6 +35,7 @@ import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { _electron as electron, type ElectronApplication, type Page } from "@playwright/test";
 
 import { importNonDicomPaths } from "../fixtures/importFixtures.js";
@@ -591,6 +592,94 @@ async function writeApprovalSection(app: ElectronApplication, main: Page): Promi
   }
 }
 
+// ── 13. 一括抽出の無人実行（インストール版の起動ラッパー） ─────────────
+// `resources/cli/graphy-batch(.cmd)` を**直接**動かす（実行ビット・パス・app.asar の読み込み・同梱の JRE と jar を含めて確かめる）。
+// 実データでの計算はここでは回さない（DICOM・SEG の合成が要る。計算の部分は開発ツリーの batchCliRealCheck.ts で確認済みで、同じ jar を使う）。
+
+interface CliRun { code: number; stdout: string; stderr: string }
+
+/** 検査用の定義（frontend の batchSpec で作る。SHA-256 の埋め込みまで本物と同じ）。tamper で 1 項目を書き換える。 */
+async function writeCliSpec(file: string, prefix: string, tamper: boolean): Promise<void> {
+  const modPath = path.join(AUTOMATOR_ROOT, "..", "frontend", "src", "radiomics", "batchSpec.ts");
+  const mod = (await import(pathToFileURL(modPath).href)) as {
+    buildSpec(c: unknown, prefix: string): Promise<unknown>;
+    defaultSpecContent(): unknown;
+    specText(s: unknown): string;
+  };
+  const text = mod.specText(await mod.buildSpec(mod.defaultSpecContent(), prefix));
+  if (!tamper) return void fs.writeFileSync(file, text);
+  const raw = JSON.parse(text) as { form: { binCount: number } };
+  raw.form.binCount += 1;
+  fs.writeFileSync(file, JSON.stringify(raw));
+}
+
+function runInstalledCli(inst: Installed, env: Record<string, string>, args: string[]): CliRun {
+  const wrapper = path.join(inst.resources, "cli", process.platform === "win32" ? "graphy-batch.cmd" : "graphy-batch");
+  const opts = { encoding: "utf8" as const, env, timeout: 300_000 };
+  // .cmd は shell 経由でないと動かない（Node 20.12 以降の仕様）。引数は空白を含まない前提で引用符で包む。
+  const r = process.platform === "win32"
+    ? spawnSync([`"${wrapper}"`, ...args.map((a) => `"${a}"`)].join(" "), { ...opts, shell: true })
+    : spawnSync(wrapper, args, opts);
+  return { code: r.status ?? -1, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
+}
+
+async function cliSection(inst: Installed, appEnv: Record<string, string>, work: string, phase: "running" | "closed"): Promise<void> {
+  // Windows の Electron は appData を環境変数 APPDATA ではなく既知フォルダから取る（実測: 起動時に APPDATA を差し替えても、
+  // アプリの DB は差し替え先に作られない）。CLI は実際のアプリと同じ場所を見るので、差し替えを外した環境で動かす。
+  const env: Record<string, string> = process.platform === "win32" && process.env.APPDATA ? { ...appEnv, APPDATA: process.env.APPDATA } : appEnv;
+  if (process.platform === "linux" && LINUX_PACKAGE === "appimage") {
+    if (phase === "running") console.log("  [情報] [13] AppImage は無人実行のラッパーの対象外（deb で検査する）");
+    return;
+  }
+  const dir = path.join(work, "cli");
+  fs.mkdirSync(dir, { recursive: true });
+  const good = path.join(dir, "good_spec.json");
+  const bad = path.join(dir, "bad_spec.json");
+  await writeCliSpec(good, "smoke", false);
+  await writeCliSpec(bad, "smoke-bad", true);
+  const out = path.join(dir, "out");
+  const scrub = (v: string): string => v.split(os.homedir()).join("<home>").split(work).join("<work>");
+  const brief = (r: CliRun) => ({ code: r.code, stderr: scrub(r.stderr).slice(0, 200), stdout: scrub(r.stdout).slice(0, 200) });
+  const log = (name: string, r: CliRun) => fs.appendFileSync(path.join(OUT, "cli-output.log"), `--- ${name} (exit ${r.code})\n${scrub(r.stdout)}\n${scrub(r.stderr)}\n`);
+
+  if (phase === "running") {
+    // アプリが同じ DB を開いている間: backend を起動せず終了コード 5
+    const busy = runInstalledCli(inst, env, ["--album", "none", "--spec", good, "--out", out]);
+    log("running: in use", busy);
+    check(busy.code === 5 && /使用中/.test(busy.stderr), "[13] ★アプリが DB を開いている間、無人実行は終了コード 5（使用中）", brief(busy));
+    check(!busy.stdout.includes("backend を起動します"), "[13] 使用中のときは backend を起動しない");
+    const help = runInstalledCli(inst, env, ["--help"]);
+    log("help", help);
+    check(help.code === 0 && /graphy-batch/.test(help.stdout + help.stderr), "[13] --help が動く（ラッパー・app.asar の読み込み）", brief(help));
+    const noSpec = runInstalledCli(inst, env, ["--album", "none", "--out", out]);
+    check(noSpec.code === 3, "[13] 引数の誤り（--spec なし）は終了コード 3", brief(noSpec));
+    const tampered = runInstalledCli(inst, env, ["--album", "none", "--spec", bad, "--out", out]);
+    log("tampered", tampered);
+    check(tampered.code === 3 && /sha_mismatch/.test(tampered.stderr) && !tampered.stdout.includes("backend を起動します"),
+      "[13] 改変した定義は backend の起動前に終了コード 3 で断る", brief(tampered));
+    check(!fs.existsSync(out), "[13] 断ったときは何も書かない");
+    return;
+  }
+
+  // アプリを閉じた後: 同梱の JRE と jar で backend を起動し、存在しないアルバムを断って終了コード 3
+  let r: CliRun = { code: -1, stdout: "", stderr: "" };
+  for (let i = 0; i < 12; i++) {
+    r = runInstalledCli(inst, env, ["--album", "no-such-album", "--spec", good, "--out", out]);
+    if (r.code !== 5) break; // アプリの backend が終わるまでの間は使用中
+    await new Promise((res) => setTimeout(res, 3000));
+  }
+  log("closed: no such album", r);
+  check(r.stdout.includes("backend を起動します") && r.code === 3 && /アルバム/.test(r.stderr),
+    "[13] ★同梱の JRE と jar で無人実行の backend が起動し、存在しないアルバムは終了コード 3", brief(r));
+  const port = /port (\d+)/.exec(r.stdout)?.[1];
+  let freed = false;
+  for (let i = 0; port && i < 20 && !freed; i++) {
+    freed = !(await fetch(`http://127.0.0.1:${port}/api/status`).then(() => true, () => false));
+    if (!freed) await new Promise((res) => setTimeout(res, 500));
+  }
+  check(!!port && freed, "[13] 終了後に無人実行の backend のポートが空く", { port });
+}
+
 async function main(): Promise<void> {
   if (process.platform === "darwin" && process.env.CI !== "true") {
     throw new Error("macOS は実プロファイルを隔離できないので、CI（CI=true）以外では実行しません。");
@@ -707,7 +796,17 @@ async function main(): Promise<void> {
     // 日付の絞り込みは「All」ボタンで外す（利用者と同じ操作。入力欄を空にするだけだと、状態が反映される前に
     // 検索が走って空振りすることがあった）。
     const dates = main.locator('input[type="date"]');
-    await main.getByRole("button", { name: "All", exact: true }).click();
+    // 「新しいバージョンがあります」の窓は、起動の後しばらくして（GitHub の最新リリースを見てから）出る。
+    // 出ていればボタンの押下を遮る（main の版が公開済みのリリースより古い間は毎回）ので、閉じてやり直す。
+    for (let attempt = 0; ; attempt++) {
+      try {
+        await main.getByRole("button", { name: "All", exact: true }).click({ timeout: 8_000 });
+        break;
+      } catch (e) {
+        if (attempt >= 4) throw e;
+        await dismissStartupDialogs(main);
+      }
+    }
     await main.waitForTimeout(500);
     console.log(`  [情報] 日付欄: ${JSON.stringify([await dates.nth(0).inputValue(), await dates.nth(1).inputValue()])}`);
     // 起動直後は backend との接続中（画面下部の「Connecting…」）で、最初の検索が空振りすることがあるので数回やり直す。
@@ -808,6 +907,9 @@ async function main(): Promise<void> {
     // ── 7. ローカル AI（--local-ai のとき）──────────────────
     if (LOCAL_AI) localAi = await localAiSection(app, main);
 
+    // ── 13. 一括抽出の無人実行（アプリが DB を開いている間）──
+    await cliSection(inst, env, work, "running");
+
     // ── 3. 画面の異常 ───────────────────────────────────────
     check(pageProblems.length === 0, "[3] ★★画面に CSP 違反・未捕捉エラーが出ていない", pageProblems.slice(0, 5));
   } catch (e) {
@@ -826,6 +928,9 @@ async function main(): Promise<void> {
     await Promise.race([app.close().catch(() => {}), new Promise((r) => setTimeout(r, 20_000))]);
     if (proc && proc.exitCode === null) killProcessTree(proc);
   }
+
+  // ── 13. 一括抽出の無人実行（アプリを閉じた後。同梱の JRE と jar で backend を起動する）──
+  await cliSection(inst, env, work, "closed");
 
   if (localAi && localAi.pid !== null) {
     // アプリを閉じたら llama-server も終わる（孤児を残さない）。終了処理は最大 10 秒待つ。

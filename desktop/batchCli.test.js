@@ -113,3 +113,28 @@ test("freePort は空きポートを返す", async () => {
   const p = await cli.freePort();
   assert.ok(Number.isInteger(p) && p > 0 && p < 65536);
 });
+
+test("resourcesPathOf: process.resourcesPath が無いとき実行ファイルの位置から導く（3 OS）", () => {
+  assert.equal(cli.resourcesPathOf({ resourcesPath: "/given/resources", execPath: "/x/app", platform: "linux" }), "/given/resources");
+  assert.equal(cli.resourcesPathOf({ resourcesPath: undefined, execPath: path.join("C:", "Apps", "GRAPHY-Next", "GRAPHY-Next.exe"), platform: "win32" }),
+    path.join("C:", "Apps", "GRAPHY-Next", "resources"));
+  assert.equal(cli.resourcesPathOf({ resourcesPath: undefined, execPath: path.join("/opt", "GRAPHY-Next", "graphy-next-desktop"), platform: "linux" }),
+    path.join("/opt", "GRAPHY-Next", "resources"));
+  assert.equal(path.normalize(cli.resourcesPathOf({ resourcesPath: undefined, execPath: path.join("/Applications", "GRAPHY-Next.app", "Contents", "MacOS", "GRAPHY-Next"), platform: "darwin" })),
+    path.normalize(path.join("/Applications", "GRAPHY-Next.app", "Contents", "Resources")));
+});
+
+test("resolveJar: 資源フォルダの backend/jar を見つけたらパッケージ版", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bc-res-"));
+  try {
+    const config = require("./config.json");
+    fs.mkdirSync(path.join(dir, "backend"), { recursive: true });
+    fs.writeFileSync(path.join(dir, "backend", config.backend.jarName), "x");
+    const r = cli.resolveJar(dir);
+    assert.equal(r.packaged, true);
+    assert.equal(r.jar, path.join(dir, "backend", config.backend.jarName));
+    assert.equal(cli.resolveJar(path.join(dir, "none")).packaged, false);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

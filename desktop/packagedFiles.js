@@ -11,7 +11,10 @@ const fs = require("node:fs");
 const path = require("node:path");
 
 const root = __dirname;
-const ENTRIES = ["main.js", "preload.js", "splash-preload.js"];
+// batchCli.js は main.js から require されない別の入口（一括抽出の無人実行。`ELECTRON_RUN_AS_NODE` で動かす）。
+const ENTRIES = ["main.js", "preload.js", "splash-preload.js", "batchCli.js"];
+// require の引数が組み立てられていて（`path.join(__dirname, "batch-cli", "run.cjs")`）たどれず、リリースで生成される（frontend の npm run build:batch-cli）ファイル。
+const GENERATED = ["batch-cli/run.cjs"];
 
 function buildFiles() {
   return JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8")).build.files;
@@ -70,6 +73,7 @@ function walkHtml(entry, seen) {
 function requiredFiles() {
   const seen = new Set();
   for (const e of ENTRIES) walk(e, seen);
+  for (const g of GENERATED) seen.add(g);
   return [...seen].map(toPosix).sort();
 }
 

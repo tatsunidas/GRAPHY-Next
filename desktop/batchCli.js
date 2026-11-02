@@ -41,7 +41,7 @@ const JVM_ARGS = [
 ];
 
 const USAGE = [
-  "使い方: node desktop/batchCli.js --album <名前|ID> --spec <定義.json> [--spec …] --out <フォルダ>",
+  "使い方: graphy-batch --album <名前|ID> --spec <定義.json> [--spec …] --out <フォルダ>（開発ツリーでは node desktop/batchCli.js）",
   "         [--data-dir <フォルダ>] [--recompute] [--report <ファイル>]",
 ].join("\n");
 
@@ -83,8 +83,18 @@ function appDataDir({ platform = process.platform, env = process.env, home = os.
   return path.join(base, APP_DATA_FOLDER);
 }
 
+/**
+ * インストール先の `resources`。`ELECTRON_RUN_AS_NODE=1` で動かすとき `process.resourcesPath` が定義されている保証が無いので、
+ * 無ければ実行ファイルの位置から導く（Windows・Linux は実行ファイルの隣の `resources`、macOS は `Contents/MacOS/<app>` の `../Resources`）。
+ */
+function resourcesPathOf({ resourcesPath = process.resourcesPath, execPath = process.execPath, platform = process.platform } = {}) {
+  if (resourcesPath) return resourcesPath;
+  if (platform === "darwin") return path.join(path.dirname(execPath), "..", "Resources");
+  return path.join(path.dirname(execPath), "resources");
+}
+
 /** backend の jar（`main.js` の resolveBackendJar と同じ候補の順）。 */
-function resolveJar(resourcesPath = process.resourcesPath) {
+function resolveJar(resourcesPath = resourcesPathOf()) {
   const jarName = config.backend.jarName;
   const candidates = [
     path.join(resourcesPath || "", "backend", jarName),
@@ -96,7 +106,7 @@ function resolveJar(resourcesPath = process.resourcesPath) {
 }
 
 /** 同梱 JRE → PATH の java（`main.js` の resolveJava と同じ）。 */
-function resolveJava(resourcesPath = process.resourcesPath) {
+function resolveJava(resourcesPath = resourcesPathOf()) {
   const exe = process.platform === "win32" ? "java.exe" : "java";
   const candidates = [path.join(resourcesPath || "", "jre", "bin", exe), path.join(__dirname, "resources", "jre", "bin", exe)];
   return candidates.find((p) => p && fs.existsSync(p)) || "java";
@@ -198,6 +208,12 @@ async function main(argv) {
     console.error("実行部分（desktop/batch-cli/run.cjs）がありません。frontend で npm run build:batch-cli を実行してください");
     return EXIT_ERROR;
   }
+  // 定義の誤りは、backend の起動（約 30 秒）の前に断る
+  const { checkSpecFiles, runCli } = require(runModule);
+  const specFiles = opts.specs.map((s) => path.resolve(s));
+  const preCheck = await checkSpecFiles(specFiles);
+  if (preCheck !== 0) return preCheck;
+
   const { jar, packaged } = resolveJar();
   if (!jar) {
     console.error(`backend の jar（${config.backend.jarName}）が見つかりません`);
@@ -246,9 +262,8 @@ async function main(argv) {
 
   try {
     await waitHealthy(port, child, () => spawnError !== null || child.exitCode !== null);
-    const { runCli } = require(runModule);
     return await runCli({
-      server: `http://127.0.0.1:${port}`, album: opts.album, specFiles: opts.specs.map((s) => path.resolve(s)),
+      server: `http://127.0.0.1:${port}`, album: opts.album, specFiles,
       outDir: path.resolve(opts.out), recompute: opts.recompute,
       reportFile: opts.report ? path.resolve(opts.report) : undefined,
     });
@@ -263,7 +278,7 @@ async function main(argv) {
 
 module.exports = {
   EXIT_USAGE, EXIT_ERROR, EXIT_IN_USE, JVM_ARGS,
-  parseArgs, appDataDir, resolveJar, resolveDataDir, dbInUse, backendArgs, freePort, stopBackend, main,
+  parseArgs, appDataDir, resourcesPathOf, resolveJar, resolveDataDir, dbInUse, backendArgs, freePort, stopBackend, main,
 };
 
 if (require.main === module) {

@@ -176,6 +176,15 @@ jobs:
           mkdir -p desktop/renderer desktop/resources/backend
           cp -r frontend/dist/. desktop/renderer/
           cp backend/target/graphy-next-backend.jar desktop/resources/backend/graphy-next-backend.jar
+      # 一括抽出の無人実行（desktop/batchCli.js が読む batch-cli/run.cjs。build.files に入る生成物）。
+      # Maven の統合ビルドが frontend/node_modules（esbuild を含む）を入れている。
+      - name: Bundle batch CLI (desktop/batch-cli/run.cjs)
+        working-directory: frontend
+        shell: bash
+        run: |
+          [ -d node_modules/esbuild ] || npm ci
+          npm run build:batch-cli
+          test -s ../desktop/batch-cli/run.cjs
       - name: Bundle Java 21 runtime (jlink, このOS向け)
         shell: bash
         run: |
