@@ -7,6 +7,8 @@ import { describe, expect, it } from "vitest";
  * （書式の設定が効かなくなる）。検索欄の `<input type="date">` の値を作る関数は、表示ではないので許可する。
  */
 const SRC = join(__dirname, "..");
+/** 許可の一覧は `/` 区切り。Windows の `relative` はバックスラッシュ区切りで返すので揃える。 */
+const rel = (f: string): string => relative(SRC, f).split("\\").join("/");
 const ALLOWED = new Set([
   "i18n/dateFormat.ts",
   "dbadmin/DbScopePicker.tsx", // <input type="date"> の値
@@ -44,7 +46,7 @@ describe("アプリの日時の表示は dateFormat.ts を通す", () => {
   });
   it("日時の自前整形・OS 依存の整形が残っていない", () => {
     const hits = walk(SRC)
-      .map((f) => relative(SRC, f))
+      .map((f) => rel(f))
       .filter((f) => !DATETIME_ALLOWED.has(f) && DATETIME_PATTERN.test(readFileSync(join(SRC, f), "utf8")));
     expect(hits).toEqual([]);
   });
@@ -52,14 +54,14 @@ describe("アプリの日時の表示は dateFormat.ts を通す", () => {
 
 describe("DICOM の日付の表示は dateFormat.ts を通す", () => {
   it("検出器が実在する（走査対象があり、許可の一覧に実際に当たるファイルがある）", () => {
-    const files = walk(SRC).map((f) => relative(SRC, f));
+    const files = walk(SRC).map((f) => rel(f));
     expect(files.length).toBeGreaterThan(100);
     const hits = files.filter((f) => PATTERN.test(readFileSync(join(SRC, f), "utf8")));
     expect(hits.length).toBeGreaterThan(0);
   });
   it("自前で組み立てた日付の表示が残っていない", () => {
     const hits = walk(SRC)
-      .map((f) => relative(SRC, f))
+      .map((f) => rel(f))
       .filter((f) => !ALLOWED.has(f) && PATTERN.test(readFileSync(join(SRC, f), "utf8")));
     expect(hits).toEqual([]);
   });
