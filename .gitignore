@@ -8,6 +8,8 @@ frontend/node_modules/
 frontend/dist/
 frontend/portable-dist/
 desktop/node_modules/
+# 一括抽出の無人実行（desktop/batchCli.js）が読む、束ねた実行部分（frontend の npm run build:batch-cli が作る）
+desktop/batch-cli/
 # frontend-maven-plugin が配置する node ランタイム
 frontend/node/
 # tsc -b が書く増分ビルドのキャッシュ（型検査のたびに書き換わる。automator/tsconfig.tsbuildinfo など）

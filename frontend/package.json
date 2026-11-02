@@ -12,6 +12,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "dev:portable": "vite --config vite.portable.config.ts",
+    "build:batch-cli": "node scripts/build-batch-cli.mjs",
     "typecheck:portable": "tsc -p tsconfig.portable.json --noEmit",
     "build:portable": "tsc -p tsconfig.portable.json --noEmit && vite build --config vite.portable.config.ts"
   },
@@ -32,6 +33,7 @@
     "@types/react": "^18.3.11",
     "@types/react-dom": "^18.3.1",
     "@vitejs/plugin-react": "^4.3.3",
+    "esbuild": "^0.21.5",
     "typescript": "^5.6.3",
     "vite": "^5.4.10",
     "vitest": "^2.1.4"
