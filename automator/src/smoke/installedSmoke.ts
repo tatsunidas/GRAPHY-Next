@@ -592,7 +592,7 @@ async function writeApprovalSection(app: ElectronApplication, main: Page): Promi
   }
 }
 
-// ── 10. 一括抽出の無人実行（インストール版の起動ラッパー） ─────────────
+// ── 13. 一括抽出の無人実行（インストール版の起動ラッパー） ─────────────
 // `resources/cli/graphy-batch(.cmd)` を**直接**動かす（実行ビット・パス・app.asar の読み込み・同梱の JRE と jar を含めて確かめる）。
 // 実データでの計算はここでは回さない（DICOM・SEG の合成が要る。計算の部分は開発ツリーの batchCliRealCheck.ts で確認済みで、同じ jar を使う）。
 
@@ -628,7 +628,7 @@ async function cliSection(inst: Installed, appEnv: Record<string, string>, work:
   // アプリの DB は差し替え先に作られない）。CLI は実際のアプリと同じ場所を見るので、差し替えを外した環境で動かす。
   const env: Record<string, string> = process.platform === "win32" && process.env.APPDATA ? { ...appEnv, APPDATA: process.env.APPDATA } : appEnv;
   if (process.platform === "linux" && LINUX_PACKAGE === "appimage") {
-    if (phase === "running") console.log("  [情報] [10] AppImage は無人実行のラッパーの対象外（deb で検査する）");
+    if (phase === "running") console.log("  [情報] [13] AppImage は無人実行のラッパーの対象外（deb で検査する）");
     return;
   }
   const dir = path.join(work, "cli");
@@ -646,18 +646,18 @@ async function cliSection(inst: Installed, appEnv: Record<string, string>, work:
     // アプリが同じ DB を開いている間: backend を起動せず終了コード 5
     const busy = runInstalledCli(inst, env, ["--album", "none", "--spec", good, "--out", out]);
     log("running: in use", busy);
-    check(busy.code === 5 && /使用中/.test(busy.stderr), "[10] ★アプリが DB を開いている間、無人実行は終了コード 5（使用中）", brief(busy));
-    check(!busy.stdout.includes("backend を起動します"), "[10] 使用中のときは backend を起動しない");
+    check(busy.code === 5 && /使用中/.test(busy.stderr), "[13] ★アプリが DB を開いている間、無人実行は終了コード 5（使用中）", brief(busy));
+    check(!busy.stdout.includes("backend を起動します"), "[13] 使用中のときは backend を起動しない");
     const help = runInstalledCli(inst, env, ["--help"]);
     log("help", help);
-    check(help.code === 0 && /graphy-batch/.test(help.stdout + help.stderr), "[10] --help が動く（ラッパー・app.asar の読み込み）", brief(help));
+    check(help.code === 0 && /graphy-batch/.test(help.stdout + help.stderr), "[13] --help が動く（ラッパー・app.asar の読み込み）", brief(help));
     const noSpec = runInstalledCli(inst, env, ["--album", "none", "--out", out]);
-    check(noSpec.code === 3, "[10] 引数の誤り（--spec なし）は終了コード 3", brief(noSpec));
+    check(noSpec.code === 3, "[13] 引数の誤り（--spec なし）は終了コード 3", brief(noSpec));
     const tampered = runInstalledCli(inst, env, ["--album", "none", "--spec", bad, "--out", out]);
     log("tampered", tampered);
     check(tampered.code === 3 && /sha_mismatch/.test(tampered.stderr) && !tampered.stdout.includes("backend を起動します"),
-      "[10] 改変した定義は backend の起動前に終了コード 3 で断る", brief(tampered));
-    check(!fs.existsSync(out), "[10] 断ったときは何も書かない");
+      "[13] 改変した定義は backend の起動前に終了コード 3 で断る", brief(tampered));
+    check(!fs.existsSync(out), "[13] 断ったときは何も書かない");
     return;
   }
 
@@ -670,14 +670,14 @@ async function cliSection(inst: Installed, appEnv: Record<string, string>, work:
   }
   log("closed: no such album", r);
   check(r.stdout.includes("backend を起動します") && r.code === 3 && /アルバム/.test(r.stderr),
-    "[10] ★同梱の JRE と jar で無人実行の backend が起動し、存在しないアルバムは終了コード 3", brief(r));
+    "[13] ★同梱の JRE と jar で無人実行の backend が起動し、存在しないアルバムは終了コード 3", brief(r));
   const port = /port (\d+)/.exec(r.stdout)?.[1];
   let freed = false;
   for (let i = 0; port && i < 20 && !freed; i++) {
     freed = !(await fetch(`http://127.0.0.1:${port}/api/status`).then(() => true, () => false));
     if (!freed) await new Promise((res) => setTimeout(res, 500));
   }
-  check(!!port && freed, "[10] 終了後に無人実行の backend のポートが空く", { port });
+  check(!!port && freed, "[13] 終了後に無人実行の backend のポートが空く", { port });
 }
 
 async function main(): Promise<void> {
@@ -907,7 +907,7 @@ async function main(): Promise<void> {
     // ── 7. ローカル AI（--local-ai のとき）──────────────────
     if (LOCAL_AI) localAi = await localAiSection(app, main);
 
-    // ── 10. 一括抽出の無人実行（アプリが DB を開いている間）──
+    // ── 13. 一括抽出の無人実行（アプリが DB を開いている間）──
     await cliSection(inst, env, work, "running");
 
     // ── 3. 画面の異常 ───────────────────────────────────────
@@ -929,7 +929,7 @@ async function main(): Promise<void> {
     if (proc && proc.exitCode === null) killProcessTree(proc);
   }
 
-  // ── 10. 一括抽出の無人実行（アプリを閉じた後。同梱の JRE と jar で backend を起動する）──
+  // ── 13. 一括抽出の無人実行（アプリを閉じた後。同梱の JRE と jar で backend を起動する）──
   await cliSection(inst, env, work, "closed");
 
   if (localAi && localAi.pid !== null) {
