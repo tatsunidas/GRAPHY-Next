@@ -83,6 +83,8 @@ export interface QueueContext {
   baseForm: RoiFeatureForm;
   output: OutputContext;
   pollMs: number;
+  /** キャッシュを使わず計算し直す（無人実行の `--recompute`）。省略は使う。 */
+  recompute?: boolean;
   /** 利用者が中止を押したか。実行中のジョブには `cancel` を送り、残りの定義は始めない。 */
   isCancelled(): boolean;
 }
@@ -106,6 +108,7 @@ async function runOne(
   const form = applySpecToForm(ctx.baseForm, spec);
   const req = buildBatchRequest(chosen.map((c) => c.pair), form, {
     qc: { smallRoi: spec.qc.smallRoi, lossy: spec.qc.lossy }, acknowledged: [], smallRoiVoxels: spec.qc.smallRoiVoxels, kind: spec.kind,
+    recompute: ctx.recompute ?? false,
   });
   let job = await api.submit(req);
   let cancelSent = false;
