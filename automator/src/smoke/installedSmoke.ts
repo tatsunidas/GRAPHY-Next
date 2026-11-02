@@ -623,7 +623,10 @@ function runInstalledCli(inst: Installed, env: Record<string, string>, args: str
   return { code: r.status ?? -1, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
 }
 
-async function cliSection(inst: Installed, env: Record<string, string>, work: string, phase: "running" | "closed"): Promise<void> {
+async function cliSection(inst: Installed, appEnv: Record<string, string>, work: string, phase: "running" | "closed"): Promise<void> {
+  // Windows の Electron は appData を環境変数 APPDATA ではなく既知フォルダから取る（実測: 起動時に APPDATA を差し替えても、
+  // アプリの DB は差し替え先に作られない）。CLI は実際のアプリと同じ場所を見るので、差し替えを外した環境で動かす。
+  const env: Record<string, string> = process.platform === "win32" && process.env.APPDATA ? { ...appEnv, APPDATA: process.env.APPDATA } : appEnv;
   if (process.platform === "linux" && LINUX_PACKAGE === "appimage") {
     if (phase === "running") console.log("  [情報] [10] AppImage は無人実行のラッパーの対象外（deb で検査する）");
     return;
