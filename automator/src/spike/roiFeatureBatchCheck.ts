@@ -31,6 +31,8 @@ import { DesktopDriver } from "../driver/desktopDriver.js";
 import { resetDb } from "../backend/dbReset.js";
 import { importPaths } from "../fixtures/importFixtures.js";
 import { AUTOMATOR_ROOT } from "../fixtures/manifest.js";
+import { dismissUpdateDialog } from "./dismissUpdateDialog.js";
+import { PY, PY_FLAGS } from "./pythonCmd.js";
 
 const OUT_DIR = path.join(AUTOMATOR_ROOT, ".results", "roi-feature-batch-check");
 
@@ -70,7 +72,7 @@ function makeSynth(i: number, patientId?: string): Synth & { dir: string } {
   fs.rmSync(dir, { recursive: true, force: true });
   fs.mkdirSync(dir, { recursive: true });
   const seed = String((Date.now() + i * 7919) % 2_000_000_000);
-  const r = spawnSync("python3", ["-I", path.join(import.meta.dirname, "roiFeatureSynth.py"), dir, seed, "-1000", ...(patientId ? [patientId] : [])], { encoding: "utf8" });
+  const r = spawnSync(PY, [...PY_FLAGS, path.join(import.meta.dirname, "roiFeatureSynth.py"), dir, seed, "-1000", ...(patientId ? [patientId] : [])], { encoding: "utf8" });
   if (r.status !== 0) throw new Error(`合成データを作れません: ${r.stderr}`);
   return { ...(JSON.parse(r.stdout) as Synth), dir };
 }
@@ -222,6 +224,7 @@ async function main(): Promise<void> {
     `);
 
     console.log("\n[2] ボタンの有効・無効");
+    await dismissUpdateDialog(page);
     const btn = page.getByTestId("album-batch-button");
     check(await btn.isVisible(), "standalone ではボタンが出る");
     check(await btn.isDisabled(), "アルバム未選択では無効");
@@ -740,7 +743,7 @@ async function main(): Promise<void> {
     const boxVoxels = (b: Box) => (b.r1 - b.r0) * (b.c1 - b.c0) * (b.z1 - b.z0);
     const boxes = { BigBox: [SEG1.r0, SEG1.r1, SEG1.c0, SEG1.c1, SEG1.z0, SEG1.z1], SmallBox: [SEG2.r0, SEG2.r1, SEG2.c0, SEG2.c1, SEG2.z0, SEG2.z1] };
     const predicted = synths.slice(0, 3).map((s) => {
-      const r = spawnSync("python3", ["-I", path.join(import.meta.dirname, "roiFeatureRangeCount.py"), s.dir, "-850.5", JSON.stringify(boxes)], { encoding: "utf8" });
+      const r = spawnSync(PY, [...PY_FLAGS, path.join(import.meta.dirname, "roiFeatureRangeCount.py"), s.dir, "-850.5", JSON.stringify(boxes)], { encoding: "utf8" });
       if (r.status !== 0) throw new Error(`予測値を数えられません: ${r.stderr}`);
       return JSON.parse(r.stdout) as { BigBox: number; SmallBox: number };
     });

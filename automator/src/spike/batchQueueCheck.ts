@@ -20,12 +20,10 @@ import { DesktopDriver } from "../driver/desktopDriver.js";
 import { resetDb } from "../backend/dbReset.js";
 import { importPaths } from "../fixtures/importFixtures.js";
 import { AUTOMATOR_ROOT } from "../fixtures/manifest.js";
+import { dismissUpdateDialog } from "./dismissUpdateDialog.js";
+import { PY, PY_FLAGS } from "./pythonCmd.js";
 
 const OUT_DIR = path.join(AUTOMATOR_ROOT, ".results", "batch-queue-check");
-/** Windows の `python3` は Microsoft Store の案内だけを出す別名なので `python` を使う。 */
-const PY = process.env.GRAPHY_SPIKE_PYTHON ?? (process.platform === "win32" ? "python" : "python3");
-/** 隔離モード（-I）は利用者領域の site-packages を見ない。pydicom がそこにある機では GRAPHY_SPIKE_PYTHON_USERSITE=1 で外す（スクリプトは自分のもの）。 */
-const PY_FLAGS = process.env.GRAPHY_SPIKE_PYTHON_USERSITE ? [] : ["-I"];
 const failures: string[] = [];
 let passed = 0;
 function check(cond: boolean, label: string, detail?: unknown): void {
@@ -202,15 +200,8 @@ async function main(): Promise<void> {
     });
     await page.getByTestId("album-select").selectOption(String(album.id));
     await page.waitForTimeout(800);
-    // dismissUpdateDialog.ts の正規表現は「あとで」だが、画面のボタンは「後で」（ja）。ここでは両方に合わせる
-    const laterBtn = page.getByRole("button", { name: /^(後で|あとで|Later)$/ });
-    if (await laterBtn.isVisible({ timeout: 1500 }).catch(() => false)) await laterBtn.click();
-    await page.getByTestId("album-batch-button").click({ timeout: 8000 }).catch(async (e) => {
-      await page.screenshot({ path: path.join(OUT_DIR, "98-click-blocked.png"), fullPage: true }).catch(() => {});
-      const who = await page.evaluate("(function(){var b=document.querySelector(\"[data-testid=album-batch-button]\").getBoundingClientRect();var e=document.elementFromPoint(b.x+b.width/2,b.y+b.height/2);return e?e.outerHTML.slice(0,300)+\" | parent: \"+(e.parentElement?e.parentElement.outerHTML.slice(0,200):\"\"):\"none\"})()");
-      console.log("click blocked by:", who);
-      throw e;
-    });
+    await dismissUpdateDialog(page);
+    await page.getByTestId("album-batch-button").click();
     await page.getByTestId("batch-dialog").waitFor({ state: "visible", timeout: 20_000 });
     await page.getByTestId("batch-row-3").waitFor({ state: "visible", timeout: 30_000 });
     await page.waitForTimeout(1000);

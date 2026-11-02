@@ -21,6 +21,8 @@ import { DesktopDriver } from "../driver/desktopDriver.js";
 import { resetDb } from "../backend/dbReset.js";
 import { importPaths } from "../fixtures/importFixtures.js";
 import { AUTOMATOR_ROOT } from "../fixtures/manifest.js";
+import { dismissUpdateDialog } from "./dismissUpdateDialog.js";
+import { PY, PY_FLAGS } from "./pythonCmd.js";
 
 const OUT_DIR = path.join(AUTOMATOR_ROOT, ".results", "voi-stats-batch-check");
 const failures: string[] = [];
@@ -54,7 +56,7 @@ function makeSynth(i: number): Synth & { dir: string } {
   fs.rmSync(dir, { recursive: true, force: true });
   fs.mkdirSync(dir, { recursive: true });
   const seed = String((Date.now() + i * 7919) % 2_000_000_000);
-  const r = spawnSync("python3", ["-I", path.join(import.meta.dirname, "roiFeatureSynth.py"), dir, seed, "-1000", `SYNTHVOI-${i}`], { encoding: "utf8" });
+  const r = spawnSync(PY, [...PY_FLAGS, path.join(import.meta.dirname, "roiFeatureSynth.py"), dir, seed, "-1000", `SYNTHVOI-${i}`], { encoding: "utf8" });
   if (r.status !== 0) throw new Error(`合成データを作れません: ${r.stderr}`);
   return { ...(JSON.parse(r.stdout) as Synth), dir };
 }
@@ -128,7 +130,7 @@ async function shaTitle(page: Page, notEqual?: string): Promise<string> {
 
 function predict(dir: string): Record<string, { n: number; mean: number; sd: number; min: number; max: number; median: number }> {
   const boxes = { BigBox: [BIG.r0, BIG.r1, BIG.c0, BIG.c1, BIG.z0, BIG.z1], SmallBox: [SMALL.r0, SMALL.r1, SMALL.c0, SMALL.c1, SMALL.z0, SMALL.z1] };
-  const r = spawnSync("python3", ["-I", path.join(import.meta.dirname, "voiStatsPredict.py"), dir, JSON.stringify(boxes)], { encoding: "utf8" });
+  const r = spawnSync(PY, [...PY_FLAGS, path.join(import.meta.dirname, "voiStatsPredict.py"), dir, JSON.stringify(boxes)], { encoding: "utf8" });
   if (r.status !== 0) throw new Error(`予測を作れません: ${r.stderr}`);
   return JSON.parse(r.stdout);
 }
@@ -198,6 +200,7 @@ async function main(): Promise<void> {
     });
     await page.getByTestId("album-select").selectOption(String(album.id));
     await page.waitForTimeout(800);
+    await dismissUpdateDialog(page);
     await page.getByTestId("album-batch-button").click();
     await page.getByTestId("batch-dialog").waitFor({ state: "visible", timeout: 20_000 });
     await page.getByTestId("batch-row-3").waitFor({ state: "visible", timeout: 30_000 });
