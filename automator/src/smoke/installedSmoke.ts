@@ -560,7 +560,7 @@ async function writeApprovalSection(app: ElectronApplication, main: Page): Promi
   const domClick = (page: Page, tid: string) => page.waitForSelector(`[data-testid="${tid}"]`, { timeout: 20_000 }).then((h) => h.evaluate((el) => (el as HTMLElement).click()));
   let win: Page | null = null;
   try {
-    // main の確認ダイアログ（データを変える操作の承認）を「取り消す」で返すスタブにする。
+    // main の確認ダイアログ（データを変える操作の承認）を「取り消す」で返すスタブにする（出た回数を数える）。
     await app.evaluate(({ dialog }) => {
       const g = globalThis as unknown as { __wdlg: number; __origMsgBox: unknown };
       g.__wdlg = 0;
@@ -579,7 +579,10 @@ async function writeApprovalSection(app: ElectronApplication, main: Page): Promi
     check(forb.ok === false && forb.error === "forbidden", "[12] 🔴 メイン窓からの中継は forbidden", forb);
     const r = await win.evaluate(() => (window as unknown as { graphyDesktop: VB }).graphyDesktop.assistantViewerCmd("smoke", { kind: "action", id: "clearMeasurements", params: {}, approved: true }));
     const n = await app.evaluate(() => (globalThis as unknown as { __wdlg: number }).__wdlg);
-    check(r.ok === false && r.error === "declined" && n === 1, "[12] ★承認の関門が配布物の main で働く（approved を偽っても確認ダイアログが出て、取り消しで declined）", { r, dialogs: n });
+    // #505 以降、write 操作は「2D 窓が引数と対象を確かめ、通ったときだけ確認ダイアログを出す」。このスモークには DICOM の
+    // タイルが無い（動画だけ）ので、確認ダイアログから declined までの経路は desktop/viewerRelay.test.js が見る。ここでは、
+    // 配布物の main で「2D 窓が無いときは、approved を偽っても確認ダイアログを出さず、実行もしない」ことを確かめる。
+    check(r.ok === false && r.error === "no-viewer" && n === 0, "[12] ★承認の関門が配布物の main で働く（2D 窓が無ければ、approved を偽っても確認ダイアログを出さず実行しない）", { r, dialogs: n });
   } finally {
     await win?.close().catch(() => undefined);
     // 後続の検査へスタブを持ち越さない。
