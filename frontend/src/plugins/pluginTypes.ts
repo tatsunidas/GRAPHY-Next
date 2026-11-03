@@ -972,6 +972,9 @@ export interface Viewer2DPluginHost extends PluginHostBase {
    * **多角形・自由曲線も作れる**（`tool: "PolygonROI" | "FreehandROI"`）。頂点を `verticesLps`（LPS mm）か `verticesPx`（表示中スライスの画素座標）の
    * **どちらか一方**で順に渡す（閉じるので始点を繰り返さない。多角形 3〜64 点、自由曲線 3〜256 点）。全頂点が表示中のスライスの面内であること。
    * 自己交差・面積ゼロの形は `self-intersecting` / `degenerate` で拒否する。`radiiMm` / `centerLps` / `centerPx` は使わない。
+   * **長径・短径（RECIST の 2 軸）も作れる**（`tool: "Bidirectional"`）。`longAxisLps` と `shortAxisLps`（各軸の両端 2 点・LPS mm）、または
+   * `longAxisPx` と `shortAxisPx`（表示中スライスの画素座標）の**どちらか一方**で渡す。短径は長径に直交し、長径の線分と交わること（満たさない形は `bad-axes`）。
+   * 全点が表示中のスライスの面内であること。作った ROI は本体の長径・短径ツールで引いたものと同じ扱いで、端点を動かして直せる。
    */
   createRoi: (
     tileId: string | undefined,

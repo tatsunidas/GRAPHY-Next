@@ -12,12 +12,19 @@
  * <p>ハンドルの並び（Cornerstone3D の `EllipticalROITool` / `RectangleROITool` の規約。canvas は y が下向き）:
  * 楕円 `[bottom, top, left, right]`（辺の中点）、矩形 `[bottomLeft, bottomRight, topLeft, topRight]`。
  */
-export type CreateRoiTool = "EllipticalROI" | "RectangleROI" | "PolygonROI" | "FreehandROI";
+export type CreateRoiTool = "EllipticalROI" | "RectangleROI" | "PolygonROI" | "FreehandROI" | "Bidirectional";
 /** 中心と半径で作る形（`buildRoiHandles`）。 */
 export const CREATE_ROI_TOOLS: readonly CreateRoiTool[] = ["EllipticalROI", "RectangleROI"];
 /** 頂点で作る閉じた輪郭（`buildContourVertices`）。多角形は直線で結ぶ。自由曲線は点が密な閉曲線。 */
 export const CREATE_CONTOUR_TOOLS: readonly CreateRoiTool[] = ["PolygonROI", "FreehandROI"];
 export const isContourCreateTool = (t: unknown): boolean => CREATE_CONTOUR_TOOLS.includes(t as CreateRoiTool);
+/** 長径・短径（RECIST の 2 軸）。4 点で作る（`buildBidirectionalHandles`）。 */
+export const isBidirectionalCreateTool = (t: unknown): boolean => t === "Bidirectional";
+/**
+ * 短径が長径に直交しているとみなす許容（2 本の方向ベクトルの |cos|）。0.001 は約 0.06°で、直交する 2 本を座標から計算して渡す
+ * 呼び出し側の丸め誤差を通し、手で斜めに描いた線は通さない。RECIST の短径は「長径に直交する最大径」なので、斜めのものは別の量になる。
+ */
+export const BIDIRECTIONAL_ORTHO_TOLERANCE = 1e-3;
 /** 頂点数の範囲。暫定値（モデルが 1 回に指せる点の数と、自己交差の検査 O(n²) の上限から）。 */
 export const MIN_CONTOUR_VERTICES = 3;
 export const MAX_CONTOUR_VERTICES: Record<string, number> = { PolygonROI: 64, FreehandROI: 256 };
@@ -46,10 +53,18 @@ export interface CreateRoiRequest {
   verticesLps?: [number, number, number][];
   verticesPx?: [number, number][];
   verticesView?: [number, number][];
+  /**
+   * 長径・短径（`tool: "Bidirectional"`）。各軸は両端の 2 点。患者座標 LPS（mm）か、表示中のスライスの画素座標のどちらか**一方**
+   * （長径・短径は同じ種類で渡す）。短径は長径に直交し、長径と交わること。全点が表示中のスライスの面内であること。
+   */
+  longAxisLps?: [[number, number, number], [number, number, number]];
+  shortAxisLps?: [[number, number, number], [number, number, number]];
+  longAxisPx?: [[number, number], [number, number]];
+  shortAxisPx?: [[number, number], [number, number]];
   label?: string;
 }
 
-export type CreateRoiFailure = "bad-request" | "off-slice" | "no-geometry" | "too-large" | "no-image" | "thick-slab" | "self-intersecting" | "degenerate" | "failed";
+export type CreateRoiFailure = "bad-request" | "off-slice" | "no-geometry" | "too-large" | "no-image" | "thick-slab" | "self-intersecting" | "degenerate" | "bad-axes" | "failed";
 
 export interface RoiCreateGeometry {
   worldToCanvas(p: number[]): [number, number] | null;
@@ -238,4 +253,67 @@ export function buildContourVertices(
   const m = [0, 0, 0];
   for (const w of world) for (let k = 0; k < 3; k++) m[k] += w[k] / world.length;
   return { ok: true, points: world, centerLps: [m[0], m[1], m[2]] };
+}
+
+/**
+ * 長径・短径の 4 点（world, mm）。並びは Cornerstone3D の `BidirectionalTool` の規約どおり `[長径の始点, 長径の終点, 短径の始点, 短径の終点]`。
+ * 拒否は理由つき。長さ 0 は `degenerate`、直交しない・交わらない 2 軸は `bad-axes`（RECIST の「長径とそれに直交する短径」でない形を作らない）。
+ */
+export function buildBidirectionalHandles(
+  req: CreateRoiRequest,
+  g: RoiCreateGeometry,
+): { ok: true; points: number[][]; centerLps: [number, number, number] } | { ok: false; reason: CreateRoiFailure } {
+  if (!req || !isBidirectionalCreateTool(req.tool)) return { ok: false, reason: "bad-request" };
+  const hasLps = req.longAxisLps !== undefined || req.shortAxisLps !== undefined;
+  const hasPx = req.longAxisPx !== undefined || req.shortAxisPx !== undefined;
+  if (hasLps === hasPx) return { ok: false, reason: "bad-request" };
+  const rawL = (hasLps ? req.longAxisLps : req.longAxisPx) as unknown;
+  const rawS = (hasLps ? req.shortAxisLps : req.shortAxisPx) as unknown;
+  if (!(g.sliceToleranceMm > 0) || !(g.maxExtentMm > 0) || !finite3(g.focalPoint) || !finite3(g.viewPlaneNormal)) return { ok: false, reason: "no-geometry" };
+  const nLen = norm(g.viewPlaneNormal);
+  if (!(nLen > 0)) return { ok: false, reason: "no-geometry" };
+  const toWorld = (raw: unknown): number[][] | { fail: CreateRoiFailure } => {
+    if (!Array.isArray(raw) || raw.length !== 2) return { fail: "bad-request" };
+    const out: number[][] = [];
+    for (const v of raw) {
+      let w: number[] | null | undefined;
+      if (hasLps) {
+        if (!finite3(v)) return { fail: "bad-request" };
+        w = v as number[];
+      } else {
+        if (!(Array.isArray(v) && v.length === 2 && v.every((n) => typeof n === "number" && Number.isFinite(n)))) return { fail: "bad-request" };
+        w = g.pixelToWorld?.(v as [number, number]);
+        if (!w || !finite3(w)) return { fail: "no-geometry" };
+      }
+      if (Math.abs(dot(sub(w, g.focalPoint), g.viewPlaneNormal)) / nLen > g.sliceToleranceMm) return { fail: "off-slice" };
+      out.push([w[0], w[1], w[2]]);
+    }
+    return out;
+  };
+  const L = toWorld(rawL);
+  if (!Array.isArray(L)) return { ok: false, reason: L.fail };
+  const S = toWorld(rawS);
+  if (!Array.isArray(S)) return { ok: false, reason: S.fail };
+  const dl = sub(L[1], L[0]);
+  const ds = sub(S[1], S[0]);
+  const ll = norm(dl);
+  const ls = norm(ds);
+  if (!(ll > 1e-6) || !(ls > 1e-6)) return { ok: false, reason: "degenerate" };
+  if (ll > g.maxExtentMm || ls > g.maxExtentMm) return { ok: false, reason: "too-large" };
+  if (Math.abs(dot(dl, ds)) / (ll * ls) > BIDIRECTIONAL_ORTHO_TOLERANCE) return { ok: false, reason: "bad-axes" };
+  // 短径が長径の線分と交わる: 短径の両端が長径の直線の反対側にあり、交点が長径の線分の内側にある
+  const u = [dl[0] / ll, dl[1] / ll, dl[2] / ll];
+  const side = (p: number[]): number => {
+    const d = sub(p, L[0]);
+    const along = dot(d, u);
+    const perp = [d[0] - along * u[0], d[1] - along * u[1], d[2] - along * u[2]];
+    return dot(perp, ds) / ls; // 短径の向きの成分（符号付き）。長径の直線から短径の方向へ何 mm 離れているか
+  };
+  const s0 = side(S[0]);
+  const s1 = side(S[1]);
+  if (!(s0 * s1 < 0)) return { ok: false, reason: "bad-axes" };
+  const foot = dot(sub(S[0], L[0]), u);
+  if (!(foot > 0 && foot < ll)) return { ok: false, reason: "bad-axes" };
+  const m = [(L[0][0] + L[1][0]) / 2, (L[0][1] + L[1][1]) / 2, (L[0][2] + L[1][2]) / 2];
+  return { ok: true, points: [L[0], L[1], S[0], S[1]], centerLps: [m[0], m[1], m[2]] };
 }

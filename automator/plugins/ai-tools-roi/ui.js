@@ -27,5 +27,26 @@ export const aiTools = {
     if (r.ok) window.__roiDemoCenter = r.centerLps;
     return r;
   },
+  make_bidirectional: async (args, host) => {
+    const base = host.getRois()[0];
+    if (!base) return { ok: false, reason: "no-base-roi" };
+    const [sx, sy] = base.spacing;
+    if (!sx || !sy) return { ok: false, reason: "no-spacing" };
+    const c = centroid(base.points);
+    const t = ((args.tiltDeg || 0) * Math.PI) / 180;
+    const k = ((args.skewDeg || 0) * Math.PI) / 180;
+    // 方向は mm の世界で決め、画素へは間隔で割って戻す（異方性の間隔でも直交が保たれる）
+    const toPx = (dxMm, dyMm) => [c[0] + dxMm / sx, c[1] + dyMm / sy];
+    const u = [Math.cos(t), Math.sin(t)];
+    const v = [-Math.sin(t + k), Math.cos(t + k)];
+    const hl = args.longMm / 2;
+    const hs = args.shortMm / 2;
+    const req = {
+      tool: "Bidirectional",
+      longAxisPx: [toPx(-u[0] * hl, -u[1] * hl), toPx(u[0] * hl, u[1] * hl)],
+      shortAxisPx: [toPx(-v[0] * hs, -v[1] * hs), toPx(v[0] * hs, v[1] * hs)],
+    };
+    return host.createRoi(undefined, req);
+  },
   remove_roi: async (args, host) => ({ ok: host.removeCreatedRoi(args.roiUid) }),
 };

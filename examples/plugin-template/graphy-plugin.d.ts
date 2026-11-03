@@ -2246,6 +2246,9 @@ export interface Viewer2DPluginHost extends PluginHostBase {
    * <p>**多角形・自由曲線も作れる**（`tool: "PolygonROI" | "FreehandROI"`）。頂点を `verticesLps`（LPS mm）か `verticesPx`（表示中スライスの画素座標）の
    * **どちらか一方**で順に渡す（閉じるので始点を繰り返さない。多角形 3〜64 点、自由曲線 3〜256 点）。全頂点が表示中のスライスの面内であること。
    * 自己交差・面積ゼロの形は `self-intersecting` / `degenerate` で拒否する。`radiiMm` / `centerLps` / `centerPx` は使わない。
+   * **長径・短径（RECIST の 2 軸）も作れる**（`tool: "Bidirectional"`）。`longAxisLps` と `shortAxisLps`（各軸の両端 2 点・LPS mm）、または
+   * `longAxisPx` と `shortAxisPx`（表示中スライスの画素座標）の**どちらか一方**で渡す。短径は長径に直交し、長径の線分と交わること（満たさない形は `bad-axes`）。
+   * 全点が表示中のスライスの面内であること。作った ROI は本体の長径・短径ツールで引いたものと同じ扱いで、端点を動かして直せる。
    *
    * <p>AI ツール（`effect: "write"`）の中から呼ぶ場合、その実行の前に本体が利用者の確認を出す。
    * 失敗の理由: `bad-request`（ツール・数値が不正）／`off-slice`／`too-large`（半径が画像の大きさを超える）／
@@ -2262,7 +2265,7 @@ export interface Viewer2DPluginHost extends PluginHostBase {
       verticesPx?: [number, number][];
       label?: string;
     },
-  ) => { ok: true; roiUid: string; centerLps: [number, number, number] } | { ok: false; reason: "bad-request" | "off-slice" | "no-geometry" | "too-large" | "no-image" | "thick-slab" | "self-intersecting" | "degenerate" | "failed" };
+  ) => { ok: true; roiUid: string; centerLps: [number, number, number] } | { ok: false; reason: "bad-request" | "off-slice" | "no-geometry" | "too-large" | "no-image" | "thick-slab" | "self-intersecting" | "degenerate" | "bad-axes" | "failed" };
   /** `createRoi` で**このプラグインが作った** ROI だけを消す（ロック中・他の ROI は消えず false）。（次の版以降） */
   removeCreatedRoi: (roiUid: string) => boolean;
   /** `showLabelVolume` で**このプラグインが出した** Mask（返った `segmentationId`）だけを消す（本体・他プラグイン・利用者の Mask、ロック中は消えず false）。 */
