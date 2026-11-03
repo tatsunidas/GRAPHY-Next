@@ -65,6 +65,13 @@ function validateManifest(m) {
       if (!md || typeof md.file !== "string" || !/^[A-Za-z0-9._-]+\.gguf$/.test(md.file)) problems.push(`model:${id}:bad-file`);
       if (!md || typeof md.license !== "string" || !md.license) problems.push(`model:${id}:no-license`);
       if (md && md.reasoning != null && !["on", "off", "auto"].includes(md.reasoning)) problems.push(`model:${id}:bad-reasoning`);
+      // 任意の LoRA アダプタ（ベースと同じ手順で取得・検証し、llama-server に --lora で渡す）
+      if (md && md.lora != null) {
+        problems.push(...validateAsset(md.lora, `model:${id}:lora`));
+        const lf = md.lora && md.lora.file;
+        if (typeof lf !== "string" || !/^[A-Za-z0-9._-]+\.gguf$/.test(lf)) problems.push(`model:${id}:bad-lora-file`);
+        else if (lf === md.file) problems.push(`model:${id}:lora-same-file`);
+      }
     }
   }
   if (!Array.isArray(m.models) || !m.models.some((x) => x && x.id === m.defaultModelId)) problems.push("manifest:bad-default-model");

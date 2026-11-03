@@ -5,7 +5,7 @@ import { errorKey, formatBytes, percentOf, phaseOf, reduceProgress } from "./loc
 const base: AiLocalStatus = {
   supported: true,
   runtime: { installed: false, build: null, size: 1 },
-  model: { installed: false, id: null, verified: false, file: null },
+  model: { installed: false, id: null, verified: false, file: null, lora: false },
   running: false,
   busy: false,
 };
@@ -20,12 +20,12 @@ describe("phaseOf", () => {
     expect(phaseOf({ ...base, runtime: { installed: true, build: "b", size: 1 } }, null)).toBe("notInstalled");
   });
   it("両方あれば ready、起動中なら running", () => {
-    const ok = { ...base, runtime: { installed: true, build: "b", size: 1 }, model: { installed: true, id: "m", verified: true, file: "m.gguf" } };
+    const ok = { ...base, runtime: { installed: true, build: "b", size: 1 }, model: { installed: true, id: "m", verified: true, file: "m.gguf", lora: false } };
     expect(phaseOf(ok, null)).toBe("ready");
     expect(phaseOf({ ...ok, running: true }, null)).toBe("running");
   });
   it("導入中（busy・進捗あり）は他より優先。done の進捗は導入中にしない", () => {
-    const ok = { ...base, runtime: { installed: true, build: "b", size: 1 }, model: { installed: true, id: "m", verified: true, file: "m.gguf" } };
+    const ok = { ...base, runtime: { installed: true, build: "b", size: 1 }, model: { installed: true, id: "m", verified: true, file: "m.gguf", lora: false } };
     expect(phaseOf({ ...ok, busy: true }, null)).toBe("installing");
     expect(phaseOf(base, { phase: "model-download", received: 1, total: 2 })).toBe("installing");
     expect(phaseOf(ok, { phase: "done" })).toBe("ready");

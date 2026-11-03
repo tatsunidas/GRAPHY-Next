@@ -81,12 +81,13 @@ export function LocalAiSection({ onChanged }: { onChanged?: () => void }) {
             {t("settings.ai.local.model")}{" "}
             <select value={modelId} onChange={(e) => setModelId(e.target.value)} data-testid="ai-local-model" style={{ fontSize: 12 }}>
               {status.models.map((m) => (
-                <option key={m.id} value={m.id}>{`${m.label} — ${formatBytes(m.size)} — ${m.license}`}</option>
+                <option key={m.id} value={m.id}>{`${m.label} — ${formatBytes(m.size + (m.lora?.size ?? 0))} — ${m.license}`}</option>
               ))}
             </select>
           </label>
           {selected?.note ? <span style={help}>{selected.note}</span> : null}
-          <span style={help}>{t("settings.ai.local.sizeNote", { runtime: formatBytes(status.runtime?.size ?? 0), model: formatBytes(selected?.size ?? 0) })}</span>
+          {selected?.lora ? <span style={help} data-testid="ai-local-lora-note">{t("settings.ai.local.loraNote", { size: formatBytes(selected.lora.size) })}</span> : null}
+          <span style={help}>{t("settings.ai.local.sizeNote", { runtime: formatBytes(status.runtime?.size ?? 0), model: formatBytes((selected?.size ?? 0) + (selected?.lora?.size ?? 0)) })}</span>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             <button style={btnPrimary} disabled={working || !modelId} onClick={() => void run(() => d.aiLocalInstall!(modelId), t("settings.ai.local.installed"))} data-testid="ai-local-install">
               {t("settings.ai.local.install")}

@@ -204,3 +204,28 @@ test("validateManifest: sttModels は mmproj も検査する（負例: 許可外
   delete none.defaultSttModelId;
   assert.deepEqual(I.validateManifest(none), [], "音声入力が無いマニフェストも有効（任意）");
 });
+
+test("validateManifest: lora は任意。付けるなら url・sha256・size・file を検査する（負例: 許可外 URL・sha 不正・サイズ不正・ベースと同名・.gguf でない）", () => {
+  const real = JSON.parse(fs.readFileSync(path.join(__dirname, "localAiManifest.json"), "utf8"));
+  assert.deepEqual(I.validateManifest(real), [], "lora の無い同梱のマニフェストは通る");
+  const lora = { file: "a.gguf", url: "https://huggingface.co/x/a.gguf", sha256: "a".repeat(64), size: 1000 };
+  const ok = JSON.parse(JSON.stringify(real));
+  ok.models[0].lora = { ...lora };
+  assert.deepEqual(I.validateManifest(ok), [], "正しい lora は通る（正例）");
+  const cases = {
+    "lora:url-not-allowed": { url: "https://evil.example/a.gguf" },
+    "lora:bad-sha256": { sha256: "zz" },
+    "lora:bad-size": { size: 0 },
+    "bad-lora-file": { file: "a.bin" },
+    "lora-same-file": { file: real.models[0].file },
+  };
+  for (const [code, patch] of Object.entries(cases)) {
+    const bad = JSON.parse(JSON.stringify(real));
+    bad.models[0].lora = { ...lora, ...patch };
+    const p = I.validateManifest(bad);
+    assert.ok(p.some((x) => x.includes(code)), code + " in " + JSON.stringify(p));
+  }
+  const notObj = JSON.parse(JSON.stringify(real));
+  notObj.models[0].lora = "a.gguf";
+  assert.ok(I.validateManifest(notObj).some((x) => x.includes("lora:not-an-object")));
+});

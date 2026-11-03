@@ -340,9 +340,10 @@ export interface AiLocalStatus {
   supported: boolean;
   platform?: string;
   defaultModelId?: string;
-  models?: { id: string; label: string; size: number; license: string; licenseUrl?: string; note?: string }[];
+  /** `lora`: 追加の LoRA アダプタ（任意）。無ければ null。`size` はアダプタ分で、モデルの `size` には含まない。 */
+  models?: { id: string; label: string; size: number; license: string; licenseUrl?: string; note?: string; lora: { size: number } | null }[];
   runtime?: { installed: boolean; build: string | null; size: number | null };
-  model?: { installed: boolean; id: string | null; verified: boolean; file: string | null };
+  model?: { installed: boolean; id: string | null; verified: boolean; file: string | null; lora: boolean };
   running?: boolean;
   busy?: boolean;
   registered?: boolean;
