@@ -36,7 +36,7 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { _electron as electron, type ElectronApplication, type Page } from "@playwright/test";
+import { _electron as electron, type ElectronApplication, type Locator, type Page } from "@playwright/test";
 
 import { importNonDicomPaths } from "../fixtures/importFixtures.js";
 import { AUTOMATOR_ROOT } from "../fixtures/manifest.js";
@@ -683,6 +683,22 @@ async function cliSection(inst: Installed, appEnv: Record<string, string>, work:
   check(!!port && freed, "[13] 終了後に無人実行の backend のポートが空く", { port });
 }
 
+/**
+ * メイン窓のボタンを押す。「新しいバージョンがあります」の窓は、起動の後しばらくして（GitHub の最新リリースを見てから）出て、
+ * 出ていればボタンの押下を遮る（main の版が公開済みのリリースより古い間は毎回）。遮られたら閉じてやり直す。
+ */
+async function clickDismissing(page: Page, target: Locator): Promise<void> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await target.click({ timeout: 8_000 });
+      return;
+    } catch (e) {
+      if (attempt >= 4) throw e;
+      await dismissStartupDialogs(page);
+    }
+  }
+}
+
 async function main(): Promise<void> {
   if (process.platform === "darwin" && process.env.CI !== "true") {
     throw new Error("macOS は実プロファイルを隔離できないので、CI（CI=true）以外では実行しません。");
@@ -799,17 +815,7 @@ async function main(): Promise<void> {
     // 日付の絞り込みは「All」ボタンで外す（利用者と同じ操作。入力欄を空にするだけだと、状態が反映される前に
     // 検索が走って空振りすることがあった）。
     const dates = main.locator('input[type="date"]');
-    // 「新しいバージョンがあります」の窓は、起動の後しばらくして（GitHub の最新リリースを見てから）出る。
-    // 出ていればボタンの押下を遮る（main の版が公開済みのリリースより古い間は毎回）ので、閉じてやり直す。
-    for (let attempt = 0; ; attempt++) {
-      try {
-        await main.getByRole("button", { name: "All", exact: true }).click({ timeout: 8_000 });
-        break;
-      } catch (e) {
-        if (attempt >= 4) throw e;
-        await dismissStartupDialogs(main);
-      }
-    }
+    await clickDismissing(main, main.getByRole("button", { name: "All", exact: true }));
     await main.waitForTimeout(500);
     console.log(`  [情報] 日付欄: ${JSON.stringify([await dates.nth(0).inputValue(), await dates.nth(1).inputValue()])}`);
     // 起動直後は backend との接続中（画面下部の「Connecting…」）で、最初の検索が空振りすることがあるので数回やり直す。
@@ -822,7 +828,7 @@ async function main(): Promise<void> {
     let found = false;
     let attempts = 0;
     for (; attempts < 6 && !found; attempts++) {
-      await main.getByTestId("search-submit-button").click();
+      await clickDismissing(main, main.getByTestId("search-submit-button"));
       found = await row.waitFor({ state: "visible", timeout: 10_000 }).then(() => true, () => false);
     }
     console.log(`  [情報] 検索の試行回数: ${attempts}\n  [情報] 画面の検索リクエスト: ${JSON.stringify(searchCalls.slice(0, 4))}`);
