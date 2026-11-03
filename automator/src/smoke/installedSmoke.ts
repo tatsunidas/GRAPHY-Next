@@ -94,7 +94,15 @@ function install(root: string): Installed {
     const dir = path.join(root, "app");
     console.log(`[install] NSIS 無人インストール: ${path.basename(setup)} → ${dir}`);
     // /D= は最後・引用符なし（NSIS の決まり）。perMachine=false なので管理者権限は要らない。
-    execFileSync(setup, ["/S", `/D=${dir}`], { stdio: "inherit", timeout: 300_000 });
+    // 稀に（4 回に 1 回ほど）インストーラが 0.7 秒ほどで非 0 で終わり、何も出さない（原因は未確認）。終了コードを残し、
+    // 1 回だけやり直す。やり直しで通ったときは [情報] に出す（黙って通さない）。2 回続けて落ちたら失敗。
+    for (let attempt = 1; ; attempt++) {
+      const r = spawnSync(setup, ["/S", `/D=${dir}`], { stdio: "inherit", timeout: 300_000 });
+      if (r.status === 0) break;
+      console.log(`  [情報] NSIS のインストーラが失敗した（${attempt} 回目）: status=${r.status} signal=${r.signal} error=${r.error?.message ?? "-"}`);
+      if (attempt >= 2) throw new Error(`NSIS のインストーラが 2 回続けて失敗: status=${r.status}`);
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5_000);
+    }
     return { exe: path.join(dir, "GRAPHY-Next.exe"), resources: path.join(dir, "resources"), args: [] };
   }
   if (process.platform === "darwin") {
