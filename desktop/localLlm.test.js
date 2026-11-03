@@ -48,6 +48,8 @@ function makeZip(files) {
 
 const RUNTIME_ZIP = makeZip([{ name: "bin/llama-server", data: FAKE_SERVER }, { name: "LICENSE", data: "MIT" }]);
 const MODEL = Buffer.concat([Buffer.from("GGUF"), crypto.randomBytes(5000)]);
+/** LoRA アダプタの GGUF。ヘッダにベースモデルには無い `adapter.type` のキーがある（実物の adapter.gguf でも先頭の数 KB に出る）。 */
+const ADAPTER = Buffer.concat([Buffer.from("GGUF"), Buffer.from("general.type\0adapter\0adapter.type\0lora\0"), crypto.randomBytes(3000)]);
 
 function makeManifest() {
   return {
@@ -63,7 +65,7 @@ function makeManifest() {
 function fakeDownload(calls) {
   return async (o) => {
     calls.push(o.url);
-    const body = o.url.endsWith("rt.zip") ? RUNTIME_ZIP : MODEL;
+    const body = o.url.endsWith("rt.zip") ? RUNTIME_ZIP : o.url.endsWith("a.gguf") ? ADAPTER : MODEL;
     if (o.onProgress) o.onProgress({ received: body.length, total: body.length });
     fs.writeFileSync(o.dest, body);
     return { ok: true };
@@ -470,4 +472,91 @@ test("sweepStale: 音声入力の残骸も、目印の接頭辞が合うもの�
   ai.sweepStale();
   assert.deepEqual(killed, [5151]);
   assert.equal(fs.existsSync(rec), false);
+});
+
+// ── 任意の LoRA アダプタ（ベースのあとに 2 つ目のファイルを入れ、llama-server に --lora で渡す） ──
+
+/** m1（アダプタ無し）と m2（m1 と同じベースファイル＋アダプタ）を持つマニフェスト。 */
+function makeLoraManifest() {
+  const m = makeManifest();
+  const base = m.models[0];
+  m.models.push({ ...base, id: "m2", label: "M2", lora: { file: "a.gguf", url: "https://huggingface.co/a.gguf", sha256: sha(ADAPTER), size: ADAPTER.length } });
+  return m;
+}
+const argvOf = (file) => fs.readFileSync(file, "utf8").trim().split("\n").map((l) => JSON.parse(l));
+
+test("serverArgs: lora は指定したときだけ --lora <パス> を足す（他の引数は変わらない）", () => {
+  const base = { modelPath: "/m.gguf", port: 4321, mark: "0123456789abcdef", jinja: true, reasoning: "off", threads: 4 };
+  const without = L.serverArgs(base);
+  const withLora = L.serverArgs({ ...base, lora: "/a.gguf" });
+  assert.ok(!without.includes("--lora"));
+  assert.equal(withLora[withLora.indexOf("--lora") + 1], "/a.gguf");
+  assert.deepEqual(withLora.filter((x, i) => !(x === "--lora" || withLora[i - 1] === "--lora")), without, "--lora とその値を除けば同じ");
+});
+
+test("lora 付きモデルの導入: 取得順は runtime → ベース → アダプタ。起動に --lora が付き、アダプタ無しのモデルには付かない", { skip: SKIP_WIN }, async () => {
+  const out = path.join(tmp(), "argv.jsonl");
+  const { ai, calls, dataDir } = setup({ manifest: makeLoraManifest(), env: { ...process.env, FAKE_ARGV_OUT: out } });
+  assert.deepEqual(await ai.install({ modelId: "m2" }), { ok: true });
+  assert.deepEqual(calls.map((u) => u.split("/").pop()), ["rt.zip", "m1.gguf", "a.gguf"]);
+  const st = ai.status();
+  assert.equal(st.model.installed, true);
+  assert.equal(st.model.lora, true);
+  assert.deepEqual(st.models.find((x) => x.id === "m2").lora, { size: ADAPTER.length });
+  assert.equal(st.models.find((x) => x.id === "m1").lora, null);
+  const e = await ai.ensure();
+  assert.equal(e.ok, true);
+  const a = argvOf(out).at(-1);
+  assert.equal(a[a.indexOf("--lora") + 1], path.join(dataDir, "local-ai", "models", "a.gguf"));
+  await ai.stop();
+  // アダプタ無しのモデルへ切り替えると --lora は付かない
+  assert.deepEqual(await ai.install({ modelId: "m1" }), { ok: true });
+  assert.equal(ai.status().model.lora, false);
+  const e2 = await ai.ensure();
+  assert.equal(e2.ok, true);
+  assert.ok(!argvOf(out).at(-1).includes("--lora"));
+  await ai.stop();
+});
+
+test("lora 付きモデルは、アダプタが無ければ「導入済み」でなく起動もしない（ベースだけで黙って動かさない）", { skip: SKIP_WIN }, async () => {
+  const { ai, dataDir } = setup({ manifest: makeLoraManifest() });
+  assert.deepEqual(await ai.install({ modelId: "m2" }), { ok: true });
+  fs.rmSync(path.join(dataDir, "local-ai", "models", "a.gguf"));
+  assert.equal(ai.status().model.installed, false);
+  assert.deepEqual(await ai.ensure(), { ok: false, error: "not-installed" });
+});
+
+test("importFile: アダプタはアダプタとして受ける（ベースとして登録しない）。ベースが揃った時点で lora 付きモデルとして登録する", async () => {
+  const { ai, dataDir } = setup({ manifest: makeLoraManifest() });
+  const d = tmp();
+  const ad = path.join(d, "x.bin"); fs.writeFileSync(ad, ADAPTER);
+  const bs = path.join(d, "y.bin"); fs.writeFileSync(bs, MODEL);
+  // 先にアダプタだけ: ベースが無いので登録しない。allowUnverified でも custom（ベース）にならない
+  const r1 = await ai.importFile({ file: ad, allowUnverified: true });
+  assert.deepEqual(r1, { ok: true, kind: "lora-part", id: "m2", complete: false });
+  assert.equal(ai.status().model.id, null);
+  // ベース（m1 と m2 は同じファイル）を入れる: m1 として登録される
+  assert.equal((await ai.importFile({ file: bs })).id, "m1");
+  // もう一度アダプタを入れると、ベースが在るので m2 になる
+  const r2 = await ai.importFile({ file: ad });
+  assert.deepEqual(r2, { ok: true, kind: "model", id: "m2", verified: true, complete: true });
+  const st = ai.status();
+  assert.equal(st.model.id, "m2");
+  assert.equal(st.model.lora, true);
+  assert.equal(st.model.installed, true);
+  assert.ok(fs.existsSync(path.join(dataDir, "local-ai", "models", "a.gguf")));
+});
+
+test("importFile: 未知のアダプタ（ヘッダに adapter.type）は、allowUnverified でもベースモデルとして受け付けない（負例）。ふつうの GGUF は従来どおり受ける（正例）", async () => {
+  const { ai } = setup();
+  const d = tmp();
+  const unknownAdapter = path.join(d, "u.gguf");
+  fs.writeFileSync(unknownAdapter, Buffer.concat([Buffer.from("GGUF"), Buffer.from("general.type\0adapter\0adapter.type\0lora\0"), crypto.randomBytes(200)]));
+  assert.deepEqual(await ai.importFile({ file: unknownAdapter, allowUnverified: true }), { ok: false, error: "adapter-not-model" });
+  assert.equal(ai.status().model.id, null);
+  const plain = path.join(d, "p.gguf");
+  fs.writeFileSync(plain, Buffer.concat([Buffer.from("GGUF"), crypto.randomBytes(500)]));
+  const r = await ai.importFile({ file: plain, allowUnverified: true });
+  assert.equal(r.ok, true);
+  assert.equal(r.id, "custom");
 });

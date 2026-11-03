@@ -4588,6 +4588,7 @@ export const ja: Record<string, string> = {
   "settings.ai.local.help": "インターネットに接続できないときや、データを外に出したくないときに使える、この PC 上の軽量 AI を導入します。クラウドの AI より精度は下がります。導入は任意で、ファイルの読み取りなどは精度を落として使う前提です。",
   "settings.ai.local.unsupported": "この OS / CPU 向けの実行ファイルが同梱の一覧にありません。",
   "settings.ai.local.model": "モデル",
+  "settings.ai.local.loraNote": "追加ファイル: LoRA アダプタ（GRAPHY-Next の操作向けに追加学習した重み、{{size}}）。ベースのモデルと一緒に取得し、起動時に重ねて使います。",
   "settings.ai.local.sizeNote": "ダウンロード量の目安: 実行ファイル {{runtime}} + モデル {{model}}。取得したファイルは SHA-256 を確かめてから使います。",
   "settings.ai.local.install": "ダウンロードして導入",
   "settings.ai.local.import": "ファイルから導入（オフライン用）",

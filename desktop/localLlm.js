@@ -72,10 +72,11 @@ function defaultThreads(logicalCpus) {
 }
 
 /** llama-server の引数。host は 127.0.0.1 固定。 */
-function serverArgs({ modelPath, port, mark, ctx = CONTEXT_TOKENS, jinja = false, reasoning = null, threads = null, mmproj = null, markPrefix = MARK_PREFIX }) {
+function serverArgs({ modelPath, port, mark, ctx = CONTEXT_TOKENS, jinja = false, reasoning = null, threads = null, mmproj = null, lora = null, markPrefix = MARK_PREFIX }) {
   return [
     "-m", modelPath,
     ...(mmproj ? ["--mmproj", mmproj] : []),
+    ...(lora ? ["--lora", lora] : []),
     "--host", "127.0.0.1",
     "--port", String(port),
     "-c", String(ctx),
@@ -197,11 +198,21 @@ function createLocalAi(deps) {
     if (!archive.safeJoin(runtimeRoot, s.runtime.exe)) return null;
     return fs.existsSync(p) ? p : null;
   }
+  /** LoRA アダプタ付きのモデルのアダプタの実在する絶対パス。アダプタ無しのモデル・ファイルが無いときは null。 */
+  function loraPath(s = readState()) {
+    if (!s.model || !s.model.lora) return null;
+    if (!archive.safeJoin(modelsDir, s.model.lora)) return null;
+    const p = path.join(modelsDir, s.model.lora);
+    return fs.existsSync(p) ? p : null;
+  }
+  /** ベースの GGUF の絶対パス。アダプタ付きのモデルは、アダプタも在るときだけ（ベースだけで黙って動かさない）。 */
   function modelPath(s = readState()) {
     if (!s.model || !s.model.file) return null;
     if (!archive.safeJoin(modelsDir, s.model.file)) return null;
     const p = path.join(modelsDir, s.model.file);
-    return fs.existsSync(p) ? p : null;
+    if (!fs.existsSync(p)) return null;
+    if (s.model.lora && !loraPath(s)) return null;
+    return p;
   }
   function manifestModel(id) {
     return manifest.models.find((m) => m.id === id) || null;
@@ -228,9 +239,9 @@ function createLocalAi(deps) {
     return {
       supported: !!asset,
       platform: key,
-      models: manifest.models.map(({ id, label, size, license, licenseUrl, note }) => ({ id, label, size, license, licenseUrl, note })),
+      models: manifest.models.map(({ id, label, size, license, licenseUrl, note, lora }) => ({ id, label, size, license, licenseUrl, note, lora: lora ? { size: lora.size } : null })),
       runtime: { installed: !!exe, build: s.runtime ? s.runtime.build : null, size: asset ? asset.size : null },
-      model: { installed: !!mp, id: s.model ? s.model.id : null, verified: s.model ? !!s.model.verified : false, file: s.model ? s.model.file : null },
+      model: { installed: !!mp, id: s.model ? s.model.id : null, verified: s.model ? !!s.model.verified : false, file: s.model ? s.model.file : null, lora: !!(s.model && s.model.lora) },
       running: !!(LLM.current && !LLM.current.exited),
       busy: !!installing,
       registered: !!prov,
@@ -388,8 +399,17 @@ function createLocalAi(deps) {
           onProgress: (p) => progress("model-download", p) });
         if (!r.ok) return r;
       }
+      if (md.lora) {
+        const lto = path.join(modelsDir, md.lora.file);
+        if (!fs.existsSync(lto)) {
+          progress("model-download", { received: 0, total: md.lora.size });
+          const lr = await download({ url: md.lora.url, dest: lto, sha256: md.lora.sha256, size: md.lora.size, signal: ac.signal,
+            onProgress: (p) => progress("model-download", p) });
+          if (!lr.ok) return lr;
+        }
+      }
       const s = readState();
-      s.model = { id: md.id, file: md.file, verified: true, toolMode: md.toolMode === "native" ? "native" : "none" };
+      s.model = { id: md.id, file: md.file, verified: true, toolMode: md.toolMode === "native" ? "native" : "none", ...(md.lora ? { lora: md.lora.file } : {}) };
       writeState(s);
       const reg = registerProvider({ endpoint: PARKED_ENDPOINT, model: md.id, toolMode: s.model.toolMode });
       if (!reg.ok) return { ok: false, error: `register-failed:${reg.problems[0] || ""}` };
@@ -438,6 +458,17 @@ function createLocalAi(deps) {
         const reg = registerProvider({ endpoint: PARKED_ENDPOINT, model: sttHit.id }, STT);
         return reg.ok ? { ok: true, kind: "stt-model", id: sttHit.id, complete: true } : { ok: false, error: `register-failed:${reg.problems[0] || ""}` };
       }
+      // LoRA アダプタ（ベースの GGUF が先に入っていれば、ここで lora 付きのモデルとして登録する）
+      const loraHit = md ? null : manifest.models.find((m) => m.lora && m.lora.sha256 === digest && m.lora.size === st.size);
+      if (loraHit) {
+        fs.copyFileSync(file, path.join(modelsDir, loraHit.lora.file));
+        if (!fs.existsSync(path.join(modelsDir, loraHit.file))) return { ok: true, kind: "lora-part", id: loraHit.id, complete: false };
+        const lx = readState();
+        lx.model = { id: loraHit.id, file: loraHit.file, verified: true, toolMode: loraHit.toolMode === "native" ? "native" : "none", lora: loraHit.lora.file };
+        writeState(lx);
+        const reg = registerProvider({ endpoint: PARKED_ENDPOINT, model: loraHit.id, toolMode: lx.model.toolMode });
+        return reg.ok ? { ok: true, kind: "model", id: loraHit.id, verified: true, complete: true } : { ok: false, error: `register-failed:${reg.problems[0] || ""}` };
+      }
       if (md) {
         const dest = path.join(modelsDir, md.file);
         fs.copyFileSync(file, dest);
@@ -448,10 +479,13 @@ function createLocalAi(deps) {
         return reg.ok ? { ok: true, kind: "model", id: md.id, verified: true } : { ok: false, error: `register-failed:${reg.problems[0] || ""}` };
       }
       if (allowUnverified && /\.gguf$/i.test(file)) {
-        const head = Buffer.alloc(4);
+        const head = Buffer.alloc(65536);
         const fd = fs.openSync(file, "r");
-        try { fs.readSync(fd, head, 0, 4, 0); } finally { fs.closeSync(fd); }
-        if (head.toString("latin1") !== "GGUF") return { ok: false, error: "not-gguf" };
+        let got = 0;
+        try { got = fs.readSync(fd, head, 0, head.length, 0); } finally { fs.closeSync(fd); }
+        if (got < 4 || head.toString("latin1", 0, 4) !== "GGUF") return { ok: false, error: "not-gguf" };
+        // LoRA アダプタの GGUF はヘッダに `adapter.type` を持つ（ベースモデルには無い）。ベースとして登録すると起動できないので受け付けない
+        if (head.subarray(0, got).includes("adapter.type")) return { ok: false, error: "adapter-not-model" };
         const name = `custom-${digest.slice(0, 12)}.gguf`;
         fs.copyFileSync(file, path.join(modelsDir, name));
         const s = readState();
@@ -512,7 +546,7 @@ function createLocalAi(deps) {
     const mark = newMark();
     const args = slot === STT
       ? serverArgs({ modelPath: mp, mmproj: stt.mmproj, port, mark, ctx: STT_CONTEXT_TOKENS, markPrefix: STT_MARK_PREFIX, threads: defaultThreads(deps.cpuCount ?? os.availableParallelism()) })
-      : serverArgs({ modelPath: mp, port, mark, jinja: !!(s.model && s.model.toolMode === "native"), reasoning: (manifestModel(s.model && s.model.id) || {}).reasoning, threads: defaultThreads(deps.cpuCount ?? os.availableParallelism()) });
+      : serverArgs({ modelPath: mp, lora: loraPath(s), port, mark, jinja: !!(s.model && s.model.toolMode === "native"), reasoning: (manifestModel(s.model && s.model.id) || {}).reasoning, threads: defaultThreads(deps.cpuCount ?? os.availableParallelism()) });
     const child = spawn(exe, args, {
       env: childEnv(env), cwd: path.dirname(exe), stdio: ["ignore", "pipe", "pipe"], shell: false, windowsHide: true, detached: false,
     });

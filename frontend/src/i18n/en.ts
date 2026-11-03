@@ -4597,6 +4597,7 @@ export const en: Record<string, string> = {
   "settings.ai.local.help": "Install a lightweight AI that runs on this PC, for when you are offline or do not want data to leave the machine. Accuracy is lower than cloud AI; reading attached files is expected to be less accurate.",
   "settings.ai.local.unsupported": "No runtime for this OS / CPU is listed in the bundled manifest.",
   "settings.ai.local.model": "Model",
+  "settings.ai.local.loraNote": "Extra file: LoRA adapter (weights fine-tuned for GRAPHY-Next operations, {{size}}). Downloaded with the base model and applied on top of it at start.",
   "settings.ai.local.sizeNote": "Download size: runtime {{runtime}} + model {{model}}. Files are used only after their SHA-256 is verified.",
   "settings.ai.local.install": "Download and install",
   "settings.ai.local.import": "Install from files (offline)",

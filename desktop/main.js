@@ -1809,7 +1809,7 @@ async function runLocalAiInstall(win, modelId) {
   if (!md) return { ok: false, error: "unknown-model" };
   const rtAsset = localAiManifest.runtime.assets[st.platform];
   if (!rtAsset) return { ok: false, error: "unsupported-platform" };
-  const modelSize = stt ? md.size + md.mmproj.size : md.size;
+  const modelSize = stt ? md.size + md.mmproj.size : md.size + (md.lora ? md.lora.size : 0);
   const have = stt ? st.stt.installed && st.stt.id === md.id : st.model.installed && st.model.id === md.id;
   const total = (st.runtime.installed ? 0 : rtAsset.size) + (have ? 0 : modelSize);
   const choice = dialog.showMessageBoxSync(win, {
@@ -1819,7 +1819,7 @@ async function runLocalAiInstall(win, modelId) {
     cancelId: 1,
     title: stt ? "ローカルの音声入力をダウンロードします" : "ローカル AI をダウンロードします",
     message: `${formatBytes(total)} をダウンロードして、この PC に保存します。`,
-    detail: `実行ファイル: llama.cpp ${localAiManifest.runtime.build} (MIT)\nモデル: ${md.label} (${md.license})\n取得元: github.com / huggingface.co\n\n取得したファイルは SHA-256 を確かめてから使います。`,
+    detail: `実行ファイル: llama.cpp ${localAiManifest.runtime.build} (MIT)\nモデル: ${md.label} (${md.license})${md.lora ? `\n追加ファイル（LoRA アダプタ）: ${md.lora.file}` : ""}\n取得元: github.com / huggingface.co\n\n取得したファイルは SHA-256 を確かめてから使います。`,
   });
   if (choice !== 0) return { ok: false, error: "canceled" };
   return ai.install({ modelId: md.id });
