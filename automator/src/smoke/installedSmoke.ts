@@ -36,7 +36,7 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { _electron as electron, type ElectronApplication, type Page } from "@playwright/test";
+import { _electron as electron, type ElectronApplication, type Locator, type Page } from "@playwright/test";
 
 import { importNonDicomPaths } from "../fixtures/importFixtures.js";
 import { AUTOMATOR_ROOT } from "../fixtures/manifest.js";
@@ -94,7 +94,15 @@ function install(root: string): Installed {
     const dir = path.join(root, "app");
     console.log(`[install] NSIS 無人インストール: ${path.basename(setup)} → ${dir}`);
     // /D= は最後・引用符なし（NSIS の決まり）。perMachine=false なので管理者権限は要らない。
-    execFileSync(setup, ["/S", `/D=${dir}`], { stdio: "inherit", timeout: 300_000 });
+    // 稀に（4 回に 1 回ほど）インストーラが 0.7 秒ほどで非 0 で終わり、何も出さない（原因は未確認）。終了コードを残し、
+    // 1 回だけやり直す。やり直しで通ったときは [情報] に出す（黙って通さない）。2 回続けて落ちたら失敗。
+    for (let attempt = 1; ; attempt++) {
+      const r = spawnSync(setup, ["/S", `/D=${dir}`], { stdio: "inherit", timeout: 300_000 });
+      if (r.status === 0) break;
+      console.log(`  [情報] NSIS のインストーラが失敗した（${attempt} 回目）: status=${r.status} signal=${r.signal} error=${r.error?.message ?? "-"}`);
+      if (attempt >= 2) throw new Error(`NSIS のインストーラが 2 回続けて失敗: status=${r.status}`);
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5_000);
+    }
     return { exe: path.join(dir, "GRAPHY-Next.exe"), resources: path.join(dir, "resources"), args: [] };
   }
   if (process.platform === "darwin") {
@@ -560,7 +568,7 @@ async function writeApprovalSection(app: ElectronApplication, main: Page): Promi
   const domClick = (page: Page, tid: string) => page.waitForSelector(`[data-testid="${tid}"]`, { timeout: 20_000 }).then((h) => h.evaluate((el) => (el as HTMLElement).click()));
   let win: Page | null = null;
   try {
-    // main の確認ダイアログ（データを変える操作の承認）を「取り消す」で返すスタブにする。
+    // main の確認ダイアログ（データを変える操作の承認）を「取り消す」で返すスタブにする（出た回数を数える）。
     await app.evaluate(({ dialog }) => {
       const g = globalThis as unknown as { __wdlg: number; __origMsgBox: unknown };
       g.__wdlg = 0;
@@ -579,7 +587,10 @@ async function writeApprovalSection(app: ElectronApplication, main: Page): Promi
     check(forb.ok === false && forb.error === "forbidden", "[12] 🔴 メイン窓からの中継は forbidden", forb);
     const r = await win.evaluate(() => (window as unknown as { graphyDesktop: VB }).graphyDesktop.assistantViewerCmd("smoke", { kind: "action", id: "clearMeasurements", params: {}, approved: true }));
     const n = await app.evaluate(() => (globalThis as unknown as { __wdlg: number }).__wdlg);
-    check(r.ok === false && r.error === "declined" && n === 1, "[12] ★承認の関門が配布物の main で働く（approved を偽っても確認ダイアログが出て、取り消しで declined）", { r, dialogs: n });
+    // #505 以降、write 操作は「2D 窓が引数と対象を確かめ、通ったときだけ確認ダイアログを出す」。このスモークには DICOM の
+    // タイルが無い（動画だけ）ので、確認ダイアログから declined までの経路は desktop/viewerRelay.test.js が見る。ここでは、
+    // 配布物の main で「2D 窓が無いときは、approved を偽っても確認ダイアログを出さず、実行もしない」ことを確かめる。
+    check(r.ok === false && r.error === "no-viewer" && n === 0, "[12] ★承認の関門が配布物の main で働く（2D 窓が無ければ、approved を偽っても確認ダイアログを出さず実行しない）", { r, dialogs: n });
   } finally {
     await win?.close().catch(() => undefined);
     // 後続の検査へスタブを持ち越さない。
@@ -678,6 +689,22 @@ async function cliSection(inst: Installed, appEnv: Record<string, string>, work:
     if (!freed) await new Promise((res) => setTimeout(res, 500));
   }
   check(!!port && freed, "[13] 終了後に無人実行の backend のポートが空く", { port });
+}
+
+/**
+ * メイン窓のボタンを押す。「新しいバージョンがあります」の窓は、起動の後しばらくして（GitHub の最新リリースを見てから）出て、
+ * 出ていればボタンの押下を遮る（main の版が公開済みのリリースより古い間は毎回）。遮られたら閉じてやり直す。
+ */
+async function clickDismissing(page: Page, target: Locator): Promise<void> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await target.click({ timeout: 8_000 });
+      return;
+    } catch (e) {
+      if (attempt >= 4) throw e;
+      await dismissStartupDialogs(page);
+    }
+  }
 }
 
 async function main(): Promise<void> {
@@ -796,17 +823,7 @@ async function main(): Promise<void> {
     // 日付の絞り込みは「All」ボタンで外す（利用者と同じ操作。入力欄を空にするだけだと、状態が反映される前に
     // 検索が走って空振りすることがあった）。
     const dates = main.locator('input[type="date"]');
-    // 「新しいバージョンがあります」の窓は、起動の後しばらくして（GitHub の最新リリースを見てから）出る。
-    // 出ていればボタンの押下を遮る（main の版が公開済みのリリースより古い間は毎回）ので、閉じてやり直す。
-    for (let attempt = 0; ; attempt++) {
-      try {
-        await main.getByRole("button", { name: "All", exact: true }).click({ timeout: 8_000 });
-        break;
-      } catch (e) {
-        if (attempt >= 4) throw e;
-        await dismissStartupDialogs(main);
-      }
-    }
+    await clickDismissing(main, main.getByRole("button", { name: "All", exact: true }));
     await main.waitForTimeout(500);
     console.log(`  [情報] 日付欄: ${JSON.stringify([await dates.nth(0).inputValue(), await dates.nth(1).inputValue()])}`);
     // 起動直後は backend との接続中（画面下部の「Connecting…」）で、最初の検索が空振りすることがあるので数回やり直す。
@@ -819,7 +836,7 @@ async function main(): Promise<void> {
     let found = false;
     let attempts = 0;
     for (; attempts < 6 && !found; attempts++) {
-      await main.getByTestId("search-submit-button").click();
+      await clickDismissing(main, main.getByTestId("search-submit-button"));
       found = await row.waitFor({ state: "visible", timeout: 10_000 }).then(() => true, () => false);
     }
     console.log(`  [情報] 検索の試行回数: ${attempts}\n  [情報] 画面の検索リクエスト: ${JSON.stringify(searchCalls.slice(0, 4))}`);
