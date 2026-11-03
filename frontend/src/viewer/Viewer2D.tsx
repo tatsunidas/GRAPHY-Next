@@ -37,7 +37,7 @@ import { emitToast } from "./toast";
 import { isRoiLocked, partitionByLock } from "./roiLock";
 import { forgetLabelVolume, isLabelVolumeOf } from "./labelVolumeOrigin";
 import type { SavedRoi } from "./roiPersistence";
-import { buildContourVertices, buildRoiHandles, isContourCreateTool, maxExtentFromImage, sliceToleranceFromStack, type RoiCreateGeometry } from "./roiCreate";
+import { buildBidirectionalHandles, buildContourVertices, buildRoiHandles, isBidirectionalCreateTool, isContourCreateTool, maxExtentFromImage, sliceToleranceFromStack, type RoiCreateGeometry } from "./roiCreate";
 import { installTrueMagnification } from "./magnifier";
 import { ERASER_TOOL_ID, WAND2D_TOOL_ID, WAND3D_TOOL_ID, LEVELSET2D_TOOL_ID, SCISSORS_TOOL_ID } from "./toolIds";
 import { commitThreshold } from "./thresholdTool";
@@ -2699,7 +2699,7 @@ export function Viewer2D({
       sliceToleranceMm: tol,
       maxExtentMm: maxExtent,
     };
-    const handles = contour ? buildContourVertices(creq, geom) : buildRoiHandles(creq, geom);
+    const handles = contour ? buildContourVertices(creq, geom) : isBidirectionalCreateTool(req.tool) ? buildBidirectionalHandles(creq, geom) : buildRoiHandles(creq, geom);
     if (!handles.ok) return handles;
     const sop = sopFromImageId(ctx.imageId);
     if (!sop) return { ok: false, reason: "failed" };

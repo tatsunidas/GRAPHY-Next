@@ -82,6 +82,44 @@
       }
     },
     {
+      "name": "make_bidirectional",
+      "description": "Create a long-axis/short-axis (Bidirectional) ROI around the first ROI of the current tile (verification of host.createRoi tool Bidirectional). Axes are drawn in pixel coordinates from the first ROI centroid.",
+      "effect": "write",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "longMm": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1000,
+            "description": "Long axis length (mm)."
+          },
+          "shortMm": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1000,
+            "description": "Short axis length (mm)."
+          },
+          "tiltDeg": {
+            "type": "number",
+            "minimum": -90,
+            "maximum": 90,
+            "description": "Rotation of the long axis from the row direction (degrees)."
+          },
+          "skewDeg": {
+            "type": "number",
+            "minimum": -90,
+            "maximum": 90,
+            "description": "Deviation of the short axis from perpendicular (degrees); a non-zero value is expected to be rejected as bad-axes."
+          }
+        },
+        "required": [
+          "longMm",
+          "shortMm"
+        ]
+      }
+    },
+    {
       "name": "remove_roi",
       "description": "Remove a ROI this plugin created (verification of host.removeCreatedRoi).",
       "effect": "write",

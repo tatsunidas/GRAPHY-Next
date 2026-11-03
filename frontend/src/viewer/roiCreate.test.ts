@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildContourVertices, buildRoiHandles, isSelfIntersecting, type CreateRoiRequest, type RoiCreateGeometry } from "./roiCreate";
+import { buildBidirectionalHandles, buildContourVertices, buildRoiHandles, isSelfIntersecting, type CreateRoiRequest, type RoiCreateGeometry } from "./roiCreate";
 
 /** canvas(px) → world(mm) の仮のアフィン。world = origin + cx·ex·mmPerPx + cy·ey·mmPerPx。 */
 function geom(over: Partial<{ origin: number[]; ex: number[]; ey: number[]; mmPerPx: number; focal: number[]; normal: number[]; tol: number; max: number }> = {}): RoiCreateGeometry {
@@ -256,5 +256,62 @@ describe("isSelfIntersecting", () => {
     expect(isSelfIntersecting([[0, 0], [4, 0], [4, 1], [1, 1], [1, 4], [0, 4]])).toBe(false);
     expect(isSelfIntersecting([[0, 0], [4, 4], [4, 0], [0, 4]])).toBe(true);
     expect(isSelfIntersecting([[0, 0], [4, 0], [4, 4], [2, 0], [0, 4]])).toBe(true); // 頂点が別の辺に触れる
+  });
+});
+
+describe("buildBidirectionalHandles（長径・短径）", () => {
+  // 長径は x 方向に 40mm、短径は y 方向に 20mm。交点は長径の始点から 15mm。
+  const bi = (over: Partial<CreateRoiRequest> = {}): CreateRoiRequest => ({
+    tool: "Bidirectional",
+    longAxisLps: [[-5, 20, 5], [35, 20, 5]],
+    shortAxisLps: [[10, 10, 5], [10, 30, 5]],
+    ...over,
+  });
+
+  it("正例: 並びは [長径の始点, 長径の終点, 短径の始点, 短径の終点]。長さは world の mm で一致し、中心は長径の中点", () => {
+    const r = buildBidirectionalHandles(bi(), geom());
+    if (!r.ok) throw new Error(r.reason);
+    expect(r.points).toEqual([[-5, 20, 5], [35, 20, 5], [10, 10, 5], [10, 30, 5]]);
+    expect(dist(r.points[0], r.points[1])).toBeCloseTo(40, 9);
+    expect(dist(r.points[2], r.points[3])).toBeCloseTo(20, 9);
+    expect(r.centerLps).toEqual([15, 20, 5]);
+  });
+
+  it("正例: 斜めの 2 軸（直交）と、短径の向きが逆でも受理する（RECIST は向きを問わない）", () => {
+    const c = Math.SQRT1_2;
+    const r = buildBidirectionalHandles(
+      bi({ longAxisLps: [[0, 0, 5], [30 * c, 30 * c, 5]], shortAxisLps: [[15 * c + 5 * c, 15 * c - 5 * c, 5], [15 * c - 5 * c, 15 * c + 5 * c, 5]] }),
+      geom(),
+    );
+    expect(r.ok).toBe(true);
+    expect(buildBidirectionalHandles(bi({ shortAxisLps: [[10, 30, 5], [10, 10, 5]] }), geom()).ok).toBe(true);
+  });
+
+  it("正例: 画素座標（pixelToWorld）で指定すると、同じ点に LPS へ変換される", () => {
+    const g = { ...geom(), pixelToWorld: (p: [number, number]) => [p[0], p[1], 5] };
+    const r = buildBidirectionalHandles({ tool: "Bidirectional", longAxisPx: [[-5, 20], [35, 20]], shortAxisPx: [[10, 10], [10, 30]] }, g);
+    if (!r.ok) throw new Error(r.reason);
+    expect(r.points[1]).toEqual([35, 20, 5]);
+  });
+
+  it("負例: 直交しない 2 軸は bad-axes。対照として直交させれば通る", () => {
+    expect(buildBidirectionalHandles(bi({ shortAxisLps: [[10, 10, 5], [14, 30, 5]] }), geom())).toEqual({ ok: false, reason: "bad-axes" });
+    expect(buildBidirectionalHandles(bi({ shortAxisLps: [[10, 10, 5], [10, 30, 5]] }), geom()).ok).toBe(true);
+  });
+
+  it("負例: 短径が長径と交わらない（片側だけ・線分の外）は bad-axes", () => {
+    expect(buildBidirectionalHandles(bi({ shortAxisLps: [[10, 22, 5], [10, 40, 5]] }), geom())).toEqual({ ok: false, reason: "bad-axes" }); // 長径の同じ側
+    expect(buildBidirectionalHandles(bi({ shortAxisLps: [[50, 10, 5], [50, 30, 5]] }), geom())).toEqual({ ok: false, reason: "bad-axes" }); // 長径の線分の外
+  });
+
+  it("負例: 長さ 0・面外・大きすぎ・点数/型の不正・両指定・未指定", () => {
+    expect(buildBidirectionalHandles(bi({ longAxisLps: [[0, 0, 5], [0, 0, 5]] }), geom())).toEqual({ ok: false, reason: "degenerate" });
+    expect(buildBidirectionalHandles(bi({ shortAxisLps: [[10, 10, 5], [10, 30, 9]] }), geom())).toEqual({ ok: false, reason: "off-slice" });
+    expect(buildBidirectionalHandles(bi(), geom({ max: 30 }))).toEqual({ ok: false, reason: "too-large" });
+    expect(buildBidirectionalHandles(bi({ shortAxisLps: [[10, 10, 5]] as never }), geom())).toEqual({ ok: false, reason: "bad-request" });
+    expect(buildBidirectionalHandles(bi({ longAxisLps: [[NaN, 0, 5], [1, 0, 5]] }), geom())).toEqual({ ok: false, reason: "bad-request" });
+    expect(buildBidirectionalHandles(bi({ longAxisPx: [[0, 0], [1, 1]] }), geom())).toEqual({ ok: false, reason: "bad-request" }); // LPS と画素の混在
+    expect(buildBidirectionalHandles({ tool: "Bidirectional" }, geom())).toEqual({ ok: false, reason: "bad-request" });
+    expect(buildBidirectionalHandles({ ...bi(), tool: "EllipticalROI" }, geom())).toEqual({ ok: false, reason: "bad-request" });
   });
 });
