@@ -1,0 +1,244 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>GRAPHY-Next v0.6.0 操作ガイド — v0.5.2 からの主な新機能</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;900&family=IBM+Plex+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="../guide.css">
+<style>
+  /* この版のための部品（共通の guide.css は変えない） */
+  .duo { display: grid; grid-template-columns: 1fr 1fr; gap: 56px; align-items: start; }
+  .duo .col { display: flex; flex-direction: column; gap: 28px; }
+  .duo .col { gap: 16px; }
+  .duo .shot { width: 82%; }
+  .duo .explain { gap: 10px; }
+  .duo .explain li p { font-size: 23px; line-height: 1.4; }
+  .duo .explain li .num { margin-top: 2px; }
+  .cover .steps li { padding: 14px 0; }
+  .others { display: grid; grid-template-columns: 1fr 1fr; gap: 20px 72px; list-style: none; }
+  .others li { font-size: 26px; line-height: 1.5; padding-left: 28px; position: relative; }
+  .others li::before { content: ""; position: absolute; left: 0; top: 16px; width: 10px; height: 10px; border-radius: 50%; background: var(--accent); }
+  .others b { color: var(--text); }
+  .others span { color: var(--sub); }
+</style>
+</head>
+<body>
+
+<section class="page cover">
+  <div class="left">
+    <p class="eyebrow">GRAPHY-NEXT v0.6.0 / 操作ガイド</p>
+    <h1>v0.5.2 からの<br>主な新機能</h1>
+    <p class="lead">ROI のグループ化とコピー、患者を並べて比べる全患者タイル、複数シリーズの連結、そして元に戻せない操作（自動削除・受信時の匿名化）の設定を、画面つきで紹介します。小さな変更は最後のページに一覧しました。</p>
+    <div class="chips">
+      <span class="chip on">ROI のグループ化</span>
+      <span class="chip">全患者タイル</span>
+      <span class="chip">シリーズの連結</span>
+    </div>
+  </div>
+  <div class="panel">
+    <h3>この版の内容</h3>
+    <ol class="steps">
+      <li><span class="n">01</span><p>ROI のグループ化<small>まとめて表示・ロック・選択・合算</small></p></li>
+      <li><span class="n">02</span><p>ROI のコピーと貼り付け<small>複数をまとめて、位置関係を保ったまま</small></p></li>
+      <li><span class="n">03</span><p>全患者タイル<small>患者を並べて比べる。取り違えを防ぐ表示</small></p></li>
+      <li><span class="n">04</span><p>複数シリーズの連結<small>位置の順に 1 本で表示</small></p></li>
+      <li><span class="n">05</span><p>自動削除<small>条件・試算・有効化の確認</small></p></li>
+      <li><span class="n">06</span><p>受信時の匿名化<small>元に戻せない設定を、確かめてから有効に</small></p></li>
+      <li><span class="n">07</span><p>AI アシスタントと、そのほかの変更</p></li>
+    </ol>
+  </div>
+  <div class="footer"><span>研究用です。診断には使わないでください。データ: TCIA HCC-TACE-Seg（Moawad et al., 2021）CC BY 4.0　doi.org/10.7937/TCIA.5FNA-0924</span><span>1 / 9</span></div>
+</section>
+
+<section class="page">
+  <div>
+    <p class="eyebrow">01 / 2D Viewer ＞ ROI ツール ＞ ROI マネージャ</p>
+    <h2>ROI を 2 つ以上選んで「グループ」にまとめる</h2>
+  </div>
+  <div class="duo">
+    <div class="col">
+      <figure class="shot" data-shot="roi-group-make"><img src="shots/roi-group-make.png" alt="ROI マネージャで 2 つの ROI にチェックを入れ、グループのボタンを押す"></figure>
+      <ol class="explain">
+        <li><span class="num">1</span><p>ROI マネージャで、まとめたい ROI の<b>行頭にチェック</b>を入れます（2 つ以上）</p></li>
+        <li><span class="num">2</span><p><b>「🗂 グループ」</b>を押します。同じ患者の ROI だけをまとめられます</p></li>
+      </ol>
+    </div>
+    <div class="col">
+      <figure class="shot" data-shot="roi-group"><img src="shots/roi-group.png" alt="グループの見出し。名前・表示・ロック・全選択・合算の各ボタン"></figure>
+      <ol class="explain">
+        <li><span class="num">1</span><p>グループの<b>名前</b>は書き換えられます</p></li>
+        <li><span class="num">2</span><p>見出しの右のボタンで、まとめて操作します<br><b>👁</b> 表示・非表示　<b>🔒</b> ロック（メンバーの鍵が一緒に変わります）<br><b>◎</b> メンバーを全部選ぶ　<b>Σ</b> 合計面積と、全画素をまとめた平均 ± SD</p></li>
+      </ol>
+    </div>
+  </div>
+  <p class="note">グループは保存され、開き直しても残ります。⛓ で解除、🗑 でグループごと削除できます（ロック中の ROI は残ります）。</p>
+  <div class="footer"><span>研究用です。診断には使わないでください。データ: TCIA HCC-TACE-Seg（Moawad et al., 2021）CC BY 4.0</span><span>2 / 9</span></div>
+</section>
+
+<section class="page">
+  <div>
+    <p class="eyebrow">02 / 2D Viewer ＞ ROI ツール ＞ ROI をコピー・ROI を貼り付け</p>
+    <h2>複数の ROI を、位置関係を保ったままコピーして貼り付ける</h2>
+  </div>
+  <div class="shot-row">
+    <figure class="shot" data-shot="roi-paste"><img src="shots/roi-paste.png" alt="コピーした 2 つの ROI を別のスライスに貼り付けた画面と、貼り付けの通知"></figure>
+    <div style="display:flex;flex-direction:column;gap:32px">
+      <ol class="explain">
+        <li><span class="num">1</span><p>ROI を選びます。<b>Ctrl（Mac は ⌘）＋クリック</b>で複数選べます。グループの ◎ でも選べます。<b>ROI ツール ＞ ROI をコピー</b>（Ctrl+C）</p></li>
+        <li><span class="num">2</span><p>貼り付け先のスライスやタイルを開いて、<b>ROI を貼り付け</b>（Ctrl+V）。複数のときも、<b>面内の相対位置とスライス間の枚数差</b>を保ちます</p></li>
+      </ol>
+      <p class="callout">ROI は別の患者のタイルへも貼り付けられます（貼り付け先の患者の、新しい ROI として保存されます）。</p>
+      <p class="note">⚠ 選択が複数の患者にまたがるとき、またコピーで複数のタイル（シリーズ）にまたがるときは、コピーできません。理由が表示されます。</p>
+    </div>
+  </div>
+  <div class="footer"><span>研究用です。診断には使わないでください。データ: TCIA HCC-TACE-Seg（Moawad et al., 2021）CC BY 4.0</span><span>3 / 9</span></div>
+</section>
+
+<section class="page">
+  <div>
+    <p class="eyebrow">03 / 2D Viewer ＞ タイルの見せ方「全患者」</p>
+    <h2>患者を同じ領域に並べて比べる。取り違えない表示</h2>
+  </div>
+  <div class="duo">
+    <div class="col">
+      <figure class="shot" data-shot="left-panel"><img src="shots/left-panel.png" alt="2D ビューアの左パネル。検索パネルの開閉と、表示中の一覧"></figure>
+      <ol class="explain">
+        <li><span class="num">1</span><p><b>「検索パネル」</b>の開閉で、画像の領域を広げられます</p></li>
+        <li><span class="num">2</span><p><b>表示中の一覧</b>に、開いているシリーズが出ます。✕ でそのタイルを閉じます</p></li>
+      </ol>
+    </div>
+    <div class="col">
+      <figure class="shot" data-shot="all-patients"><img src="shots/all-patients.png" alt="3 人の患者を同じ領域に並べた全患者タイル。患者ごとの色の枠と凡例"></figure>
+      <ol class="explain">
+        <li><span class="num">1</span><p><b>「全患者」</b>では、別の患者を開いてもタブは増えず、同じ領域に並びます（「患者タブ」で従来の表示に戻せます）</p></li>
+        <li><span class="num">2</span><p>凡例に<b>表示中の患者</b>と、いま操作が効く<b>「操作の対象」</b>が出ます。押すとその患者のタイルが点滅します</p></li>
+        <li><span class="num">3</span><p>タイルのヘッダには、<b>患者名・ID・検査日</b>が常に出ます</p></li>
+      </ol>
+    </div>
+  </div>
+  <p class="note">操作は全患者に一斉には効きません。Fusion は別の患者どうしではできず、スクロール同期は同じ患者のタイルの間だけ連動します。</p>
+  <div class="footer"><span>研究用です。診断には使わないでください。データ: TCIA HCC-TACE-Seg（Moawad et al., 2021）CC BY 4.0</span><span>4 / 9</span></div>
+</section>
+
+<section class="page">
+  <div>
+    <p class="eyebrow">04 / 2D Viewer ＞ 左パネル ＞ 連結して開く</p>
+    <h2>複数のシリーズを、位置の順に 1 本として開く</h2>
+  </div>
+  <div class="duo">
+    <div class="col">
+      <figure class="shot" data-shot="concat-dialog"><img src="shots/concat-dialog.png" alt="連結して開く。連結できる旨と、継ぎ目の重なりの表示"></figure>
+      <ol class="explain">
+        <li><span class="num">1</span><p>左パネルで<b>連結するシリーズにチェック</b>（2 本以上）を入れ、<b>「連結して開く」</b>を押します</p></li>
+        <li><span class="num">2</span><p><b>連結できるか</b>を確かめた結果と、枚数が出ます</p></li>
+        <li><span class="num">3</span><p><b>継ぎ目</b>の重なり・隙間が出ます。重なりは中点で切り、隙間は埋めません</p></li>
+        <li><span class="num">4</span><p>問題がなければ<b>「連結して開く」</b></p></li>
+      </ol>
+    </div>
+    <div class="col">
+      <figure class="shot" data-shot="concat-open"><img src="shots/concat-open.png" alt="連結して開いたタイル。見出しとバナーに連結したシリーズが出る"></figure>
+      <ol class="explain">
+        <li><span class="num">1</span><p>連結したタイルには<b>バナー</b>が出て、元の画像のまま 1 本のスタックとして見られます</p></li>
+      </ol>
+      <p class="callout">連結できるのは、同じ患者・同じ座標系・同じ向き・同じモダリティで、全スライスに位置のあるシリーズです。満たさないときは、理由をすべて表示します。</p>
+    </div>
+  </div>
+  <div class="footer"><span>研究用です。診断には使わないでください。この図の画像は合成データです。</span><span>5 / 9</span></div>
+</section>
+
+<section class="page">
+  <div>
+    <p class="eyebrow">05 / 環境設定 ＞ 自動削除</p>
+    <h2>古い検査を自動で消す。まず条件を決めて、「試算」で確かめる</h2>
+  </div>
+  <div class="duo">
+    <div class="col">
+      <figure class="shot" data-shot="retention-conditions"><img src="shots/retention-conditions.png" alt="自動削除の条件。受信からの期間（日・週間・ヶ月）と保管庫の上限"></figure>
+      <ol class="explain">
+        <li><span class="num">1</span><p><b>受信からの期間</b>の値を入れます</p></li>
+        <li><span class="num">2</span><p>単位は<b>日・週間・ヶ月</b>から選べます</p></li>
+        <li><span class="num">3</span><p>日数に換算した値が出ます（1 週間 = 7 日、1 ヶ月 = 30 日）</p></li>
+        <li><span class="num">4</span><p><b>「条件を保存」</b>。保存しても、状態は「オフ」のままです。保管庫の上限・ディスクの空きの下限も条件にできます</p></li>
+      </ol>
+    </div>
+    <div class="col">
+      <figure class="shot" data-shot="retention-preview"><img src="shots/retention-preview.png" alt="自動削除の試算。消える検査の一覧と、保護で除外した検査の説明"></figure>
+      <ol class="explain">
+        <li><span class="num">1</span><p><b>「試算」</b>は何も消しません。今の条件で消える検査を見せます</p></li>
+        <li><span class="num">2</span><p>患者・検査日・容量・<b>消える理由</b>の表で確かめます</p></li>
+        <li><span class="num">3</span><p>納得できたら<b>「この内容で有効にする」</b>へ</p></li>
+      </ol>
+    </div>
+  </div>
+  <p class="note">⚠ ロックした検査、ROI・解析・レポートなどのある検査、開いている検査は消しません（試算に除外の件数が出ます）。</p>
+  <div class="footer"><span>研究用です。診断には使わないでください。データ: TCIA HCC-TACE-Seg（Moawad et al., 2021）CC BY 4.0</span><span>6 / 9</span></div>
+</section>
+
+<section class="page">
+  <div>
+    <p class="eyebrow">05 / 環境設定 ＞ 自動削除（つづき）</p>
+    <h2>有効にする前に、必ず確認が出る</h2>
+  </div>
+  <div class="shot-row">
+    <figure class="shot" data-shot="retention-confirm"><img src="shots/retention-confirm.png" alt="自動削除を有効にしますかの確認。キャンセルのボタン"></figure>
+    <div style="display:flex;flex-direction:column;gap:32px">
+      <ol class="explain">
+        <li><span class="num">1</span><p>「この内容で有効にする」を押すと、<b>確認</b>が出ます。やめるときは<b>キャンセル</b>で戻れます</p></li>
+      </ol>
+      <p class="callout">消した検査は元に戻せません。PACS など別の場所に原本がある運用でだけ使ってください。</p>
+      <p class="note">削除の実行は「削除の記録」に残ります。ロックした検査は消えません。</p>
+    </div>
+  </div>
+  <div class="footer"><span>研究用です。診断には使わないでください。データ: TCIA HCC-TACE-Seg（Moawad et al., 2021）CC BY 4.0</span><span>7 / 9</span></div>
+</section>
+
+<section class="page">
+  <div>
+    <p class="eyebrow">06 / 環境設定 ＞ DICOM 通信先 ＞ 受信時の匿名化</p>
+    <h2>受け取った画像を、保管する前に匿名化する</h2>
+  </div>
+  <div class="duo">
+    <div class="col">
+      <figure class="shot" data-shot="receive-anon"><img src="shots/receive-anon.png" alt="受信時の匿名化。有効にするのチェックと、内容を理解したのチェック"></figure>
+      <ol class="explain">
+        <li><span class="num">1</span><p><b>「受信した画像を匿名化してから保管する」</b>を入れると、原本はこのアプリに残りません</p></li>
+        <li><span class="num">2</span><p>注意の内容を読み、<b>「理解しました」</b>にチェックを入れます</p></li>
+      </ol>
+    </div>
+    <div class="col">
+      <figure class="shot" data-shot="receive-anon-save"><img src="shots/receive-anon-save.png" alt="受信時の匿名化。接頭辞、保存、鍵の書き出し"></figure>
+      <ol class="explain">
+        <li><span class="num">1</span><p>患者 ID の<b>接頭辞</b>などを決めます</p></li>
+        <li><span class="num">2</span><p><b>保存</b>すると、再起動なしで次の受信から効きます</p></li>
+        <li><span class="num">3</span><p>仮名の<b>鍵を書き出して保管</b>します。鍵を失うと、同じ患者でも別の仮名になります</p></li>
+      </ol>
+    </div>
+  </div>
+  <p class="note">⚠ 画素に文字が焼き込まれている恐れのある画像は受け取らず、送信側にエラーを返します。</p>
+  <div class="footer"><span>研究用です。診断には使わないでください。</span><span>8 / 9</span></div>
+</section>
+
+<section class="page">
+  <div>
+    <p class="eyebrow">07 / AI アシスタントと、そのほかの変更</p>
+    <h2>AI アシスタントは構築中です。そのほかの変更</h2>
+  </div>
+  <p class="callout">AI アシスタント（表示中の画像の添付、ROI の作成と計測値の読み取り、プラグインの AI ツール）は<b>構築中</b>です。この版では機能が増えていますが、動作の確認が終わっていないため、使い方は載せません。</p>
+  <ul class="others">
+    <li><b>検索と一覧</b> <span>検索条件に名前を付けて保存・呼び出し、一覧への任意の DICOM タグの列、アルバム、日付・時刻の表示書式</span></li>
+    <li><b>DICOM 送信</b> <span>転送構文の選択（保存どおり／Explicit VR LE／Implicit VR LE）、確定済みレポートのキー画像だけを送る</span></li>
+    <li><b>ROI の保存と追従</b> <span>塗り ROI・3D 球 ROI の保存と復元、シリーズの統合・分割や DB 間のコピー・移動への追従</span></li>
+    <li><b>2D Viewer</b> <span>ROI マネージャの全患者表示、検索パネルの ✓ で表示中のシリーズを閉じる、フィルタ画像（LoG）の色分け重ね表示</span></li>
+    <li><b>一括抽出</b> <span>定義の一覧（複数の定義を順に実行）、コマンドラインでの無人実行</span></li>
+    <li><b>Radiomics</b> <span>IBSI 照合の画面</span></li>
+    <li><b>XA</b> <span>2D QCA の側枝の候補を探す（採否は人）、中心線・エッジ調整にアンカー、解析フレームの心位相</span></li>
+    <li><b>プラグイン</b> <span>ROI の作成、Curved MPR を開く、派生シリーズに b 値（DiffusionBValue）を付ける、3D 血管モデルの登録</span></li>
+  </ul>
+  <p class="note">この一覧は、更新の内容から拾った主なものです。すべての変更は、リリースノートを参照してください。</p>
+  <div class="footer"><span>研究用です。診断には使わないでください。</span><span>9 / 9</span></div>
+</section>
+
+<script src="shots/marks.js"></script>
+<script src="../guide.js"></script>
+</body>
+</html>
