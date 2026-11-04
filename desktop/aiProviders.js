@@ -64,13 +64,35 @@ const BUILT_IN = {
       auth: "api-key",
       models: {
         "image-to-image": "gemini-3.1-flash-image",
-        "image-to-text": "gemini-2.5-flash",
-        "text-to-text": "gemini-2.5-flash",
+        "image-to-text": "gemini-3.5-flash-lite",
+        "text-to-text": "gemini-3.5-flash-lite",
       },
     },
   ],
   defaults: { "image-to-image": "gemini-public", "image-to-text": "gemini-public", "text-to-text": "gemini-public" },
 };
+
+/**
+ * 廃止されたモデル → 転送先。gemini-2.5-flash は 2026-12-01 に gemini-3.5-flash-lite へ自動転送される（Google の通知）。
+ * 転送を待たずに自分で切り替え、思考の深さなど 3 系の設定（アダプタ）を効かせる。
+ * **組み込みの提供元（gemini-public）の、厳密にこのモデル名だけ**を読み替える。利用者が自分で作った提供元・別のモデル名は触らない。
+ */
+const RETIRED_MODELS = { "gemini-2.5-flash": "gemini-3.5-flash-lite" };
+function migrateRetiredModels(raw) {
+  if (!raw || !Array.isArray(raw.providers)) return raw;
+  let changed = false;
+  const providers = raw.providers.map((p) => {
+    if (!p || p.id !== LEGACY_PROVIDER_ID || !p.models || typeof p.models !== "object") return p;
+    const models = {};
+    for (const [cap, m] of Object.entries(p.models)) {
+      const to = Object.prototype.hasOwnProperty.call(RETIRED_MODELS, m) ? RETIRED_MODELS[m] : null;
+      if (to) { changed = true; console.info(`[ai] ${p.id} の ${cap}: ${m} → ${to}（${m} は廃止されるため）`); }
+      models[cap] = to || m;
+    }
+    return { ...p, models };
+  });
+  return changed ? { ...raw, providers } : raw;
+}
 
 /** 旧版（0.3.0 まで）が使っていた鍵の名前。 */
 const LEGACY_SECRET_KEY = "ai.gemini.apiKey";
@@ -505,7 +527,7 @@ function get() {
   let loadError = null;
   if (filePath && fs.existsSync(filePath)) {
     try {
-      raw = JSON.parse(fs.readFileSync(filePath, "utf8"));
+      raw = migrateRetiredModels(JSON.parse(fs.readFileSync(filePath, "utf8")));
     } catch (e) {
       // 🔴 **黙って出荷時構成へ戻さない。** 戻すだけだと利用者には
       //    「Grok を書いたのに Gemini に送られる、理由は不明」に見える。
