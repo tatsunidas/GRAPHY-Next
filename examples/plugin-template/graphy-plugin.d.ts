@@ -718,6 +718,13 @@ export interface PixelData {
    * DICOM SliceThickness (0018,0050) mm。無ければ null（間隔で代用しない）。**0.1.12 以降**。
    */
   sliceThickness: number | null;
+  /**
+   * このスライスの患者座標の位置（ImagePositionPatient・LPS mm）。無ければ null。
+   * **タイルのスライス番号（`sliceIndex`）と、`loadVolume` が返すボリュームの z 添字は同じとは限らない**
+   * （ボリュームは位置の昇順、タイルは本体のレイアウト順。NM 多フレームのように位置が減る順だと完全な逆順）。
+   * 2 つを突き合わせるときは、この `ipp` と `loadVolume` の `ipp`・`sliceStep` から**位置で**対応づけること。
+   */
+  ipp: [number, number, number] | null;
 }
 
 /** `showOverlay` に渡す値マップ。**0.1.9 以降**。 */
