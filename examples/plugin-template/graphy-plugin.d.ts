@@ -762,7 +762,7 @@ export interface DerivedSeriesRequest {
   /**
    * DiffusionBValue (0018,9087) として書く b 値（s/mm²、0 以上の有限値）。**省略すると書かない**。
    * 元シリーズの b 値は引き継がない（派生画素の b 値を知っているのはプラグインだけ。例: computed DWI の目標 b 値）。
-   * **0.5.2 以降**。
+   * **0.6.0 以降**。
    */
   diffusionBValue?: number;
 }
