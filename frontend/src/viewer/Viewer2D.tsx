@@ -5,6 +5,7 @@
 import { importLabelVolume } from "./maskFrames";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { RenderingEngine, Enums, EVENTS, eventTarget, metaData, utilities, type Types } from "@cornerstonejs/core";
+import { sliceIppOf } from "./sliceIpp";
 import {
   ToolGroupManager,
   PanTool,
@@ -2230,6 +2231,8 @@ export function Viewer2D({
       // ギャップのある収集で厚さと一致しない）。無ければ null を渡し、
       // 「厚さが分からない」ことをプラグイン側が判断できるようにする。
       sliceThickness: inf?.sliceThickness ?? null,
+      // 要求したスライス自身の位置（表示中スライスの値を流用しない）。H10 のボリュームとの対応づけに使う。
+      ipp: sliceIppOf(imageId),
     };
   };
 

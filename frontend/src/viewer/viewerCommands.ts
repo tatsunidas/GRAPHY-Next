@@ -164,6 +164,16 @@ export interface ViewerPixelData {
    * ギャップのある収集で間隔を厚さの代わりに使うと基準が変わってしまう。
    */
   sliceThickness: number | null;
+  /**
+   * このスライスの**患者座標の位置**（ImagePositionPatient・LPS mm）。無ければ null。
+   *
+   * <p>🔴 **`sliceIndex`（タイルの表示順）と、`loadVolume`（H10）が返すボリュームの z 添字は、同じとは限らない。**
+   * ボリュームは法線方向の位置の**昇順**に並べるが、タイルは本体のレイアウト順（NM 多フレームのように
+   * `SpacingBetweenSlices` が負なら**位置が減る順**）で並ぶ。実データ（MRTDosimetry）では完全な逆順だった。
+   * 2 つを突き合わせるときは、この `ipp` と `loadVolume` の `ipp`・`sliceStep` から**位置で**対応づける
+   * （添字をそのまま使わない）。
+   */
+  ipp: [number, number, number] | null;
 }
 
 /**
