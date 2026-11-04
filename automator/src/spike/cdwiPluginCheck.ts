@@ -65,7 +65,7 @@ async function seriesOf(base: string, studyUid: string) {
     seriesInstanceUid: string; seriesDescription?: string; numberOfInstances?: number; modality?: string;
   }[];
 }
-async function tagsOf(base: string, studyUid: string, seriesUid: string, sop: string): Promise<{ tag: string; value: string; depth: number }[]> {
+async function tagsOf(base: string, studyUid: string, seriesUid: string, sop: string): Promise<{ tag: string; value: string; depth: number; vr?: string }[]> {
   return (await (await fetch(`${base}/api/studies/${studyUid}/series/${seriesUid}/instances/${sop}/tags`)).json()) as never;
 }
 
