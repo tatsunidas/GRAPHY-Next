@@ -154,6 +154,8 @@ export interface AiProviderEntry {
   auth?: { header?: string; prefix?: string } | string;
   /** 会話でのツール呼び出し。`none` ならツールを送らない（関数呼び出しを持たないローカルモデル向け）。 */
   toolMode?: string;
+  /** Gemini 3 系の思考の深さ。未指定なら既定（ツールを使う会話は medium）。 */
+  thinkingLevel?: string;
   /** 鍵が要らない提供元（ループバックのローカルモデル）。鍵の欄・未設定の警告を出さない。 */
   keyless?: boolean;
   /** パスの組み方（`kind` の既定を上書きしたいときだけ）。 */

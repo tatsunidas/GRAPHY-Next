@@ -80,7 +80,7 @@ const LEGACY_PROVIDER_ID = "gemini-public";
 /** 提供元 1 件で認める項目。ここに無いものは「無視した」と problems に出す。 */
 const KNOWN_PROVIDER_FIELDS = new Set([
   "id", "label", "kind", "endpoint", "auth", "models",
-  "pathStyle", "apiVersion", "paths", "headers", "toolMode",
+  "pathStyle", "apiVersion", "paths", "headers", "toolMode", "thinkingLevel",
 ]);
 
 /**
@@ -89,6 +89,8 @@ const KNOWN_PROVIDER_FIELDS = new Set([
  * 呼び出し側（アシスタント）がテキスト中の JSON で代替する。
  */
 const TOOL_MODES = new Set(["native", "none"]);
+/** Gemini 3 系の思考の深さ（`thinkingConfig.thinkingLevel`）。 */
+const THINKING_LEVELS = new Set(["minimal", "low", "medium", "high"]);
 
 let filePath = null;
 /** 読み込み済みの構成（未読なら null）。 */
@@ -382,6 +384,10 @@ function validateProvider(p) {
     return { ok: false, reason: `unknown-tool-mode:${p.toolMode}` };
   }
 
+  if (p.thinkingLevel != null && !THINKING_LEVELS.has(p.thinkingLevel)) {
+    return { ok: false, reason: `unknown-thinking-level:${p.thinkingLevel}` };
+  }
+
   if (p.pathStyle != null && !PATH_STYLES.has(p.pathStyle)) {
     return { ok: false, reason: `unknown-path-style:${p.pathStyle}` };
   }
@@ -409,6 +415,7 @@ function validateProvider(p) {
   if (auth.auth !== undefined) provider.auth = auth.auth;
   if (p.pathStyle != null) provider.pathStyle = p.pathStyle;
   if (p.toolMode != null) provider.toolMode = p.toolMode;
+  if (p.thinkingLevel != null) provider.thinkingLevel = p.thinkingLevel;
   if (p.apiVersion != null) provider.apiVersion = p.apiVersion;
   if (pa.paths) provider.paths = pa.paths;
   if (h.headers) provider.headers = h.headers;
@@ -633,6 +640,7 @@ module.exports = {
   resolveChain,
   byId,
   TOOL_MODES,
+  THINKING_LEVELS,
   isLoopback,
   isLocalProvider,
   normalize,

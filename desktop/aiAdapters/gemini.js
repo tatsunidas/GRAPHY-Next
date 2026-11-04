@@ -22,6 +22,24 @@ const wire = require("./wire");
 
 const DEFAULT_ENDPOINT = "https://generativelanguage.googleapis.com";
 
+/**
+ * Gemini 3 系（2026-12-01 に gemini-2.5-flash の転送先になる gemini-3.5-flash-lite を含む）。
+ * 3 系は検証が厳しい: サンプリング設定は廃止（送ると 400 になりうる）、思考は `thinkingLevel`、
+ * 関数呼び出しの往復は `id` と思考署名を保つ。2 系・他の提供元は従来どおり。
+ */
+const isGemini3 = (model) => /^gemini-3/i.test(String(model || ""));
+const SAMPLING_KEYS = ["temperature", "topP", "topK", "candidateCount", "top_p", "top_k", "candidate_count"];
+/**
+ * ツールを使うチャットの既定の思考の深さ。**暫定**: Google の案内（ツール呼び出しは medium 以上。既定の minimal は
+ * 複数手の作業を途中で終えることがある）が根拠で、弊社の測定ではない。測定したら更新する。
+ */
+const DEFAULT_THINKING_LEVEL = "medium";
+/** 3 系ではサンプリング系の項目を落とす。 */
+function dropSampling(cfg, model) {
+  if (isGemini3(model)) for (const k of SAMPLING_KEYS) delete cfg[k];
+  return cfg;
+}
+
 const DEFAULT_API_VERSION = "v1beta";
 
 /** 既定の認証の載せ方。提供元の設定（`auth`）があればそちらが勝つ。 */
@@ -98,6 +116,7 @@ function buildRequest(req) {
   if (req.providerOptions && typeof req.providerOptions === "object") {
     Object.assign(body.generationConfig, req.providerOptions);
   }
+  dropSampling(body.generationConfig, req.model);
 
   const provider = req.provider || {};
   const own = {
@@ -156,7 +175,8 @@ function buildTranscribeRequest(req) {
         ],
       },
     ],
-    generationConfig: { responseModalities: ["TEXT"], temperature: 0 },
+    // 書き起こしは決定的にしたい（言い換えさせない）。3 系は temperature を無視・廃止なので送らない。
+    generationConfig: { responseModalities: ["TEXT"], ...(isGemini3(req.model) ? {} : { temperature: 0 }) },
   };
   const own = { "Content-Type": "application/json", ...wire.authHeaders(provider, req.apiKey, DEFAULT_AUTH) };
   return {
@@ -250,11 +270,13 @@ function toGeminiSchema(schema) {
 function toContents(messages) {
   const system = [];
   const contents = [];
+  const callIds = new Map(); // アプリ側の呼び出し ID → モデルが付けた functionCall.id
   for (const m of messages) {
     const text = wire.messageText(m);
     if (m.role === "system") { if (text) system.push(text); continue; }
     if (m.role === "tool") {
-      const part = { functionResponse: { name: String(m.toolName || ""), response: { result: text } } };
+      const cid = callIds.get(m.toolCallId);
+      const part = { functionResponse: { ...(cid ? { id: cid } : {}), name: String(m.toolName || ""), response: { result: text } } };
       const last = contents[contents.length - 1];
       if (last && last.role === "user" && last.parts.every((p) => p.functionResponse)) last.parts.push(part);
       else contents.push({ role: "user", parts: [part] });
@@ -265,8 +287,10 @@ function toContents(messages) {
       if (text) parts.push({ text });
       for (const c of Array.isArray(m.toolCalls) ? m.toolCalls : []) {
         const sig = c.providerState && c.providerState.thoughtSignature;
+        const cid = c.providerState && typeof c.providerState.callId === "string" && c.providerState.callId ? c.providerState.callId : null;
+        if (cid) callIds.set(c.id, cid);
         parts.push({
-          functionCall: { name: String(c.name), args: c.args || {} },
+          functionCall: { ...(cid ? { id: cid } : {}), name: String(c.name), args: c.args || {} },
           // 思考署名は不透明な値。**そのまま返さないと次のターンが 400 になる**ことがある。
           ...(typeof sig === "string" && sig ? { thoughtSignature: sig } : {}),
         });
@@ -301,13 +325,18 @@ function buildChatRequest(req) {
     ...(tools.length > 0
       ? { tools: [{ functionDeclarations: tools.map((t) => ({ name: t.name, description: t.description || "", parameters: toGeminiSchema(t.parameters) })) }] }
       : {}),
-    ...(typeof req.temperature === "number" ? { generationConfig: { temperature: req.temperature } } : {}),
   };
-  if (req.providerOptions && typeof req.providerOptions === "object" && body.generationConfig) {
-    Object.assign(body.generationConfig, req.providerOptions);
-  } else if (req.providerOptions && typeof req.providerOptions === "object") {
-    body.generationConfig = { ...req.providerOptions };
+  const gc = {};
+  if (typeof req.temperature === "number") gc.temperature = req.temperature;
+  const hasOptions = !!req.providerOptions && typeof req.providerOptions === "object";
+  if (hasOptions) Object.assign(gc, req.providerOptions);
+  if (isGemini3(req.model)) {
+    dropSampling(gc, req.model);
+    // 思考の深さ。利用者が提供元に選んだ値が勝つ。無ければ、ツールを使う呼び出しにだけ既定を付ける
+    const level = provider.thinkingLevel || (tools.length > 0 ? DEFAULT_THINKING_LEVEL : null);
+    if (level && !gc.thinkingConfig) gc.thinkingConfig = { thinkingLevel: level };
   }
+  if (hasOptions || Object.keys(gc).length > 0) body.generationConfig = gc;
   const own = { "Content-Type": "application/json", ...wire.authHeaders(provider, req.apiKey, DEFAULT_AUTH) };
   const overridden = !!(provider.paths && typeof provider.paths["text-to-text"] === "string");
   const streaming = !!req.stream && !overridden;
@@ -340,12 +369,18 @@ function readChatParts(json, makeId) {
     if (fc && typeof fc.name === "string" && fc.name) {
       const parsed = wire.parseToolArgs(fc.args);
       const sig = part.thoughtSignature || part.thought_signature;
+      // 3 系はモデルが functionCall に id を付けて返し、結果にも同じ id を求める。アプリ側の ID（id）とは別に持つ。
+      const callId = typeof fc.id === "string" && fc.id ? fc.id : null;
+      const state = {
+        ...(typeof sig === "string" && sig ? { thoughtSignature: sig } : {}),
+        ...(callId ? { callId } : {}),
+      };
       toolCalls.push({
         id: makeId(),
         name: fc.name,
         args: parsed.args,
         ...(parsed.argsError ? { argsError: parsed.argsError } : {}),
-        ...(typeof sig === "string" && sig ? { providerState: { thoughtSignature: sig } } : {}),
+        ...(Object.keys(state).length > 0 ? { providerState: state } : {}),
       });
     }
   }

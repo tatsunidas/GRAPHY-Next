@@ -34,7 +34,8 @@ export const MAX_REPEATS = 20;
 
 /**
  * 合格率の文（質問単位）。全回合格した質問数/質問数と Wilson 95% 区間。質問が 20 未満なら参考値。
- * 反復は独立とは限らない（temperature 0 では毎回同じ結果になりやすい）ので、反復の合計には区間を付けず、
+ * 反復は独立とは限らない（temperature 0 では毎回同じ結果になりやすい。ただし Gemini 3 系は temperature を無視するので、
+ * そちらは毎回揺れうる——反復を増やして見る）ので、反復の合計には区間を付けず、
  * 反復で結果が揺れた質問の数だけを添える（0 件なら反復は情報を足していない）。質問が 0 件なら null（未取得）。
  */
 export function rateTexts(cases: readonly { pass: boolean; passes: number; n: number }[], t: T): { head: string; reps: string | null } | null {
