@@ -90,6 +90,8 @@ export class WebDriver implements Driver {
         cwd: FRONTEND_DIR,
         stdio: ["ignore", "pipe", "pipe"],
         detached: process.platform !== "win32",
+        // win32: Node >= 20.12 は .cmd を shell 無しで spawn すると EINVAL で落ちる（desktopDriver と同じ）。
+        shell: process.platform === "win32",
         env: { ...process.env, VITE_BACKEND_URL: `http://localhost:${this.ports.http}` },
       },
     );
