@@ -16,7 +16,7 @@ import { createRequire } from "node:module";
 
 import { DesktopDriver } from "../driver/desktopDriver.js";
 import { AUTOMATOR_ROOT } from "../fixtures/manifest.js";
-import { dismissUpdateDialog } from "./dismissUpdateDialog.js";
+import { clickDismissing, dismissUpdateDialog } from "./dismissUpdateDialog.js";
 
 const require = createRequire(import.meta.url);
 const L = require("../../../desktop/localLlm.js") as {
@@ -94,8 +94,8 @@ async function main(): Promise<void> {
 
     await dismissUpdateDialog(page, 4000);
     const win = await driver.waitForNewPage(async () => {
-      await page.getByTestId("mainscreen-menu-system").click();
-      await page.getByTestId("menu-item-assistant").click();
+      await clickDismissing(page, page.getByTestId("mainscreen-menu-system"));
+      await clickDismissing(page, page.getByTestId("menu-item-assistant"));
     }, (u) => u.includes("#assistant"));
     await win.getByTestId("assistant-root").waitFor({ state: "visible", timeout: 20_000 });
     await win.setViewportSize({ width: 680, height: 900 });

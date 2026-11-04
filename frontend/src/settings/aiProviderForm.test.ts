@@ -177,6 +177,13 @@ describe("会話・鍵なしの持ち回り（画面から編集しない項目�
     expect(fromDraft(d).auth).toEqual({ header: "x-api-key", prefix: "" });
   });
 
+  it("thinkingLevel は gemini のときだけ往復で残り、空欄・他の系統には生えない（負例）", () => {
+    const gem = { id: "g", label: "G", kind: "gemini", endpoint: "https://generativelanguage.googleapis.com", models: { "text-to-text": "gemini-3.5-flash-lite" }, thinkingLevel: "high" } as const;
+    expect(fromDraft(toDraft({ ...gem }, CAPS)).thinkingLevel).toBe("high");
+    expect("thinkingLevel" in fromDraft(toDraft({ ...gem, thinkingLevel: undefined }, CAPS))).toBe(false);
+    expect("thinkingLevel" in fromDraft({ ...toDraft({ ...gem }, CAPS), kind: "openai" })).toBe(false);
+  });
+
   it("負例: 普通の提供元に auth / toolMode は生えない", () => {
     const e = fromDraft({ ...emptyDraft(CAPS), id: "x", endpoint: "https://a.test", models: { "text-to-text": "m" } });
     expect("auth" in e).toBe(false);

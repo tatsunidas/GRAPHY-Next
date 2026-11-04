@@ -39,6 +39,8 @@ export interface ProviderDraft {
   authNone: boolean;
   /** 会話のツール呼び出しの扱い。画面からは変えられない（持ち回りだけ）。 */
   toolMode: string;
+  /** Gemini 3 系の思考の深さ（minimal/low/medium/high）。空欄＝既定（ツールを使う会話は medium）。 */
+  thinkingLevel: string;
   models: Record<string, string>;
   paths: Record<string, string>;
 }
@@ -93,7 +95,7 @@ export function emptyDraft(capabilities: string[]): ProviderDraft {
     models[c] = "";
     paths[c] = "";
   }
-  return { id: "", label: "", kind: "openai", endpoint: "", pathStyle: "", apiVersion: "", authHeader: "", authPrefix: "", authNone: false, toolMode: "", models, paths };
+  return { id: "", label: "", kind: "openai", endpoint: "", pathStyle: "", apiVersion: "", authHeader: "", authPrefix: "", authNone: false, toolMode: "", thinkingLevel: "", models, paths };
 }
 
 /** 追加時に選べる提供元。`endpoint` が空のものは利用者ごとに違う（Azure）か自由入力（その他）。 */
@@ -131,6 +133,7 @@ export function toDraft(p: AiProviderEntry, capabilities: string[]): ProviderDra
     authPrefix: auth.prefix ?? "",
     authNone: p.auth === "none",
     toolMode: p.toolMode ?? "",
+    thinkingLevel: p.thinkingLevel ?? "",
     models: { ...d.models, ...p.models },
     paths: { ...d.paths, ...(p.paths ?? {}) },
   };
@@ -152,6 +155,7 @@ export function fromDraft(d: ProviderDraft): AiProviderEntry {
   if (d.authHeader.trim() || d.authPrefix) out.auth = { header: d.authHeader.trim(), prefix: d.authPrefix };
   else if (d.authNone) out.auth = "none";
   if (d.toolMode) out.toolMode = d.toolMode;
+  if (d.kind === "gemini" && d.thinkingLevel) out.thinkingLevel = d.thinkingLevel;
   if (d.pathStyle) out.pathStyle = d.pathStyle;
   if (d.apiVersion.trim()) out.apiVersion = d.apiVersion.trim();
   if (Object.keys(paths).length) out.paths = paths;
@@ -405,6 +409,16 @@ export function AiProviderForm({ draft: initial, isNew, capabilities, others, de
                    placeholder={hint.apiVersion || t("settings.ai.provider.apiVersion.unused")}
                    spellCheck={false} data-testid="ai-provider-field-apiversion" />
           </Field>
+          {draft.kind === "gemini" ? (
+            <Field label={t("settings.ai.provider.thinkingLevel")}>
+              <select style={{ ...input, maxWidth: 240 }} value={draft.thinkingLevel}
+                      onChange={(e) => set({ thinkingLevel: e.target.value })} data-testid="ai-provider-field-thinkinglevel">
+                <option value="">{t("settings.ai.provider.thinkingLevel.default")}</option>
+                {["minimal", "low", "medium", "high"].map((lv) => <option key={lv} value={lv}>{lv}</option>)}
+              </select>
+              <span style={{ fontSize: 11, opacity: 0.75 }}>{t("settings.ai.provider.thinkingLevel.help")}</span>
+            </Field>
+          ) : null}
           {capabilities.map((cap) => (
             <Field key={cap} label={t("settings.ai.provider.path", { cap: t(`settings.ai.cap.${cap}`) })}>
               <input

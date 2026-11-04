@@ -23,7 +23,7 @@ import { resetDb } from "../backend/dbReset.js";
 import { importFixtureCategory } from "../fixtures/importFixtures.js";
 import { openFirstSeriesInViewer } from "../checklist/items/shared/helpers.js";
 import { createStepRecorder } from "../checklist/types.js";
-import { dismissUpdateDialog } from "./dismissUpdateDialog.js";
+import { clickDismissing, dismissUpdateDialog } from "./dismissUpdateDialog.js";
 import { AUTOMATOR_ROOT } from "../fixtures/manifest.js";
 
 const require = createRequire(import.meta.url);
@@ -135,7 +135,7 @@ async function main(): Promise<void> {
     await dismissUpdateDialog(main);
     const vb = main.getByTestId("viewer2d-toolbar-button");
     console.log("  main:", main.url(), "ボタン数", await vb.count(), "無効", await vb.isDisabled(), "窓数", driver.app.windows().length);
-    const viewer = await driver.waitForNewPage(() => main.getByTestId("viewer2d-toolbar-button").click({ timeout: 120_000 }), (u) => u.includes("2dviewer"));
+    const viewer = await driver.waitForNewPage(() => clickDismissing(main, main.getByTestId("viewer2d-toolbar-button")), (u) => u.includes("2dviewer"));
     await viewer.getByTestId("series-viewer-root").first().waitFor({ state: "visible", timeout: 20_000 });
     await viewer.waitForTimeout(2500);
     const max = Number(await viewer.getByTestId("dim-slider-z").first().getAttribute("max"));
@@ -149,8 +149,8 @@ async function main(): Promise<void> {
 
     await dismissUpdateDialog(main);
     const win = await driver.waitForNewPage(async () => {
-      await main.getByTestId("mainscreen-menu-system").click();
-      await main.getByTestId("menu-item-assistant").click();
+      await clickDismissing(main, main.getByTestId("mainscreen-menu-system"));
+      await clickDismissing(main, main.getByTestId("menu-item-assistant"));
     }, (u) => u.includes("#assistant"));
     await win.setViewportSize({ width: 680, height: 900 });
     const fresh = async () => {

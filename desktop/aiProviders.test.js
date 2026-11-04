@@ -484,6 +484,18 @@ test("🔴 auth:none はループバックだけ通る（負例: 院内アドレ
   assert.ok(r.problems.some((p) => p.includes("auth-none-needs-loopback")));
 });
 
+test("thinkingLevel は minimal / low / medium / high だけ（Gemini 3.x の思考の深さ）", () => {
+  const GEMINI = { id: "g", kind: "gemini", endpoint: "https://generativelanguage.googleapis.com", auth: "api-key", models: { "text-to-text": "gemini-3.5-flash-lite" } };
+  for (const lv of ["minimal", "low", "medium", "high"]) {
+    assert.equal(providers.normalize({ providers: [{ ...GEMINI, thinkingLevel: lv }] }).providers[0].thinkingLevel, lv, lv);
+  }
+  assert.equal(providers.normalize({ providers: [GEMINI] }).providers[0].thinkingLevel, undefined, "未指定なら付かない");
+  for (const bad of ["max", "", "HIGH", 3, null]) {
+    if (bad === null) continue; // null は「未指定」と同じ扱い
+    assert.equal(providers.normalize({ providers: [{ ...GEMINI, thinkingLevel: bad }] }).providers.length, 0, String(bad));
+  }
+});
+
 test("toolMode は native / none だけ", () => {
   assert.equal(providers.normalize({ providers: [{ ...LOCAL, toolMode: "none" }] }).providers[0].toolMode, "none");
   assert.equal(providers.normalize({ providers: [{ ...LOCAL, toolMode: "auto" }] }).providers.length, 0);

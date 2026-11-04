@@ -210,3 +210,89 @@ test("gemini: ストリームのチャンクを連結した結果が、非スト
   const whole = gemini.normalizeChat({ candidates: [{ finishReason: "STOP", content: { parts: [...parts1, ...parts2] } }] }, { makeId: mk() });
   assert.deepEqual(p.result(), whole);
 });
+
+// ── Gemini 3.x（gemini-2.5-flash の廃止に伴う移行。2026-12-01 に gemini-3.5-flash-lite へ自動転送される） ──
+// 🚨 ここが固定するのは「通知の文言に沿った電文になっているか」だけ。実 API が受け付けるかは実機で確かめる。
+
+const G3 = "gemini-3.5-flash-lite";
+const TURN_MESSAGES = [
+  { role: "system", text: "s" },
+  { role: "user", text: "最後のスライスと肺の条件に" },
+  { role: "assistant", text: "", toolCalls: [
+    { id: "loc1", name: "getState", args: {}, providerState: { thoughtSignature: "SIG1", callId: "gc1" } },
+    { id: "loc2", name: "applyWlPreset", args: { name: "lung" }, providerState: { callId: "gc2" } },
+  ] },
+  { role: "tool", toolCallId: "loc1", toolName: "getState", text: "{\"ok\":true}" },
+  { role: "tool", toolCallId: "loc2", toolName: "applyWlPreset", text: "{\"ok\":true}" },
+];
+
+test("gemini 3.x: 応答の functionCall.id を保持し、署名と並べる（無ければ保持しない）", () => {
+  const r = gemini.normalizeChat({ candidates: [{ finishReason: "STOP", content: { parts: [
+    { functionCall: { id: "gc1", name: "f", args: {} }, thoughtSignature: "S" },
+    { functionCall: { id: "gc2", name: "g", args: {} } },
+    { functionCall: { name: "h", args: {} } },
+  ] } }] }, { makeId: (() => { let n = 0; return () => `loc${++n}`; })() });
+  assert.deepEqual(r.toolCalls.map((c) => c.providerState), [{ thoughtSignature: "S", callId: "gc1" }, { callId: "gc2" }, undefined]);
+  assert.deepEqual(r.toolCalls.map((c) => c.id), ["loc1", "loc2", "loc3"], "アプリ側の ID は従来どおりローカル採番");
+});
+
+test("gemini 3.x: 履歴を返すとき functionCall に id と署名、functionResponse に対応する id と name を付ける（並列呼び出し）", () => {
+  const b = body(gemini.buildChatRequest({ provider: GEM, model: G3, apiKey: "K", messages: TURN_MESSAGES, tools: TOOLS }));
+  const model = b.contents[1].parts;
+  assert.deepEqual(model.map((p) => p.functionCall.id), ["gc1", "gc2"]);
+  assert.equal(model[0].thoughtSignature, "SIG1");
+  assert.equal("thoughtSignature" in model[1], false);
+  const user = b.contents[2].parts;
+  assert.deepEqual(user.map((p) => [p.functionResponse.id, p.functionResponse.name]), [["gc1", "getState"], ["gc2", "applyWlPreset"]]);
+});
+
+test("gemini: id を返さないモデル（2.x）では id を付けない（互換）", () => {
+  const b = body(gemini.buildChatRequest({ provider: GEM, model: "gemini-2.5-flash", apiKey: "K", messages: MESSAGES, tools: TOOLS }));
+  const s = JSON.stringify(b.contents);
+  assert.ok(!s.includes("\"id\""), s);
+});
+
+test("gemini 3.x: ストリームでも functionCall.id を保持し、非ストリームの正規化と一致する", () => {
+  const mk = () => { let n = 0; return () => `loc${++n}`; };
+  const parts = [{ functionCall: { id: "gc1", name: "f", args: { a: 1 } }, thoughtSignature: "S" }];
+  const p = gemini.createStreamParser({ makeId: mk() });
+  p.push(JSON.stringify({ candidates: [{ finishReason: "STOP", content: { parts } }] }));
+  const whole = gemini.normalizeChat({ candidates: [{ finishReason: "STOP", content: { parts } }] }, { makeId: mk() });
+  assert.deepEqual(p.result(), whole);
+  assert.deepEqual(p.result().toolCalls[0].providerState, { thoughtSignature: "S", callId: "gc1" });
+});
+
+test("gemini 3.x: ツールがあるチャットにだけ thinkingConfig（既定 medium。提供元の thinkingLevel が勝つ）。2.x には付けない", () => {
+  const withTools = (model, provider = GEM) => body(gemini.buildChatRequest({ provider, model, apiKey: "K", messages: [{ role: "user", text: "x" }], tools: TOOLS }));
+  assert.equal(withTools(G3).generationConfig.thinkingConfig.thinkingLevel, "medium");
+  assert.equal(withTools(G3, { ...GEM, thinkingLevel: "high" }).generationConfig.thinkingConfig.thinkingLevel, "high");
+  assert.equal(withTools("gemini-2.5-flash").generationConfig, undefined, "2.x に thinkingLevel は無い");
+  const noTools = body(gemini.buildChatRequest({ provider: GEM, model: G3, apiKey: "K", messages: [{ role: "user", text: "x" }] }));
+  assert.equal(noTools.generationConfig, undefined, "ツールが無い呼び出しはモデルの既定のまま");
+  const noToolsExplicit = body(gemini.buildChatRequest({ provider: { ...GEM, thinkingLevel: "low" }, model: G3, apiKey: "K", messages: [{ role: "user", text: "x" }] }));
+  assert.equal(noToolsExplicit.generationConfig.thinkingConfig.thinkingLevel, "low", "利用者が選んだ値はツールが無くても付く");
+});
+
+test("gemini 3.x: temperature・topP・topK・candidateCount は送らない（廃止・400）。2.x では従来どおり。他の providerOptions は残る", () => {
+  const opts = { topP: 0.9, topK: 3, candidateCount: 2, responseMimeType: "text/plain" };
+  const g3 = body(gemini.buildChatRequest({ provider: GEM, model: G3, apiKey: "K", messages: [{ role: "user", text: "x" }], temperature: 0, providerOptions: opts }));
+  for (const k of ["temperature", "topP", "topK", "candidateCount"]) assert.equal(k in g3.generationConfig, false, k);
+  assert.equal(g3.generationConfig.responseMimeType, "text/plain");
+  const g2 = body(gemini.buildChatRequest({ provider: GEM, model: "gemini-2.5-flash", apiKey: "K", messages: [{ role: "user", text: "x" }], temperature: 0, providerOptions: opts }));
+  assert.equal(g2.generationConfig.temperature, 0);
+  assert.equal(g2.generationConfig.topK, 3);
+  // 画像・音声の経路も同じ
+  const img = body(gemini.buildRequest({ capability: "image-to-image", provider: GEM, model: G3, apiKey: "K", prompt: "p", imageBase64: "AA", temperature: 0.5, providerOptions: { topK: 1 } }));
+  assert.equal("temperature" in img.generationConfig || "topK" in img.generationConfig, false);
+  const stt3 = body(gemini.buildTranscribeRequest({ provider: GEM, model: G3, apiKey: "K", audio: { base64: "AA", mimeType: "audio/wav" } }));
+  assert.equal("temperature" in stt3.generationConfig, false);
+  const stt2 = body(gemini.buildTranscribeRequest({ provider: GEM, model: "gemini-2.5-flash", apiKey: "K", audio: { base64: "AA", mimeType: "audio/wav" } }));
+  assert.equal(stt2.generationConfig.temperature, 0);
+});
+
+test("gemini: 会話の末尾は model にならない（先読み＝prefill は 3.x で 400）", () => {
+  for (const msgs of [MESSAGES, TURN_MESSAGES, [{ role: "user", text: "x" }]]) {
+    const b = body(gemini.buildChatRequest({ provider: GEM, model: G3, apiKey: "K", messages: msgs, tools: TOOLS }));
+    assert.equal(b.contents[b.contents.length - 1].role, "user");
+  }
+});
