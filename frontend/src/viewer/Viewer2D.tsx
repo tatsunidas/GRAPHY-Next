@@ -1941,6 +1941,9 @@ export function Viewer2D({
     if (req.background !== undefined && !Number.isFinite(req.background)) {
       return "background must be a finite number";
     }
+    if (req.diffusionBValue !== undefined && !(Number.isFinite(req.diffusionBValue) && req.diffusionBValue >= 0)) {
+      return "diffusionBValue must be a finite number >= 0";
+    }
     return null;
   };
 
@@ -1993,6 +1996,7 @@ export function Viewer2D({
           rescaleType: req.unit ?? null,
           // 背景（NaN 埋め）は DICOM のパディング値として明示する。
           pixelPaddingValue: encoded.paddingStored,
+          diffusionBValue: req.diffusionBValue ?? null,
           producer,
           frames,
         },

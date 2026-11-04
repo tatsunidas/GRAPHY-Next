@@ -337,6 +337,13 @@ export interface ViewerDerivedSeriesRequest {
    * 「データ無し」として扱える（W/L の自動計算からも外れる）。CT のマスクなら空気の −1000 が素直。
    */
   background?: number;
+  /**
+   * DiffusionBValue (0018,9087) として書く b 値（s/mm²、0 以上の有限値）。**省略すると書かない**。
+   *
+   * <p>元シリーズの b 値は引き継がない（派生画素の b 値を知っているのはプラグインだけ。
+   * 例: computed DWI の目標 b 値）。DWI 由来でない出力（ADC など）には付けないこと。
+   */
+  diffusionBValue?: number;
 }
 
 /** 保存結果。`cancelled` はユーザーが確認ダイアログで拒否した場合。 */

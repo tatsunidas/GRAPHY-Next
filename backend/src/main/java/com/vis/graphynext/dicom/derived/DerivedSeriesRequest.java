@@ -36,6 +36,8 @@ import java.util.List;
  * @param rescaleType         RescaleType(0028,1054)（null なら CT のみ "HU"、他は書かない）
  * @param pixelPaddingValue   PixelPaddingValue(0028,0120) の<b>格納値</b>（null なら書かない）。
  *                            プラグイン出力で「データ無し」を埋めた背景値を明示するために使う
+ * @param diffusionBValue     DiffusionBValue(0018,9087)（FD, s/mm²）。null なら書かない。元シリーズの値は引き継がない
+ *                            （派生画素の b 値は呼び出し側しか知らない。例: computed DWI の目標 b 値）。16bit 経路のみ
  * @param producer            プラグイン由来の場合の出所（null なら本体の機能による生成）
  * @param parametricMap       null でなければ **Parametric Map（Float Pixel Data・Modality=OT）として保存**する。
  *                            画素は {@code frames[].pixels} の Float32 リトルエンディアン（rows*columns*4 バイト）で、
@@ -67,6 +69,7 @@ public record DerivedSeriesRequest(
         Double rescaleIntercept,
         String rescaleType,
         Integer pixelPaddingValue,
+        Double diffusionBValue,
         Producer producer,
         ParametricMap parametricMap,
         List<Frame> frames) {

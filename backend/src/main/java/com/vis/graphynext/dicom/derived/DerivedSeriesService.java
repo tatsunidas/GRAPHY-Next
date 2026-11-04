@@ -153,6 +153,10 @@ public class DerivedSeriesService {
         if (req.pixelSpacing() == null || req.pixelSpacing().length != 2) {
             throw new IllegalArgumentException("pixelSpacing は 2 要素が必要です");
         }
+        if (req.diffusionBValue() != null
+                && (!Double.isFinite(req.diffusionBValue()) || req.diffusionBValue() < 0)) {
+            throw new IllegalArgumentException("diffusionBValue は 0 以上の有限値が必要です");
+        }
         if (req.parametricMap() != null) {
             // Parametric Map は幾何を Functional Groups に置くので、幾何なし（Curved MPR 等）は作れない。
             if (iop == null || iop.length != 6) {
@@ -209,7 +213,7 @@ public class DerivedSeriesService {
     }
 
     /** 1 スライスの Attributes を構築する（属性引き継ぎ＋幾何/画素更新）。 */
-    private Attributes buildInstance(Attributes tmpl, DerivedSeriesRequest req, String newSeriesUid,
+    Attributes buildInstance(Attributes tmpl, DerivedSeriesRequest req, String newSeriesUid,
                                      int seriesNumber, String modality, DerivedSeriesRequest.Frame f, byte[] px) {
         Attributes a = new Attributes();
         // 幾何（IOP/IPP）を持つか。Curved MPR 等の曲面/平坦化再構成では省略される。
@@ -308,6 +312,11 @@ public class DerivedSeriesService {
         // これがあると、ビューア側は W/L 自動計算や統計から背景を除外できる。
         if (req.pixelPaddingValue() != null) {
             a.setInt(Tag.PixelPaddingValue, VR.SS, req.pixelPaddingValue());
+        }
+
+        // 派生画素の b 値（元シリーズの値は ModalityAttributeInheritance が写さないので、指定時のみ書く）。
+        if (req.diffusionBValue() != null) {
+            a.setDouble(Tag.DiffusionBValue, VR.FD, req.diffusionBValue());
         }
 
         // 幾何（再構成値で更新）。PixelSpacing は常に付与、IOP/IPP は幾何がある場合のみ。
