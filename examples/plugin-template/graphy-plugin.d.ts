@@ -1232,6 +1232,50 @@ export interface PluginCurveFrame {
   arcLengthMm: number;
 }
 
+/** {@link Viewer2DPluginHost.openTransientSeries} の引数。**次の本体の版以降**。 */
+export interface PluginTransientSeriesSpec {
+  /** タイルの見出しに出す名前（本体が「[Plugin <名前>] <label>（未保存）」の形にする）。 */
+  label: string;
+  /** 幾何（スライス数・位置・向き）を借りるタイル。省略時は対象の先頭タイル。 */
+  referenceTileId?: string;
+  /**
+   * 表示するマップ（ADC・cDWI など）。**C 次元に並ぶ**（スライダーでマップを切り替える）。
+   * 全マップのスライス数は参照タイルのスタックと 1:1 で、`dims` は互いに等しいこと。
+   * `window` は必須（無いと元の画像の窓が当たって何も見えない）。
+   */
+  maps: Array<{
+    name: string;
+    volume: PluginValueVolume;
+    window: { center: number; width: number };
+    /** 本体の LUT 名（例 "Hot_Iron"）。省略/null はグレースケール。 */
+    colormap?: string | null;
+  }>;
+  /** 最初に出すマップ（C）。既定 0。 */
+  initialC?: number;
+  /** 最初に出すスライス（Z）。 */
+  initialZ?: number;
+  /** 画像の右側に値のスケールバーを出す。既定 true。 */
+  scaleBar?: boolean;
+}
+
+/** {@link Viewer2DPluginHost.openTransientSeries} の戻り。タイルを閉じる・見え方を変える・状態を聞く。**次の本体の版以降**。 */
+export interface PluginTransientSeriesHandle {
+  readonly tileId: string;
+  /** タイルが閉じたら true（× ・患者を閉じる・`close()` のどれでも）。 */
+  readonly closed: boolean;
+  /** マップ `c` の窓・カラーマップを変える。表示中のマップなら即反映する。 */
+  setMapDisplay(
+    c: number,
+    d: { window?: { center: number; width: number }; colormap?: string | null },
+  ): void;
+  /** 表示中の C・Z が変わったとき。戻り値は購読解除。 */
+  onDimChange(fn: (d: { c: number; z: number }) => void): () => void;
+  /** タイルが閉じたとき（1 度だけ）。 */
+  onClose(fn: () => void): void;
+  /** 一時タイルを閉じる。 */
+  close(): void;
+}
+
 /** {@link Viewer2DPluginHost.openCurvedMpr} の引数（H73）。 */
 export interface PluginCurvedMprSpec {
   /** 開いているタイルのシリーズ。 */
@@ -2405,6 +2449,20 @@ export interface Viewer2DPluginHost extends PluginHostBase {
    * `options.frameMode` の省略時は `ROTATION_MINIMIZING`（血管向け）。
    */
   openCurvedMpr: (spec: PluginCurvedMprSpec) => Promise<PluginCurvedMprResult>;
+  /**
+   * **プラグインが計算した値の画像を、2D ビューアの普通のタイルとして開く**（**次の本体の版以降**）。
+   * ADC・cDWI のような float のボリュームを、**マップを C 次元にして 1 枚のタイル**に出す。
+   * W/L・ズーム・プローブ・ROI・値の読み取りなど通常のシリーズビューの道具がそのまま効く。
+   *
+   * <p>🔴 **保管庫には保存されない一時シリーズ**（見出しに「（未保存）」）。その上の ROI も保存されない。
+   * 3D・MPR・Slicer などの単一シリーズ前提の操作は本体が止め、他のプラグインの `getTargets()` の
+   * 既定の対象にも入らない（`tileId` を明示すれば `getRois`・`getPixelData` で読める）。
+   * 一時タイルを参照にした保存系の host API は `transient-reference` で拒否される。
+   *
+   * <p>失敗は理由つきの例外（参照を解決できない・マップが無い・スライス数の不一致・窓が無い・
+   * マップ間で `dims` が違う）。出所（プラグイン名）は本体が入れる。
+   */
+  openTransientSeries: (spec: PluginTransientSeriesSpec) => Promise<PluginTransientSeriesHandle>;
   /**
    * **シリーズビューパネルをそのまま貸す**（H34・**0.2.1 以降**）。W/L バー・スライダ・
    * ThickSlab・参照線・計測・シネ、そして**フュージョン重畳**が丸ごと付いてくる。
