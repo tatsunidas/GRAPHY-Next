@@ -30,7 +30,7 @@ class DerivedSeriesBValueTest {
 
     private static DerivedSeriesRequest req(Double bValue) {
         return new DerivedSeriesRequest("1.2.3", "1.2.4", "Computed DWI b=200", null, 2, 2,
-                new double[] {1.0, 1.0}, 1.0, 1.0, null, null, null, null, null, null, null, bValue, null, null,
+                new double[] {1.0, 1.0}, 1.0, 1.0, null, null, null, null, null, null, null, bValue, null, null, null, null,
                 List.of(new DerivedSeriesRequest.Frame(1, null, "")));
     }
 
