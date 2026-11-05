@@ -358,6 +358,8 @@ export interface ViewerDerivedSeriesRequest {
    * 保存するシリーズの表示の窓（WindowCenter/Width）。**保存する値（`unit` 換算後の実際の量）での窓**を渡す
    * （例: ADC を mm²/s で保存するなら 0.0015 / 0.003）。**省略すると窓は書かず**、ビューアが値域から決める。
    *
+   * <p>窓は `VOILUTFunction = LINEAR_EXACT`（範囲 = 中心 ± 幅/2）として書かれる（DICOM 既定の LINEAR は幅 1 未満で上下が逆転するため）。
+   *
    * <p>元シリーズの窓は引き継がない（プラグインの出力は元画像とは別の量で、元の窓だと値域が合わず真っ黒になる）。
    * `width` は 0 より大きい有限値、`center` も有限値であること。
    */

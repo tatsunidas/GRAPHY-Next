@@ -71,7 +71,18 @@ class DerivedSeriesWindowTest {
         assertEquals(0.0015, a.getDouble(Tag.WindowCenter, Double.NaN), 1e-12);
         assertEquals(0.003, a.getDouble(Tag.WindowWidth, Double.NaN), 1e-12);
         assertEquals(VR.DS, a.getVR(Tag.WindowCenter));
-        assertFalse(a.contains(Tag.VOILUTFunction));
+    }
+
+    @Test
+    void pluginWindow_isWrittenAsLinearExact_soAWidthBelowOneIsNotInverted() {
+        // 幅 0.003 の窓（ADC）。LINEAR のままだと上下が逆転する（DICOM の式は幅 1 以上が前提）。
+        Attributes a = build(PLUGIN, 0.0015, 0.003);
+        assertEquals("LINEAR_EXACT", a.getString(Tag.VOILUTFunction));
+        assertEquals(VR.CS, a.getVR(Tag.VOILUTFunction));
+        // 窓を渡さないときは付けない（元の VOILUTFunction も外れたまま）
+        assertFalse(build(PLUGIN).contains(Tag.VOILUTFunction));
+        // producer なしの本体の機能は、元の VOILUTFunction をそのまま引き継ぐ（プラグインの指定は無視）
+        assertEquals("LINEAR", build(null, 0.0015, 0.003).getString(Tag.VOILUTFunction));
     }
 
     @Test
