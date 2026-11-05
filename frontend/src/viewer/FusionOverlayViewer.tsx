@@ -17,6 +17,7 @@ import { probeMetaOf } from "./fusionProbeMeta";
 import { toFusionSlice, type RawFusionSlice } from "./fusionSlice";
 import { subscribeSuvStore } from "./suvStore";
 import { extractIsolines, isolinesToPath } from "./isoline";
+import { recordFusionResample } from "./gpuResample/fusionResampleStats";
 import { registerFusionProbe, setFusionProbeData, unregisterFusionProbe } from "./fusionProbe";
 import { fetchSeriesLayout, type Instance, type SeriesLayoutDto } from "../api";
 import {
@@ -486,7 +487,11 @@ export function FusionImageViewer({
           }),
         };
 
+        const t0 = import.meta.env.DEV ? performance.now() : 0;
         const fusionPixels = computeFusionSlice(fgVolume, bgMeta, xf);
+        if (import.meta.env.DEV) {
+          recordFusionResample(performance.now() - t0, bgMeta.cols, bgMeta.rows, fgVolume.slices.length, !!xf);
+        }
         const fgSampleId = fgZStack[loadedSlices[0].zIdx] ?? "";
         const voiLut: AnyObj = metaData.get("voiLutModule", fgSampleId) ?? {};
         const { center, width } = resolveWL(voiLut, fusionPixels);

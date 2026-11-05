@@ -1,0 +1,164 @@
+/*
+ * 切り出し前の computeFusionSlice（main b6021ca0 の版）をそのまま固定したもの。
+ * ビット一致の回帰テスト専用。本番コードから import しない。
+ */
+import type { Vec3, WorldTransform } from "./regTransform";
+import type { FusionVolume, BackgroundSliceMeta, FusionSlice } from "./fusionEngine";
+
+function dot(a: Vec3, b: Vec3): number {
+  return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+}
+
+function cross(a: Vec3, b: Vec3): Vec3 {
+  return [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+}
+
+function sub(a: Vec3, b: Vec3): Vec3 {
+  return [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+}
+
+/**
+ * 前景ボリュームを背景スライスの画素グリッドにリサンプリングする。
+ *
+ * 返り値: Float32Array (size = bg.rows × bg.cols)。
+ * 前景範囲外の画素は NaN。
+ *
+ * 計算量: O(bg.rows × bg.cols × log(fg.slices.length))
+ *
+ * @param xf **fixed(背景) world → moving(前景) world** の変換（pull-back）。
+ *   `fw/registration-design.md` §2 のとおり向きに注意すること
+ *   （「前景をこう動かす」というユーザーの直感の**逆**）。
+ *   省略／恒等なら一切挟まないので従来と同一の結果になる。
+ */
+export function computeFusionSliceLegacy(
+  fg: FusionVolume,
+  bg: BackgroundSliceMeta,
+  xf?: WorldTransform | null,
+): Float32Array {
+  const nOut = bg.rows * bg.cols;
+  const out = new Float32Array(nOut);
+  out.fill(NaN);
+
+  const d = fg.slices.length;
+  if (d === 0) return out;
+
+  const fRr: Vec3 = [fg.iop[0], fg.iop[1], fg.iop[2]];
+  const fRc: Vec3 = [fg.iop[3], fg.iop[4], fg.iop[5]];
+  const fRs = cross(fRr, fRc); // 前景スライス法線
+
+  const bRr: Vec3 = [bg.iop[0], bg.iop[1], bg.iop[2]];
+  const bRc: Vec3 = [bg.iop[3], bg.iop[4], bg.iop[5]];
+
+  const fgIpp0 = fg.slices[0].ipp;
+  // 各前景スライスの法線方向距離（fgIpp0 基点）
+  const wPos = fg.slices.map((s) => dot(sub(s.ipp, fgIpp0), fRs));
+
+  const fgW = fg.cols;
+  const fgH = fg.rows;
+  const bPx = bg.pixelSpacingCol;
+  const bPy = bg.pixelSpacingRow;
+  const bgIpp = bg.ipp;
+
+  // 変換の出力先。ホットループ内で割り付けないよう 1 本だけ使い回す
+  // （`WorldTransform.mapPoint` が out 引数を取る契約なのはこのため）。
+  const useXf = !!xf && xf.kind !== "identity";
+  const xp: Vec3 = [0, 0, 0];
+
+  for (let by = 0; by < bg.rows; by++) {
+    const Py0 = bgIpp[0] + by * bPy * bRc[0];
+    const Py1 = bgIpp[1] + by * bPy * bRc[1];
+    const Py2 = bgIpp[2] + by * bPy * bRc[2];
+
+    for (let bx = 0; bx < bg.cols; bx++) {
+      // 背景画素 (bx=列, by=行) → ワールド座標
+      let Px = Py0 + bx * bPx * bRr[0];
+      let Py = Py1 + bx * bPx * bRr[1];
+      let Pz = Py2 + bx * bPx * bRr[2];
+
+      // ★ レジストレーション: fixed world → moving world（pull-back）。
+      if (useXf) {
+        xf!.mapPoint(Px, Py, Pz, xp);
+        Px = xp[0]; Py = xp[1]; Pz = xp[2];
+      }
+
+      // ワールド → 前景座標
+      const dx = Px - fgIpp0[0];
+      const dy = Py - fgIpp0[1];
+      const dz = Pz - fgIpp0[2];
+
+      const u = (dx * fRr[0] + dy * fRr[1] + dz * fRr[2]) / fg.pixelSpacingCol;
+      const v = (dx * fRc[0] + dy * fRc[1] + dz * fRc[2]) / fg.pixelSpacingRow;
+      const w_mm = dx * fRs[0] + dy * fRs[1] + dz * fRs[2];
+
+      // 面内境界チェック
+      if (u < -0.5 || u > fgW - 0.5 || v < -0.5 || v > fgH - 0.5) continue;
+
+      // z 方向 trilinear のための前景スライスインデックス探索
+      const iw = lowerBound(wPos, w_mm);
+
+      let val: number;
+      if (iw < 0) {
+        val = bilinear(fg.slices[0].pixels, fgW, fgH, u, v);
+        if (!isNaN(val)) val = val * fg.slices[0].slope + fg.slices[0].intercept;
+      } else if (iw >= d - 1) {
+        val = bilinear(fg.slices[d - 1].pixels, fgW, fgH, u, v);
+        if (!isNaN(val)) val = val * fg.slices[d - 1].slope + fg.slices[d - 1].intercept;
+      } else {
+        const dw = wPos[iw + 1] - wPos[iw];
+        const wFrac = dw > 0 ? (w_mm - wPos[iw]) / dw : 0;
+        val = trilinear(fg.slices[iw], fg.slices[iw + 1], fgW, fgH, u, v, wFrac);
+      }
+
+      if (!isNaN(val)) out[by * bg.cols + bx] = val;
+    }
+  }
+
+  return out;
+}
+
+/** wPos[result] <= w_mm < wPos[result+1] となる最大インデックスを返す（境界外: <0 または >=d-1）。 */
+function lowerBound(wPos: number[], w_mm: number): number {
+  const d = wPos.length;
+  if (d === 0 || w_mm < wPos[0]) return -1;
+  if (w_mm >= wPos[d - 1]) return d - 1;
+  let lo = 0, hi = d - 1;
+  while (lo < hi - 1) {
+    const mid = (lo + hi) >> 1;
+    if (wPos[mid] <= w_mm) lo = mid;
+    else hi = mid;
+  }
+  return lo;
+}
+
+/** バイリニア補間（1 スライス内）。範囲外は nearest clamp。 */
+function bilinear(pixels: ArrayLike<number>, w: number, h: number, u: number, v: number): number {
+  const iu = Math.floor(u);
+  const iv = Math.floor(v);
+  const iu1 = Math.min(iu + 1, w - 1);
+  const iv1 = Math.min(iv + 1, h - 1);
+  const iu0 = Math.max(0, iu);
+  const iv0 = Math.max(0, iv);
+  const uu = Math.min(1, Math.max(0, u - iu));
+  const vv = Math.min(1, Math.max(0, v - iv));
+  const c00 = pixels[iv0 * w + iu0];
+  const c10 = pixels[iv0 * w + iu1];
+  const c01 = pixels[iv1 * w + iu0];
+  const c11 = pixels[iv1 * w + iu1];
+  return c00 * (1 - uu) * (1 - vv) + c10 * uu * (1 - vv) + c01 * (1 - uu) * vv + c11 * uu * vv;
+}
+
+/** 3D trilinear 補間（2 スライス間）。rescale も適用して物理値を返す。 */
+function trilinear(
+  lo: FusionSlice,
+  hi: FusionSlice,
+  w: number,
+  h: number,
+  u: number,
+  v: number,
+  wFrac: number,
+): number {
+  const vLo = bilinear(lo.pixels, w, h, u, v) * lo.slope + lo.intercept;
+  const vHi = bilinear(hi.pixels, w, h, u, v) * hi.slope + hi.intercept;
+  return vLo * (1 - wFrac) + vHi * wFrac;
+}
+
