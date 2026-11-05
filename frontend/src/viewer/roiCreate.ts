@@ -12,9 +12,9 @@
  * <p>ハンドルの並び（Cornerstone3D の `EllipticalROITool` / `RectangleROITool` の規約。canvas は y が下向き）:
  * 楕円 `[bottom, top, left, right]`（辺の中点）、矩形 `[bottomLeft, bottomRight, topLeft, topRight]`。
  */
-export type CreateRoiTool = "EllipticalROI" | "RectangleROI" | "PolygonROI" | "FreehandROI" | "Bidirectional";
-/** 中心と半径で作る形（`buildRoiHandles`）。 */
-export const CREATE_ROI_TOOLS: readonly CreateRoiTool[] = ["EllipticalROI", "RectangleROI"];
+export type CreateRoiTool = "EllipticalROI" | "RectangleROI" | "PolygonROI" | "FreehandROI" | "Bidirectional" | "PointROI";
+/** 中心と半径で作る形（`buildRoiHandles`）。点は半径を持たず、中心の 1 点だけ。 */
+export const CREATE_ROI_TOOLS: readonly CreateRoiTool[] = ["EllipticalROI", "RectangleROI", "PointROI"];
 /** 頂点で作る閉じた輪郭（`buildContourVertices`）。多角形は直線で結ぶ。自由曲線は点が密な閉曲線。 */
 export const CREATE_CONTOUR_TOOLS: readonly CreateRoiTool[] = ["PolygonROI", "FreehandROI"];
 export const isContourCreateTool = (t: unknown): boolean => CREATE_CONTOUR_TOOLS.includes(t as CreateRoiTool);
@@ -98,10 +98,14 @@ export function buildRoiHandles(
   if (hasPx && !(Array.isArray(req.centerPx) && req.centerPx.length === 2 && req.centerPx.every((n) => typeof n === "number" && Number.isFinite(n)))) {
     return { ok: false, reason: "bad-request" };
   }
+  const point = req.tool === "PointROI";
   const r = req.radiiMm;
-  if (!Array.isArray(r) || r.length !== 2 || !r.every((n) => typeof n === "number" && Number.isFinite(n) && n > 0)) return { ok: false, reason: "bad-request" };
+  // 点は半径を持たない。渡されたら別の形と取り違えているので拒否する。
+  if (point ? r !== undefined : !Array.isArray(r) || r.length !== 2 || !r.every((n) => typeof n === "number" && Number.isFinite(n) && n > 0)) {
+    return { ok: false, reason: "bad-request" };
+  }
   if (!(g.maxExtentMm > 0) || !(g.sliceToleranceMm > 0) || !finite3(g.focalPoint) || !finite3(g.viewPlaneNormal)) return { ok: false, reason: "no-geometry" };
-  if (r[0] > g.maxExtentMm || r[1] > g.maxExtentMm) return { ok: false, reason: "too-large" };
+  if (r && (r[0] > g.maxExtentMm || r[1] > g.maxExtentMm)) return { ok: false, reason: "too-large" };
   const nLen = norm(g.viewPlaneNormal);
   if (!(nLen > 0)) return { ok: false, reason: "no-geometry" };
   let center: number[];
@@ -116,6 +120,8 @@ export function buildRoiHandles(
   const off = Math.abs(dot(sub(center, g.focalPoint), g.viewPlaneNormal)) / nLen;
   if (off > g.sliceToleranceMm) return { ok: false, reason: "off-slice" };
 
+  if (point) return { ok: true, points: [[center[0], center[1], center[2]]], centerLps: [center[0], center[1], center[2]] };
+
   const c = g.worldToCanvas(center);
   if (!c) return { ok: false, reason: "no-geometry" };
   const w0 = g.canvasToWorld(c);
@@ -126,8 +132,8 @@ export function buildRoiHandles(
   const sx = norm(sub(wx, w0));
   const sy = norm(sub(wy, w0));
   if (!(sx > 0) || !(sy > 0) || !Number.isFinite(sx) || !Number.isFinite(sy)) return { ok: false, reason: "no-geometry" };
-  const rx = r[0] / sx;
-  const ry = r[1] / sy;
+  const rx = r![0] / sx;
+  const ry = r![1] / sy;
   const at = (dx: number, dy: number): number[] | null => g.canvasToWorld([c[0] + dx, c[1] + dy]);
   const pts =
     req.tool === "EllipticalROI"

@@ -76,6 +76,7 @@ import { registerViewerCommands, requestTool, type ViewerCommands, type ViewerDe
 import { buildPluginMeta, computeCalipers, hasShapeCalipers, pickPluginMeta, readRoiStats, roiPointsPx } from "./roiRead";
 import { CONTOUR_TOOL_NAMES, SPLINE_TYPE_LINEAR, cancelContourDrawing } from "./roiContourTools";
 import { POINT_ROI_TOOL_NAME } from "./pointRoiTool";
+import { parsePluginVolumeImageId } from "../plugins/pluginVolumeScheme";
 import { annotationRoiKind } from "./roiKind";
 import { convertMeasureToRoi } from "./measureToRoi";
 import { installInteriorGrab, installSelectionGestures } from "./roiInteriorGrab";
@@ -2712,7 +2713,11 @@ export function Viewer2D({
     };
     const handles = contour ? buildContourVertices(creq, geom) : isBidirectionalCreateTool(req.tool) ? buildBidirectionalHandles(creq, geom) : buildRoiHandles(creq, geom);
     if (!handles.ok) return handles;
-    const sop = sopFromImageId(ctx.imageId);
+    // 一時シリーズ（プラグインが計算した値の画像）は保管庫に SOP を持たない。ROI は保存しない（roiRestore の guard）ので、
+    // provider が割り当てた合成 SOP UID をそのまま使う。
+    const sop = sopFromImageId(ctx.imageId) ?? (parsePluginVolumeImageId(ctx.imageId)
+      ? ((metaData.get("sopCommonModule", ctx.imageId) as { sopInstanceUID?: string } | undefined)?.sopInstanceUID ?? null)
+      : null);
     if (!sop) return { ok: false, reason: "failed" };
     const uid = (utilities as unknown as { uuidv4: () => string }).uuidv4();
     const frame = frameOfImageId(ctx.imageId);
@@ -2725,8 +2730,10 @@ export function Viewer2D({
       label,
       custom: buildPluginMeta(by.pluginId, { created: "1" }),
     };
-    // 輪郭系は本体の手描きと同じツール名・保存形にする（復元・統計・ROI マネージャが同じ経路で扱う）
-    if (req.tool === "PolygonROI") {
+    // 輪郭系・点は本体の手描き（点 ROI は Probe の変換）と同じツール名・保存形にする（復元・統計・ROI マネージャが同じ経路で扱う）
+    if (req.tool === "PointROI") {
+      saved.tool = POINT_ROI_TOOL_NAME;
+    } else if (req.tool === "PolygonROI") {
       saved.tool = CONTOUR_TOOL_NAMES.polygon;
       saved.splineType = SPLINE_TYPE_LINEAR;
       saved.isOpenContour = false;

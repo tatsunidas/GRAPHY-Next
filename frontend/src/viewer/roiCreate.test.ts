@@ -315,3 +315,32 @@ describe("buildBidirectionalHandles（長径・短径）", () => {
     expect(buildBidirectionalHandles({ ...bi(), tool: "EllipticalROI" }, geom())).toEqual({ ok: false, reason: "bad-request" });
   });
 });
+
+describe("buildRoiHandles: PointROI", () => {
+  const px = (p: [number, number]): number[] => [-100 + p[0] * 0.5, -100 + p[1] * 0.5, 5];
+  const pt = (over: Partial<CreateRoiRequest> = {}): CreateRoiRequest => ({ tool: "PointROI", centerPx: [200, 240], ...over });
+
+  it("makes one handle at the pixel center, and echoes the LPS center", () => {
+    const r = buildRoiHandles(pt(), { ...geom(), pixelToWorld: px });
+    if (!r.ok) throw new Error(r.reason);
+    expect(r.points).toEqual([[0, 20, 5]]);
+    expect(r.centerLps).toEqual([0, 20, 5]);
+  });
+
+  it("accepts centerLps on the slice and rejects a center off the slice (no silent move to another slice)", () => {
+    const ok = buildRoiHandles({ tool: "PointROI", centerLps: [10, 20, 5] }, geom());
+    expect(ok.ok).toBe(true);
+    const off = buildRoiHandles({ tool: "PointROI", centerLps: [10, 20, 9] }, geom());
+    expect(off).toEqual({ ok: false, reason: "off-slice" });
+  });
+
+  it("rejects radiiMm (a point has no radius) and a request with both or neither center", () => {
+    expect(buildRoiHandles(pt({ radiiMm: [5, 5] }), { ...geom(), pixelToWorld: px })).toEqual({ ok: false, reason: "bad-request" });
+    expect(buildRoiHandles(pt({ centerLps: [0, 0, 5] }), { ...geom(), pixelToWorld: px })).toEqual({ ok: false, reason: "bad-request" });
+    expect(buildRoiHandles({ tool: "PointROI" }, geom())).toEqual({ ok: false, reason: "bad-request" });
+  });
+
+  it("the ellipse still needs radii (the point exemption does not leak)", () => {
+    expect(buildRoiHandles({ tool: "EllipticalROI", centerLps: [0, 0, 5] }, geom())).toEqual({ ok: false, reason: "bad-request" });
+  });
+});
