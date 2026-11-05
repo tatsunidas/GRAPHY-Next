@@ -34,6 +34,8 @@ import { openDeveloperContact } from "../help/DeveloperContact";
 import { openUninstallGuide } from "../help/UninstallGuide";
 import { openResearchUseTerms } from "../help/ResearchUseConsent";
 import { runUpdateCheck } from "../help/UpdateNotice";
+import { useUpdateState } from "../help/updateState";
+import { updateMenuLabel } from "../help/updateLabel";
 import { isDesktop } from "../desktopBridge";
 import { openThreshold } from "../viewer/thresholdTool";
 
@@ -103,6 +105,7 @@ export function Viewer2DMenuBar({
   onClose: () => void;
 }) {
   const { t, locale } = useI18n();
+  const updateState = useUpdateState();
   const presets = useWlPresets();
   const statsDisplay = useRoiStatsDisplay();
   // host の中身はサーフェスに依らず同一。違うのは「どのメニューに出るか」だけなので、
@@ -545,7 +548,7 @@ export function Viewer2DMenuBar({
       id: "help",
       label: t("main.menu.help"),
       items: [
-        ...(isDesktop() ? [{ label: t("help.update"), onClick: () => void runUpdateCheck(true) }] : []),
+        ...(isDesktop() ? [{ label: updateMenuLabel(t, t("help.update"), updateState), onClick: () => void runUpdateCheck(true), testId: "menu-item-update" }] : []),
         { label: t("help.community"), onClick: () => openUsersCommunity() },
         { label: t("help.contact"), onClick: () => openDeveloperContact() },
         { label: t("help.terms"), onClick: () => openResearchUseTerms() },

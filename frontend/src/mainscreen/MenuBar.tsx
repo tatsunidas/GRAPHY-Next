@@ -15,6 +15,8 @@ import { openDeveloperContact } from "../help/DeveloperContact";
 import { openUninstallGuide } from "../help/UninstallGuide";
 import { openResearchUseTerms } from "../help/ResearchUseConsent";
 import { runUpdateCheck } from "../help/UpdateNotice";
+import { useUpdateState } from "../help/updateState";
+import { updateMenuLabel } from "../help/updateLabel";
 import { isDesktop } from "../desktopBridge";
 
 interface MenuItem {
@@ -54,6 +56,7 @@ export function MenuBar({
   onOpenMobileUi?: () => void;
 }) {
   const { t, locale } = useI18n();
+  const updateState = useUpdateState();
   const pluginItems = usePluginMenu("mainscreen.menu", (m) => ({
     surface: "mainscreen.menu",
     pluginId: m.id,
@@ -159,7 +162,7 @@ export function MenuBar({
       label: t("main.menu.help"),
       items: [
         { label: t("sc.title"), onClick: onOpenHelp },
-        ...(isDesktop() ? [{ label: t("help.update"), onClick: () => void runUpdateCheck(true) }] : []),
+        ...(isDesktop() ? [{ label: updateMenuLabel(t, t("help.update"), updateState), onClick: () => void runUpdateCheck(true), testId: "menu-item-update" }] : []),
         { label: t("help.community"), onClick: openUsersCommunity },
         { label: t("help.contact"), onClick: openDeveloperContact },
         { label: t("help.terms"), onClick: openResearchUseTerms },
