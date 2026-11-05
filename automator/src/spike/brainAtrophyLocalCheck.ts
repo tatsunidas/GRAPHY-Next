@@ -31,6 +31,7 @@ const PLUGIN_ID = "vis-brain-atrophy";
 const HIPPO_DB = process.env.BA_HIPPO_DB ?? "";   // 指定すると「海馬も解析する」を選んで通す（HippoDeep は ~/hippodeep_pytorch か GN_BA_HIPPODEEP）
 const CANCEL_AT = (process.env.BA_CANCEL_AT ?? "").split(",").filter(Boolean);   // 例 bet,register: そのプロセスの実行中に［キャンセル］を押し、止まるまでの時間を測る
 const MAKER = process.env.BA_MAKER ?? "";   // 指定すると装置メーカーを選んで通す（Philips/GE/Siemens/other）
+const WM_DB = process.env.BA_WM_DB ?? "";   // 指定すると「全脳白質（参考・警告つき）」を選んで通す
 const GN_DB = process.env.BA_GN_DB ?? "";   // 指定すると「全脳規格化後の Z」を選んで通す
 const VOI_DB = process.env.BA_VOI_DB ?? "";   // 指定すると「鑑別の参考指標」を選んで通す（背側脳幹の白質の基準）
 const PLUGIN_REPO = path.resolve(AUTOMATOR_ROOT, "..", "..", "graphy-next-plugin-brain-atrophy");
@@ -107,7 +108,7 @@ async function main(): Promise<void> {
     await main.getByTestId("search-patientid-input").waitFor({ state: "visible", timeout: 60_000 });
     await driver.app.evaluate(({ dialog }, p) => {
       dialog.showMessageBoxSync = (() => 0) as typeof dialog.showMessageBoxSync;
-      dialog.showOpenDialog = (async (_w: unknown, o: { title?: string }) => ({ canceled: false, filePaths: [String(o?.title ?? "").includes("海馬") ? process.env.BA_HIPPO_DB ?? p : String(o?.title ?? "").includes("背側脳幹") ? process.env.BA_VOI_DB ?? p : String(o?.title ?? "").includes("規格化") ? process.env.BA_GN_DB ?? p : p] })) as unknown as typeof dialog.showOpenDialog;
+      dialog.showOpenDialog = (async (_w: unknown, o: { title?: string }) => ({ canceled: false, filePaths: [String(o?.title ?? "").includes("海馬") ? process.env.BA_HIPPO_DB ?? p : String(o?.title ?? "").includes("背側脳幹") ? process.env.BA_VOI_DB ?? p : String(o?.title ?? "").includes("規格化") ? process.env.BA_GN_DB ?? p : String(o?.title ?? "").includes("全脳白質") ? process.env.BA_WM_DB ?? p : p] })) as unknown as typeof dialog.showOpenDialog;
     }, db);
 
     const rec = createStepRecorder();
@@ -187,6 +188,12 @@ async function main(): Promise<void> {
       await viewer.getByTestId("ba-hippo-db-pick").click();
       await viewer.waitForFunction(() => !!(window as unknown as { __brainAtrophyState: { hippoDb?: string } }).__brainAtrophyState.hippoDb, null, { timeout: 10_000 });
       check(((await viewer.getByTestId("ba-hippo-db-path").textContent()) ?? "") === HIPPO_DB, "海馬の基準の選択が画面に反映される");
+    }
+    if (WM_DB) {
+      await viewer.getByTestId("ba-wm").check();
+      await viewer.getByTestId("ba-wm-db-pick").click();
+      await viewer.waitForFunction(() => !!(window as unknown as { __brainAtrophyState: { wmDb?: string } }).__brainAtrophyState.wmDb, null, { timeout: 10_000 });
+      check(((await viewer.getByTestId("ba-wm-db-path").textContent()) ?? "") === WM_DB, "全脳白質の基準の選択が画面に反映される");
     }
     if (GN_DB) {
       await viewer.getByTestId("ba-gn").check();
@@ -286,6 +293,15 @@ async function main(): Promise<void> {
       await viewer.screenshot({ path: path.join(OUT_DIR, "d4-hippo.png") });
     }
 
+    if (WM_DB) {
+      console.log("\n[D7] 全脳白質（参考・警告つき）");
+      await viewer.getByTestId("ba-wm-result").waitFor({ state: "visible", timeout: 10_000 });
+      const frac = (await viewer.getByTestId("ba-wm-frac").textContent()) ?? "";
+      const warn = (await viewer.getByTestId("ba-wm-warning").textContent()) ?? "";
+      console.log(`  ${frac}\n  ${warn}`);
+      check(/Z>2 の割合: \d+\.\d\d %/.test(frac), "画面に全脳白質の Z>2 の割合が出る", frac);
+      check(/年齢を ±20 歳ずらす/.test(warn) && /58 歳未満/.test(warn), "警告が必ず付く", warn);
+    }
     if (GN_DB) {
       console.log("\n[D6] 全脳規格化後の Z");
       await viewer.getByTestId("ba-gn-result").waitFor({ state: "visible", timeout: 10_000 });
@@ -415,7 +431,7 @@ async function main(): Promise<void> {
         await loc.screenshot({ path: path.join(md, `${name}.png`) });
       };
       for (const [id, name] of [["ba-card-patient", "01-patient"], ["ba-card-imaging", "02-imaging"], ["ba-card-reference", "03-reference"], ["ba-card-extras", "04-extras"], ["ba-card-run", "05-run"],
-        ["ba-metrics", "06-metrics"], ["ba-hippo-result", "07-hippo"], ["ba-voi-result", "08-voi"], ["ba-gn-result", "09-gn"], ["ba-procs", "10-procs"], ["ba-panel-stages", "11-stages"], ["ba-panel-report", "12-report-panel"]] as const) await shot(id, name);
+        ["ba-metrics", "06-metrics"], ["ba-hippo-result", "07-hippo"], ["ba-voi-result", "08-voi"], ["ba-gn-result", "09-gn"], ["ba-wm-result", "09b-wm"], ["ba-procs", "10-procs"], ["ba-panel-stages", "11-stages"], ["ba-panel-report", "12-report-panel"]] as const) await shot(id, name);
       const pages = viewer.frameLocator('[data-testid="ba-report"]').locator(".page");
       for (let i = 0; i < (await pages.count()); i++) { await pages.nth(i).scrollIntoViewIfNeeded(); await pages.nth(i).screenshot({ path: path.join(md, `13-report-page${i + 1}.png`) }); }
       await viewer.screenshot({ path: path.join(md, "00-window.png") });
