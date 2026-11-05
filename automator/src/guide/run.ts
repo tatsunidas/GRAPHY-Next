@@ -25,6 +25,9 @@ import { waitForMainScreenReady } from "../checklist/items/shared/helpers.js";
 import { dismissStartupDialogs } from "../common/dismissDialogs.js";
 
 const GUIDES_DIR = path.resolve(AUTOMATOR_ROOT, "..", "docs", "release-guides");
+// 成果物（shots/・guide.html・PDF）の置き場。既定は本体の docs/release-guides。プラグインのガイドは、
+// そのリポジトリの docs/ に置くので、GRAPHY_GUIDE_OUT で上書きする（guide.css / guide.js・本文もそこに置く）。
+const OUT_DIR = process.env.GRAPHY_GUIDE_OUT ? path.resolve(process.env.GRAPHY_GUIDE_OUT) : GUIDES_DIR;
 const DATA_DIR = process.env.GRAPHY_GUIDE_DATA ?? path.join(process.env.HOME ?? "", "graphy-demo-samples");
 // 縮小して載せても文字が読めるよう、画面は小さめに撮り、画素は 2 倍で持つ。
 const SCREEN = { width: 1280, height: 720 };
@@ -58,7 +61,7 @@ async function shoot(tag: string): Promise<void> {
   if (!fs.existsSync(scenarioFile)) throw new Error(`シナリオがありません: ${scenarioFile}`);
   const scenario = (await import(pathToFileURL(scenarioFile).href)).default as Scenario;
 
-  const shotsDir = path.join(GUIDES_DIR, tag, "shots");
+  const shotsDir = path.join(OUT_DIR, tag, "shots");
   fs.rmSync(shotsDir, { recursive: true, force: true });
   fs.mkdirSync(shotsDir, { recursive: true });
   const marks: Record<string, { width: number; height: number; marks: Mark[] }> = {};
@@ -118,9 +121,9 @@ async function shoot(tag: string): Promise<void> {
 }
 
 async function renderPdf(tag: string): Promise<void> {
-  const html = path.join(GUIDES_DIR, tag, "guide.html");
+  const html = path.join(OUT_DIR, tag, "guide.html");
   if (!fs.existsSync(html)) throw new Error(`本文がありません: ${html}`);
-  const out = path.join(GUIDES_DIR, `${tag}.pdf`);
+  const out = path.join(OUT_DIR, `${tag}.pdf`);
   const browser = await chromium.launch();
   try {
     const page = await browser.newPage({ viewport: { width: 1920, height: 1080 } });
@@ -134,8 +137,8 @@ async function renderPdf(tag: string): Promise<void> {
 }
 
 const [tag, flag] = process.argv.slice(2);
-if (!tag || !/^v\d+\.\d+\.\d+$/.test(tag)) {
-  console.error("使い方: npm run guide -- vX.Y.Z [--shots-only | --pdf-only]");
+if (!tag || !/^(?:[a-z][a-z0-9-]*-)?v\d+\.\d+\.\d+$/.test(tag)) {
+  console.error("使い方: npm run guide -- vX.Y.Z（プラグインは <名前>-vX.Y.Z）[--shots-only | --pdf-only]");
   process.exit(2);
 }
 if (flag !== "--pdf-only") await shoot(tag);
