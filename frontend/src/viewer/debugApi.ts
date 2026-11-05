@@ -18,6 +18,7 @@ import { addSphere3D } from "./sphere3dStore";
 import { worldToImageCoords } from "./imageCoords";
 import type { Geometry3DPixelStats } from "./vtkGeometryView";
 import type { VtkRenderStats } from "./vtkVolumeView";
+import { getFusionResampleStats, resetFusionResampleStats } from "./gpuResample/fusionResampleStats";
 import type { CinematicStats } from "./cinematicScale";
 
 /**
@@ -952,6 +953,8 @@ declare global {
       getImagePixelRange: typeof getImagePixelRange;
       getPixelStats: typeof getPixelStats;
       getRender3dStats: typeof getRender3dStats;
+      getFusionResampleStats: typeof getFusionResampleStats;
+      resetFusionResampleStats: typeof resetFusionResampleStats;
       getCinematicStats: typeof getCinematicStats;
       benchCinematicFrames: typeof benchCinematicFrames;
       forceCinematicScale: typeof forceCinematicScale;
@@ -1123,6 +1126,8 @@ export function installDebugApi(): void {
     getImagePixelRange,
     getPixelStats,
     getRender3dStats,
+    getFusionResampleStats,
+    resetFusionResampleStats,
     getCinematicStats,
     benchCinematicFrames,
     forceCinematicScale,

@@ -4121,6 +4121,7 @@ function FusionControlBar({
 
       {/* 手動位置合わせ（fw/registration-design.md R1） */}
       <button
+        data-testid="fusion-adjust-toggle"
         onClick={() => setShowAdjust((v) => !v)}
         disabled={!adjustEnabled}
         title={adjustEnabled ? t("viewer2d.fusion.adjust.title") : t("viewer2d.fusion.adjust.unavailable")}
@@ -4180,16 +4181,16 @@ function FusionControlBar({
           <span style={{ fontSize: 11, color: "#5a6672", flex: "none" }}>
             {t("viewer2d.fusion.adjust.translate")}
           </span>
-          <AdjustNumber label="X" value={adjust.tx} step={1} onChange={(v) => onAdjustChange({ ...adjust, tx: v })} />
-          <AdjustNumber label="Y" value={adjust.ty} step={1} onChange={(v) => onAdjustChange({ ...adjust, ty: v })} />
-          <AdjustNumber label="Z" value={adjust.tz} step={1} onChange={(v) => onAdjustChange({ ...adjust, tz: v })} />
+          <AdjustNumber label="X" value={adjust.tx} step={1} testId="fusion-adjust-tx" onChange={(v) => onAdjustChange({ ...adjust, tx: v })} />
+          <AdjustNumber label="Y" value={adjust.ty} step={1} testId="fusion-adjust-ty" onChange={(v) => onAdjustChange({ ...adjust, ty: v })} />
+          <AdjustNumber label="Z" value={adjust.tz} step={1} testId="fusion-adjust-tz" onChange={(v) => onAdjustChange({ ...adjust, tz: v })} />
 
           <span style={{ fontSize: 11, color: "#5a6672", flex: "none", marginLeft: 6 }}>
             {t("viewer2d.fusion.adjust.rotate")}
           </span>
-          <AdjustNumber label="X" value={adjust.rx} step={1} onChange={(v) => onAdjustChange({ ...adjust, rx: v })} />
-          <AdjustNumber label="Y" value={adjust.ry} step={1} onChange={(v) => onAdjustChange({ ...adjust, ry: v })} />
-          <AdjustNumber label="Z" value={adjust.rz} step={1} onChange={(v) => onAdjustChange({ ...adjust, rz: v })} />
+          <AdjustNumber label="X" value={adjust.rx} step={1} testId="fusion-adjust-rx" onChange={(v) => onAdjustChange({ ...adjust, rx: v })} />
+          <AdjustNumber label="Y" value={adjust.ry} step={1} testId="fusion-adjust-ry" onChange={(v) => onAdjustChange({ ...adjust, ry: v })} />
+          <AdjustNumber label="Z" value={adjust.rz} step={1} testId="fusion-adjust-rz" onChange={(v) => onAdjustChange({ ...adjust, rz: v })} />
 
           <button
             onClick={() => onAdjustChange(ZERO_ADJUST)}
@@ -4227,8 +4228,9 @@ function FusionControlBar({
  * **フォーカス中は props からの同期を止める**ことで、即時反映と自由な入力を両立させている。
  */
 function AdjustNumber({
-  label, value, step, onChange,
+  label, value, step, onChange, testId,
 }: {
+  testId?: string;
   label: string;
   value: number;
   step: number;
@@ -4244,6 +4246,7 @@ function AdjustNumber({
       <span style={{ fontSize: 11, color: "#8a94a2" }}>{label}</span>
       <input
         ref={ref}
+        data-testid={testId}
         type="number"
         step={step}
         value={text}
