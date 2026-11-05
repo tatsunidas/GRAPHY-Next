@@ -1,0 +1,4 @@
+{
+  "comment": "自動更新のインストーラ（.exe / .AppImage）の minisign 署名を検証する公開鍵。公式鍵 98EA7C6BA2D50118（backend の application.yml の trusted-keys と同じ。minisign.test.js が一致を縛る）。公開鍵は秘密ではない。",
+  "keys": ["RWQYAdWia3zqmCJxZSCcze0JrUzO5Qvs2oNuIt5a0QbWsoZTbjJqhjNT"]
+}
