@@ -40,6 +40,8 @@ export interface SeriesLayout {
   cDimension?: string | null;
   /** T 次元の DICOM 由来（"Temporal"/"Trigger" 等。単一次元なら null）。 */
   tDimension?: string | null;
+  /** C 次元の各値の名前（一時シリーズのマップ名など）。あれば C スライダーに番号の代わりに出す。 */
+  cLabels?: string[];
   /** 指定 (c, t) に対する Z スタック（imageId 配列, z 昇順）。 */
   zStack(c: number, t: number): string[];
   /**

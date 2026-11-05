@@ -2,7 +2,7 @@
  * Copyright (c) Visionary Imaging Services, Inc. All rights reserved.
  * Author: Tatsuaki Kobayashi
  */
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useI18n } from "../i18n/i18n";
 import { type ViewerActions } from "./Viewer2DToolbar";
 import { spansPatients } from "./tileScope";
@@ -82,6 +82,7 @@ export function Viewer2DMenuBar({
   actions,
   refLines,
   panelVisible,
+  scaleBarOn,
   activeTool,
   gridRows,
   gridCols,
@@ -92,6 +93,8 @@ export function Viewer2DMenuBar({
   refLines: boolean;
   /** 画像下ツールパネルの表示状態（View メニューのチェック表示用）。 */
   panelVisible: boolean;
+  /** 値スケールバーの表示状態（全タイル共通。View メニューのチェック表示用）。 */
+  scaleBarOn: boolean;
   activeTool: string;
   gridRows: number;
   gridCols: number;
@@ -106,6 +109,15 @@ export function Viewer2DMenuBar({
   // 組み立てを 1 本にして surface だけ差し替える（2 本に分けると片方だけ H## を足す事故になる）。
   // `ai` / `file` はここでは作らない。マニフェストと結び付けて launchPlugin が注入する
   // （PluginHostSeed の注記を参照）。
+  // プラグインへ渡す host は窓を開いた時に 1 回作られ、開いている間ずっと使われる。`actions` は描画のたびに作り直される
+  // （タイルの増減を反映する）ので、そのまま閉じ込めると、窓を開いたあとに開いたタイルを getTargets などが見失う。
+  // 呼ぶたびに最新の actions を引く。
+  const actionsRef = useRef(actions);
+  actionsRef.current = actions;
+  const liveActions = useMemo(
+    () => new Proxy({} as ViewerActions, { get: (_t, k) => (actionsRef.current as unknown as Record<string | symbol, unknown>)[k] }),
+    [],
+  );
   const makeViewerHost = (surface: Viewer2DSurface) => (m: PluginManifest): PluginHostSeed => ({
     surface,
     pluginId: m.id,
@@ -114,19 +126,19 @@ export function Viewer2DMenuBar({
     locale,
     notify: (msg) => window.alert(msg),
     runBackend: (payload) => runPluginBackend(m.id, payload),
-    actions,
-    // 問い合わせ系は actions の実装へ委譲（対象の定義＝選択→無ければ全、を命令系と共有するため）。
-    getTargets: () => actions.getTargets(),
-    getViewState: (tileId) => actions.getViewState(tileId),
-    getPixelData: (tileId, opts) => actions.getPixelData(tileId, opts),
+    actions: liveActions,
+    // 問い合わせ系は liveActions の実装へ委譲（対象の定義＝選択→無ければ全、を命令系と共有するため）。
+    getTargets: () => liveActions.getTargets(),
+    getViewState: (tileId) => liveActions.getViewState(tileId),
+    getPixelData: (tileId, opts) => liveActions.getPixelData(tileId, opts),
     // H35 / H36: 校正の出自と XA の表示状態。**画素だけ渡して意味を渡さない**のを避ける
     // （数値は取れるのに「近似か実測か」「差分中か」が分からない状態を作らない）。
-    getSpatialCalibration: (tileId) => actions.getSpatialCalibration(tileId),
-    getXaState: (tileId) => actions.getXaState(tileId),
-    getXaCine: (tileId) => actions.getXaCine(tileId),
-    getXaGeometry: (tileId) => actions.getXaGeometry(tileId),
+    getSpatialCalibration: (tileId) => liveActions.getSpatialCalibration(tileId),
+    getXaState: (tileId) => liveActions.getXaState(tileId),
+    getXaCine: (tileId) => liveActions.getXaCine(tileId),
+    getXaGeometry: (tileId) => liveActions.getXaGeometry(tileId),
     // H11 / H12: 3D 血管モデルの受け渡しと、解析値の書き戻し（A7）。
-    // タイルに紐付かない（再構成はセッション単位の登録簿）ので actions を経由しない。
+    // タイルに紐付かない（再構成はセッション単位の登録簿）ので liveActions を経由しない。
     // 🔴 出自は host が入れる。**本体は FFR を計算しない**（fw/angio-design.md §11.1）。
     listVesselModels: () => listVesselModels(),
     getVesselModel: (runId) => getVesselModel(runId),
@@ -139,62 +151,62 @@ export function Viewer2DMenuBar({
     // H74: 登録したモデルの 3D 画面を開く（色は乗せない）。
     openVesselModel3d: (runId) => openVesselModel3dFromPlugin(runId),
     // 出所ラベルはプラグイン任せにしない: host が必ずマニフェストの表示名を入れる。
-    showOverlay: (tileId, overlay) => actions.showOverlay(tileId, { ...overlay, label: m.name }),
-    showLabelVolume: (tileId, req) => actions.showLabelVolume(tileId, req, { id: m.id, name: m.name }),
-    clearOverlay: (tileId) => actions.clearOverlay(tileId),
+    showOverlay: (tileId, overlay) => liveActions.showOverlay(tileId, { ...overlay, label: m.name }),
+    showLabelVolume: (tileId, req) => liveActions.showLabelVolume(tileId, req, { id: m.id, name: m.name }),
+    clearOverlay: (tileId) => liveActions.clearOverlay(tileId),
     // 出所（id/name/version）は host がマニフェストから入れる。プラグインに名乗らせない。
     saveDerivedSeries: (tileId, req) =>
-      actions.saveDerivedSeries(tileId, req, { id: m.id, name: m.name, version: m.version }),
+      liveActions.saveDerivedSeries(tileId, req, { id: m.id, name: m.name, version: m.version }),
     // H9: 出所（id/name/version）は host がマニフェストから入れる。プラグインに名乗らせない。
     saveStructuredReport: (tileId, req) =>
-      actions.saveStructuredReport(tileId, req, { id: m.id, name: m.name, version: m.version }),
+      liveActions.saveStructuredReport(tileId, req, { id: m.id, name: m.name, version: m.version }),
     // H37: アンギオ解析 SR。出所（id/name/version）は host がマニフェストから入れる。
     saveAngioReport: (tileId, req) =>
-      actions.saveAngioReport(tileId, req, { id: m.id, name: m.name, version: m.version }),
+      liveActions.saveAngioReport(tileId, req, { id: m.id, name: m.name, version: m.version }),
     // H38: 表示状態（GSPS）。出所は host が入れる。
     savePresentationState: (tileId, req) =>
-      actions.savePresentationState(tileId, req, { id: m.id, name: m.name, version: m.version }),
+      liveActions.savePresentationState(tileId, req, { id: m.id, name: m.name, version: m.version }),
     // H39: レポートへの差し込み候補。出所は host が入れる。
     publishAnalysisResult: (tileId, input) =>
-      actions.publishAnalysisResult(tileId, input, { id: m.id, name: m.name, version: m.version }),
+      liveActions.publishAnalysisResult(tileId, input, { id: m.id, name: m.name, version: m.version }),
     // H22 / H23: 出所（プラグイン id・名前・版）は**本体が付ける**。
     // プラグイン側から渡させると、出力の由来を書き換えられる。
     // （レポートへの差し込みは H39 が上で受けている。H25 は同じ機能の重複だったので採らない。）
     saveSegmentation: (req) =>
-      actions.saveSegmentation(req, { id: m.id, name: m.name, version: m.version }),
-    saveRtDose: (req) => actions.saveRtDose(req, { id: m.id, name: m.name, version: m.version }),
+      liveActions.saveSegmentation(req, { id: m.id, name: m.name, version: m.version }),
+    saveRtDose: (req) => liveActions.saveRtDose(req, { id: m.id, name: m.name, version: m.version }),
     // H5: ROI の読み出しと、ROI に紐付くプラグイン属性。**pluginId は host が入れる**ので、
     // プラグインは他プラグイン（や本体）の属性名前空間に触れない。
-    getRois: (tileId) => actions.getRois(tileId),
+    getRois: (tileId) => liveActions.getRois(tileId),
     // H10 / H21: ボリュームの読み出しと位置合わせ。**プラグインに計算を持たせない**
     // （位置合わせの答えが 2 つになるのを避ける。fw/registration-design.md）。
-    loadVolume: (ref, onProgress) => actions.loadVolume(ref, onProgress),
-    estimateVolume: (ref) => actions.estimateVolume(ref),
-    readXaSeries: (ref) => actions.readXaSeries(ref),
-    readXaSeriesFrame: (ref, frameIndex) => actions.readXaSeriesFrame(ref, frameIndex),
-    registerVolumes: (req, onProgress) => actions.registerVolumes(req, onProgress),
-    resampleVolume: (source, transform, target) => actions.resampleVolume(source, transform, target),
-    goTo: (tileId, dims) => actions.goTo(tileId, dims),
-    selectRoi: (tileId, roiUid, exclusive) => actions.selectRoi(tileId, roiUid, exclusive),
-    getRoiMeta: (roiUid) => actions.getRoiMeta(roiUid, m.id),
-    setRoiMeta: (roiUid, patch) => actions.setRoiMeta(roiUid, m.id, patch),
+    loadVolume: (ref, onProgress) => liveActions.loadVolume(ref, onProgress),
+    estimateVolume: (ref) => liveActions.estimateVolume(ref),
+    readXaSeries: (ref) => liveActions.readXaSeries(ref),
+    readXaSeriesFrame: (ref, frameIndex) => liveActions.readXaSeriesFrame(ref, frameIndex),
+    registerVolumes: (req, onProgress) => liveActions.registerVolumes(req, onProgress),
+    resampleVolume: (source, transform, target) => liveActions.resampleVolume(source, transform, target),
+    goTo: (tileId, dims) => liveActions.goTo(tileId, dims),
+    selectRoi: (tileId, roiUid, exclusive) => liveActions.selectRoi(tileId, roiUid, exclusive),
+    getRoiMeta: (roiUid) => liveActions.getRoiMeta(roiUid, m.id),
+    setRoiMeta: (roiUid, patch) => liveActions.setRoiMeta(roiUid, m.id, patch),
     // 作る ROI には「どのプラグインが作ったか」の印を**本体が**付ける（pluginId はここで入れる。名乗らせない）。
-    createRoi: (tileId, req) => actions.createRoi(tileId, { pluginId: m.id, pluginName: m.name }, req),
-    removeCreatedRoi: (roiUid) => actions.removeCreatedRoi(roiUid, m.id),
-    removeLabelVolume: (segmentationId) => actions.removeLabelVolume(segmentationId, m.id),
-    subscribeRois: (listener) => actions.subscribeRois(listener),
+    createRoi: (tileId, req) => liveActions.createRoi(tileId, { pluginId: m.id, pluginName: m.name }, req),
+    removeCreatedRoi: (roiUid) => liveActions.removeCreatedRoi(roiUid, m.id),
+    removeLabelVolume: (segmentationId) => liveActions.removeLabelVolume(segmentationId, m.id),
+    subscribeRois: (listener) => liveActions.subscribeRois(listener),
     // H8: プラグイン専用の保存領域（患者単位・backend 保管）。**pluginId と patientKey は
     // host が入れる**。患者は対象タイルから引くので、プラグインが別患者の領域を勝手に
     // 触ることはない（明示指定した場合を除く）。
-    loadStore: (patientKey) => loadPluginStore(m.id, patientKey ?? currentPatientKey(actions)),
+    loadStore: (patientKey) => loadPluginStore(m.id, patientKey ?? currentPatientKey(liveActions)),
     saveStore: (json, opts) =>
       savePluginStore(
         m.id,
-        opts?.patientKey ?? currentPatientKey(actions),
+        opts?.patientKey ?? currentPatientKey(liveActions),
         json,
         opts?.version ?? null,
       ),
-    deleteStore: (patientKey) => deletePluginStore(m.id, patientKey ?? currentPatientKey(actions)),
+    deleteStore: (patientKey) => deletePluginStore(m.id, patientKey ?? currentPatientKey(liveActions)),
     // ── H30〜H33: 「見せる」側の貸し出し（fw/subtraction-design.md §15.4） ──
     // どれも**サブトラクションを知らない汎用の能力**である。本体側に機能固有の語を持ち込まない。
     openWindow: (opts) =>
@@ -217,12 +229,12 @@ export function Viewer2DMenuBar({
       // 古いまま残り（登録の useEffect は [commandKey] 依存なので再実行されない）、
       // `getStackImageIds` を持たないオブジェクトが registry に残って**静かに 3 面とも
       // 出ない**という形で踏んだ。理由を持った例外にして、呼び出し側に見せる。
-      const ids = actions.getStackImageIds?.(referenceTileId);
+      const ids = liveActions.getStackImageIds?.(referenceTileId);
       if (!ids || ids.length === 0) {
         throw new Error(
           `mountViewport: could not resolve the reference stack for tile ` +
             `${referenceTileId ?? "(target)"}. ` +
-            (typeof actions.getStackImageIds !== "function"
+            (typeof liveActions.getStackImageIds !== "function"
               ? "getStackImageIds is missing on ViewerActions — reload the app (a stale HMR registration does this)."
               : "The tile has no image stack."),
         );
@@ -235,8 +247,10 @@ export function Viewer2DMenuBar({
     extractCenterline: (mask, opts) => extractCenterline(mask, opts),
     sampleCenterlineFrames: (polyline, opts) => sampleCenterlineFrames(polyline, opts),
     // H73: 出所（id/name/version）は host がマニフェストから入れる。
-    openCurvedMpr: (spec) => actions.openCurvedMpr(spec, { id: m.id, name: m.name, version: m.version }),
-    mountSeriesPanel: (el, series, opts) => actions.mountSeriesPanel(el, series, opts),
+    openCurvedMpr: (spec) => liveActions.openCurvedMpr(spec, { id: m.id, name: m.name, version: m.version }),
+    // 出所（id/name）は host が入れる。一時タイルの見出しにプラグイン名が必ず出る。
+    openTransientSeries: (spec) => liveActions.openTransientSeries(spec, { id: m.id, name: m.name }),
+    mountSeriesPanel: (el, series, opts) => liveActions.mountSeriesPanel(el, series, opts),
   });
   /** 「プラグイン」メニューに出るもの。 */
   // アシスタントからのプラグインツール呼び出しに使うホストの素（メニューのクリックと同じ組み立てを共有する）
@@ -274,6 +288,7 @@ export function Viewer2DMenuBar({
       items: [
         { label: t("viewer2d.refLines.label"), onClick: actions.toggleRefLines, checked: refLines },
         { label: t("viewer2d.toolPanel.label"), onClick: actions.toggleToolPanel, checked: panelVisible },
+        { label: t("viewer2d.scaleBar.label"), onClick: actions.toggleScaleBar, checked: scaleBarOn, testId: "menu-scalebar" },
         {
           label: t("viewer2d.layout"),
           testId: "viewer2d-menu-layout",
