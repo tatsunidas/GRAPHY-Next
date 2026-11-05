@@ -32,7 +32,8 @@ const OUT_DIR = path.join(AUTOMATOR_ROOT, ".results", "transient-check");
 const PLUGIN_ID = "vis-computed-dwi";
 const PLUGIN_DIR = process.env.CDWI_PLUGIN_DIR ?? path.join(os.homedir(), "graphy-next-plugin-computed-dwi");
 const GE = process.env.CDWI_GE;
-const PORTS = { http: 28741, scp: 28742, vite: 28743 };
+const P0 = Number(process.env.CDWI_PORT_BASE ?? 28741);
+const PORTS = { http: P0, scp: P0 + 1, vite: P0 + 2 };
 
 function tag(b: Buffer, t: number[], vr: string): string | null {
   const at = b.indexOf(Buffer.from([...t, ...Buffer.from(vr, "latin1")]));
@@ -188,7 +189,13 @@ async function main(): Promise<number> {
     const status = (await viewer.getByTestId("status").textContent()) ?? "";
     console.log(`  status: ${status}`);
     check(status.includes("計算しました"), "計算が完了する", status);
-    check((await hostCount()) === 2, "一時タイルが 1 枚増える（タイル 2 枚）", await hostCount());
+    check((await hostCount()) === 3, "既定は ADC・cDWI を別々の一時タイルに開く（元 DWI と合わせてタイル 3 枚）", await hostCount());
+    const wSplit = (await viewer.evaluate(`Array.from(document.querySelectorAll('[data-testid="viewer2d-canvas-host"]')).map(function(e){return e.clientWidth})`)) as number[];
+    check(new Set(wSplit).size === 1, "3 タイルの画像領域の幅がそろう", wSplit);
+    await viewer.screenshot({ path: path.join(OUT_DIR, "1b-split-tiles.png") });
+    await viewer.getByTestId("open-tiles").click();
+    await viewer.waitForTimeout(2500);
+    check((await hostCount()) === 2, "「全マップを 1 タイルで開く」で一時タイルが 1 枚になる（タイル 2 枚）", await hostCount());
     const bodyText = (await viewer.locator("body").innerText()) ?? "";
     check(bodyText.includes("（未保存）"), "一時タイルの見出しに「（未保存）」が出る");
     await viewer.screenshot({ path: path.join(OUT_DIR, "1-after-run.png") });

@@ -18,7 +18,7 @@ const ROOT = path.resolve(AUTOMATOR_ROOT, "..");
  * desktop 実行時に backend の CWD にするディレクトリ（H2 DB `./data` / DICOM 保管庫 /
  * `./plugins` がここに作られる）。プラグインを置いて検証する側もこの場所を知る必要がある。
  */
-export const DESKTOP_RUN_DATA_DIR = path.join(AUTOMATOR_ROOT, ".results", "run-data", "desktop");
+export const DESKTOP_RUN_DATA_DIR = process.env.AUTOMATOR_DATA_DIR ?? path.join(AUTOMATOR_ROOT, ".results", "run-data", "desktop");
 const DESKTOP_DIR = path.join(ROOT, "desktop");
 const FRONTEND_DIR = path.join(ROOT, "frontend");
 const BACKEND_JAR = path.join(ROOT, "backend", "target", "graphy-next-backend.jar");
