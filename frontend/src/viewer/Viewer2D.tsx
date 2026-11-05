@@ -3180,7 +3180,7 @@ export function Viewer2D({
           <div data-testid="scalebar-max" style={scaleBarText}>{barLabels.max}</div>
           <canvas ref={barCanvasRef} data-testid="scalebar-canvas" width={1} height={256} style={scaleBarCanvas} />
           <div data-testid="scalebar-min" style={scaleBarText}>{barLabels.min}</div>
-          <div data-testid="scalebar-unit" style={{ ...scaleBarText, color: "#9fb0c3" }}>{calUnit}</div>
+          <div data-testid="scalebar-unit" style={scaleBarUnit}>{calUnit}</div>
         </div>
       )}
     </div>
@@ -3525,6 +3525,8 @@ const scaleBarText: React.CSSProperties = {
   color: "#e6edf5",
   fontVariantNumeric: "tabular-nums",
 };
+// 単位（例: ×10⁻³ mm²/s）は 56px の列に収まらないので、折り返して全部見せる。
+const scaleBarUnit: React.CSSProperties = { ...scaleBarText, height: "auto", minHeight: 12, whiteSpace: "normal", overflowWrap: "anywhere", textAlign: "center", fontSize: 9, lineHeight: "11px", color: "#9fb0c3" };
 const scaleBarCanvas: React.CSSProperties = {
   flex: 1,
   minHeight: 16,

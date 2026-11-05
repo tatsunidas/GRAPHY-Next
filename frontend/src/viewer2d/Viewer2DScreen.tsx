@@ -2730,7 +2730,7 @@ function TileGrid({
             syncEnabled={tile.syncEnabled}
             referenceLinesEnabled={refLines}
             showControls={panelVisible}
-            scaleBar={scaleBarOn || !!tile.transient?.scaleBar}
+            scaleBar={scaleBarOn || patient.tiles.some((tl) => !!tl.transient?.scaleBar)}
             onFrameContextMenu={(e) => openFrameMenu(e, tile.id)}
             commandKey={tile.id}
             selected={selectedIds.has(tile.id)}
