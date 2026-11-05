@@ -32,6 +32,11 @@ export interface FusionProbeData {
   suv: boolean;
   /** 名前（フィルタ層の `r2` など）。層ごとの値を状態バーに並べるときの見出し。 */
   label?: string;
+  /**
+   * 列 `col`・行 `row` の前景値を、CPU の実装で計算し直す。`values` が GPU で作った値のとき、状態バーの数値を
+   * 導入前（CPU）と同じにするために使う。あれば `values` より優先する（範囲外は NaN）。
+   */
+  exactAt?: (col: number, row: number) => number;
 }
 
 /** カーソル位置で読み出した前景の値。 */
@@ -141,7 +146,7 @@ export function sampleFusionValue(
   const i = Math.round(mapAxis(fx, baseCols, data.cols));
   const j = Math.round(mapAxis(fy, baseRows, data.rows));
   if (i < 0 || j < 0 || i >= data.cols || j >= data.rows) return null;
-  const v = data.values[j * data.cols + i];
+  const v = data.exactAt ? data.exactAt(i, j) : data.values[j * data.cols + i];
   if (v === undefined || !Number.isFinite(v)) return null;
   return { value: v * data.scale, unit: data.unit, suv: data.suv, ...(data.label ? { label: data.label } : {}) };
 }
