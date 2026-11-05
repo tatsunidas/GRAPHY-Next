@@ -27,13 +27,11 @@ export function gamma(n: number): number {
 }
 
 /**
- * 演算数（誤差上界の n）。**段 2 で書くシェーダの式を数えた値に置き換える暫定値**で、
- * 段 2 では「シェーダ文字列の要約値が、ここに記録した値と違えば落ちる」照合を足す。
- * それまでは次の数え方の上限:
+ * 演算数（誤差上界の n）。affine・interp は **GPU のシェーダ（gpuShader.ts）の式から数えた値**で、
+ * シェーダを変えたら数え直す（gpuShader.test.ts がシェーダの要約値で強制する）。
  * - affine: 3 項の積和（乗算 3・加算 2）＋ float64 → float32 に丸めて渡す係数の誤差 1 回分 = 4
- * - gridCoord: (q − 原点) / 間隔 = 2
- * - dvf: 変位の trilinear（lerp 7 回 × 2 演算）= 14 に、局所座標への足し込みを足して 16
- * - interp: 保存値 → 物理値（積・和 2）と bilinear（lerp 3 × 2）、z の lerp（2〜3）の連鎖 = 16
+ * - interp: シェーダの補間の連鎖は 11 段（gpuShader.ts の冒頭に内訳）。上界には余裕を持たせて 16
+ * - gridCoord・dvf: DVF（第 3 段）の見積もり。シェーダがまだ無いので上限の暫定値（DVF のシェーダを書くときに数え直す）
  */
 export const OP_COUNTS = { affine: 4, gridCoord: 2, dvf: 16, interp: 16 } as const;
 

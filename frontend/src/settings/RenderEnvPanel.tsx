@@ -10,6 +10,7 @@ import { isDesktop } from "../desktopBridge";
 import { useI18n, type TFn } from "../i18n/i18n";
 import { STILL_MS_STORAGE_KEY, type RenderEnvSummary } from "../viewer/renderEnv";
 import { loadRenderEnvSummary } from "../viewer/renderEnvReport";
+import { readFusionDecision, type StoredFusionDecision } from "../viewer/gpuResample/fusionResampleReport";
 import type { SelfTestRun } from "../viewer/render3dSelfTest";
 import { fetchStatus } from "../api";
 import { SelfTestSection } from "./SelfTestSection";
@@ -62,6 +63,7 @@ export function RenderEnvPanel() {
   };
 
   const still = readStillMs();
+  const fusion = readFusionDecision();
 
   if (!s) return <p style={muted}>…</p>;
 
@@ -126,6 +128,13 @@ export function RenderEnvPanel() {
             text={still === null ? t("renderenv.still3dNone") : t("renderenv.still3dText", { ms: still.toFixed(1) })}
           />
           <Row
+            id="fusionResample"
+            k={t("renderenv.row.fusionResample")}
+            value={fusion ? fusion.engine : ""}
+            extra={{ "data-reason": fusion?.reason ?? "" }}
+            text={fusionResampleText(fusion, t)}
+          />
+          <Row
             id="features"
             k={t("renderenv.row.features")}
             value={s.featureStatus?.webgl2 ?? ""}
@@ -155,6 +164,24 @@ export function RenderEnvPanel() {
       <SelfTestSection kind={s.kind} onResult={setSelfTest} />
     </div>
   );
+}
+
+/** 設定 > 描画環境の「Fusion のリサンプル」の表示（判定の記録から）。 */
+function fusionResampleText(d: StoredFusionDecision | null, t: TFn): string {
+  if (!d) return t("renderenv.fusion.none");
+  const ms = (v: number | null) => (v === null ? "—" : v.toFixed(1));
+  if (d.engine === "gpu-webgl2") {
+    return t("renderenv.fusion.gpu", {
+      valid: String(d.parity?.valid ?? 0),
+      ambiguous: String(d.parity?.ambiguous ?? 0),
+      ratio: (d.parity?.maxRatio ?? 0).toFixed(2),
+      cpu: ms(d.cpuMs),
+      gpu: ms(d.gpuMs),
+    });
+  }
+  const reason = d.reason ?? "evaluating";
+  const base = t("renderenv.fusion.cpu", { reason: t(`renderenv.fusion.reason.${reason}`) });
+  return d.cpuMs !== null && d.gpuMs !== null ? `${base}（${t("renderenv.fusion.timing", { cpu: ms(d.cpuMs), gpu: ms(d.gpuMs) })}）` : base;
 }
 
 /** 3D ビューア（別ウィンドウのことが多い）が最後に測った静止 1 フレームの時間。同じ場所の localStorage 経由。 */

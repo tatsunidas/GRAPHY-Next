@@ -278,13 +278,18 @@ const _pt: FusionSamplePoint = { u: 0, v: 0, w_mm: 0 };
  * `computeFusionSlice` のループ本体を切り出したもの（式・演算の順序は同じ）。
  */
 export function computeFusionPixel(ctx: FusionSliceContext, bx: number, by: number): number {
-  const { fg, wPos } = ctx;
+  fusionSamplePoint(ctx, bx, by, _pt);
+  return fusionInterpolate(ctx.fg, ctx.wPos, _pt.u, _pt.v, _pt.w_mm);
+}
+
+/**
+ * 前景の (u, v, w_mm) での物理値（面内境界の外は NaN）。`computeFusionPixel` の後半で、式・分岐は同じ。
+ * (u, v, w_mm) を別の方法（GPU の計画層など）で求めた実装の、補間の部分だけを CPU の正で検査するために切り出してある。
+ */
+export function fusionInterpolate(fg: FusionVolume, wPos: number[], u: number, v: number, w_mm: number): number {
   const d = fg.slices.length;
   const fgW = fg.cols;
   const fgH = fg.rows;
-
-  fusionSamplePoint(ctx, bx, by, _pt);
-  const { u, v, w_mm } = _pt;
 
   // 面内境界チェック
   if (u < -0.5 || u > fgW - 0.5 || v < -0.5 || v > fgH - 0.5) return NaN;
