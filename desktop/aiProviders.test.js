@@ -136,7 +136,40 @@ test("用途から提供元とモデルが引ける", () => {
   const r = p.resolve("image-to-text");
   assert.equal(r.ok, true);
   assert.equal(r.provider.id, "gemini-public");
-  assert.equal(r.model, "gemini-2.5-flash");
+  assert.equal(r.model, "gemini-3.5-flash-lite");
+  assert.equal(p.resolve("text-to-text").model, "gemini-3.5-flash-lite");
+  assert.equal(p.resolve("image-to-image").model, "gemini-3.1-flash-image", "画像の生成は対象外（通知は 2.5 Flash だけ）");
+});
+
+// ── gemini-2.5-flash の廃止（2026-12-01 に gemini-3.5-flash-lite へ自動転送）。保存済みの設定の読み替え ──
+
+test("保存済みの組み込み提供元の gemini-2.5-flash は、読み込み時に gemini-3.5-flash-lite に読み替える", () => {
+  const dir = freshDir();
+  const p = freshStore(dir);
+  fs.writeFileSync(path.join(dir, p.FILE_NAME), JSON.stringify({
+    providers: [{ id: "gemini-public", kind: "gemini", endpoint: "https://generativelanguage.googleapis.com", auth: "api-key",
+      models: { "image-to-image": "gemini-3.1-flash-image", "image-to-text": "gemini-2.5-flash", "text-to-text": "gemini-2.5-flash" } }],
+  }));
+  const q = freshStore(dir); // 読み直す
+  assert.equal(q.resolve("text-to-text").model, "gemini-3.5-flash-lite");
+  assert.equal(q.resolve("image-to-text").model, "gemini-3.5-flash-lite");
+  assert.equal(q.resolve("image-to-image").model, "gemini-3.1-flash-image");
+});
+
+test("負例: 読み替えるのは組み込みの提供元の gemini-2.5-flash だけ（利用者が作った提供元・別のモデル名は触らない）", () => {
+  const dir = freshDir();
+  const p = freshStore(dir);
+  fs.writeFileSync(path.join(dir, p.FILE_NAME), JSON.stringify({
+    providers: [
+      { id: "gemini-public", kind: "gemini", endpoint: "https://generativelanguage.googleapis.com", auth: "api-key", models: { "text-to-text": "gemini-2.5-pro", "image-to-text": "gemini-2.5-flash-lite" } },
+      { id: "mine", kind: "gemini", endpoint: "https://generativelanguage.googleapis.com", auth: "api-key", models: { "text-to-text": "gemini-2.5-flash" } },
+    ],
+    defaults: { "text-to-text": "mine", "image-to-text": "gemini-public" },
+  }));
+  const q = freshStore(dir);
+  assert.equal(q.get().providers.find((x) => x.id === "gemini-public").models["text-to-text"], "gemini-2.5-pro");
+  assert.equal(q.get().providers.find((x) => x.id === "gemini-public").models["image-to-text"], "gemini-2.5-flash-lite");
+  assert.equal(q.get().providers.find((x) => x.id === "mine").models["text-to-text"], "gemini-2.5-flash", "利用者が自分で作った提供元は読み替えない");
 });
 
 test("🔴 知らない用途と「扱える提供元が無い」を区別する（案内が違う）", () => {

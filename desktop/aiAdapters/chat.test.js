@@ -262,10 +262,10 @@ test("gemini 3.x: ストリームでも functionCall.id を保持し、非スト
   assert.deepEqual(p.result().toolCalls[0].providerState, { thoughtSignature: "S", callId: "gc1" });
 });
 
-test("gemini 3.x: ツールがあるチャットにだけ thinkingConfig（既定 medium。提供元の thinkingLevel が勝つ）。2.x には付けない", () => {
+test("gemini 3.x: ツールがあるチャットにだけ thinkingConfig（既定 high。提供元の thinkingLevel が勝つ）。2.x には付けない", () => {
   const withTools = (model, provider = GEM) => body(gemini.buildChatRequest({ provider, model, apiKey: "K", messages: [{ role: "user", text: "x" }], tools: TOOLS }));
-  assert.equal(withTools(G3).generationConfig.thinkingConfig.thinkingLevel, "medium");
-  assert.equal(withTools(G3, { ...GEM, thinkingLevel: "high" }).generationConfig.thinkingConfig.thinkingLevel, "high");
+  assert.equal(withTools(G3).generationConfig.thinkingConfig.thinkingLevel, "high");
+  assert.equal(withTools(G3, { ...GEM, thinkingLevel: "low" }).generationConfig.thinkingConfig.thinkingLevel, "low");
   assert.equal(withTools("gemini-2.5-flash").generationConfig, undefined, "2.x に thinkingLevel は無い");
   const noTools = body(gemini.buildChatRequest({ provider: GEM, model: G3, apiKey: "K", messages: [{ role: "user", text: "x" }] }));
   assert.equal(noTools.generationConfig, undefined, "ツールが無い呼び出しはモデルの既定のまま");

@@ -30,10 +30,13 @@ const DEFAULT_ENDPOINT = "https://generativelanguage.googleapis.com";
 const isGemini3 = (model) => /^gemini-3/i.test(String(model || ""));
 const SAMPLING_KEYS = ["temperature", "topP", "topK", "candidateCount", "top_p", "top_k", "candidate_count"];
 /**
- * ツールを使うチャットの既定の思考の深さ。**暫定**: Google の案内（ツール呼び出しは medium 以上。既定の minimal は
- * 複数手の作業を途中で終えることがある）が根拠で、弊社の測定ではない。測定したら更新する。
+ * ツールを使うチャットの既定の思考の深さ。根拠は実 Gemini（gemini-3.5-flash-lite、2026-11-05）での評価の測定
+ * （basic・basic-b・plugin-pos を各 3 回、失敗リクエスト 0）: plugin-pos の合格回数は minimal 24/30・medium 27/30・high 28/30
+ * （basic・basic-b は全部 3/3）。minimal は「曖昧な依頼では操作せず聞き返す」を 2 問で 0/3 にした。medium と high の差は
+ * 質問 10 問では揺れの範囲だが、思考トークン（出力料金）は 1 リクエスト数百トークン増えるだけで、応答時間の中央値は 1.06 → 1.15 秒。
+ * 詳細: roadmap の research/gemini-3-5-flash-lite-eval-2026-11-05.md。
  */
-const DEFAULT_THINKING_LEVEL = "medium";
+const DEFAULT_THINKING_LEVEL = "high";
 /** 3 系ではサンプリング系の項目を落とす。 */
 function dropSampling(cfg, model) {
   if (isGemini3(model)) for (const k of SAMPLING_KEYS) delete cfg[k];
