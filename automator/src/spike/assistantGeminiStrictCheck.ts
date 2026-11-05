@@ -179,7 +179,7 @@ async function main(): Promise<void> {
       await sleep(300);
     };
 
-    console.log("\n[1] 既定（medium）で、getState → goToSlice → 本文の往復が 400 なしで通る");
+    console.log("\n[1] 既定（high）で、getState → goToSlice → 本文の往復が 400 なしで通る");
     seen.length = 0;
     await ask("最後のスライスを表示して");
     const bad = seen.filter((s) => s.status !== 200);
@@ -189,22 +189,22 @@ async function main(): Promise<void> {
     const last = win.getByTestId("assistant-msg-bot").last();
     check(((await last.innerText()) ?? "").includes("最後のスライスに移動しました"), "本文が画面に出る");
     const t0 = seen[0].body.generationConfig as { thinkingConfig?: { thinkingLevel?: string } } | undefined;
-    check(t0?.thinkingConfig?.thinkingLevel === "medium", "ツールを渡す要求に thinkingLevel=medium（既定）", t0);
+    check(t0?.thinkingConfig?.thinkingLevel === "high", "ツールを渡す要求に thinkingLevel=high（既定）", t0);
     const secondTurn = seen[1].body.contents ?? [];
     const fr = secondTurn[secondTurn.length - 1].parts[0].functionResponse;
     check(fr?.id === "fc-1" && fr?.name === "getState", "🔴 2 回目の要求の functionResponse に、モデルの id と name が戻る", fr);
     await win.screenshot({ path: path.join(OUT_DIR, "1-assistant.png") });
     await viewer.screenshot({ path: path.join(OUT_DIR, "2-viewer.png") });
 
-    console.log("\n[2] 提供元の thinkingLevel（high）が要求に載る");
-    const r1 = await setProvider({ thinkingLevel: "high" });
+    console.log("\n[2] 提供元の thinkingLevel（low）が要求に載る");
+    const r1 = await setProvider({ thinkingLevel: "low" });
     check(r1.ok === true, "thinkingLevel を付けて保存できる", r1);
     await win.reload({ waitUntil: "domcontentloaded" });
     await win.getByTestId("assistant-input").waitFor({ state: "visible", timeout: 20_000 });
     seen.length = 0;
     await ask("最後のスライスを表示して");
     const hi = seen[0]?.body.generationConfig as { thinkingConfig?: { thinkingLevel?: string } } | undefined;
-    check(hi?.thinkingConfig?.thinkingLevel === "high", "要求に thinkingLevel=high", hi);
+    check(hi?.thinkingConfig?.thinkingLevel === "low", "要求に thinkingLevel=low", hi);
     check(seen.every((s) => s.status === 200), "ここでも 400 なし", seen.map((s) => s.status));
 
     console.log("\n[3] 負例: 不正な thinkingLevel は保存できない");

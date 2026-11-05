@@ -128,6 +128,15 @@ async function main(): Promise<void> {
       await win.getByTestId("assistant-eval-k").fill(String(K));
       const t0 = Date.now();
       await win.getByTestId("assistant-eval-run").click();
+      // クラウド宛は、送る回数と宛先を見せる確認が出る（ローカルには出ない）。送るのは合成の質問とツール定義だけ。
+      // この測定は利用者が頼んだものなので、内容（回数・宛先）を記録して「実行する」を押す。押さないと永久に待つ。
+      const ask = win.getByTestId("assistant-eval-ask");
+      if (await ask.waitFor({ state: "visible", timeout: 5000 }).then(() => true, () => false)) {
+        const text = ((await ask.textContent()) ?? "").trim();
+        console.log(`  確認: ${text}`);
+        (suites as Record<string, unknown>)[`${suite}:ask`] = text;
+        await win.getByTestId("assistant-eval-ask-yes").click();
+      }
       const deadline = Date.now() + 60 * 60_000;
       while (Date.now() < deadline) {
         if (lines(evalFile).length > before && !(await win.getByTestId("assistant-eval-progress").isVisible())) break;

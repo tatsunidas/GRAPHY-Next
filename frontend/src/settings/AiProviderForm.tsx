@@ -39,7 +39,7 @@ export interface ProviderDraft {
   authNone: boolean;
   /** 会話のツール呼び出しの扱い。画面からは変えられない（持ち回りだけ）。 */
   toolMode: string;
-  /** Gemini 3 系の思考の深さ（minimal/low/medium/high）。空欄＝既定（ツールを使う会話は medium）。 */
+  /** Gemini 3 系の思考の深さ（minimal/low/medium/high）。空欄＝既定（ツールを使う会話は high）。 */
   thinkingLevel: string;
   models: Record<string, string>;
   paths: Record<string, string>;

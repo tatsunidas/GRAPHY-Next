@@ -4523,7 +4523,7 @@ export const en: Record<string, string> = {
   "settings.ai.provider.pathStyle.openai": "OpenAI-compatible (/v1/…)",
   "settings.ai.provider.pathStyle.azure": "Azure deployment (/openai/deployments/…)",
   "settings.ai.provider.thinkingLevel": "Thinking level (Gemini 3)",
-  "settings.ai.provider.thinkingLevel.default": "Default (medium for tool-using chats)",
+  "settings.ai.provider.thinkingLevel.default": "Default (high for tool-using chats)",
   "settings.ai.provider.thinkingLevel.help": "Only affects gemini-3 models. minimal is faster and cheaper but can stop multi-step work such as viewer operations too early.",
   "settings.ai.provider.apiVersion": "API version",
   "settings.ai.provider.apiVersion.unused": "(not used by this wire format)",
