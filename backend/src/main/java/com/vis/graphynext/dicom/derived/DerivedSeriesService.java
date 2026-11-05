@@ -276,9 +276,13 @@ public class DerivedSeriesService {
             a.remove(Tag.WindowWidth);
             a.remove(Tag.VOILUTFunction);
             // プラグインが表示に適した窓を渡したときだけ書く（保存する値の単位の実際の量での窓）。
+            // ★ VOILUTFunction = LINEAR_EXACT（範囲 = 中心 ± 幅/2）を必ず添える。無いと DICOM 既定の LINEAR になり、
+            //   上限 = c−0.5+(w−1)/2・下限 = c−0.5−(w−1)/2 なので、幅が 1 未満（ADC は mm²/s で幅 0.002〜0.003）だと
+            //   上下が逆転して、ビューアで明暗が反転して見える（実機: 保存した ADC が反転。窓なし・LINEAR_EXACT 付きは正常）。
             if (req.windowCenter() != null && req.windowWidth() != null) {
                 a.setDouble(Tag.WindowCenter, VR.DS, req.windowCenter());
                 a.setDouble(Tag.WindowWidth, VR.DS, req.windowWidth());
+                a.setString(Tag.VOILUTFunction, VR.CS, "LINEAR_EXACT");
             }
         }
         // FrameOfReferenceUID は幾何がある場合のみ付ける（IPP/IOP 無しで付けると空間登録を偽装するため）。
