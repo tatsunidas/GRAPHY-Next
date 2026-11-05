@@ -337,6 +337,15 @@ jobs:
           else
             npx tsx src/smoke/installedSmoke.ts --dist ../desktop/dist $extra
           fi
+      # アプリ内の自動更新が使うサイレント更新（`Setup.exe --updated /S --force-run`）を、できたインストーラで実際に通す。
+      # 旧い版の入れ替え・利用者データが残ること・force-run で起動して backend が応答することを見る（Linux の Docker では代替にしない）。
+      - name: Silent update smoke (Windows)
+        if: runner.os == 'Windows' && inputs.backfill_tag == ''
+        timeout-minutes: 20
+        shell: bash
+        run: |
+          cd automator
+          npx tsx src/smoke/silentUpdateSmoke.ts --dist ../desktop/dist
       # .deb は apt で実際に入れ、--no-sandbox なしで起動する。Ubuntu 24.04 の AppArmor の下で Chromium の
       # sandbox が動くこと（desktop/build/linux/after-install.sh のプロファイル）の検査を兼ねる。
       - name: Smoke test (.deb を apt で入れる → 起動 → 動画再生)
@@ -384,6 +393,84 @@ jobs:
           else
             gh release upload "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --clobber "${files[@]}"
           fi
+
+  # アプリ内の自動更新の対象（Windows の .exe・Linux の .AppImage）に minisign で署名し、<ファイル>.minisig を添える。
+  # アプリは、公式鍵（desktop/update-trusted-keys.json）の署名と trusted comment `graphy-next v<版> <ファイル名>` を確かめてから実行する。
+  # 署名が無い版は自動更新の対象外（通知だけ）。タグのリリースでは、署名の secrets が無ければ**失敗する**
+  # （署名なしで黙って出さない）。秘密鍵・パスフレーズは利用者が登録する（`graphy_sign.py setup-repo`。fw/release-checklist.md）。
+  # 予行演習（workflow_dispatch）は、使い捨ての鍵で署名・検証して仕組みが動くことだけ確かめる（公式の署名ではない）。
+  # 署名は ubuntu で行う（minisign の Windows 版はパスワードをコンソールから読み、CI の標準入力渡しが効かない恐れがある）。
+  sign:
+    name: Sign installers (minisign)
+    needs: desktop
+    if: ${{ !cancelled() && needs.desktop.result == 'success' && inputs.backfill_tag == '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
+      MINISIGN_PASSWORD: ${{ secrets.MINISIGN_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install minisign
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq minisign
+          minisign -v || true
+      - name: Resolve version / mode
+        id: meta
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            echo "ver=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+            echo "mode=official" >> "$GITHUB_OUTPUT"
+          else
+            echo "ver=$(node -p "require('./desktop/package.json').version")" >> "$GITHUB_OUTPUT"
+            echo "mode=rehearsal" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Get installers (予行演習は Artifact から)
+        if: steps.meta.outputs.mode == 'rehearsal'
+        uses: actions/download-artifact@v4
+        with:
+          pattern: installer-*
+          merge-multiple: true
+          path: dist
+      - name: Get installers (下書きリリースから)
+        if: steps.meta.outputs.mode == 'official'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release download "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" -p '*.exe' -p '*.AppImage' -D dist
+      - name: Sign and verify
+        run: bash desktop/scripts/sign-installers.sh dist "${{ steps.meta.outputs.ver }}" "${{ steps.meta.outputs.mode }}"
+      - name: Upload signatures (予行演習は Artifact へ)
+        if: steps.meta.outputs.mode == 'rehearsal'
+        uses: actions/upload-artifact@v4
+        with:
+          name: signatures-rehearsal
+          path: dist/*.minisig
+          retention-days: 3
+      - name: Upload signatures (リリースへ)
+        if: steps.meta.outputs.mode == 'official'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          shopt -s nullglob
+          sigs=(dist/*.minisig)
+          (( ${#sigs[@]} )) || { echo "::error::署名ファイルがありません"; exit 1; }
+          gh release upload "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --clobber "${sigs[@]}"
+      # 署名が資産として揃っているか（片方の OS の .minisig が欠けたまま公開しない）
+      - name: Check signature assets
+        if: steps.meta.outputs.mode == 'official'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ver="${{ steps.meta.outputs.ver }}"
+          names=$(gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')
+          for want in "GRAPHY-Next.Setup.${ver}.exe.minisig" "GRAPHY-Next-${ver}.AppImage.minisig"; do
+            grep -qxF "$want" <<<"$names" || { echo "::error::リリースに $want がありません"; exit 1; }
+          done
+          echo "署名の資産: OK"
 
   # インストール手順書（docs/install.md）用の画面を、ブラウザで落とした状態から撮る。
   # 撮れなくてもリリースは止めない。取り込みは scripts/fetch-install-shots.sh <run-id>（fw/release-checklist.md）。
