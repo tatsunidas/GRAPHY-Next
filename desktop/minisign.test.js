@@ -103,7 +103,8 @@ test("ファイルの検証（Worker で BLAKE2b）: 正例・改ざんの負例
 test("信頼鍵: update-trusted-keys.json は公式鍵 98EA7C6BA2D50118 だけで、backend の trusted-keys と一致する", () => {
   const keys = JSON.parse(fs.readFileSync(path.join(__dirname, "update-trusted-keys.json"), "utf8")).keys;
   assert.deepStrictEqual(keys.map((k) => parseKey(k).keyId), ["98EA7C6BA2D50118"]);
-  const yml = fs.readFileSync(path.join(__dirname, "..", "backend", "src", "main", "resources", "application.yml"), "utf8");
+  // Windows では git の改行変換で CRLF になる（`.` は \r に一致しないので、正規化してから読む）
+  const yml = fs.readFileSync(path.join(__dirname, "..", "backend", "src", "main", "resources", "application.yml"), "utf8").replace(/\r\n/g, "\n");
   const m = yml.match(/trusted-keys:\s*\n(?:\s*#.*\n)*\s*-\s*"([^"]+)"/);
   assert.ok(m, "application.yml の trusted-keys が読めない");
   assert.strictEqual(keys[0], m[1], "desktop の信頼鍵が backend の公式鍵と食い違っている");
