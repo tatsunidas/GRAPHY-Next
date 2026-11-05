@@ -192,7 +192,10 @@ async function main(): Promise<number> {
     check((await hostCount()) === 3, "既定は ADC・cDWI を別々の一時タイルに開く（元 DWI と合わせてタイル 3 枚）", await hostCount());
     const wSplit = (await viewer.evaluate(`Array.from(document.querySelectorAll('[data-testid="viewer2d-canvas-host"]')).map(function(e){return e.clientWidth})`)) as number[];
     check(new Set(wSplit).size === 1, "3 タイルの画像領域の幅がそろう", wSplit);
+    await viewer.evaluate(`(function(){ var w = document.querySelector('.graphy-plugin-window'); w.style.left = (window.innerWidth - 40) + 'px'; w.style.top = (window.innerHeight - 40) + 'px'; })()`);
+    await viewer.waitForTimeout(500);
     await viewer.screenshot({ path: path.join(OUT_DIR, "1b-split-tiles.png") });
+    await viewer.evaluate(`(function(){ var w = document.querySelector('.graphy-plugin-window'); w.style.left = '20px'; w.style.top = '20px'; })()`);
     await viewer.getByTestId("open-tiles").click();
     await viewer.waitForTimeout(2500);
     check((await hostCount()) === 2, "「全マップを 1 タイルで開く」で一時タイルが 1 枚になる（タイル 2 枚）", await hostCount());
