@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>GRAPHY-Next v0.6.1 操作ガイド — v0.6.0 からの変更</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;900&family=IBM+Plex+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="../guide.css">
+<style>
+  /* この版のための部品（共通の guide.css は変えない） */
+  .duo { display: grid; grid-template-columns: 1fr 1fr; gap: 56px; align-items: start; }
+  .tri { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 40px; align-items: start; }
+  .col { display: flex; flex-direction: column; gap: 18px; }
+  .col .explain { gap: 10px; }
+  .col .explain li p { font-size: 23px; line-height: 1.42; }
+  .col .explain li .num { margin-top: 2px; }
+  .tri .explain li p { font-size: 21px; }
+  .tri .shot, .duo .shot { width: 100%; }
+  .small { font-size: 22px; }
+  .cover .steps li { padding: 14px 0; }
+  .others { display: grid; grid-template-columns: 1fr 1fr; gap: 20px 72px; list-style: none; }
+  .others li { font-size: 25px; line-height: 1.5; padding-left: 28px; position: relative; }
+  .others li::before { content: ""; position: absolute; left: 0; top: 14px; width: 10px; height: 10px; border-radius: 50%; background: var(--accent); }
+  .others b { color: var(--text); display: block; }
+  code { font-family: "IBM Plex Mono", monospace; font-size: 0.88em; color: var(--text); }
+  .others span { color: var(--sub); }
+</style>
+</head>
+<body>
+
+<section class="page cover">
+  <div class="left">
+    <p class="eyebrow">GRAPHY-NEXT v0.6.1 / 操作ガイド</p>
+    <h1>v0.6.0 からの<br>変更</h1>
+    <p class="lead">プラグインの結果を、保管庫に保存せずに並べて見られる「一時タイル」と、プラグインが保存する派生シリーズの扱い（表示の窓・シリーズ番号）の改良です。例として、同時に公開する Computed DWI / vMRE プラグインを使います。</p>
+    <div class="chips">
+      <span class="chip on">一時タイル</span>
+      <span class="chip">派生シリーズの窓</span>
+      <span class="chip">シリーズ番号</span>
+    </div>
+  </div>
+  <div class="panel">
+    <h3>この版の内容</h3>
+    <ol class="steps">
+      <li><span class="n">01</span><p>プラグインの結果を、一時タイルで見る<small>保管庫に保存せず、元のシリーズと並べる。スケールバー付き</small></p></li>
+      <li><span class="n">02</span><p>プラグインが保存した派生シリーズ<small>確認画面・連番のシリーズ番号・表示の窓</small></p></li>
+      <li><span class="n">03</span><p>プラグイン開発者向けの追加</p></li>
+    </ol>
+  </div>
+  <div class="footer"><span>研究用です。診断には使わないでください。データ: 合成のデジタルファントム（患者情報を含みません）</span><span>1 / 4</span></div>
+</section>
+
+<section class="page">
+  <div>
+    <p class="eyebrow">01 / 2D Viewer ＞ 解析 ＞ プラグイン</p>
+    <h2>プラグインの結果を、保管庫に保存せずに並べて見る</h2>
+  </div>
+  <div class="duo">
+    <div class="col">
+      <figure class="shot" data-shot="tiles-vmre"><img src="shots/tiles-vmre.png" alt="元の DWI と、プラグインが作った sADC・μdiff の一時タイル。スケールバー付き"></figure>
+    </div>
+    <div class="col">
+      <ol class="explain">
+        <li><span class="num">1</span><p>プラグインが計算した結果は、<b>一時タイル</b>として 2D ビューアに並びます。<b>保管庫には保存されません</b>（タイルの見出しは「未保存」）。閉じれば消えます</p></li>
+        <li><span class="num">2</span><p>結果のタイルは、元のシリーズと<b>同じ位置・同じスライス数</b>で作られます（幾何は元のシリーズから引き継ぎます）。元の画像と見比べられます</p></li>
+        <li><span class="num">3</span><p>タイルには<b>スケールバー</b>が出ます。値の単位（×10⁻³ mm²/s、kPa）はカラーバーの横に出ます</p></li>
+        <li><span class="num">4</span><p>プラグインが置いた点（円）は、ビューアで<b>ドラッグして動かせます</b>。一時タイルへの点・ROI は、保管庫には保存されません</p></li>
+      </ol>
+    </div>
+  </div>
+  <p class="note">この画面は Computed DWI / vMRE プラグイン（別冊の操作ガイド）の例です。ほかのプラグインも、同じ一時タイルで結果を見せられます。</p>
+  <div class="footer"><span>研究用です。診断には使わないでください。データ: 合成のデジタルファントム</span><span>2 / 4</span></div>
+</section>
+
+<section class="page">
+  <div>
+    <p class="eyebrow">02 / プラグインの保存 ＞ 派生シリーズ</p>
+    <h2>保存した派生シリーズは、連番で並び、そのまま見える窓で開く</h2>
+  </div>
+  <div class="tri">
+    <div class="col">
+      <figure class="shot" data-shot="save-confirm"><img src="shots/save-confirm.png" alt="プラグインによるシリーズ保存の確認画面"></figure>
+      <ol class="explain">
+        <li><span class="num">1</span><p>プラグインが結果を保存するときは、必ず<b>本体の確認画面</b>が出ます。「保存する」を押すまで、何も書き込まれません</p></li>
+      </ol>
+    </div>
+    <div class="col">
+      <figure class="shot" data-shot="saved-list"><img src="shots/saved-list.png" alt="保存した 3 本の派生シリーズが、既存の番号と重ならずに並ぶ"></figure>
+      <ol class="explain">
+        <li><span class="num">1</span><p>保存した系列は、元と同じ検査に<b>[Plugin]</b> 付きで入ります。<b>シリーズ番号</b>は元の番号 + 1000 から、検査内の既存の番号と<b>重ならない連番</b>になります（同じ元から何本作っても重なりません）</p></li>
+      </ol>
+    </div>
+    <div class="col">
+      <figure class="shot" data-shot="saved-adc"><img src="shots/saved-adc.png" alt="保存した ADC を 2D ビューアで開いた画面。窓は 0.0015/0.003"></figure>
+      <p class="small"><b>表示の窓</b>: 元のシリーズの窓は引き継がず（元の画像とは別の量のため）、<b>プラグインが指定した窓</b>で開きます。ADC なら 0〜3 ×10⁻³ mm²/s で、体部と円が見えます。窓は、画面で変えた値がそのまま保存に反映されます。</p>
+    </div>
+  </div>
+  <p class="note">保存した ADC などは、窓が値域（幅 0.003 など）に合うよう、窓の計算式を「中心 ± 幅/2」（VOI LUT Function = LINEAR_EXACT）で保存します。</p>
+  <div class="footer"><span>研究用です。診断には使わないでください。データ: 合成のデジタルファントム</span><span>3 / 4</span></div>
+</section>
+
+<section class="page">
+  <div>
+    <p class="eyebrow">03 / そのほか</p>
+    <h2>プラグイン開発者向けの追加</h2>
+  </div>
+  <ul class="others">
+    <li><b>一時タイルを開く</b><span><code>openTransientSeries</code>: 計算結果を保管庫に保存せずに、元のシリーズの幾何で並べる。スケールバー・初期スライスの指定つき。</span></li>
+    <li><b>点 ROI を作る</b><span><code>createRoi</code> の <code>PointROI</code>（中心の 1 点）。一時タイルの上にも作れる。作った点・ROI は一時タイルでは保存されない。</span></li>
+    <li><b>保存する窓を指定する</b><span><code>saveDerivedSeries</code> の <code>window: { center, width }</code>。保存する値の単位での窓。省略すると窓は書かず、ビューアが値域から決める。</span></li>
+    <li><b>プラグインが保存した窓の扱い（修正）</b><span>プラグイン出力に、元シリーズの窓を引き継がない（元の窓だと値域が合わず真っ黒に見えていた）。</span></li>
+    <li><b>シリーズ番号の連番</b><span>派生シリーズのシリーズ番号が、検査内の既存の番号と重ならない連番になる（元の番号 + 1000 から）。</span></li>
+    <li><b>型定義</b><span><code>examples/plugin-template/graphy-plugin.d.ts</code> に上記を追記済み。</span></li>
+  </ul>
+  <p class="callout">Computed DWI / vMRE プラグイン v1.0.0 は、この版（0.6.1 以上）が必要です。操作は、プラグインの操作ガイド（別冊 PDF）を参照してください。</p>
+  <div class="footer"><span>研究用です。診断には使わないでください。© Visionary Imaging Services, Inc.</span><span>4 / 4</span></div>
+</section>
+
+<script src="shots/marks.js"></script>
+<script src="../guide.js"></script>
+</body>
+</html>
