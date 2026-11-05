@@ -40,6 +40,12 @@ interface ValueStackSession {
   unit: string;
   /** 表示窓。省略時は値域から自動で決める。 */
   window: { center: number; width: number } | null;
+  /**
+   * 一時シリーズ（`host.openTransientSeries`）のマップ 1 本のとき。通常のタイルに載せるので、
+   * 元の DWI のスライスに**委譲してはいけないもの**（SOP・シリーズの素性・窓）を自前で返す。
+   * `mountViewport` のセッションは null のまま（従来どおり全部委譲する）。
+   */
+  transient: { seriesUid: string; description: string; c: number } | null;
 }
 
 const sessions = new Map<string, ValueStackSession>();
@@ -95,6 +101,8 @@ export function createValueStack(params: {
   nativeIds: string[];
   unit?: string;
   window?: { center: number; width: number } | null;
+  /** 一時シリーズのマップとして載せるとき。このとき `window` は必須（無いと元の DWI の窓が当たる）。 */
+  transient?: { seriesUid: string; description: string; c: number };
 }): { token: string; imageIds: string[] } {
   const [nx, ny, nz] = params.dims;
   if (!(nx > 0 && ny > 0 && nz > 0)) throw new Error(`bad dims ${nx}x${ny}x${nz}`);
@@ -107,6 +115,9 @@ export function createValueStack(params: {
         "the plugin volume and the reference stack must line up 1:1",
     );
   }
+  if (params.transient && !params.window) {
+    throw new Error("transient map needs an explicit window (otherwise the source DWI window would be applied)");
+  }
   counter += 1;
   const token = `${encodeURIComponent(params.pluginId)}-${counter}`;
   sessions.set(token, {
@@ -116,6 +127,7 @@ export function createValueStack(params: {
     nativeIds: [...params.nativeIds],
     unit: params.unit ?? "",
     window: params.window ?? null,
+    transient: params.transient ?? null,
   });
   const imageIds = Array.from({ length: nz }, (_, z) => pluginVolumeImageId(token, z));
   return { token, imageIds };
@@ -139,6 +151,25 @@ export function releaseValueStack(token: string): void {
       /* キャッシュに無ければ何もしない */
     }
   }
+}
+
+/**
+ * セッションの表示窓を差し替える（`setMapDisplay`）。provider は読み込みのたびに session.window を返すので、
+ * 読み込み済みの画像だけキャッシュから落として古い窓のメタデータが残らないようにする。
+ * 画面に出ている画像への反映は呼び出し側が W/L を当て直す（キャッシュを落としても描画中の画像は変わらない）。
+ */
+export function updateValueStackWindow(token: string, window: { center: number; width: number }): boolean {
+  const session = sessions.get(token);
+  if (!session) return false;
+  session.window = window;
+  for (let z = 0; z < session.dims[2]; z++) {
+    try {
+      (cache as Any).removeImageLoadObject?.(pluginVolumeImageId(token, z));
+    } catch {
+      /* キャッシュに無ければ何もしない */
+    }
+  }
+  return true;
 }
 
 /** テスト・診断用。 */
@@ -242,6 +273,19 @@ export function registerPluginVolumeLoader(): void {
     if (type === "modalityLutModule") {
       // 校正済みの値なので恒等。**ここを委譲すると CT で約 −1024 ずれる**（既知の事故）。
       return { rescaleSlope: 1, rescaleIntercept: 0, rescaleType: session.unit || undefined };
+    }
+    if (session.transient) {
+      const tr = session.transient;
+      if (type === "sopCommonModule") {
+        // 元の DWI の SOP を返すと、一時タイルの ROI が DWI の SOP で保存・復元される（`roiRestore.sopOfImageId` も塞ぐ）。
+        const base = (metaData.get(type, nativeId) as Any) ?? {};
+        return { ...base, sopInstanceUID: `${tr.seriesUid}.${tr.c + 1}.${parsed.z + 1}` };
+      }
+      if (type === "generalSeriesModule") {
+        // タイルの見出し・ROI マネージャ・オーバーレイが、元の DWI のシリーズ名を名乗らないようにする。
+        const base = (metaData.get(type, nativeId) as Any) ?? {};
+        return { ...base, seriesInstanceUID: tr.seriesUid, seriesDescription: tr.description, modality: "MR" };
+      }
     }
     if (type === "voiLutModule" && session.window) {
       // 差分画像に元シリーズの W/L を当てても何も見えない。指定があればそちらを使う。

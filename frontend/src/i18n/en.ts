@@ -1907,6 +1907,7 @@ export const en: Record<string, string> = {
   "series.concat.gap": "gap {{mm}} mm",
   "series.concat.overlap": "overlap {{mm}} mm cut at midpoint",
   "series.concat.disabled": "Not available on a concatenated tile (it spans several series)",
+  "series.transient.disabled": "Not available on a temporary series computed by a plugin (the image is not stored)",
   "series.concat.saveUnsupported": "Saving a derived series from a concatenated volume is not supported (it spans several series, so the source cannot be a single series)",
   "series.concat.fail.gap": "Cannot build a volume from the concatenation: the {{mm}} mm gap would be filled by interpolation",
   "series.concat.fail.grid.orientation": "Cannot build a volume from the concatenation: the series have different image orientation (resampling is not supported)",

@@ -13,6 +13,7 @@ import { getRenderingEngines, metaData } from "@cornerstonejs/core";
 import { annotation as csAnnotation } from "@cornerstonejs/tools";
 import { log } from "../log";
 import { frameOfImageId, sopFromImageId } from "./imageId";
+import { parsePluginVolumeImageId } from "../plugins/pluginVolumeScheme";
 import { getRoiMaskMeta, setRoiMaskMeta } from "./roiMaskStore";
 import { ensureSplineInstance } from "./roiContourTools";
 import { setRoiLocked } from "./roiLock";
@@ -33,6 +34,10 @@ import {
 const sopCache = new Map<string, string | null>();
 
 export function sopOfImageId(imageId: string): string | null {
+  // 🔴 プラグインが計算した値の画像（一時シリーズ）は、保管庫に実在する SOP を持たない。ここで SOP を返すと、
+  //    その上に描いた ROI が「存在しない SOP の ROI」として保存・復元される（元の DWI に紐づく事故も起きる）。
+  //    null を返せば `toSavedRoi` が保存をしない。値の統計は画素から出すので影響しない。
+  if (parsePluginVolumeImageId(imageId)) return null;
   const hit = sopCache.get(imageId);
   if (hit !== undefined) return hit;
   let sop: string | null = null;

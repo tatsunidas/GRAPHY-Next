@@ -10,8 +10,10 @@
  * **必ず 1 フレーム目**に戻り、実際に描いたフレームには何も出ない
  * （実機で「解析したフレームには無く、1 フレーム目に出る」として報告された）。
  */
+import { metaData } from "@cornerstonejs/core";
 import { describe, expect, it } from "vitest";
-import { resolveImageId } from "./roiRestore";
+import { createValueStack, registerPluginVolumeLoader, releaseValueStack } from "../plugins/pluginVolumeScheme";
+import { resolveImageId, sopOfImageId } from "./roiRestore";
 
 const xa = (frame: number) => `wadouri:http://localhost:1/instances/1.2.3/file&frame=${frame + 1}`;
 
@@ -54,5 +56,34 @@ describe("resolveImageId", () => {
 
   it("保存されたフレームがスタックに無ければ先頭へ（ラン数が減った等）", () => {
     expect(resolveImageId(MULTI, "1.2.3", 99)).toBe(xa(0));
+  });
+});
+
+describe("sopOfImageId: プラグインが計算した値の画像（一時シリーズ）は SOP を持たない", () => {
+  // 元の DWI のスライスを模したメタデータ（SOP を返す）。
+  const NATIVE = ["native:roi0", "native:roi1"];
+  metaData.addProvider(
+    (type: string, imageId: string) =>
+      NATIVE.includes(imageId) && type === "sopCommonModule" ? { sopInstanceUID: `1.2.DWI.${imageId}` } : undefined,
+    5,
+  );
+  registerPluginVolumeLoader();
+
+  it("通常の画像は従来どおりメタデータから SOP を引く（正例）", () => {
+    expect(sopOfImageId("native:roi0")).toBe("1.2.DWI.native:roi0");
+  });
+
+  it("🔴 プラグインの値の画像は null。元の DWI の SOP を名乗って保存されるのを防ぐ（負例）", () => {
+    const stack = createValueStack({
+      pluginId: "p", data: new Float32Array(2 * 2 * 2), dims: [2, 2, 2], nativeIds: NATIVE,
+      window: { center: 1, width: 2 }, transient: { seriesUid: "2.25.9", description: "x", c: 0 },
+    });
+    // 委譲されたままなら、メタデータは元の DWI の SOP を返してしまう（これが事故の経路）。
+    expect(sopOfImageId(stack.imageIds[0])).toBeNull();
+    // mountViewport 用（委譲するセッション）でも同じ。こちらは annotation を持たないが、念のため塞ぐ。
+    const plain = createValueStack({ pluginId: "p", data: new Float32Array(2 * 2 * 2), dims: [2, 2, 2], nativeIds: NATIVE });
+    expect(sopOfImageId(plain.imageIds[1])).toBeNull();
+    releaseValueStack(stack.token);
+    releaseValueStack(plain.token);
   });
 });

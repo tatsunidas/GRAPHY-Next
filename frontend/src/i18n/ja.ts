@@ -1909,6 +1909,7 @@ export const ja: Record<string, string> = {
   "series.concat.gap": "隙間 {{mm}} mm",
   "series.concat.overlap": "重なり {{mm}} mm を中点で切る",
   "series.concat.disabled": "連結して開いたタイルでは使えません（複数のシリーズにまたがるため）",
+  "series.transient.disabled": "プラグインが計算した一時シリーズでは使えません（保存されていない画像です）",
   "series.concat.saveUnsupported": "連結から開いたボリュームの派生シリーズ保存は未対応です（複数のシリーズにまたがり、元のシリーズを 1 本に決められないため）",
   "series.concat.fail.gap": "隙間 {{mm}} mm を補間で埋めないため、連結したままボリュームにできません",
   "series.concat.fail.grid.orientation": "シリーズ間で画像の向きが違うため、連結したままボリュームにできません（再サンプルは未対応）",

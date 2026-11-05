@@ -25,6 +25,7 @@ import type {
   PluginRtDoseResult,
 } from "../plugins/pluginTypes";
 import type { PluginCurvedMprResult, PluginCurvedMprSpec } from "../plugins/pluginCurvedMprApi";
+import type { PluginTransientSeriesHandle, PluginTransientSeriesSpec } from "../plugins/pluginTypes";
 import { ToolIcon } from "../icons/ToolIcon";
 import { OverflowRow } from "../viewer/OverflowRow";
 import { UI_ICON_FILES } from "../icons/toolIcons";
@@ -258,6 +259,8 @@ export interface ViewerActions {
   launchCurvedMpr(): void;
   /** プラグインから中心線を渡して Curved MPR 窓を開く（H73）。出所は呼び出し側（host）が渡す。 */
   openCurvedMpr(spec: PluginCurvedMprSpec, producer: { id: string; name: string; version: string }): Promise<PluginCurvedMprResult>;
+  /** プラグインが計算した値を一時シリーズのタイルとして開く。出所は呼び出し側（host）が渡す。保管庫には保存されない。 */
+  openTransientSeries(spec: PluginTransientSeriesSpec, producer: { id: string; name: string }): Promise<PluginTransientSeriesHandle>;
   /** 対象タイルのシリーズで Histogram 解析ダイアログを開く。 */
   openHistogram(): void;
   /** 対象タイルのシリーズで値の点検（Probe の点の時間曲線）ダイアログを開く。 */

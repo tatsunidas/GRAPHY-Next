@@ -159,6 +159,8 @@ import { studyUidsOfTiles, useStudyInUse } from "../retention/useStudyInUse";
 import { closeAllPluginWindows } from "../plugins/pluginWindowApi";
 import { mountSeriesPanel, closeAllSeriesPanels, PluginSeriesPanels } from "../plugins/pluginSeriesPanelApi";
 import { formatDateTime, formatDicomDate, useDateFormat } from "../i18n/dateFormat";
+import { removedTransient, type TransientOpened } from "../viewer/transientSeries";
+import { finishTransient, onTransientDim, openTransientTile, type TransientTileInit } from "./openTransientTile";
 
 // ── 型定義 ────────────────────────────────────────────────────
 
@@ -191,13 +193,28 @@ interface Tile {
   range?: ZRange;
   /**
    * 連結して開いたタイル（複数シリーズを開くときだけ 1 本につなぐ）。`study`/`series` は先頭の部分（代表）、
-   * `instances` は全部分の和集合。単一シリーズ前提の操作は {@link isConcatTile} で無効にする。
+   * `instances` は全部分の和集合。単一シリーズ前提の操作は {@link isVirtualTile} で無効にする。
    */
   concat?: ConcatOpened;
+  /**
+   * プラグインが計算した値の画像を開いた一時タイル（`host.openTransientSeries`）。保管庫に無いので `instances` は空、
+   * `series` は合成（UID・説明）。単一シリーズ前提の操作は {@link isVirtualTile} で無効にする。
+   */
+  transient?: TransientOpened;
 }
 
-/** 連結タイルか。`tile.series` を単一シリーズとして読む操作は、これが true のとき使わない（代表の 1 本だけを指してしまう）。 */
-const isConcatTile = (tile: Pick<Tile, "concat">) => !!tile.concat;
+/**
+ * 保管庫の 1 シリーズに対応しないタイルか（連結・一時）。`tile.series` / `tile.instances` を単一の実シリーズとして
+ * 読む操作（3D・MPR・解析ダイアログ・保存など）は、これが true のとき使わない。
+ */
+const isVirtualTile = (tile: Pick<Tile, "concat" | "transient">) => !!tile.concat || !!tile.transient;
+/** {@link isVirtualTile} のとき出す通知の i18n キー（連結と一時で理由が違う）。 */
+const virtualDisabledKey = (tile: Pick<Tile, "transient">) =>
+  tile.transient ? "series.transient.disabled" : "series.concat.disabled";
+
+/** 一時タイル（保管庫に無い）を参照にした保存・読み出しの拒否理由。 */
+const TRANSIENT_REF_ERROR =
+  "transient-reference: the reference is a temporary series computed by a plugin and is not stored; use the original series";
 
 /**
  * 連結したタイルを MPR・3D・Slicer の窓で開く。窓を開く前に連結の列を作ってみて、隙間・格子の違いなどで
@@ -576,6 +593,24 @@ export function Viewer2DScreen({ status }: { status: AppStatus | null }) {
     setActiveKey(pKey);
   }, []);
 
+  /** プラグインの一時タイルを追加する。参照タイルと同じ患者のタイル列の末尾へ（連結タイルと同じ追加の仕方）。 */
+  const addTransientTile = useCallback((init: TransientTileInit) => {
+    const tile: Tile = init;
+    const pKey = derivePatientKey(tile.study);
+    setPatients((prev) => {
+      const idx = prev.findIndex((pp) => pp.patientKey === pKey);
+      if (idx >= 0) {
+        const updated = [...prev];
+        updated[idx] = { ...prev[idx], tiles: [...prev[idx].tiles, tile], soloTileId: null };
+        return updated;
+      }
+      return [
+        ...prev,
+        { patientKey: pKey, patientId: tile.study.patientId, patientName: tile.study.patientName ?? "", tiles: [tile], gridCols: 0, gridRows: 0 },
+      ];
+    });
+  }, []);
+
   /** 同一患者のタイルをクリアして新しい1枚で置き換える（別スタディを開く場合）。 */
   const replacePatientTiles = useCallback(async (patientKey: string, study: Study, series: Series) => {
     const tileId = `${study.studyInstanceUid}|${series.seriesInstanceUid}`;
@@ -587,6 +622,19 @@ export function Viewer2DScreen({ status }: { status: AppStatus | null }) {
     setPatients((prev) =>
       prev.map((p) => (p.patientKey === patientKey ? { ...p, tiles: [tile] } : p)),
     );
+  }, []);
+
+  // 一時タイルの後始末。× で閉じる・患者を閉じる・タイルの置き換え・画面を閉じる、のどれでも `patients` から消えるので、
+  // 差分を 1 か所で見る（スタック解放・ROI 削除・プラグインへの通知を、どの経路でも 1 度だけ行う）。
+  const prevTilesRef = useRef<Tile[]>([]);
+  useEffect(() => {
+    const next = patients.flatMap((p) => p.tiles);
+    for (const tr of removedTransient(prevTilesRef.current, next)) finishTransient(tr);
+    prevTilesRef.current = next;
+  }, [patients]);
+  useEffect(() => () => {
+    for (const tl of prevTilesRef.current) if (tl.transient) finishTransient(tl.transient);
+    prevTilesRef.current = [];
   }, []);
 
   const removeTile = (patientKey: string, tileId: string) => {
@@ -681,6 +729,11 @@ export function Viewer2DScreen({ status }: { status: AppStatus | null }) {
 
   /** タイルのシリーズ Sync 参加フラグを切り替える。 */
   const setTileSync = useCallback((patientKey: string, tileId: string, enabled: boolean) => {
+    // 同期は実シリーズの座標・スライス番号が前提。一時タイルを混ぜると別の画像の位置へ飛ぶ。
+    if (enabled && patientsRef.current.some((p) => p.tiles.some((tl) => tl.id === tileId && tl.transient))) {
+      emitToast(t("series.transient.disabled"));
+      return;
+    }
     setPatients((prev) =>
       prev.map((p) => {
         if (p.patientKey !== patientKey) return p;
@@ -974,6 +1027,7 @@ export function Viewer2DScreen({ status }: { status: AppStatus | null }) {
                   global={isGlobal}
                   colors={colorMap}
                   onRemovePatient={removePatient}
+                  onAddTransientTile={addTransientTile}
                   mode={mode}
                   isDemo={isDemo}
                   {...(isGlobal ? globalOps : tabOps)}
@@ -1140,6 +1194,7 @@ function TileGrid({
   onSetFusion,
   onTileRangeEdit,
   onTileRangeClear,
+  onAddTransientTile,
 }: {
   /** 患者タブでは表示中の患者。全患者モードでは全タイルを並べた仮の患者（GLOBAL_KEY）。 */
   patient: PatientSession;
@@ -1159,6 +1214,8 @@ function TileGrid({
   onSetFusion: (patientKey: string, tileId: string, overlay: FusionOverlay | undefined) => void;
   onTileRangeEdit: (patientKey: string, tile: Tile) => void;
   onTileRangeClear: (patientKey: string, tileId: string) => void;
+  /** プラグインが開いた一時タイルを患者のタイル列へ足す。 */
+  onAddTransientTile: (tile: TransientTileInit) => void;
 }) {
   const { t } = useI18n();
   const n = patient.tiles.length;
@@ -1420,8 +1477,8 @@ function TileGrid({
         if (zone === "center") {
           const targetTile = patient.tiles.find((tl) => tl.id === targetTileId);
           // 連結タイルは Fusion の重ね先にできない（背景の座標系が複数シリーズにまたがる）。
-          if (targetTile?.concat) {
-            emitToast(t("series.concat.disabled"));
+          if (targetTile && isVirtualTile(targetTile)) {
+            emitToast(t(virtualDisabledKey(targetTile)));
             return;
           }
           // 別の患者のシリーズは重ねない（患者の取り違え防止）。
@@ -1474,8 +1531,9 @@ function TileGrid({
               emitToast(t("viewer2d.fusion.crossPatient"));
               return;
             }
-            if (srcTile?.concat || dstTile?.concat) {
-              emitToast(t("series.concat.disabled"));
+            const virtualTile = [srcTile, dstTile].find((x) => x && isVirtualTile(x));
+            if (virtualTile) {
+              emitToast(t(virtualDisabledKey(virtualTile)));
               return;
             }
             if (srcTile) {
@@ -1508,6 +1566,8 @@ function TileGrid({
   const openTagsOf = (tileId: string | undefined): boolean => {
     const tile = patient.tiles.find((tl) => tl.id === tileId);
     if (!tile) return false;
+    // 保管庫に無い画像には DICOM の属性が無い（合成のメタデータを「タグ」として見せない）。
+    if (tile.transient) { emitToast(t("series.transient.disabled")); return true; }
     // 表示中の imageId から SOP を引く。引けなければ（blank など）シリーズ先頭＝null（誤った SOP を載せない）。
     const imageId = queryViewerCommand(tile.id, (c) => c.getSuvContext())?.imageId;
     setTagTarget({ tile, sop: imageId ? sopFromImageId(imageId) : null });
@@ -1528,6 +1588,16 @@ function TileGrid({
     }
     return r.ids;
   }, [selectedIds, patient.tiles, focusedTileId, global, t]);
+  // プラグインの既定の対象。別のプラグインが計算した一時タイルを入れない（DWI を読むつもりが計算結果を読む事故を防ぐ）。
+  // tileId を明示した呼び出しは対象にかかわらず通る（計算したプラグイン自身が読むため）。
+  const pluginTargets = useCallback(
+    () => resolveTargets().filter((id) => !patient.tiles.some((tl) => tl.id === id && tl.transient)),
+    [resolveTargets, patient.tiles],
+  );
+  /** この tileId が一時タイルか（最新のタイル一覧から引く。actions は tiles に依存させない）。 */
+  const isTransientTileId = (id: string) => tilesRef.current.some((tl) => tl.id === id && !!tl.transient);
+  /** この seriesUid が開いている一時タイルのものか（`loadVolume` 等の参照が合成 UID を指していないか）。 */
+  const isTransientSeriesUid = (uid: string | undefined) => !!uid && tilesRef.current.some((tl) => tl.transient?.seriesUid === uid);
   /**
    * ROI の**貼り付け先タイルを 1 つに決める**。決まらなければ null。
    *
@@ -1633,6 +1703,8 @@ function TileGrid({
   const studyUidOfSeries = useCallback(
     (seriesUid: string): string | undefined => {
       for (const tile of tilesRef.current) {
+        // 一時タイルの合成 UID は保管庫に無い。解決すると backend への問い合わせが 404 で落ちる。
+        if (tile.transient) continue;
         if (tile.series.seriesInstanceUid === seriesUid) return tile.study.studyInstanceUid;
       }
       return undefined;
@@ -1683,8 +1755,14 @@ function TileGrid({
       // 未登録タイル（fusion 子・アンマウント途中）は queryViewerCommand が null を返すので落ちる。
       // H10 / H21: ボリュームの読み出しと位置合わせ。実装は `plugins/pluginVolumeApi.ts`
       // （本体の regVolumeLoader / regWorkerClient をそのまま使う。計算をここに書かない）。
-      loadVolume: (ref, onProgress) => loadPluginVolume(mode, studyUidOfSeries, ref, onProgress),
-      estimateVolume: (ref) => estimatePluginVolume(mode, studyUidOfSeries, ref),
+      loadVolume: (ref, onProgress) => {
+        if (isTransientSeriesUid(ref?.seriesUid)) return Promise.reject(new Error(TRANSIENT_REF_ERROR));
+        return loadPluginVolume(mode, studyUidOfSeries, ref, onProgress);
+      },
+      estimateVolume: (ref) => {
+        if (isTransientSeriesUid(ref?.seriesUid)) return Promise.reject(new Error(TRANSIENT_REF_ERROR));
+        return estimatePluginVolume(mode, studyUidOfSeries, ref);
+      },
       // H42: 開いていない XA シリーズの幾何と 1 フレーム（loadVolume は IPP の無い XA シネに使えない）。
       readXaSeries: (ref) => readXaSeriesInfo(mode, studyUidOfSeries, ref),
       readXaSeriesFrame: (ref, frameIndex) => readXaSeriesFrame(mode, studyUidOfSeries, ref, frameIndex),
@@ -1696,7 +1774,7 @@ function TileGrid({
       mountSeriesPanel: (el, series, opts) =>
         mountSeriesPanel(el, mode, (ref) => studyUidOfSeries(ref.seriesUid) ?? null, series, opts),
       getTargets: () =>
-        resolveTargets().flatMap((tileId) => {
+        pluginTargets().flatMap((tileId) => {
           // 2D ビューアが登録していればそれが結論。動画タイルは ViewerCommands を持てないので、
           // H1 だけの登録簿へ落とす（無いと動画シリーズがプラグインから見えなくなる）。
           const info =
@@ -1704,18 +1782,18 @@ function TileGrid({
           return info ? [{ tileId, ...info }] : [];
         }),
       getViewState: (tileId) => {
-        const id = tileId ?? resolveTargets()[0];
+        const id = tileId ?? pluginTargets()[0];
         if (!id) return null;
         const st = queryViewerCommand(id, (c) => c.getViewState());
         return st ? { tileId: id, ...st } : null;
       },
       getStackImageIds: (tileId) => {
-        const id = tileId ?? resolveTargets()[0];
+        const id = tileId ?? pluginTargets()[0];
         if (!id) return null;
         return queryViewerCommand(id, (c) => c.getStackImageIds()) ?? null;
       },
       getPixelData: async (tileId, opts) => {
-        const id = tileId ?? resolveTargets()[0];
+        const id = tileId ?? pluginTargets()[0];
         if (!id) return null;
         // queryViewerCommand は同期の戻りしか包めないので、Promise はここで await する
         // （未登録タイルなら null が返るのでそのまま素通し）。
@@ -1725,7 +1803,7 @@ function TileGrid({
       },
       // H35: 校正の**値と出自**。tileId 省略時は先頭タイル（H2 / H3 と同じ規約）。
       getSpatialCalibration: (tileId) => {
-        const id = tileId ?? resolveTargets()[0];
+        const id = tileId ?? pluginTargets()[0];
         if (!id) return null;
         const c = queryViewerCommand(id, (cmd) => cmd.getSpatialCalibration());
         return c ? { tileId: id, ...c } : null;
@@ -1733,7 +1811,7 @@ function TileGrid({
       // H36: XA の表示状態。**DSA 中かどうかは合成 imageId からは見分けられない**ので、
       // これが無いとプラグインは差分画像を非サブトラクションとして測ってしまう。
       getXaState: (tileId) => {
-        const id = tileId ?? resolveTargets()[0];
+        const id = tileId ?? pluginTargets()[0];
         if (!id) return null;
         const x = queryViewerCommand(id, (cmd) => cmd.getXaState());
         return x ? { tileId: id, ...x } : null;
@@ -1741,14 +1819,14 @@ function TileGrid({
       // H40: シネの時間軸。**QFR の造影流速はこれが無いと出せない**（フレーム番号を秒に
       // 直せないので、固定流速の fQFR だけが残る＝文献が「臨床的に不十分」とした側）。
       getXaCine: (tileId) => {
-        const id = tileId ?? resolveTargets()[0];
+        const id = tileId ?? pluginTargets()[0];
         if (!id) return null;
         const c = queryViewerCommand(id, (cmd) => cmd.getXaCine());
         return c ? { tileId: id, ...c } : null;
       },
       // H41: 投影幾何（撮影角度・SID・SOD）。2 方向の対応付けに要る。読めない理由も渡す。
       getXaGeometry: (tileId) => {
-        const id = tileId ?? resolveTargets()[0];
+        const id = tileId ?? pluginTargets()[0];
         if (!id) return null;
         const g = queryViewerCommand(id, (cmd) => cmd.getXaGeometry());
         return g ? { tileId: id, ...g } : null;
@@ -1756,7 +1834,7 @@ function TileGrid({
       // H5: ROI の読み出し。tileId 省略時は**対象タイル全部**を読む（H1〜H4 は「先頭タイル」だが、
       // 時系列の計測ではベースラインと追跡を並べて開くのが普通なので、まとめて読める方が素直）。
       getRois: (tileId) => {
-        const ids = tileId ? [tileId] : resolveTargets();
+        const ids = tileId ? [tileId] : pluginTargets();
         return ids.flatMap((id) => {
           const rois = queryViewerCommand(id, (c) => c.getRois());
           return (rois ?? []).map((r) => ({ tileId: id, ...r }));
@@ -1764,26 +1842,26 @@ function TileGrid({
       },
       // ROI メタはタイルに依存しない（annotation は本体でグローバル）。登録済みタイルのどれかで解決できればよい。
       getRoiMeta: (roiUid, pluginId) => {
-        for (const id of resolveTargets()) {
+        for (const id of pluginTargets()) {
           const m = queryViewerCommand(id, (c) => c.getRoiMeta(roiUid, pluginId));
           if (m) return m;
         }
         return {};
       },
       setRoiMeta: (roiUid, pluginId, patch) => {
-        for (const id of resolveTargets()) {
+        for (const id of pluginTargets()) {
           if (queryViewerCommand(id, (c) => c.setRoiMeta(roiUid, pluginId, patch))) return true;
         }
         return false;
       },
       // プラグインが作る ROI。pluginId / pluginName は host が入れる（プラグインは名乗れない）。
       createRoi: (tileId, by, req) => {
-        const id = tileId ?? resolveTargets()[0];
+        const id = tileId ?? pluginTargets()[0];
         const r = id ? queryViewerCommand(id, (c) => c.createRoi(req, by)) : null;
         return r ?? { ok: false, reason: "no-image" };
       },
       removeCreatedRoi: (roiUid, pluginId) => {
-        for (const id of resolveTargets()) {
+        for (const id of pluginTargets()) {
           if (queryViewerCommand(id, (c) => c.removeCreatedRoi(roiUid, pluginId))) return true;
         }
         return false;
@@ -1810,17 +1888,17 @@ function TileGrid({
         };
       },
       showOverlay: (tileId, overlay) => {
-        const id = tileId ?? resolveTargets()[0];
+        const id = tileId ?? pluginTargets()[0];
         if (!id) return false;
         return queryViewerCommand(id, (c) => c.showOverlay(overlay)) ?? false;
       },
       clearOverlay: (tileId) => {
-        const ids = tileId ? [tileId] : resolveTargets();
+        const ids = tileId ? [tileId] : pluginTargets();
         runViewerCommand(ids, (c) => c.clearOverlay());
       },
       // H65: ラベルの volume を Mask として読み込む。表示だけで保存はしない（保存は H22/H64・確認あり）
       showLabelVolume: async (tileId, req, producer) => {
-        const id = tileId ?? resolveTargets()[0];
+        const id = tileId ?? pluginTargets()[0];
         if (!id) return { ok: false, error: "no target tile" };
         const label = (req.label?.trim() || producer.name).slice(0, 64);
         const r = (await queryViewerCommand(id, (c) => c.importLabelVolume(req, label))) ?? { ok: false as const, error: "tile is not available" };
@@ -1828,7 +1906,7 @@ function TileGrid({
         return r;
       },
       removeLabelVolume: (segmentationId, pluginId) => {
-        for (const id of resolveTargets()) {
+        for (const id of pluginTargets()) {
           if (queryViewerCommand(id, (c) => c.removeLabelVolume(segmentationId, pluginId))) return true;
         }
         return false;
@@ -1836,8 +1914,10 @@ function TileGrid({
       // H4b: プラグインの出力を派生シリーズとして保存する。**必ず確認ダイアログを挟む**
       // （抑止不可）。ここで同意が取れてからタイル側の保存コマンドを呼ぶ。
       saveDerivedSeries: (tileId, req, producer) => {
-        const id = tileId ?? resolveTargets()[0];
+        const id = tileId ?? pluginTargets()[0];
         if (!id) return Promise.resolve({ ok: false, error: "no target tile" });
+        // 保管庫に無い画像を保存の参照にしない（DICOM を書く先の患者・シリーズが無い）。
+        if (isTransientTileId(id)) return Promise.resolve({ ok: false, error: TRANSIENT_REF_ERROR });
         // 通らない要求で確認ダイアログを見せない（先にタイル側で検証する）。
         const invalid = queryViewerCommand(id, (c) => c.validateDerivedSeries(req));
         if (invalid) return Promise.resolve({ ok: false, error: invalid });
@@ -1865,8 +1945,10 @@ function TileGrid({
       // H9: 計測を DICOM SR として保存する。**必ず確認ダイアログを挟む**（抑止不可）。
       // 保存されるのは画像ではなくレポートなので、ダイアログの中身も SR 用に切り替える。
       saveStructuredReport: (tileId, req, producer) => {
-        const id = tileId ?? resolveTargets()[0];
+        const id = tileId ?? pluginTargets()[0];
         if (!id) return Promise.resolve({ ok: false, error: "no target tile" });
+        // 保管庫に無い画像を保存の参照にしない（DICOM を書く先の患者・シリーズが無い）。
+        if (isTransientTileId(id)) return Promise.resolve({ ok: false, error: TRANSIENT_REF_ERROR });
         if ((req.groups?.length ?? 0) === 0 && (req.findings?.length ?? 0) === 0) {
           // 中身の無いレポートで同意を求めない。
           return Promise.resolve({ ok: false, error: "groups か findings のどちらかが必要です" });
@@ -1898,6 +1980,7 @@ function TileGrid({
       // H22: マスクを DICOM SEG として保存する。**必ず確認ダイアログを挟む**（抑止不可）。
       // 組み立てはダイアログの**前**に済ませる（通らない要求で同意を求めない）。
       saveSegmentation: async (req, producer) => {
+        if (isTransientSeriesUid(req?.reference?.seriesUid)) return { ok: false, error: TRANSIENT_REF_ERROR };
         const prepared = await prepareSegExport(mode, studyUidOfSeries, req, producer);
         if (!prepared.ok) return { ok: false, error: prepared.error };
         const accepted = await confirmPluginSave({
@@ -1926,6 +2009,7 @@ function TileGrid({
       // H23: 線量分布を DICOM RTDOSE として保存する。**必ず確認ダイアログを挟む**（抑止不可）。
       // ⚠ backend が返す「準拠していない点」（RT Plan 参照が無い等）は握り潰さずに返す。
       saveRtDose: async (req, producer) => {
+        if (isTransientSeriesUid(req?.reference?.seriesUid)) return { ok: false, error: TRANSIENT_REF_ERROR };
         const prepared = await prepareRtDoseExport(mode, studyUidOfSeries, req, producer);
         if (!prepared.ok) return { ok: false, error: prepared.error };
         const accepted = await confirmPluginSave({
@@ -1966,8 +2050,10 @@ function TileGrid({
       },
       // H37: アンギオ解析の結果を本体と同じ SR で保存する。**確認は抑止不可**（H4b / H9 と同じ）。
       saveAngioReport: (tileId, req, producer) => {
-        const id = tileId ?? resolveTargets()[0];
+        const id = tileId ?? pluginTargets()[0];
         if (!id) return Promise.resolve({ ok: false, error: "no target tile" });
+        // 保管庫に無い画像を保存の参照にしない（DICOM を書く先の患者・シリーズが無い）。
+        if (isTransientTileId(id)) return Promise.resolve({ ok: false, error: TRANSIENT_REF_ERROR });
         return new Promise((resolve) => {
           setPluginSave({
             request: {
@@ -1994,8 +2080,10 @@ function TileGrid({
       },
       // H38: 表示状態（GSPS）。**確認は抑止不可**（H4b / H9 / H37 と同じ）。
       savePresentationState: (tileId, req, producer) => {
-        const id = tileId ?? resolveTargets()[0];
+        const id = tileId ?? pluginTargets()[0];
         if (!id) return Promise.resolve({ ok: false, error: "no target tile" });
+        // 保管庫に無い画像を保存の参照にしない（DICOM を書く先の患者・シリーズが無い）。
+        if (isTransientTileId(id)) return Promise.resolve({ ok: false, error: TRANSIENT_REF_ERROR });
         return new Promise((resolve) => {
           setPluginSave({
             request: {
@@ -2039,8 +2127,9 @@ function TileGrid({
         if (!input || typeof input !== "object") {
           return { ok: false, error: "publishAnalysisResult(tileId, input): input is required" };
         }
-        const id = tileId ?? resolveTargets()[0];
+        const id = tileId ?? pluginTargets()[0];
         if (!id) return { ok: false, error: "no target tile" };
+        if (isTransientTileId(id)) return { ok: false, error: TRANSIENT_REF_ERROR };
         const viaViewer = queryViewerCommand(id, (c) => c.publishAnalysisResult(input, producer));
         if (viaViewer) return viaViewer;
         // 🚨 **動画タイルは ViewerCommands を持てない**（W/L も画素取得も無い）。ここで諦めると
@@ -2074,7 +2163,12 @@ function TileGrid({
       editPresets: () => setPresetsOpen(true),
       // Z 並べ替えはシリーズレベル（seriesCommands）。動画/IPP不在は SeriesViewer 側でブロック。
       sort: (mode) => runSeriesCommand(resolveTargets(), (c) => c.setSortMode(mode)),
-      setSlab: (projection) => runSeriesCommand(resolveTargets(), (c) => c.setSlab(projection)),
+      setSlab: (projection) => {
+        const ids = resolveTargets();
+        // ThickSlab は実シリーズの連続スライスを前提にする（値の画像を投影して「測れる値」に見せない）。
+        if (ids.some(isTransientTileId)) notify(t("series.transient.disabled"));
+        runSeriesCommand(ids.filter((id) => !isTransientTileId(id)), (c) => c.setSlab(projection));
+      },
       // ツールはグローバルモード（タブ内全タイルへ適用）。
       setTool: (toolName) => {
         setActiveTool(toolName);
@@ -2183,7 +2277,7 @@ function TileGrid({
         const tid = resolveTargets()[0];
         const tile = patient.tiles.find((tl) => tl.id === tid);
         if (!tile) { comingSoon(t("viewer2d.menu.imagej")); return; }
-        if (isConcatTile(tile)) { notify(t("series.concat.disabled")); return; }
+        if (isVirtualTile(tile)) { notify(t(virtualDisabledKey(tile))); return; }
         bridgeImageJHyperStack(
           tile.study.studyInstanceUid,
           tile.series.seriesInstanceUid,
@@ -2199,6 +2293,7 @@ function TileGrid({
         const tid = resolveTargets()[0];
         const tile = patient.tiles.find((tl) => tl.id === tid);
         if (!tile) { comingSoon(t("main.toolbar.viewer3d")); return; }
+        if (tile.transient) { notify(t("series.transient.disabled")); return; }
         if (tile.concat) { void openConcatWindow(tile.concat, mode, "viewer3d", { c: 0, t: 0 }, t, notify); return; }
         const dims = tileDimsRef.current.get(tile.id);
         const ctx = { study: tile.study, series: tile.series, c: dims?.c ?? 0, t: dims?.t ?? 0, range: tile.range, ts: Date.now() };
@@ -2212,6 +2307,7 @@ function TileGrid({
         const tid = resolveTargets()[0];
         const tile = patient.tiles.find((tl) => tl.id === tid);
         if (!tile) { comingSoon(t("main.toolbar.mpr")); return; }
+        if (tile.transient) { notify(t("series.transient.disabled")); return; }
         if (tile.concat) { void openConcatWindow(tile.concat, mode, "mpr", {}, t, notify); return; }
         const ctx = { study: tile.study, series: tile.series, range: tile.range, ts: Date.now() };
         localStorage.setItem("graphy-mpr-ctx", JSON.stringify(ctx));
@@ -2224,6 +2320,7 @@ function TileGrid({
         const tid = resolveTargets()[0];
         const tile = patient.tiles.find((tl) => tl.id === tid);
         if (!tile) { comingSoon(t("main.toolbar.slicer")); return; }
+        if (tile.transient) { notify(t("series.transient.disabled")); return; }
         if (tile.concat) { void openConcatWindow(tile.concat, mode, "slicer", { c: 0, t: 0 }, t, notify); return; }
         const ctx = { study: tile.study, series: tile.series, range: tile.range, ts: Date.now() };
         localStorage.setItem("graphy-slicer-ctx", JSON.stringify(ctx));
@@ -2236,7 +2333,7 @@ function TileGrid({
         const tid = resolveTargets()[0];
         const tile = patient.tiles.find((tl) => tl.id === tid);
         if (!tile) { comingSoon(t("curvedMpr.title")); return; }
-        if (isConcatTile(tile)) { notify(t("series.concat.disabled")); return; }
+        if (isVirtualTile(tile)) { notify(t(virtualDisabledKey(tile))); return; }
         const dims = tileDimsRef.current.get(tile.id);
         const ctx = { study: tile.study, series: tile.series, c: dims?.c ?? 0, t: dims?.t ?? 0, ts: Date.now() };
         localStorage.setItem("graphy-curvedmpr-ctx", JSON.stringify(ctx));
@@ -2245,13 +2342,31 @@ function TileGrid({
         else window.open(`${window.location.pathname}#curvedmpr`, "graphy-curvedmpr");
       },
       // プラグインが中心線を渡して Curved MPR 窓を開く（H73）。開いているタイルのシリーズからしか引かない。
-      openCurvedMpr: (spec, producer) => openCurvedMprFromPlugin(spec, producer, studyUidOfSeries),
+      openCurvedMpr: (spec, producer) =>
+        isTransientSeriesUid(spec?.source?.seriesUid)
+          ? Promise.resolve({ ok: false, error: TRANSIENT_REF_ERROR })
+          : openCurvedMprFromPlugin(spec, producer, studyUidOfSeries),
+      // 一時シリーズ: 参照タイルの幾何でプラグインの値を 1 枚のタイル（マップ = C）として開く。出所は host が入れる。
+      openTransientSeries: async (spec, producer) => {
+        const refId = spec.referenceTileId ?? pluginTargets()[0] ?? tilesRef.current.find((tl) => !tl.transient)?.id;
+        const ref = tilesRef.current.find((tl) => tl.id === refId);
+        if (ref?.transient) throw new Error(TRANSIENT_REF_ERROR);
+        return openTransientTile({
+          spec,
+          producer,
+          ref,
+          referenceId: refId,
+          addTile: onAddTransientTile,
+          removeTile: (tileId) => onRemoveTile(derivePatientKey(ref!.study), tileId),
+          getDims: (id) => { const d = tileDimsRef.current.get(id); return d && { c: d.c, z: d.z }; },
+        });
+      },
       // 対象（選択→無ければ先頭）タイルのシリーズで Histogram 解析ダイアログを開く。
       openHistogram: () => {
         const tid = resolveTargets()[0];
         const tile = patient.tiles.find((tl) => tl.id === tid);
         if (!tile) { comingSoon(t("viewer2d.menu.histogram")); return; }
-        if (isConcatTile(tile)) { notify(t("series.concat.disabled")); return; }
+        if (isVirtualTile(tile)) { notify(t(virtualDisabledKey(tile))); return; }
         const dims = tileDimsRef.current.get(tile.id);
         setHisto({ tile, z: dims?.z ?? 0, c: dims?.c ?? 0, t: dims?.t ?? 0 });
       },
@@ -2260,7 +2375,7 @@ function TileGrid({
         const tid = resolveTargets()[0];
         const tile = patient.tiles.find((tl) => tl.id === tid);
         if (!tile) { comingSoon(t("vi.menu")); return; }
-        if (isConcatTile(tile)) { notify(t("series.concat.disabled")); return; }
+        if (isVirtualTile(tile)) { notify(t(virtualDisabledKey(tile))); return; }
         setValueInsp({ tile });
       },
       // 対象（選択→無ければ先頭）タイルのシリーズでリサンプル・切り抜きダイアログを開く。
@@ -2268,7 +2383,7 @@ function TileGrid({
         const tid = resolveTargets()[0];
         const tile = patient.tiles.find((tl) => tl.id === tid);
         if (!tile) { comingSoon(t("viewer2d.menu.resample")); return; }
-        if (isConcatTile(tile)) { notify(t("series.concat.disabled")); return; }
+        if (isVirtualTile(tile)) { notify(t(virtualDisabledKey(tile))); return; }
         const dims = tileDimsRef.current.get(tile.id);
         setResample({ tile, c: dims?.c ?? 0, t: dims?.t ?? 0 });
       },
@@ -2279,7 +2394,7 @@ function TileGrid({
         const tid = resolveTargets()[0];
         const tile = patient.tiles.find((tl) => tl.id === tid);
         if (!tile) { comingSoon(t("fourier.menu")); return; }
-        if (isConcatTile(tile)) { notify(t("series.concat.disabled")); return; }
+        if (isVirtualTile(tile)) { notify(t(virtualDisabledKey(tile))); return; }
         setFourier({ tileId: tile.id, label: tile.series.seriesDescription || tile.series.seriesInstanceUid });
       },
       // SUV 校正: 対象（選択→無ければ先頭）タイル。PET(Modality=PT) のみ有効。
@@ -2302,7 +2417,7 @@ function TileGrid({
         const tid = resolveTargets()[0];
         const tile = patient.tiles.find((tl) => tl.id === tid);
         if (!tile) { comingSoon(t("texture.menu")); return; }
-        if (isConcatTile(tile)) { notify(t("series.concat.disabled")); return; }
+        if (isVirtualTile(tile)) { notify(t(virtualDisabledKey(tile))); return; }
         setTextureTarget(tile);
       },
       // フィルタ画像（LoG）: 対象タイルのシリーズ全体に LoG を掛け、スケールごとに派生シリーズを作る。
@@ -2310,7 +2425,7 @@ function TileGrid({
         const tid = resolveTargets()[0];
         const tile = patient.tiles.find((tl) => tl.id === tid);
         if (!tile) { comingSoon(t("filterImg.menu")); return; }
-        if (isConcatTile(tile)) { notify(t("series.concat.disabled")); return; }
+        if (isVirtualTile(tile)) { notify(t(virtualDisabledKey(tile))); return; }
         setFilterImageTarget(tile);
       },
       // フィルタ層: 対象タイルに、LoG の派生シリーズを色分けで重ねる。
@@ -2318,7 +2433,7 @@ function TileGrid({
         const tid = resolveTargets()[0];
         const tile = patient.tiles.find((tl) => tl.id === tid);
         if (!tile) { comingSoon(t("filterLayer.menu")); return; }
-        if (isConcatTile(tile)) { notify(t("series.concat.disabled")); return; }
+        if (isVirtualTile(tile)) { notify(t(virtualDisabledKey(tile))); return; }
         setFilterLayerTarget(tile);
       },
       // GLAM 解析: 別ウィンドウ（#glam）で開く。対象は localStorage 経由で渡す
@@ -2327,7 +2442,7 @@ function TileGrid({
         const tid = resolveTargets()[0];
         const tile = patient.tiles.find((tl) => tl.id === tid);
         if (!tile) { comingSoon(t("glam.menu")); return; }
-        if (isConcatTile(tile)) { notify(t("series.concat.disabled")); return; }
+        if (isVirtualTile(tile)) { notify(t(virtualDisabledKey(tile))); return; }
         localStorage.setItem(GLAM_CTX_KEY, JSON.stringify({
           studyInstanceUid: tile.study.studyInstanceUid,
           seriesInstanceUid: tile.series.seriesInstanceUid,
@@ -2341,7 +2456,7 @@ function TileGrid({
         const tid = resolveTargets()[0];
         const tile = patient.tiles.find((tl) => tl.id === tid);
         if (!tile) { comingSoon(t("roiFeat.menu")); return; }
-        if (isConcatTile(tile)) { notify(t("series.concat.disabled")); return; }
+        if (isVirtualTile(tile)) { notify(t(virtualDisabledKey(tile))); return; }
         localStorage.setItem(ROI_FEATURE_CTX_KEY, JSON.stringify({
           studyInstanceUid: tile.study.studyInstanceUid,
           seriesInstanceUid: tile.series.seriesInstanceUid,
@@ -2360,7 +2475,7 @@ function TileGrid({
         const tid = resolveTargets()[0];
         const tile = patient.tiles.find((tl) => tl.id === tid);
         if (!tile) { comingSoon(t("roiFeat.maxSection.menu")); return; }
-        if (isConcatTile(tile)) { notify(t("series.concat.disabled")); return; }
+        if (isVirtualTile(tile)) { notify(t(virtualDisabledKey(tile))); return; }
         setMaxSectionTarget(tile);
       },
       // レポート: 対象（選択→無ければ先頭）タイルのスタディでレポート編集ダイアログを開く。
@@ -2376,7 +2491,7 @@ function TileGrid({
         setReportTarget(tile);
       },
     }),
-    [resolveTargets, resolveRoiEditTarget, notify, onSetGrid, onSetSync, onSetFusion, patient.patientKey, patient.tiles, comingSoon, t],
+    [resolveTargets, pluginTargets, resolveRoiEditTarget, notify, onSetGrid, onSetSync, onSetFusion, onAddTransientTile, onRemoveTile, patient.patientKey, patient.tiles, comingSoon, t],
   );
 
   // AI アシスタント窓からの表示操作（main 中継）。許可リストの操作だけを受け、引数は実行器が再検証する。
@@ -2827,7 +2942,7 @@ function TileGrid({
         <StitchDialog
           patientId={patient.patientId}
           mode={mode}
-          candidates={patient.tiles.filter((tl) => !tl.concat).map((tl) => {
+          candidates={patient.tiles.filter((tl) => !isVirtualTile(tl)).map((tl) => {
             const d = tileDimsRef.current.get(tl.id);
             return { id: tl.id, study: tl.study, series: tl.series, instances: tl.instances, c: d?.c ?? 0, t: d?.t ?? 0 };
           })}
@@ -2850,7 +2965,7 @@ function TileGrid({
           study={tagTarget.tile.study}
           series={tagTarget.tile.series}
           sopInstanceUid={tagTarget.sop}
-          tree={patient.tiles.map((tl) => ({ study: tl.study, series: tl.series, instances: tl.instances }))}
+          tree={patient.tiles.filter((tl) => !tl.transient).map((tl) => ({ study: tl.study, series: tl.series, instances: tl.instances }))}
           editable={mode === "standalone"}
           onClose={() => setTagTarget(null)}
         />
@@ -3545,13 +3660,18 @@ function TileCell({
           commandKey={commandKey}
           patientKey={patientKey}
           seriesLabel={seriesLabel}
-          onDimChange={(c, tIdx, z) => { bgDimsRef.current = { c, t: tIdx }; onDimChange(c, tIdx, z); }}
+          onDimChange={(c, tIdx, z) => {
+            bgDimsRef.current = { c, t: tIdx };
+            onDimChange(c, tIdx, z);
+            if (tile.transient) onTransientDim(tile.transient, c, z);
+          }}
           renderFusionOverlay={renderOverlayAll}
           // タスク・ランチャー（A13-2）の依頼を引き受けるのは**このタイルだけ**
           // （StudyList のプレビューに取られないようにする）。
           acceptsTaskLaunch
           range={tile.range}
           concat={tile.concat}
+          layoutOverride={tile.transient?.layout}
           onRangeEdit={onRangeEdit}
           onRangeClear={onRangeClear}
         />

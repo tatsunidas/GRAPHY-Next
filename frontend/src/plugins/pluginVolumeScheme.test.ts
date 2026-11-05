@@ -9,12 +9,14 @@
  * ここでは触れない。代わりに、**間違えると「もっともらしいが別スライスの絵」になる**
  * imageId の組み立てと入力の検査を固定する。
  */
+import { metaData } from "@cornerstonejs/core";
 import { describe, expect, it } from "vitest";
 import {
   autoWindow,
   createValueStack,
   parsePluginVolumeImageId,
   pluginVolumeImageId,
+  registerPluginVolumeLoader,
   releaseValueStack,
   valueStackCount,
   PLUGIN_VOLUME_SCHEME,
@@ -113,5 +115,60 @@ describe("autoWindow", () => {
     const w = autoWindow(new Float32Array(100).fill(7));
     expect(w.width).toBeGreaterThan(0);
     expect(w.center).toBe(7);
+  });
+});
+
+describe("一時シリーズ（transient）のセッション", () => {
+  // 元の DWI のスライスを模したメタデータ。委譲されると**元の素性が見える**ことを使って、上書きの有無を判定する。
+  const NATIVE = ["native:s0", "native:s1"];
+  const native: Record<string, Record<string, unknown>> = {
+    sopCommonModule: { sopInstanceUID: "1.2.DWI.SOP", sopClassUID: "1.2.840.10008.5.1.4.1.1.4" },
+    generalSeriesModule: { seriesInstanceUID: "1.2.DWI.SERIES", seriesDescription: "DWI b1000", modality: "MR" },
+    voiLutModule: { windowCenter: [500], windowWidth: [1000] },
+    imagePlaneModule: { rowPixelSpacing: 2, columnPixelSpacing: 2 },
+  };
+  metaData.addProvider((type: string, imageId: string) => (NATIVE.includes(imageId) ? native[type] : undefined), 5);
+  registerPluginVolumeLoader();
+  const win = { center: 1.5, width: 3 };
+  const tr = (c: number) => ({ seriesUid: "2.25.1234", description: "[Plugin X] ADC（未保存）", c });
+
+  it("window 無しの transient は拒否する（元の DWI の窓が当たるのを防ぐ）", () => {
+    expect(() =>
+      createValueStack({ pluginId: "p", data: data(), dims: DIMS, nativeIds: NATIVE, transient: tr(0) }),
+    ).toThrow(/window/);
+  });
+
+  it("transient: SOP・シリーズの素性・窓を、元の DWI に委譲せず自前で返す", () => {
+    const { token, imageIds } = createValueStack({
+      pluginId: "p", data: data(), dims: DIMS, nativeIds: NATIVE, unit: "mm2/s", window: win, transient: tr(2),
+    });
+    const sop = metaData.get("sopCommonModule", imageIds[1]) as { sopInstanceUID: string; sopClassUID: string };
+    expect(sop.sopInstanceUID).toBe("2.25.1234.3.2"); // c=2 → 3、z=1 → 2
+    expect(sop.sopInstanceUID).not.toBe("1.2.DWI.SOP");
+    expect(sop.sopClassUID).toBe("1.2.840.10008.5.1.4.1.1.4"); // クラスは委譲
+    const gs = metaData.get("generalSeriesModule", imageIds[0]) as Record<string, string>;
+    expect(gs.seriesInstanceUID).toBe("2.25.1234");
+    expect(gs.seriesDescription).toBe("[Plugin X] ADC（未保存）");
+    expect(gs.modality).toBe("MR");
+    const voi = metaData.get("voiLutModule", imageIds[0]) as { windowCenter: number[]; windowWidth: number[] };
+    expect(voi).toEqual({ windowCenter: [1.5], windowWidth: [3] });
+    const lut = metaData.get("modalityLutModule", imageIds[0]) as Record<string, unknown>;
+    expect(lut).toEqual({ rescaleSlope: 1, rescaleIntercept: 0, rescaleType: "mm2/s" }); // 恒等＋単位
+    releaseValueStack(token);
+  });
+
+  it("負例: 従来の mountViewport 用のセッションは今までどおり全部委譲する（回帰しない）", () => {
+    const { token, imageIds } = createValueStack({ pluginId: "p", data: data(), dims: DIMS, nativeIds: NATIVE, window: win });
+    expect((metaData.get("sopCommonModule", imageIds[0]) as { sopInstanceUID: string }).sopInstanceUID).toBe("1.2.DWI.SOP");
+    expect((metaData.get("generalSeriesModule", imageIds[0]) as { seriesInstanceUID: string }).seriesInstanceUID).toBe("1.2.DWI.SERIES");
+    releaseValueStack(token);
+  });
+
+  it("負例: 破棄したセッションの imageId は何も返さない", () => {
+    const { token, imageIds } = createValueStack({
+      pluginId: "p", data: data(), dims: DIMS, nativeIds: NATIVE, window: win, transient: tr(0),
+    });
+    releaseValueStack(token);
+    expect(metaData.get("generalSeriesModule", imageIds[0])).toBeUndefined();
   });
 });

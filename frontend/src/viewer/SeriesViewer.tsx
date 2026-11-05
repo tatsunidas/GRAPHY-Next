@@ -153,6 +153,7 @@ export function SeriesViewer({
   onRangeEdit,
   onRangeClear,
   concat,
+  layoutOverride,
 }: {
   instances: Instance[];
   mode: ViewerMode;
@@ -206,6 +207,8 @@ export function SeriesViewer({
   onRangeClear?: () => void;
   /** 連結して開いたタイル。レイアウトは取得済み（各シリーズのレイアウトを呼び出し側で連結した結果）なので、取得し直さない。 */
   concat?: ConcatOpened;
+  /** 一時シリーズ（プラグインが計算した値）の仮想レイアウト。指定すると backend からレイアウトを取らない。 */
+  layoutOverride?: SeriesLayout;
 }) {
   const { t } = useI18n();
   // ツールパネルの開閉。未制御のときは親の showControls を初期値・追従元にし（一括開閉は親が上書き）、
@@ -250,6 +253,12 @@ export function SeriesViewer({
       setLayoutReady(true);
       return;
     }
+    if (layoutOverride) {
+      // 一時シリーズは保管庫に無い（backend に問い合わせると 404）。仮想レイアウトをそのまま使う。
+      setBaseLayout(layoutOverride);
+      setLayoutReady(true);
+      return;
+    }
     let cancelled = false;
     fetchSeriesLayout(studyUid, seriesUid)
       .then((dto) => {
@@ -272,7 +281,7 @@ export function SeriesViewer({
     return () => {
       cancelled = true;
     };
-  }, [studyUid, seriesUid, fallback, mode, instances, concat]);
+  }, [studyUid, seriesUid, fallback, mode, instances, concat, layoutOverride]);
 
   // 安全網: レイアウト取得がハング/極端に遅い場合でも、一定時間で Viewer 描画へ進む
   // （その場合はフォールバック描画＝従来挙動）。通常は 45ms 程度で解決し先に ready になる。
@@ -1598,7 +1607,7 @@ export function SeriesViewer({
             {layout.nC > 1 && (
               <DimSlider
                 label={axisLabel(t, axes.c)}
-                dim={layout.cDimension}
+                dim={layout.cLabels?.[cc] ?? layout.cDimension}
                 idx={cc}
                 count={layout.nC}
                 onChange={setC}
