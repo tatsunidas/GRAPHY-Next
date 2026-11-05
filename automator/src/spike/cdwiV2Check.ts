@@ -7,8 +7,10 @@
  * 確かめること:
  *   1. 既定のまま計算 → 中央スライスに点 ROI が 5 つ、表の値が独立計算と一致、点がスライス上（スクリーンショットで目視）
  *   2. 点のドラッグで表の位置・値が変わる（動かせなければ【未達】）
- *   3. vMRE へ切替: 進捗が出る。b0/b1000 だけなので L・H は「合成」になる（実測の組が作れない旨）
- *   4. vMRE の実測の組（L=b0, H=b1000 を明示）: μdiff = α·ln(S_L/S_H)+β を独立計算と突き合わせる
+ *   3. vMRE へ切替（既定のまま）: 進捗が出る。b0/b1000 だけなので L=200 は合成、H=1000 は実測（片側ずつの割り当て）。
+ *      μdiff = 4.91·ln(S200合成/S1000実測)+0.92 を独立計算と突き合わせる
+ *   4. L=0 を指定: 両方実測になる（基準の欄が隠れる）。μdiff = α·ln(S_L/S_H)+β を独立計算と突き合わせる。
+ *      4b. 範囲外・逆順・空欄・負の L・H は計算ボタンが無効になり理由が出る（L ≤ 400、H ≥ 800 の境界は通る）
  *   5. 最新の ROI: 楕円 A → 楕円 B で統計の対象が B に替わる。画素数は楕円の面積と一致（許容 8%）
  *   6. 一時タイルの ROI（点含む）は保管庫に保存されない
  * 入力が無ければ「未達」で終了コード 2。患者情報を含むのでリポジトリには入れない。
@@ -251,7 +253,7 @@ async function main(): Promise<number> {
       rows = after;
     } else console.log("  【未達】画素座標を読めず、ドラッグを試せなかった");
 
-    console.log("\n[3] vMRE へ切替（b0 + b1000 だけ → 合成になる）。進捗が出る");
+    console.log("\n[3] vMRE へ切替（既定のまま。b0 + b1000 だけ → L=200 は合成、H=1000 は実測）。進捗が出る");
     await unpark(viewer);
     const sawProgress = viewer.waitForSelector('[data-testid="progress"]:not([hidden])', { timeout: 15_000 }).then(async (e) => (await e.textContent()) ?? "");
     const t0 = Date.now();
@@ -263,29 +265,42 @@ async function main(): Promise<number> {
     console.log(`  進捗の文言: 「${progText}」 所要 ${((Date.now() - t0) / 1000).toFixed(1)} 秒`);
     console.log(`  status: ${(await viewer.getByTestId("status").textContent()) ?? ""}`);
     check(/切り替えています/.test(progText), "🔴 切替中に「切り替えています」の進捗が出る", progText);
-    check((await viewer.getByTestId("source-synth").getAttribute("aria-pressed")) === "true", "実測の組が作れない（b>0 が 1 つ）ので L・H は「合成」が選ばれる");
+    check((await viewer.getByTestId("lowB").inputValue()) === "200" && (await viewer.getByTestId("highB").inputValue()) === "1000", "既定の L・H は L=200（論文値）、H=1000（範囲内で最小の実測）");
     const note = (await viewer.getByTestId("source-note").textContent()) ?? "";
-    check(/実測が 2 つ無い/.test(note), "合成になった理由が画面に出る", note);
+    check(/L = b200 → 同じ b の入力が無いため.*合成/.test(note) && /H = b1000 → 入力のシリーズ.*実測/.test(note), "🔴 L は合成、H は実測と画面に出る（片側ずつ）", note);
     await viewer.waitForTimeout(2500);
-    await viewer.screenshot({ path: path.join(OUT_DIR, "3b-vmre-synth.png") });
+    await viewer.screenshot({ path: path.join(OUT_DIR, "3b-vmre-mixed.png") });
     rows = await tableRows();
     check(rows.length === 5 && /μdiff/.test(await viewer.getByTestId("stats-table").innerText()), "vMRE では点の表に μdiff の列が出て、点は 5 つのまま（開き直しで置き直された）", rows.length);
+    const headM = await viewer.evaluate(`Array.from(document.querySelectorAll('[data-testid="stats-table"] thead th')).map(function(t){return t.textContent})`) as string[];
+    const iMuM = headM.findIndex((h) => /μdiff/.test(h));
+    let muMixed = 0;
+    for (const r of rows) {
+      const m = /\((\d+), (\d+)\) z(\d+)/.exec(r[1]);
+      if (!m) continue;
+      const z = zs[Number(m[3]) - 1], a = s0.get(z)![Number(m[2]) * nPx + Number(m[1])], b = s1.get(z)![Number(m[2]) * nPx + Number(m[1])];
+      // S200(合成) = S0·exp(-200·ADC)、ADC = max(0, ln(S0/S1000)/1000)。S_H は実測 S1000。
+      const adc = Math.max(0, Math.log(a / b) / 1000);
+      const e = a > 0 && b > 0 ? 4.91 * Math.log((a * Math.exp(-200 * adc)) / b) + 0.92 : NaN;
+      const v = Number(r[iMuM]);
+      // 表は 3 有効桁で表示する（11.2497 → 11.2）。期待値も同じ丸めにして厳密に比べる。
+      if ((Number.isNaN(e) && !Number.isFinite(v)) || Math.abs(v - Number(e.toPrecision(3))) <= 1e-9) muMixed++;
+      else console.log(`  μdiff 不一致 ${r[0]} 表=${v} 期待=${e}`);
+    }
+    check(muMixed === rows.length && rows.length === 5, "🔴 L 合成＋H 実測の μdiff が 4.91·ln(S200合成/S1000実測)+0.92 と 5 点で一致する", { muMixed, n: rows.length });
 
-    console.log("\n[4] vMRE の実測の組（L=b0, H=b1000 を明示）");
-    await viewer.getByTestId("source-pair").click();
-    await viewer.waitForTimeout(500);
-    const lowSel = viewer.getByTestId("base-low"), highSel = viewer.getByTestId("base-high");
-    const opts = (await lowSel.evaluate((s) => Array.from((s as HTMLSelectElement).options).map((o) => ({ v: o.value, t: o.textContent ?? "" })))) as { v: string; t: string }[];
-    const o0 = opts.find((o) => /^b=0 /.test(o.t)), o1 = opts.find((o) => /^b=1000 /.test(o.t));
-    check(!!o0 && !!o1, "（前提）選択肢に b=0 と b=1000 がある", opts);
-    await lowSel.selectOption(o0!.v);
-    await highSel.selectOption(o1!.v);
+    console.log("\n[4] vMRE の両方実測（L=0, H=1000 を欄に指定 → 同じ b の入力があるので実測になる）");
+    await viewer.getByTestId("lowB").fill("0");
+    await viewer.waitForTimeout(400);
+    const note4 = (await viewer.getByTestId("source-note").textContent()) ?? "";
+    check(/L = b0 → 入力のシリーズ.*実測/.test(note4) && /H = b1000 → 入力のシリーズ.*実測/.test(note4), "L=0 にすると L も実測（b0 のシリーズ）になる", note4);
+    check(!(await viewer.getByTestId("base-low").isVisible()), "両方実測のとき、基準の欄は隠れる");
     await viewer.getByTestId("run").click();
     await waitDone();
     await waitPoints();
     await viewer.waitForTimeout(3000);
     console.log(`  status: ${(await viewer.getByTestId("status").textContent()) ?? ""}`);
-    check((await hostCount()) === 3, "実測の組は sADC・μdiff の 2 タイル + 元 DWI = 3 タイル", await hostCount());
+    check((await hostCount()) === 3, "両方実測は sADC・μdiff の 2 タイル + 元 DWI = 3 タイル", await hostCount());
     rows = await tableRows();
     const head = await viewer.evaluate(`Array.from(document.querySelectorAll('[data-testid="stats-table"] thead th')).map(function(t){return t.textContent})`) as string[];
     const iMu = head.findIndex((h) => /μdiff/.test(h));
@@ -300,10 +315,25 @@ async function main(): Promise<number> {
       if ((Number.isNaN(e) && !Number.isFinite(v)) || Math.abs(v - e) <= 5e-3 + 2e-3 * Math.abs(e)) muOk++;
       else console.log(`  μdiff 不一致 ${r[0]} 表=${v} 期待=${e}`);
     }
-    check(muOk === rows.length && rows.length === 5, "🔴 実測の組の μdiff が α·ln(S_L/S_H)+β と 5 点で一致する", { muOk, n: rows.length });
+    check(muOk === rows.length && rows.length === 5, "🔴 両方実測の μdiff が α·ln(S_L/S_H)+β と 5 点で一致する", { muOk, n: rows.length });
     const warn = ((await viewer.getByTestId("warning").allInnerTexts().catch(() => [])) as string[]).join(" / ");
     check(/b=0\/1000/.test(warn), "L・H が論文の b200/800 でないことが警告される", warn);
     await viewer.screenshot({ path: path.join(OUT_DIR, "4-vmre-pair.png") });
+
+    console.log("\n[4b] 不正な L・H は通さない（計算ボタンが無効になり理由が出る）");
+    for (const [l, h, re] of [["500", "1000", /400 以下/], ["200", "700", /800 以上/], ["900", "800", /小さい/], ["400", "400", /小さい/], ["", "1000", /数値/], ["-5", "1000", /0 以上/]] as const) {
+      await viewer.getByTestId("lowB").fill(l);
+      await viewer.getByTestId("highB").fill(h);
+      await viewer.waitForTimeout(300);
+      const dis = await viewer.getByTestId("run").isDisabled();
+      const err = (await viewer.getByTestId("lh-error").textContent().catch(() => "")) ?? "";
+      check(dis && re.test(err), `L=${l || "（空）"} / H=${h} は計算できない`, { dis, err });
+    }
+    await viewer.getByTestId("lowB").fill("400");
+    await viewer.getByTestId("highB").fill("800");
+    await viewer.waitForTimeout(300);
+    check(!(await viewer.getByTestId("run").isDisabled()), "境界の L=400 / H=800 は計算できる（正例）");
+    await viewer.screenshot({ path: path.join(OUT_DIR, "4b-boundary.png") });
 
     console.log("\n[5] 最新の ROI（cDWI モードへ戻して）");
     await viewer.getByTestId("mode-cdwi").click();

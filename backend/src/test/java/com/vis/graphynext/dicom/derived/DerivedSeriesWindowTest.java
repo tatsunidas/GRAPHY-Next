@@ -13,6 +13,7 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 /**
  * 派生シリーズの窓（W/L）。<b>プラグインの出力は元画像とは別の量</b>なので、元の窓を引き継がない
@@ -25,9 +26,19 @@ class DerivedSeriesWindowTest {
             new DerivedSeriesRequest.Producer("dosimetry", "Dosimetry", "0.1.2");
 
     private static DerivedSeriesRequest req(DerivedSeriesRequest.Producer producer) {
+        return req(producer, null, null);
+    }
+
+    private static DerivedSeriesRequest req(DerivedSeriesRequest.Producer producer, Double wc, Double ww) {
         return new DerivedSeriesRequest("1.2.3", "1.2.4", "Dose map", null, 2, 2,
-                new double[] {1.0, 1.0}, 1.0, 1.0, null, null, null, null, null, null, null, null, producer, null,
+                new double[] {1.0, 1.0}, 1.0, 1.0, null, null, null, null, null, null, null, null, wc, ww, producer, null,
                 List.of(new DerivedSeriesRequest.Frame(1, null, "")));
+    }
+
+    private static Attributes build(DerivedSeriesRequest.Producer producer, Double wc, Double ww) {
+        DerivedSeriesRequest r = req(producer, wc, ww);
+        return new DerivedSeriesService(null, null).buildInstance(sourceWithWindow(), r, "1.2.9", 1001, "OT",
+                r.frames().get(0), new byte[8]);
     }
 
     private static Attributes sourceWithWindow() {
@@ -52,6 +63,31 @@ class DerivedSeriesWindowTest {
         assertFalse(a.contains(Tag.WindowCenter));
         assertFalse(a.contains(Tag.WindowWidth));
         assertFalse(a.contains(Tag.VOILUTFunction));
+    }
+
+    @Test
+    void pluginOutput_writesTheWindowThePluginSpecified() {
+        Attributes a = build(PLUGIN, 0.0015, 0.003);
+        assertEquals(0.0015, a.getDouble(Tag.WindowCenter, Double.NaN), 1e-12);
+        assertEquals(0.003, a.getDouble(Tag.WindowWidth, Double.NaN), 1e-12);
+        assertEquals(VR.DS, a.getVR(Tag.WindowCenter));
+        assertFalse(a.contains(Tag.VOILUTFunction));
+    }
+
+    @Test
+    void coreDerivation_ignoresAPluginWindowAndKeepsTheSourceOne() {
+        Attributes a = build(null, 0.0015, 0.003);
+        assertEquals(3887.0, a.getDouble(Tag.WindowCenter, 0), 0.0);
+        assertEquals(7774.0, a.getDouble(Tag.WindowWidth, 0), 0.0);
+    }
+
+    @Test
+    void rejectsHalfSpecifiedNonFiniteOrNonPositiveWidthWindows() {
+        DerivedSeriesService svc = new DerivedSeriesService(null, null);
+        for (Double[] w : new Double[][] {
+                {1.0, null}, {null, 1.0}, {Double.NaN, 1.0}, {1.0, Double.POSITIVE_INFINITY}, {1.0, 0.0}, {1.0, -2.0}}) {
+            assertThrows(IllegalArgumentException.class, () -> svc.create(req(PLUGIN, w[0], w[1])), w[0] + "/" + w[1]);
+        }
     }
 
     @Test

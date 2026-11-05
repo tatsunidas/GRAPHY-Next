@@ -38,6 +38,10 @@ import java.util.List;
  *                            プラグイン出力で「データ無し」を埋めた背景値を明示するために使う
  * @param diffusionBValue     DiffusionBValue(0018,9087)（FD, s/mm²）。null なら書かない。元シリーズの値は引き継がない
  *                            （派生画素の b 値は呼び出し側しか知らない。例: computed DWI の目標 b 値）。16bit 経路のみ
+ * @param windowCenter        WindowCenter(0028,1050)（保存する値＝Rescale 後の実際の量での窓の中心）。null なら書かない。
+ *                            <b>producer（プラグイン出力）のときだけ有効</b>。本体の機能による派生は元の窓を引き継ぐ。
+ *                            windowWidth と<b>両方</b>必要。16bit 経路のみ（Parametric Map は窓を書かない）
+ * @param windowWidth         WindowWidth(0028,1051)（0 より大きい有限値）。windowCenter とセット
  * @param producer            プラグイン由来の場合の出所（null なら本体の機能による生成）
  * @param parametricMap       null でなければ **Parametric Map（Float Pixel Data・Modality=OT）として保存**する。
  *                            画素は {@code frames[].pixels} の Float32 リトルエンディアン（rows*columns*4 バイト）で、
@@ -70,6 +74,8 @@ public record DerivedSeriesRequest(
         String rescaleType,
         Integer pixelPaddingValue,
         Double diffusionBValue,
+        Double windowCenter,
+        Double windowWidth,
         Producer producer,
         ParametricMap parametricMap,
         List<Frame> frames) {
