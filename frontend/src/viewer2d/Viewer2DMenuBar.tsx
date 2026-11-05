@@ -82,6 +82,7 @@ export function Viewer2DMenuBar({
   actions,
   refLines,
   panelVisible,
+  scaleBarOn,
   activeTool,
   gridRows,
   gridCols,
@@ -92,6 +93,8 @@ export function Viewer2DMenuBar({
   refLines: boolean;
   /** 画像下ツールパネルの表示状態（View メニューのチェック表示用）。 */
   panelVisible: boolean;
+  /** 値スケールバーの表示状態（全タイル共通。View メニューのチェック表示用）。 */
+  scaleBarOn: boolean;
   activeTool: string;
   gridRows: number;
   gridCols: number;
@@ -276,6 +279,7 @@ export function Viewer2DMenuBar({
       items: [
         { label: t("viewer2d.refLines.label"), onClick: actions.toggleRefLines, checked: refLines },
         { label: t("viewer2d.toolPanel.label"), onClick: actions.toggleToolPanel, checked: panelVisible },
+        { label: t("viewer2d.scaleBar.label"), onClick: actions.toggleScaleBar, checked: scaleBarOn, testId: "menu-scalebar" },
         {
           label: t("viewer2d.layout"),
           testId: "viewer2d-menu-layout",

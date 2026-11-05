@@ -56,6 +56,7 @@ import { restoreMasks } from "./maskSaveStore";
 import { listSpheres3D, sphereCanvasCircle, subscribeSphere3D, type SphereCanvasCircle } from "./sphere3dStore";
 import { ensureCornerstoneInitialized } from "./cornerstoneSetup";
 import { applyTransform, isPanned, readTransform, type ViewTransform, FIT_TRANSFORM } from "./transform";
+import { fmtValue, scaleBarColors, scaleBarLabels, SCALE_BAR_WIDTH } from "./valueScaleBar";
 import { readImageInfo, sampleAtCanvas, computeSliceSpacing, calibratedUnit, type ImageInfo, type PixelSample } from "./imageInfo";
 import { dicomDateToIso, readColormapName, readInvert, resolveSliceIndex } from "./viewportRead";
 import { readModalitySlice } from "./pixelCalibration";
@@ -145,21 +146,6 @@ const TOUCH_ZOOM_BINDING = { numTouchPoints: 2 } as const;
 function isColorImage(inf: ImageInfo | null): boolean {
   const p = inf?.photometricInterpretation;
   return !!p && !/MONOCHROME/i.test(p);
-}
-
-/**
- * カーソル位置のモダリティ値を表示用に整形する。
- * CT の HU（整数近傍・大きい値）は整数表示、テクスチャマップ等の<b>小さな小数（例 1e-5）は切り捨てず</b>
- * 有効桁で表示、極端に小さい/大きい値は指数表記にする。
- */
-function fmtValue(v: number): string {
-  if (!Number.isFinite(v)) return "—";
-  if (v === 0) return "0";
-  const a = Math.abs(v);
-  if (a >= 1e6 || a < 1e-4) return v.toExponential(3); // 例 1.000e-5
-  const digits = a >= 100 ? 1 : a >= 1 ? 3 : 6;
-  const s = v.toFixed(digits);
-  return s.includes(".") ? s.replace(/\.?0+$/, "") : s; // 末尾ゼロを除去
 }
 
 // LUT 解除（グレースケール復帰）用の線形グレースケール colormap 名。
@@ -507,6 +493,7 @@ export function Viewer2D({
   refreshKey,
   pendingImages = false,
   frameStack = false,
+  scaleBar: valueScaleBar = false,
 }: {
   imageIds: string[];
   imageIndex: number;
@@ -555,6 +542,8 @@ export function Viewer2D({
   pendingImages?: boolean;
   /** スタックが時間方向のフレーム（XA・US のシネ）か。3D Wand を弾くのに使う（z を空間とみなせない）。 */
   frameStack?: boolean;
+  /** true で画像の右に固定幅の値スケールバー（現在の W/L 窓のカラーバー）を出す。画像領域の幅を揃えるため、ON のタイルは常に同じ幅を確保する。 */
+  scaleBar?: boolean;
 }) {
   const { t } = useI18n();
   // 合成スライス上でのアノテーション作成をブロックする判定を、setActiveTool から最新参照する。
@@ -903,6 +892,9 @@ export function Viewer2D({
   const [activeLutName, setActiveLutName] = useState<string | null>(null);
   // 現在適用中の LUT データ（r/g/b を含む全体）。Fusion への LUT 引き継ぎ用に保持。
   const lutDataRef = useRef<LutData | null>(null);
+  // スケールバーの再描画用（ref は再描画を起こさないので、適用中の LUT を state にも持つ）。
+  const [barLut, setBarLut] = useState<LutData | null>(null);
+  const barCanvasRef = useRef<HTMLCanvasElement>(null);
 
   /** LUT データを Cornerstone3D に登録して適用する。null でグレースケールにリセット。 */
   const applyLut = useCallback((lut: LutData | null) => {
@@ -911,6 +903,7 @@ export function Viewer2D({
     // カラー(RGB)画像には LUT(カラーマップ)を適用しない。
     if (isColorImage(infoRef.current)) return;
     lutDataRef.current = lut; // Fusion への引き継ぎ用に保持。
+    setBarLut(lut);
     if (lut === null) {
       // グレースケールにリセット。Cornerstone は setProperties({colormap: undefined}) を no-op
       // とするため解除できない。そこで**線形グレースケール colormap を明示適用**して戻す。
@@ -949,6 +942,17 @@ export function Viewer2D({
       broadcastSeriesProperties(viewportIdRef.current, { colormap: { name: colormapName } });
     }
   }, []);
+
+  // スケールバーの色帯。LUT・階調反転が変わるたびに 1×256 の canvas を描き直す（高さは CSS で伸ばす）。
+  useEffect(() => {
+    const cv = barCanvasRef.current;
+    const ctx = valueScaleBar ? cv?.getContext("2d") : null;
+    if (!cv || !ctx) return;
+    scaleBarColors(barLut, inverted).forEach((c, y) => {
+      ctx.fillStyle = c;
+      ctx.fillRect(0, y, 1, 1);
+    });
+  }, [valueScaleBar, barLut, inverted]);
 
   // 現在適用中の LUT データ（Fusion へ引き継ぐため）。
   const getLutData = (): LutData | null => lutDataRef.current;
@@ -2988,6 +2992,8 @@ export function Viewer2D({
   const panned = isPanned(transform);
   // 校正済み画素値の単位（プラグインの getViewState().unit と同じ解決）。
   const calUnit = calibratedUnit(info);
+  // スケールバーの上端・下端（現在の W/L 窓）。窓が未確定なら「—」。
+  const barLabels = voi ? scaleBarLabels(voi.wc, voi.ww) : { max: "—", min: "—" };
 
   // DICOM 属性テキストオーバーレイ（4 隅、設定可能）。設定 or スライス変化(info)で再解決。
   const overlayCfg = useOverlayConfig();
@@ -3022,6 +3028,9 @@ export function Viewer2D({
     // data-graphy-image-panel: 画像キャンバス領域の目印。タイル枠の右クリックメニューは
     // この内側では開かず、cornerstone の右ドラッグ Zoom を優先させる（Viewer2DScreen 参照）。
     <div data-graphy-image-panel style={fill ? { ...wrap, flex: 1, height: "auto" } : { ...wrap, height: height ?? 512 }}>
+      {/* 画像・オーバーレイ一式を入れる枠。スケールバー ON のときは右に固定幅の列を空け、OFF なら従来どおり全面。
+          オーバーレイの座標はこの枠が基準になるので、列の分だけ縮んでも位置がずれない。 */}
+      <div style={{ position: "absolute", top: 0, bottom: 0, left: 0, right: valueScaleBar ? SCALE_BAR_WIDTH : 0 }}>
       {/* 深層: ピクセル canvas（Cornerstone3D が内部に canvas を生成） */}
           <div ref={elementRef} data-testid="viewer2d-canvas-host" style={pixelLayer} />
           {/* プラグインの値マップ（H4a）。base 画像の表示矩形に重ね、対象スライスのときだけ出す。
@@ -3163,6 +3172,15 @@ export function Viewer2D({
       {error && (
         <div style={{ ...overlayCenter, color: "#ff8a80" }} data-testid="viewer2d-error">
           {t("common.fetchError", { error })}
+        </div>
+      )}
+      </div>
+      {valueScaleBar && (
+        <div data-testid="scalebar" style={scaleBarColumn}>
+          <div data-testid="scalebar-max" style={scaleBarText}>{barLabels.max}</div>
+          <canvas ref={barCanvasRef} data-testid="scalebar-canvas" width={1} height={256} style={scaleBarCanvas} />
+          <div data-testid="scalebar-min" style={scaleBarText}>{barLabels.min}</div>
+          <div data-testid="scalebar-unit" style={{ ...scaleBarText, color: "#9fb0c3" }}>{calUnit}</div>
         </div>
       )}
     </div>
@@ -3480,6 +3498,39 @@ const wrap: React.CSSProperties = {
   background: "#000",
   borderRadius: 6,
   overflow: "hidden",
+};
+// 値スケールバーの列。幅は SCALE_BAR_WIDTH で固定（ラベルが長くても列は伸ばさず、画像領域の幅を全タイルで揃える）。
+const scaleBarColumn: React.CSSProperties = {
+  position: "absolute",
+  top: 0,
+  right: 0,
+  bottom: 0,
+  width: SCALE_BAR_WIDTH,
+  boxSizing: "border-box",
+  display: "flex",
+  flexDirection: "column",
+  alignItems: "center",
+  gap: 3,
+  padding: "6px 2px",
+  background: "#000",
+  pointerEvents: "none",
+};
+const scaleBarText: React.CSSProperties = {
+  maxWidth: "100%",
+  overflow: "hidden",
+  whiteSpace: "nowrap",
+  fontSize: 10,
+  lineHeight: "12px",
+  height: 12,
+  color: "#e6edf5",
+  fontVariantNumeric: "tabular-nums",
+};
+const scaleBarCanvas: React.CSSProperties = {
+  flex: 1,
+  minHeight: 16,
+  width: 14,
+  border: "1px solid #6b7785",
+  boxSizing: "border-box",
 };
 const pixelLayer: React.CSSProperties = {
   position: "absolute",

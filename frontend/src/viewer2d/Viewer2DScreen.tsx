@@ -74,6 +74,7 @@ import { frameOfImageId, sopFromImageId } from "../viewer/imageId";
 import { derivePatientKey } from "../viewer/patientKey";
 import { getFocusedTile } from "../viewer/focusedTile";
 import { VIEW_MODE_KEY, parseViewMode, type ViewMode } from "./viewMode";
+import { SCALE_BAR_KEY, parseScaleBarSetting, serializeScaleBarSetting } from "../viewer/valueScaleBar";
 import {
   assignPatientColors, patientColorOf, patientInitial, type PatientColor, type PatientColorMap,
 } from "./patientColor";
@@ -1310,6 +1311,10 @@ function TileGrid({
   // View メニューと右クリックメニューはこの単一の状態を共有するため、常に表示が一致する。
   // 初期値は環境設定 viewer.toolPanelDefault（既定: 閉＝画像のみ）。設定の取得が済んだ時点で一度だけ反映する。
   const [panelVisible, setPanelVisible] = useState(false);
+  // 値スケールバー（W/L 窓のカラーバー）の ON/OFF。全タイル一括で、表示の見せ方と同じく保存する（既定 OFF）。
+  const [scaleBarOn, setScaleBarOn] = useState<boolean>(() => {
+    try { return parseScaleBarSetting(localStorage.getItem(SCALE_BAR_KEY)); } catch { return false; }
+  });
   const toolPanelDefault = useToolPanelDefault();
   useEffect(() => {
     if (toolPanelDefault !== null) setPanelVisible(toolPanelDefault);
@@ -2270,6 +2275,10 @@ function TileGrid({
       setLayoutGrid: (rows, cols) => onSetGrid(patient.patientKey, rows, cols),
       toggleRefLines: () => setRefLines((v) => !v),
       toggleToolPanel: () => setPanelVisible((v) => !v),
+      toggleScaleBar: () => setScaleBarOn((v) => {
+        try { localStorage.setItem(SCALE_BAR_KEY, serializeScaleBarSetting(!v)); } catch { /* 保存できなくても今回は切り替える */ }
+        return !v;
+      }),
       setSyncTargets: (sync) => resolveTargets().forEach((id) => onSetSync(patient.patientKey, id, sync)),
       comingSoon,
       // 対象（選択→無ければ先頭）タイルのシリーズを ImageJ HyperStack として開く。
@@ -2627,6 +2636,7 @@ function TileGrid({
         actions={actions}
         refLines={refLines}
         panelVisible={panelVisible}
+        scaleBarOn={scaleBarOn}
         activeTool={activeTool}
         gridRows={patient.gridRows}
         gridCols={patient.gridCols}
@@ -2720,6 +2730,7 @@ function TileGrid({
             syncEnabled={tile.syncEnabled}
             referenceLinesEnabled={refLines}
             showControls={panelVisible}
+            scaleBar={scaleBarOn || !!tile.transient?.scaleBar}
             onFrameContextMenu={(e) => openFrameMenu(e, tile.id)}
             commandKey={tile.id}
             selected={selectedIds.has(tile.id)}
@@ -3074,6 +3085,7 @@ function TileCell({
   syncEnabled,
   referenceLinesEnabled,
   showControls,
+  scaleBar,
   onFrameContextMenu,
   commandKey,
   selected,
@@ -3105,6 +3117,8 @@ function TileCell({
   referenceLinesEnabled: boolean;
   /** 画像下のツールパネルを表示するか。全タイルで false にすると同一サイズの画像パネルで比較できる。 */
   showControls: boolean;
+  /** 値スケールバーの固定幅列を出すか（全体設定 OR プラグインの一時タイルの指定）。 */
+  scaleBar: boolean;
   /** タイル枠の右クリック（画像キャンバス上は除外）。ツールパネル切替メニューを開く。 */
   onFrameContextMenu: (e: React.MouseEvent) => void;
   commandKey: string;
@@ -3653,6 +3667,7 @@ function TileCell({
           seriesUid={tile.series.seriesInstanceUid}
           fillHeight
           showControls={panelOpen}
+          scaleBar={scaleBar}
           onShowControlsChange={setPanelOpen}
           syncEnabled={syncEnabled}
           referenceLinesEnabled={referenceLinesEnabled}

@@ -138,6 +138,7 @@ export function SeriesViewer({
   seriesUid,
   fillHeight = false,
   showControls: showControlsProp = true,
+  scaleBar = false,
   onShowControlsChange,
   syncEnabled = false,
   referenceLinesEnabled = false,
@@ -168,6 +169,8 @@ export function SeriesViewer({
    * 既定 true（単独表示・StudyList では従来どおり）。
    */
   showControls?: boolean;
+  /** 画像の右に値スケールバー（W/L 窓のカラーバー）の固定幅列を出す。Viewer2D へそのまま渡す。 */
+  scaleBar?: boolean;
   /**
    * 指定すると開閉は**親が持つ**（制御モード）: 開閉の正は `showControls`、ボタンは本関数を呼ぶ。
    * 2D ビューアのタイルが、Fusion バーなど画像外の部品を同じ開閉に束ねるのに使う。
@@ -1516,7 +1519,7 @@ export function SeriesViewer({
           </div>
         </div>
       ) : (
-        <Viewer2D imageIds={displayImageIds} imageIndex={zc} overlays={overlays} fill={fillHeight} chrome={chrome} viewSyncEnabled={syncOn} referenceLinesEnabled={referenceLinesEnabled} referenceLabel={referenceLabel} commandKey={commandKey} roiContext={roiContext} renderOverlay={renderFusionOverlay} thickSlab={effectiveThick} refreshKey={calibVersion} pendingImages={!xaReady} frameStack={!spatialStack} />
+        <Viewer2D imageIds={displayImageIds} imageIndex={zc} overlays={overlays} fill={fillHeight} chrome={chrome} viewSyncEnabled={syncOn} scaleBar={scaleBar} referenceLinesEnabled={referenceLinesEnabled} referenceLabel={referenceLabel} commandKey={commandKey} roiContext={roiContext} renderOverlay={renderFusionOverlay} thickSlab={effectiveThick} refreshKey={calibVersion} pendingImages={!xaReady} frameStack={!spatialStack} />
       )}
 
       {layoutReady && chrome && (

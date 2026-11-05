@@ -243,6 +243,8 @@ export interface ViewerActions {
   toggleRefLines(): void;
   /** 画像下のツールパネル（操作バー＋スライダー群）の表示切替。全タイル共通。 */
   toggleToolPanel(): void;
+  /** 値スケールバー（W/L 窓のカラーバー）の表示切替。全タイル共通・保存される。 */
+  toggleScaleBar(): void;
   /** 対象タイルの Sync を一括 ON/OFF。 */
   setSyncTargets(on: boolean): void;
   /** 未実装機能の「近日対応」通知（メニュー用プレースホルダ）。 */

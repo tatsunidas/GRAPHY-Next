@@ -967,6 +967,7 @@ export const ja: Record<string, string> = {
   "viewer2d.refLines.label": "参照線",
   "viewer2d.refLines.toggle": "リファレンスライン ON/OFF（他シリーズの現在スライス面が交差する線を表示）",
   "viewer2d.toolPanel.label": "ツールパネルを表示",
+  "viewer2d.scaleBar.label": "スケールバー",
   "viewer2d.menu.view": "表示",
   "viewer2d.menu.slabMip": "Slab MIP",
   "viewer2d.menu.slabMip.off": "OFF（Original）",
