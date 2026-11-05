@@ -310,6 +310,8 @@ export async function captureCdwiGuide(shot: Shot, want: Set<string>, outRoot: s
       await main.getByTestId("series-viewer-root").waitFor({ state: "visible", timeout: 15_000 });
       await fit(main, 1280, 720);
       await main.waitForTimeout(900);
+      // 状態バーの版（v0.5.1 など。開発中のコミットの版数で、リリースの版と一致しない）は写さない
+      await main.evaluate(`(function(){ var all = document.querySelectorAll('*'); for (var i = 0; i < all.length; i++) { var e = all[i]; if (e.childElementCount === 0 && /^v[0-9]+[.][0-9]+[.][0-9]+$/.test((e.textContent || '').trim())) e.style.visibility = 'hidden'; } })()`);
       await shotW(main, "saved-list", [main.locator('[data-testid^="series-row-"]', { hasText: "ADC" }).first()]);
       const viewer = await driver.waitForNewPage(() => main.getByTestId("viewer2d-toolbar-button").click(), (url) => url.includes("2dviewer"));
       await viewer.getByTestId("series-viewer-root").first().waitFor({ state: "visible", timeout: 30_000 });
