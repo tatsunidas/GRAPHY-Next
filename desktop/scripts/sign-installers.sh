@@ -54,7 +54,7 @@ for name in "${targets[@]}"; do
 
   # アルゴリズムは prehashed の "ED" であること（旧形式 "Ed" はアプリが受け付けない。minisign 0.10 未満は既定が違う）
   algo="$(sed -n '2p' "$sig" | node -e 'process.stdin.once("data",d=>{console.log(Buffer.from(d.toString().trim(),"base64").subarray(0,2).toString("ascii"))})')"
-  [[ "$algo" == ED ]] || { echo "::error::署名のアルゴリズムが ED ではありません（$algo）: $name"; exit 1; }
+  [[ "$algo" == ED ]] || { echo "::error::署名のアルゴリズムが ED ではありません（${algo}）: ${name}"; exit 1; }
   # trusted comment が期待どおりか
   got="$(sed -n '3p' "$sig" | sed 's/^trusted comment: //')"
   [[ "$got" == "$comment" ]] || { echo "::error::trusted comment が違います: '$got' != '$comment'"; exit 1; }
