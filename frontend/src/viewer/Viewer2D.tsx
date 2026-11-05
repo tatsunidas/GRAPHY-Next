@@ -2725,8 +2725,10 @@ export function Viewer2D({
       label,
       custom: buildPluginMeta(by.pluginId, { created: "1" }),
     };
-    // 輪郭系は本体の手描きと同じツール名・保存形にする（復元・統計・ROI マネージャが同じ経路で扱う）
-    if (req.tool === "PolygonROI") {
+    // 輪郭系・点は本体の手描き（点 ROI は Probe の変換）と同じツール名・保存形にする（復元・統計・ROI マネージャが同じ経路で扱う）
+    if (req.tool === "PointROI") {
+      saved.tool = POINT_ROI_TOOL_NAME;
+    } else if (req.tool === "PolygonROI") {
       saved.tool = CONTOUR_TOOL_NAMES.polygon;
       saved.splineType = SPLINE_TYPE_LINEAR;
       saved.isOpenContour = false;
