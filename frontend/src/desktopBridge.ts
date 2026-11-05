@@ -407,6 +407,18 @@ export type DbFolderPickResult =
   | { ok: true; folder?: string; kind?: "db" | "empty"; network?: boolean }
   | { ok: false; canceled?: boolean; reason?: string };
 
+/** 自動更新の進行（main の UpdateController の状態）。 */
+export interface UpdateProgress {
+  phase: "idle" | "downloading" | "verifying" | "ready" | "applying" | "failed" | "cancelled";
+  version?: string;
+  mode?: "now" | "onQuit";
+  bytes?: number;
+  total?: number;
+  /** failed のときの理由コード（network・stall・digest-mismatch・signature-…・http-404 など）。 */
+  reason?: string;
+  detail?: string;
+}
+
 export interface GraphyDesktop {
   pickImportPaths: () => Promise<string[]>;
   /** 単一の出力先フォルダを選ぶ（SeriesExtractor のコピー先など）。キャンセル時 null。 */
@@ -447,7 +459,15 @@ export interface GraphyDesktop {
     body: string;
     htmlUrl: string;
     publishedAt: string | null;
+    /** アプリ内の自動更新ができるか（Windows の NSIS・Linux の AppImage）。できないときは理由つきで supported:false。 */
+    auto?: { supported: boolean; reason?: string; kind?: string; version?: string; assetName?: string; size?: number };
   } | null>;
+  /** アプリ内の自動更新を始める（"now" = 取得・検証して再起動、"onQuit" = 取得・検証して終了時に更新）。進捗は onUpdateState。 */
+  updateStart?: (mode: "now" | "onQuit") => Promise<{ ok: boolean; reason?: string }>;
+  updateCancel?: () => Promise<{ ok: boolean }>;
+  updateState?: () => Promise<UpdateProgress>;
+  /** 自動更新の進行の通知（取得の進捗・検証・完了・失敗）。購読解除の関数を返す。 */
+  onUpdateState?: (cb: (s: UpdateProgress) => void) => () => void;
   /** アプリ全体を再起動する（DICOM 自局設定などの反映用、デスクトップのみ）。 */
   relaunch?: () => Promise<void>;
   /** DIMSE TLS のパスワードを OS のキーチェーンに預ける（空文字は消す）。キーチェーンが無い環境は設定に平文で保存する。 */

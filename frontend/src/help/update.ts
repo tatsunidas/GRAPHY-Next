@@ -9,12 +9,23 @@
 
 import { desktop } from "../desktopBridge";
 
+/** アプリ内の自動更新の可否（main が資産・署名・OS から判定。URL は渡ってこない）。 */
+export interface AutoUpdateInfo {
+  supported: boolean;
+  reason?: string;
+  kind?: string;
+  version?: string;
+  assetName?: string;
+  size?: number;
+}
+
 export interface ReleaseInfo {
   tagName: string;
   name: string;
   body: string;
   htmlUrl: string;
   publishedAt: string | null;
+  auto?: AutoUpdateInfo;
 }
 
 export type UpdateResult =
@@ -71,4 +82,34 @@ export function skipVersion(version: string): void {
   } catch {
     /* localStorage 不可の環境では単に無視 */
   }
+}
+
+// ── 自動更新の進行の表示（純ロジック）─────────────────────────────────────────
+
+/** 失敗の理由コード（main の UpdateError.code）を、利用者に見せる種類へ分ける。 */
+export type UpdateFailureKind = "network" | "verify" | "server" | "other";
+
+export function updateFailureKind(reason: string | undefined): UpdateFailureKind {
+  const r = reason ?? "";
+  if (r === "network" || r === "stall") return "network";
+  if (r === "digest-mismatch" || r === "size-mismatch" || r.startsWith("signature-")) return "verify";
+  if (/^http-\d+$/.test(r) || r === "bad-host" || r === "bad-url" || r === "too-many-redirects" || r === "too-large") return "server";
+  return "other";
+}
+
+/** 進捗（0〜100 の整数）。総量が分からない・0 以下なら null。 */
+export function updateProgressPercent(bytes: number | undefined, total: number | undefined): number | null {
+  if (typeof bytes !== "number" || typeof total !== "number" || !(total > 0)) return null;
+  return Math.max(0, Math.min(100, Math.floor((bytes / total) * 100)));
+}
+
+/** バイト数を「123.4 MB」の形に。 */
+export function formatMegabytes(bytes: number | undefined): string {
+  if (typeof bytes !== "number" || !Number.isFinite(bytes) || bytes < 0) return "—";
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+/** 進行中（取得・検証・適用）か。ダイアログを閉じても続く。 */
+export function isUpdateActive(phase: string | undefined): boolean {
+  return phase === "downloading" || phase === "verifying" || phase === "applying";
 }
