@@ -225,6 +225,15 @@ public class DerivedSeriesService {
         // 体重 / 減衰補正の基準時刻が欠けると、Modality=PT のまま SUV だけが計算できない
         // シリーズができてしまう。
         ModalityAttributeInheritance.inherit(tmpl, a, modality);
+        // ★ プラグインの出力（線量・マスク・解析マップ）は元画像とは別の量。元の窓を残すと、
+        //   値域が合わず真っ黒（または真っ白）に見える（実機: 0〜14.7 Gy の線量マップに SPECT の窓 3887/7774）。
+        //   窓は外して、ビューアが値域から決める（Parametric Map の経路と同じ）。
+        //   本体の機能による派生（MPR・リサンプル。producer なし）は同じ量なので、窓を引き継ぐ。
+        if (req.producer() != null) {
+            a.remove(Tag.WindowCenter);
+            a.remove(Tag.WindowWidth);
+            a.remove(Tag.VOILUTFunction);
+        }
         // FrameOfReferenceUID は幾何がある場合のみ付ける（IPP/IOP 無しで付けると空間登録を偽装するため）。
         // ★ 出どころは「属性テンプレート（元シリーズ）」とは限らない。位置合わせの結果は
         //   fixed の座標系にあるので、その場合は呼び出し側が fixed の FoR を渡す。
