@@ -1950,6 +1950,9 @@ export function Viewer2D({
     if (req.diffusionBValue !== undefined && !(Number.isFinite(req.diffusionBValue) && req.diffusionBValue >= 0)) {
       return "diffusionBValue must be a finite number >= 0";
     }
+    if (req.window !== undefined && !(Number.isFinite(req.window.center) && Number.isFinite(req.window.width) && req.window.width > 0)) {
+      return "window must have a finite center and a finite width > 0";
+    }
     return null;
   };
 
@@ -2003,6 +2006,9 @@ export function Viewer2D({
           // 背景（NaN 埋め）は DICOM のパディング値として明示する。
           pixelPaddingValue: encoded.paddingStored,
           diffusionBValue: req.diffusionBValue ?? null,
+          // 保存する値の単位での窓。無ければ backend は窓を書かない（元の窓も引き継がない）。
+          windowCenter: req.window?.center ?? null,
+          windowWidth: req.window?.width ?? null,
           producer,
           frames,
         },

@@ -5,6 +5,7 @@
 package com.vis.graphynext.dicom.derived;
 
 import com.vis.graphynext.dicom.ParametricMapFrameExpander;
+import com.vis.graphynext.dicom.store.DicomInstance;
 import com.vis.graphynext.dicom.store.DicomStorageService;
 import com.vis.graphynext.dicom.web.WebDicomDataService;
 import org.dcm4che3.data.Attributes;
@@ -26,7 +27,10 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Base64;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 /**
  * 派生（セカンダリ）シリーズ生成サービス。Slicer のリスライス結果を、元シリーズ属性を引き継ぎつつ
@@ -84,8 +88,10 @@ public class DerivedSeriesService {
         }
 
         String newSeriesUid = UIDUtils.createUID();
+        // 元の番号 + 1000 から始め、検査内にまだ無い番号まで進める（同じ元から何本作っても重ならない連番）。
         int seriesNumber = req.seriesNumber() != null ? req.seriesNumber()
-                : tmpl.getInt(Tag.SeriesNumber, 0) + 1000;
+                : nextFreeSeriesNumber(tmpl.getInt(Tag.SeriesNumber, 0) + 1000,
+                        existingSeriesNumbers(req.studyInstanceUid(), web));
         // Parametric Map 出力は元のモダリティの量ではない（HU×SUV など）ので Modality=OT にし、
         // 元の定量属性（PET の Units 等）は引き継がない。
         boolean parametric = req.parametricMap() != null;
@@ -134,6 +140,34 @@ public class DerivedSeriesService {
         return new Result(newSeriesUid, sops);
     }
 
+    /** base 以上で、used に無い最小の番号。 */
+    static int nextFreeSeriesNumber(int base, Set<Integer> used) {
+        int n = base;
+        while (used.contains(n)) {
+            n++;
+        }
+        return n;
+    }
+
+    /** 検査内の既存シリーズの SeriesNumber（付いていないものは含めない）。 */
+    private Set<Integer> existingSeriesNumbers(String studyUid, WebDicomDataService web) {
+        Set<Integer> used = new HashSet<>();
+        if (web != null) {
+            for (Attributes s : web.searchSeries(studyUid, Map.of())) {
+                if (s.containsValue(Tag.SeriesNumber)) {
+                    used.add(s.getInt(Tag.SeriesNumber, 0));
+                }
+            }
+        } else {
+            for (DicomInstance d : storage.findMatches(null, studyUid, null, null)) {
+                if (d.getSeriesNumber() != null) {
+                    used.add(d.getSeriesNumber());
+                }
+            }
+        }
+        return used;
+    }
+
     private void validate(DerivedSeriesRequest req) {
         if (req.studyInstanceUid() == null || req.studyInstanceUid().isBlank()
                 || req.seriesInstanceUid() == null || req.seriesInstanceUid().isBlank()) {
@@ -156,6 +190,14 @@ public class DerivedSeriesService {
         if (req.diffusionBValue() != null
                 && (!Double.isFinite(req.diffusionBValue()) || req.diffusionBValue() < 0)) {
             throw new IllegalArgumentException("diffusionBValue は 0 以上の有限値が必要です");
+        }
+        Double wc = req.windowCenter();
+        Double ww = req.windowWidth();
+        if ((wc == null) != (ww == null)) {
+            throw new IllegalArgumentException("windowCenter と windowWidth は両方指定してください");
+        }
+        if (wc != null && (!Double.isFinite(wc) || !Double.isFinite(ww) || ww <= 0)) {
+            throw new IllegalArgumentException("window は有限の値で、幅は 0 より大きい必要があります");
         }
         if (req.parametricMap() != null) {
             // Parametric Map は幾何を Functional Groups に置くので、幾何なし（Curved MPR 等）は作れない。
@@ -233,6 +275,11 @@ public class DerivedSeriesService {
             a.remove(Tag.WindowCenter);
             a.remove(Tag.WindowWidth);
             a.remove(Tag.VOILUTFunction);
+            // プラグインが表示に適した窓を渡したときだけ書く（保存する値の単位の実際の量での窓）。
+            if (req.windowCenter() != null && req.windowWidth() != null) {
+                a.setDouble(Tag.WindowCenter, VR.DS, req.windowCenter());
+                a.setDouble(Tag.WindowWidth, VR.DS, req.windowWidth());
+            }
         }
         // FrameOfReferenceUID は幾何がある場合のみ付ける（IPP/IOP 無しで付けると空間登録を偽装するため）。
         // ★ 出どころは「属性テンプレート（元シリーズ）」とは限らない。位置合わせの結果は

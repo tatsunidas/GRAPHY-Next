@@ -772,6 +772,13 @@ export interface DerivedSeriesRequest {
    * **0.6.0 以降**。
    */
   diffusionBValue?: number;
+  /**
+   * 保存するシリーズの表示の窓（WindowCenter/Width）。**保存する値（`unit` 換算後の実際の量）での窓**を渡す
+   * （例: ADC を mm²/s で保存するなら 0.0015 / 0.003）。**省略すると窓は書かず**、ビューアが値域から決める。
+   * 元シリーズの窓は引き継がない（元画像とは別の量なので、元の窓だと値域が合わず真っ黒になる）。
+   * `width` は 0 より大きい有限値、`center` も有限値であること。**この項目を含む版（0.6.0 の次）以降**。
+   */
+  window?: { center: number; width: number };
 }
 
 /** 保存結果。`cancelled` はユーザーが確認ダイアログで拒否した場合。**0.1.9 以降**。 */

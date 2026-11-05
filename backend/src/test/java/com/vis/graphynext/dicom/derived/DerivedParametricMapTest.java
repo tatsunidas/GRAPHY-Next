@@ -48,7 +48,7 @@ class DerivedParametricMapTest {
 
     private static DerivedSeriesRequest request(DerivedSeriesRequest.ParametricMap pm, byte[] px) {
         return new DerivedSeriesRequest("1.2.3", "1.2.4", "FG x BG", null, 2, 2,
-                new double[] {1.5, 2.5}, 3.0, 3.0, IOP, null, "FG x BG", null, null, null, null, null, null, pm,
+                new double[] {1.5, 2.5}, 3.0, 3.0, IOP, null, "FG x BG", null, null, null, null, null, null, null, null, pm,
                 List.of(new DerivedSeriesRequest.Frame(1, new double[] {10, 20, 30},
                         Base64.getEncoder().encodeToString(px))));
     }
@@ -96,7 +96,7 @@ class DerivedParametricMapTest {
     void parametricMapNeedsGeometry() {
         var pm = new DerivedSeriesRequest.ParametricMap("L", "e", "1", "u");
         DerivedSeriesRequest noIop = new DerivedSeriesRequest("1.2.3", "1.2.4", "x", null, 2, 2,
-                new double[] {1, 1}, 1, 1, null, null, null, null, null, null, null, null, null, pm,
+                new double[] {1, 1}, 1, 1, null, null, null, null, null, null, null, null, null, null, null, pm,
                 List.of(new DerivedSeriesRequest.Frame(1, new double[] {0, 0, 0}, "")));
         var svc = new DerivedSeriesService(null, null);
         assertThrows(IllegalArgumentException.class, () -> svc.create(noIop));
