@@ -251,7 +251,8 @@ test("executeApplyPlan: NSIS は分離して起動／AppImage は同じ場所に
     fs.writeFileSync(dest, "OLD"); fs.writeFileSync(src, "NEW", { mode: 0o600 });
     au.executeApplyPlan({ kind: "replace-appimage", from: src, to: dest, relaunch: true }, { spawn: sp });
     assert.strictEqual(fs.readFileSync(dest, "utf8"), "NEW");
-    assert.strictEqual(fs.statSync(dest).mode & 0o777, 0o755);
+    // 実行権限は POSIX だけ（Windows のファイルは 0o666 相当で表せない。AppImage の入れ替えは Linux 専用）
+    if (process.platform !== "win32") assert.strictEqual(fs.statSync(dest).mode & 0o777, 0o755);
     assert.deepStrictEqual(fs.readdirSync(d).sort(), ["GRAPHY-Next-0.6.1.AppImage", "new.bin"]); // .new が残らない
     assert.strictEqual(calls[1].cmd, dest);
     assert.strictEqual(calls[1].opt.env.GRAPHY_RELAUNCHED, "1");
