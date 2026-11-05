@@ -436,6 +436,15 @@ jobs:
           pattern: installer-*
           merge-multiple: true
           path: dist
+      # electron-builder の名前は `GRAPHY-Next Setup 0.6.2.exe`（空白）。GitHub へのアップロードで空白は `.` になり、
+      # リリースの資産名（アプリが探す名前）は `GRAPHY-Next.Setup.0.6.2.exe` になる。予行演習でも同じ名前にそろえる。
+      - name: Rename like release assets (空白 → .)
+        if: steps.meta.outputs.mode == 'rehearsal'
+        shell: bash
+        run: |
+          shopt -s nullglob
+          for f in dist/*\ *; do mv "$f" "${f// /.}"; done
+          ls dist
       - name: Get installers (下書きリリースから)
         if: steps.meta.outputs.mode == 'official'
         env:

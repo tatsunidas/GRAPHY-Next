@@ -77,7 +77,8 @@ async function main(): Promise<void> {
   const setups = fs.readdirSync(DIST).filter((f) => /\.exe$/i.test(f) && !/uninstall/i.test(f));
   if (setups.length !== 1) throw new Error(`${DIST} にインストーラが 1 つだけある想定ですが ${setups.length} 個です`);
   const setup = path.join(DIST, setups[0]);
-  const dir = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "silent-update-")), "app");
+  // %TEMP% は 8.3 形式の短いパス（C:\Users\RUNNER~1\…）で返ることがある。プロセスの実行パスは長い形式なので、前方一致で比べる前に正規化する
+  const dir = path.join(fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "silent-update-"))), "app");
   const appData = process.env.APPDATA;
   if (!appData) throw new Error("APPDATA が未設定です");
   const userMarker = path.join(appData, "GRAPHY-Next", "update-smoke-marker.txt");
