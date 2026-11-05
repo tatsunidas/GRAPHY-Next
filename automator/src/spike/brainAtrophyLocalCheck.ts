@@ -84,6 +84,7 @@ async function main(): Promise<void> {
   const birth = process.env.BA_BIRTH ?? "";
   const studyYmd = process.env.BA_STUDY ?? "20260101";
   const pname = process.env.BA_PNAME ?? "";
+  const editName = process.env.BA_EDIT_NAME ?? "編集後 太郎";   // 画面で編集する患者名（マニュアルの撮影では自然な架空名にする）
   const pid = process.env.BA_PID ?? "";
   const iso = (d: string): string => `${d.slice(0, 4)}-${d.slice(4, 6)}-${d.slice(6, 8)}`;
   const expectAge = birth ? Math.round(((Date.parse(iso(studyYmd)) - Date.parse(iso(birth))) / 86400000 / 365.2425) * 10) / 10 : null;
@@ -171,7 +172,7 @@ async function main(): Promise<void> {
       check(Number(got.age) === expectAge, "年齢が (検査日−生年月日) の計算値と一致する", { app: got.age, expect: expectAge });
       check(got.sex === sex, "性別が DICOM と一致する", got.sex);
       await viewer.screenshot({ path: path.join(OUT_DIR, "c-autofill.png") });
-      await viewer.getByTestId("ba-patient-name").fill("編集後 太郎");   // 編集できること。レポート表紙にこの値が出るはず
+      await viewer.getByTestId("ba-patient-name").fill(editName);   // 編集できること。レポート表紙にこの値が出るはず
     } else {
       await viewer.getByTestId("ba-age").fill(age);
       await viewer.getByTestId("ba-sex").selectOption(sex);
@@ -445,9 +446,9 @@ async function main(): Promise<void> {
     const auditText = fs.readFileSync(AUDIT, "utf8");
     check(!auditText.includes("SPIKE-IXI-0001"), "🔴 監査に患者 ID が無い");
     if (birth) {
-      check(!auditText.includes("編集後") && !auditText.includes("太郎") && !auditText.includes(pid), "🔴 監査・台帳に患者名・患者 ID・編集後の氏名が残らない");
+      check(!auditText.includes(editName) && !auditText.includes(pid), "🔴 監査・台帳に患者名・患者 ID・編集後の氏名が残らない");
       const html = fs.existsSync(htmlSaved) ? fs.readFileSync(htmlSaved, "utf8") : "";
-      check(html.includes("編集後 太郎") && html.includes(pid) && html.includes(iso(birth)), "レポート表紙に、編集後の患者名・患者 ID・生年月日が載る");
+      check(html.includes(editName) && html.includes(pid) && html.includes(iso(birth)), "レポート表紙に、編集後の患者名・患者 ID・生年月日が載る");
     }
 
     const expectPath = process.env.BA_EXPECT;
