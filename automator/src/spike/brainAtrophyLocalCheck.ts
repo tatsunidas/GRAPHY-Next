@@ -313,7 +313,7 @@ async function main(): Promise<void> {
 
     console.log("\n[D7] プロセスごとの進捗・結果画像・プレビュー・印刷");
     console.log(`  実行中に観測したプロセスの順: ${PROC_SEEN.join(" → ")}`);
-    check(PROC_SEEN.includes("bet") && PROC_SEEN.includes("register") && PROC_SEEN.includes("segment"), "実行中にプロセスが順に「実行中」になる（脳抽出・登録・分割を観測）", PROC_SEEN);
+    check(PROC_SEEN.includes("bet") && PROC_SEEN.includes("register") && PROC_SEEN.includes("segment"), "実行中にプロセスが順に「実行中」になる（脳抽出・レジストレーション・分割を観測）", PROC_SEEN);
     const order = ["bet", "n4", "register", "segment", "modulate", "zscore"];
     const idx = order.map((k) => PROC_SEEN.findIndex((x) => x === k));
     check(idx.every((v, i) => i === 0 || v < 0 || idx[i - 1] < 0 || v > idx[i - 1]), "観測した順序が解析の順序と一致する", { idx });
@@ -326,7 +326,7 @@ async function main(): Promise<void> {
     await viewer.getByTestId("ba-proc-view-register").click();
     await viewer.getByTestId("ba-stage-title").waitFor({ state: "visible", timeout: 30_000 });
     await viewer.waitForFunction(() => (document.querySelector('[data-testid="ba-stage-title"]')?.textContent ?? "").includes("④"), null, { timeout: 30_000 });
-    check(((await viewer.getByTestId("ba-stage-title").textContent()) ?? "").includes("標準脳"), "「画像を見る」で該当の段（④ 標準脳へ登録）が開く", await viewer.getByTestId("ba-stage-title").textContent());
+    check(((await viewer.getByTestId("ba-stage-title").textContent()) ?? "").includes("標準脳"), "「画像を見る」で該当の段（④ 標準脳へレジストレーション）が開く", await viewer.getByTestId("ba-stage-title").textContent());
     await viewer.screenshot({ path: path.join(OUT_DIR, "d7-stage-opened.png") });
     await viewer.getByTestId("ba-preview").scrollIntoViewIfNeeded();
     const z0 = await viewer.evaluate(() => (window as unknown as { __brainAtrophyState: { previewZoom: number } }).__brainAtrophyState.previewZoom);
