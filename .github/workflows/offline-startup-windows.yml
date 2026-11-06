@@ -5,10 +5,6 @@ name: Offline startup (Windows)
 # アプリ（GRAPHY-Next.exe・同梱 java.exe）だけをインターネットから切って測る（ランナー全体は止めない）。
 # 結果は job の Summary（表）と Artifact。設計・読み方: automator/src/smoke/offlineStartupWin.ts の冒頭。
 on:
-  # 一時: 新しいワークフローは既定ブランチに無いと手動実行できないので、検証の間だけブランチへの push で動かす（マージ前に外す）
-  push:
-    branches: [ci/offline-startup-windows]
-    paths: [".github/workflows/offline-startup-windows.yml", "automator/src/smoke/offlineStartup*"]
   workflow_dispatch:
     inputs:
       versions:
