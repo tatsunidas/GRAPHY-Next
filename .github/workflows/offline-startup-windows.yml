@@ -8,7 +8,7 @@ on:
   # 一時: 新しいワークフローは既定ブランチに無いと手動実行できないので、検証の間だけブランチへの push で動かす（マージ前に外す）
   push:
     branches: [ci/offline-startup-windows]
-    paths: [".github/workflows/offline-startup-windows.yml"]
+    paths: [".github/workflows/offline-startup-windows.yml", "automator/src/smoke/offlineStartup*"]
   workflow_dispatch:
     inputs:
       versions:
