@@ -10,14 +10,16 @@ export interface LogLine {
 
 export interface StartupRun {
   version: string;
-  /** normal=通常／fw-blocked=ファイアウォールでアプリの送信を遮断（接続は即失敗する）／dns-dead=DNS サーバーが応答しない（名前解決がタイムアウトまで待たされる）。 */
-  condition: "normal" | "fw-blocked" | "dns-dead";
+  /** normal=通常／fw-blocked=ファイアウォールでアプリの送信を遮断（接続は即失敗する）／dns-dead=DNS サーバーが応答しない（名前解決がタイムアウトまで待たされる）／pac-dead=プロキシの自動設定（PAC）の URL が応答しない。 */
+  condition: "normal" | "fw-blocked" | "dns-dead" | "pac-dead";
   index: number;
   /** スプラッシュが見えた・/api/status が 200 になった・メイン画面が見えた時刻（秒。起動の直前が 0）。見えなければ null。 */
   splashAt: number | null;
   backendReadyAt: number | null;
   mainAt: number | null;
   timedOut: boolean;
+  /** 追加の計測値（Chromium のプロキシ解決の所要時間 [ms] など）。 */
+  extra?: Record<string, number>;
   lines: LogLine[];
 }
 
@@ -47,7 +49,8 @@ export function renderSummary(runs: StartupRun[]): string {
   for (const r of runs) {
     const g = longestGaps(r.lines, 1)[0];
     const gap = g ? `${g.gap.toFixed(1)} s @${g.at.toFixed(1)}（${cut(g.after, 40)} → ${cut(g.before, 40)}）` : "—";
-    rows.push(`| ${r.version} | ${r.condition} | ${r.index} | ${fmt(r.splashAt)} | ${fmt(r.backendReadyAt)} | ${fmt(r.mainAt)}${r.timedOut ? "（時間切れ）" : ""} | ${gap} |`);
+    const ex = r.extra && Object.keys(r.extra).length ? ` ${JSON.stringify(r.extra)}` : "";
+    rows.push(`| ${r.version} | ${r.condition} | ${r.index} | ${fmt(r.splashAt)} | ${fmt(r.backendReadyAt)} | ${fmt(r.mainAt)}${r.timedOut ? "（時間切れ）" : ""} | ${gap}${ex} |`);
   }
   rows.push("");
   rows.push("| 版 | 条件 | backend 応答の中央値 [s] | メイン画面の中央値 [s] | 件数 |");

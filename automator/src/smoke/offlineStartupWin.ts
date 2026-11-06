@@ -2,7 +2,7 @@
  * Windows の実機（GitHub Actions の windows ランナー）で、「LAN は繋がるが、インターネットには出られない」ときの
  * 起動（スプラッシュ → メイン画面）の待ちを測る。アプリのコードは変えない。公開済みのインストーラを入れて測る。
  *
- * 条件は 3 つ: normal／fw-blocked／dns-dead。
+ * 条件は 4 つ: normal／fw-blocked／dns-dead／pac-dead（プロキシ自動設定の URL が応答しない。病院・社内の LAN に多い）。
  *   🔴 fw-blocked は**即失敗**する（接続が 7 ms で拒否される。パケットを捨てて待たせるのではない）。DNS は別のサービスが引くので影響しない。
  *   報告の「待たされる」は、応答しない DNS サーバーに対する Windows の名前解決のタイムアウト（1+2+4+8 ≒ 15 秒）の形に近いので、
  *   dns-dead（アダプタの DNS を使われない私設アドレスにする）を足した。測定の前後で必ず元へ戻す。
@@ -80,6 +80,16 @@ function deadDns(ifIndex: number): void {
 function restoreDns(ifIndex: number): void {
   ps(`Set-DnsClientServerAddress -InterfaceIndex ${ifIndex} -ResetServerAddresses; Clear-DnsClientCache`);
 }
+const INET = "HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings";
+/** プロキシの自動設定（PAC）の URL を、応答しない宛先にする。Chromium はこの設定（IE のプロキシ設定）を読む。 */
+function deadPac(): void {
+  const r = ps(`Set-ItemProperty -Path '${INET}' -Name AutoConfigURL -Value 'http://10.255.255.1/wpad.dat'`);
+  if (r.status !== 0) throw new Error(`PAC の設定に失敗: ${r.out}`);
+}
+function restorePac(): void {
+  ps(`Remove-ItemProperty -Path '${INET}' -Name AutoConfigURL -ErrorAction SilentlyContinue`);
+}
+
 /** 起動中に引かれた名前（DNS クライアントのキャッシュ）。直前に `Clear-DnsClientCache` しておくこと。 */
 function dnsCacheNames(): string[] {
   const r = ps("Get-DnsClientCache | Select-Object -ExpandProperty Entry | Sort-Object -Unique");
@@ -163,9 +173,18 @@ async function launchOnce(tag: string, exe: string, appData: string, port: numbe
     }
     await sleep(250);
   }
+  // Chromium のプロキシ解決（PAC の取得待ちがあれば、ここに出る）。外部の URL とループバックの両方
+  const extra: Record<string, number> = {};
+  try {
+    const r = (await app.evaluate(async ({ session }, loopback) => {
+      const t = async (u: string) => { const a = Date.now(); await session.defaultSession.resolveProxy(u); return Date.now() - a; };
+      return { proxyExternalMs: await t("http://example.com/"), proxyLoopbackMs: await t(loopback) };
+    }, `http://127.0.0.1:${port}/api/status`)) as { proxyExternalMs: number; proxyLoopbackMs: number };
+    Object.assign(extra, r);
+  } catch { /* 取れなければ記録しない */ }
   const timedOut = readyAt === null || mainAt === null;
   await app.close().catch(() => undefined);
-  return { version: tag, condition, index, splashAt, backendReadyAt: readyAt, mainAt, timedOut, lines };
+  return { version: tag, condition, index, splashAt, backendReadyAt: readyAt, mainAt, timedOut, extra, lines };
 }
 
 async function main(): Promise<void> {
@@ -217,9 +236,10 @@ async function main(): Promise<void> {
       check(dnsSlow, `${tag}: DNS が応答しないと名前解決が待たされる（環境の負例。効いていなければ dns-dead の測定は無効）`, dead);
       if (!dnsSlow) pendingNotes.push(`${tag}: DNS を応答しない状態にできなかった（dns-dead の測定は無効）`);
 
-      for (const condition of ["normal", "fw-blocked", ...(dnsSlow ? ["dns-dead" as const] : [])] as const) {
+      for (const condition of ["normal", "fw-blocked", ...(dnsSlow ? ["dns-dead" as const] : []), "pac-dead" as const] as const) {
         if (condition === "fw-blocked") addBlockRules([inst.exe, inst.java]);
         if (condition === "dns-dead") deadDns(ifIndex);
+        if (condition === "pac-dead") deadPac();
         try {
           for (let i = 1; i <= RUNS; i++) {
             if (condition === "normal" && i === 1) ps("Clear-DnsClientCache");
@@ -237,11 +257,13 @@ async function main(): Promise<void> {
         } finally {
           if (condition === "fw-blocked") removeBlockRules();
           if (condition === "dns-dead") restoreDns(ifIndex);
+          if (condition === "pac-dead") restorePac();
         }
       }
     }
   } finally {
     removeBlockRules();
+    restorePac();
     try { restoreDns(primaryInterface()); } catch { /* 取れなければ戻す対象も無い */ }
     killApp(fs.realpathSync.native(work));
   }
