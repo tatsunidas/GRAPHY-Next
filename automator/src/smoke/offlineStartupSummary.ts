@@ -10,7 +10,8 @@ export interface LogLine {
 
 export interface StartupRun {
   version: string;
-  condition: "normal" | "blocked";
+  /** normal=通常／fw-blocked=ファイアウォールでアプリの送信を遮断（接続は即失敗する）／dns-dead=DNS サーバーが応答しない（名前解決がタイムアウトまで待たされる）。 */
+  condition: "normal" | "fw-blocked" | "dns-dead";
   index: number;
   /** スプラッシュが見えた・/api/status が 200 になった・メイン画面が見えた時刻（秒。起動の直前が 0）。見えなければ null。 */
   splashAt: number | null;

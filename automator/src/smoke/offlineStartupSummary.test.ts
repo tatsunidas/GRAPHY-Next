@@ -33,12 +33,12 @@ test("median: 偶数件は下側、空は null", () => {
 test("renderSummary: 待ちが見える表になる（時間切れ・未取得も崩れない）", () => {
   const runs: StartupRun[] = [
     { version: "v0.5.2", condition: "normal", index: 1, splashAt: 0.5, backendReadyAt: 6.2, mainAt: 6.6, timedOut: false, lines },
-    { version: "v0.5.2", condition: "blocked", index: 1, splashAt: 0.5, backendReadyAt: 21.4, mainAt: 21.8, timedOut: false, lines },
-    { version: "v0.5.2", condition: "blocked", index: 2, splashAt: null, backendReadyAt: null, mainAt: null, timedOut: true, lines: [] },
+    { version: "v0.5.2", condition: "dns-dead", index: 1, splashAt: 0.5, backendReadyAt: 21.4, mainAt: 21.8, timedOut: false, lines },
+    { version: "v0.5.2", condition: "dns-dead", index: 2, splashAt: null, backendReadyAt: null, mainAt: null, timedOut: true, lines: [] },
   ];
   const md = renderSummary(runs);
   assert.match(md, /\| v0\.5\.2 \| normal \| 1 \| 0\.5 \| 6\.2 \| 6\.6 \|/);
   assert.match(md, /15\.2 s @1\.0/);
   assert.match(md, /\(時間切れ\)|（時間切れ）/);
-  assert.match(md, /\| v0\.5\.2 \| blocked \| 21\.4 \| 21\.8 \| 2 \|/); // 時間切れの回は中央値に入れない（件数は 2）
+  assert.match(md, /\| v0\.5\.2 \| dns-dead \| 21\.4 \| 21\.8 \| 2 \|/); // 時間切れの回は中央値に入れない（件数は 2）
 });

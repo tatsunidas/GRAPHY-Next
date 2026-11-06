@@ -2,7 +2,12 @@
  * Windows の実機（GitHub Actions の windows ランナー）で、「LAN は繋がるが、インターネットには出られない」ときの
  * 起動（スプラッシュ → メイン画面）の待ちを測る。アプリのコードは変えない。公開済みのインストーラを入れて測る。
  *
- * 「インターネットに出られない」は、Windows ファイアウォールの**プログラム単位の送信ブロック**で作る:
+ * 条件は 3 つ: normal／fw-blocked／dns-dead。
+ *   🔴 fw-blocked は**即失敗**する（接続が 7 ms で拒否される。パケットを捨てて待たせるのではない）。DNS は別のサービスが引くので影響しない。
+ *   報告の「待たされる」は、応答しない DNS サーバーに対する Windows の名前解決のタイムアウト（1+2+4+8 ≒ 15 秒）の形に近いので、
+ *   dns-dead（アダプタの DNS を使われない私設アドレスにする）を足した。測定の前後で必ず元へ戻す。
+ *
+ * fw-blocked は、Windows ファイアウォールの**プログラム単位の送信ブロック**で作る:
  *   New-NetFirewallRule -Direction Outbound -Program <GRAPHY-Next.exe / 同梱 java.exe> -Action Block -RemoteAddress Internet
  * `Internet` はローカルサブネット以外。LAN には出られるが DNS サーバーやインターネットへのパケットは黙って捨てられ、
  * 接続や名前解決はタイムアウトまで待たされる。ループバックは対象外（アプリ内部の通信・Playwright の制御は影響を受けない）。
@@ -59,6 +64,28 @@ function removeBlockRules(): void {
   ps(`Get-NetFirewallRule -DisplayName '${RULE_PREFIX}-*' -ErrorAction SilentlyContinue | Remove-NetFirewallRule`);
 }
 
+/** 既定経路のネットワークアダプタの番号。 */
+function primaryInterface(): number {
+  const r = ps("(Get-NetRoute -DestinationPrefix '0.0.0.0/0' | Sort-Object RouteMetric | Select-Object -First 1).InterfaceIndex");
+  const n = Number(r.out.split(/\s+/).pop());
+  if (!Number.isInteger(n) || n <= 0) throw new Error(`既定経路のアダプタを取れません: ${r.out}`);
+  return n;
+}
+/** DNS サーバーを、応答しない宛先（使われない私設アドレス）にする。名前解決は Windows の既定のタイムアウト（約 15 秒）まで待たされる。 */
+function deadDns(ifIndex: number): void {
+  const r = ps(`Set-DnsClientServerAddress -InterfaceIndex ${ifIndex} -ServerAddresses '10.255.255.1'; Clear-DnsClientCache`);
+  if (r.status !== 0) throw new Error(`DNS を切り替えられません: ${r.out}`);
+}
+/** DNS サーバーを元（DHCP の値）へ戻す。 */
+function restoreDns(ifIndex: number): void {
+  ps(`Set-DnsClientServerAddress -InterfaceIndex ${ifIndex} -ResetServerAddresses; Clear-DnsClientCache`);
+}
+/** 起動中に引かれた名前（DNS クライアントのキャッシュ）。直前に `Clear-DnsClientCache` しておくこと。 */
+function dnsCacheNames(): string[] {
+  const r = ps("Get-DnsClientCache | Select-Object -ExpandProperty Entry | Sort-Object -Unique");
+  return r.out.split(/\r?\n/).map((x) => x.trim()).filter(Boolean);
+}
+
 function killApp(dir: string): void {
   spawnSync("taskkill", ["/F", "/T", "/IM", "GRAPHY-Next.exe"], { stdio: "ignore" });
   const d = dir.replace(/'/g, "''");
@@ -111,7 +138,7 @@ function runNetProbe(java: string, classDir: string): Record<string, number> {
   return out;
 }
 
-async function launchOnce(tag: string, exe: string, appData: string, port: number, condition: "normal" | "blocked", index: number): Promise<StartupRun> {
+async function launchOnce(tag: string, exe: string, appData: string, port: number, condition: StartupRun["condition"], index: number): Promise<StartupRun> {
   const env: Record<string, string> = { ...(process.env as Record<string, string>), GRAPHY_BACKEND_PORT: String(port), APPDATA: appData };
   delete env.GRAPHY_DEV;
   delete env.GRAPHY_BACKEND_EXTERNAL;
@@ -147,6 +174,7 @@ async function main(): Promise<void> {
   const work = fs.mkdtempSync(path.join(os.tmpdir(), "offline-start-"));
   const runs: StartupRun[] = [];
   const envChecks: Record<string, unknown> = {};
+  const dnsNames: Record<string, string[]> = {};
   removeBlockRules();
   try {
     const probeDir = buildNetProbe(work);
@@ -178,11 +206,28 @@ async function main(): Promise<void> {
       killApp(inst.dir);
       check(!warm.timedOut, `${tag}: ウォームアップの起動が完了した`, { ready: warm.backendReadyAt, main: warm.mainAt });
 
-      for (const condition of ["normal", "blocked"] as const) {
-        if (condition === "blocked") addBlockRules([inst.exe, inst.java]);
+      const ifIndex = primaryInterface();
+      // DNS が応答しない状態の確認（環境の正例・負例）: 同梱 java.exe で、名前解決・getLocalHost が待たされること
+      deadDns(ifIndex);
+      let dead: Record<string, number> = {};
+      try { dead = runNetProbe(inst.java, probeDir); } finally { restoreDns(ifIndex); }
+      console.log(`  DNS 応答なし: ${JSON.stringify(dead)}`);
+      (envChecks[tag] as Record<string, unknown>).dnsDead = dead;
+      const dnsSlow = (dead.resolve ?? 0) >= 3000 || (dead.resolve_err ?? 0) >= 3000 || (dead.getLocalHost ?? 0) >= 3000;
+      check(dnsSlow, `${tag}: DNS が応答しないと名前解決が待たされる（環境の負例。効いていなければ dns-dead の測定は無効）`, dead);
+      if (!dnsSlow) pendingNotes.push(`${tag}: DNS を応答しない状態にできなかった（dns-dead の測定は無効）`);
+
+      for (const condition of ["normal", "fw-blocked", ...(dnsSlow ? ["dns-dead" as const] : [])] as const) {
+        if (condition === "fw-blocked") addBlockRules([inst.exe, inst.java]);
+        if (condition === "dns-dead") deadDns(ifIndex);
         try {
           for (let i = 1; i <= RUNS; i++) {
+            if (condition === "normal" && i === 1) ps("Clear-DnsClientCache");
             const run = await launchOnce(tag, inst.exe, appData, BASE_PORT + portN++, condition, i);
+            if (condition === "normal" && i === 1) {
+              dnsNames[tag] = dnsCacheNames(); // 通常の起動 1 回目に引かれた名前（キャッシュ）
+              console.log(`  ${tag} 起動中に引かれた名前: ${JSON.stringify(dnsNames[tag])}`);
+            }
             killApp(inst.dir);
             runs.push(run);
             console.log(`  ${tag} ${condition} #${i}: splash=${run.splashAt?.toFixed(1)} backend=${run.backendReadyAt?.toFixed(1)} main=${run.mainAt?.toFixed(1)}${run.timedOut ? " 時間切れ" : ""}`);
@@ -190,21 +235,23 @@ async function main(): Promise<void> {
             await sleep(3000);
           }
         } finally {
-          if (condition === "blocked") removeBlockRules();
+          if (condition === "fw-blocked") removeBlockRules();
+          if (condition === "dns-dead") restoreDns(ifIndex);
         }
       }
     }
   } finally {
     removeBlockRules();
+    try { restoreDns(primaryInterface()); } catch { /* 取れなければ戻す対象も無い */ }
     killApp(fs.realpathSync.native(work));
   }
 
   const md = renderSummary(runs);
   console.log(`\n${md}\n`);
-  fs.writeFileSync(path.join(OUT, "runs.json"), JSON.stringify({ runs, envChecks }, null, 2));
+  fs.writeFileSync(path.join(OUT, "runs.json"), JSON.stringify({ runs, envChecks, dnsNames }, null, 2));
   fs.writeFileSync(path.join(OUT, "summary.md"), md);
   if (process.env.GITHUB_STEP_SUMMARY) {
-    fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `## 起動の待ち（Windows 実機・インターネットだけ遮断）\n\n${md}\n\n環境の確認: \`${JSON.stringify(envChecks)}\`\n`);
+    fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `## 起動の待ち（Windows 実機・インターネットだけ遮断）\n\n${md}\n\n環境の確認: \`${JSON.stringify(envChecks)}\`\n\n起動中に引かれた名前: \`${JSON.stringify(dnsNames)}\`\n`);
   }
   for (const n of pendingNotes) console.log(`  [未達] ${n}`);
 }
