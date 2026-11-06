@@ -173,15 +173,23 @@ async function launchOnce(tag: string, exe: string, appData: string, port: numbe
     }
     await sleep(250);
   }
-  // Chromium のプロキシ解決（PAC の取得待ちがあれば、ここに出る）。外部の URL とループバックの両方
+  // Chromium のプロキシ解決（PAC の取得待ちがあれば、ここに出る）。外部の URL とループバックの両方。
+  // 🚨 tsx は**名前の付いた内側の関数**（`const t = async () => …`）に `__name` の補助を差し込み、Electron の main 側では未定義で落ちる。
+  //    内側に関数を作らず、式を順に書く（匿名の関数を渡すだけなら補助は付かない）
   const extra: Record<string, number> = {};
   try {
-    const r = (await app.evaluate(async ({ session }, loopback) => {
-      const t = async (u: string) => { const a = Date.now(); await session.defaultSession.resolveProxy(u); return Date.now() - a; };
-      return { proxyExternalMs: await t("http://example.com/"), proxyLoopbackMs: await t(loopback) };
+    const r = (await app.evaluate(async ({ session }, loopbackUrl: string) => {
+      let a = Date.now();
+      await session.defaultSession.resolveProxy("http://example.com/");
+      const ext = Date.now() - a;
+      a = Date.now();
+      await session.defaultSession.resolveProxy(loopbackUrl);
+      return { proxyExternalMs: ext, proxyLoopbackMs: Date.now() - a };
     }, `http://127.0.0.1:${port}/api/status`)) as { proxyExternalMs: number; proxyLoopbackMs: number };
     Object.assign(extra, r);
-  } catch { /* 取れなければ記録しない */ }
+  } catch (e) {
+    console.log(`  [情報] プロキシ解決の計測に失敗: ${String(e).slice(0, 200)}`);
+  }
   const timedOut = readyAt === null || mainAt === null;
   await app.close().catch(() => undefined);
   return { version: tag, condition, index, splashAt, backendReadyAt: readyAt, mainAt, timedOut, extra, lines };
