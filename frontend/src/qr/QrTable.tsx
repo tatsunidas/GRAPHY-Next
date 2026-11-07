@@ -16,6 +16,7 @@ import { useI18n } from "../i18n/i18n";
 import { ageAt, storedStatusOf, type StoredStatus } from "./qrUtil";
 import { useTableSort, applySort, sortIndicator, type SortState, type Accessor } from "../tableSort";
 import { DicomDate } from "../i18n/dateFormat";
+import { emitDbChanged } from "../dbEvents";
 
 type JobView = { received: number; expected: number; stored: number; phase: string; done: boolean; success: boolean; message?: string };
 
@@ -135,6 +136,8 @@ export function QrTable({
             pollRef.current.set(k, window.setTimeout(poll, 700));
           } else {
             pollRef.current.delete(k);
+            // メイン画面の一覧は DB 変更通知でしか読み直されない（取得前に同じ条件で検索済みだと空のまま残る）。
+            if (s.success && s.stored > 0) emitDbChanged({ reason: "qr-retrieve", studyUids: [studyUid] });
             await refreshStored([{ studyUid, seriesUid }]);
             if (!seriesUid) {
               // スタディ取得後は配下シリーズの保存済みも更新（展開済みなら）。

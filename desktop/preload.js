@@ -56,6 +56,15 @@ contextBridge.exposeInMainWorld("graphyDesktop", {
   openExternal: (url) => ipcRenderer.send("graphy:open-external", url),
   // GitHub Releases の最新版情報を取得（更新確認）。失敗時 null。
   checkForUpdate: () => ipcRenderer.invoke("graphy:check-update"),
+  // アプリ内の自動更新（Windows・AppImage。start の mode は "now" | "onQuit"。進捗は onUpdateState）。
+  updateStart: (mode) => ipcRenderer.invoke("graphy:update-start", mode),
+  updateCancel: () => ipcRenderer.invoke("graphy:update-cancel"),
+  updateState: () => ipcRenderer.invoke("graphy:update-state"),
+  onUpdateState: (cb) => {
+    const h = (_e, st) => cb(st);
+    ipcRenderer.on("graphy:update-state", h);
+    return () => ipcRenderer.removeListener("graphy:update-state", h);
+  },
   // アプリ全体を再起動する（DICOM 自局設定などの反映用）。
   relaunch: () => ipcRenderer.invoke("graphy:relaunch"),
   // DB フォルダ（索引と DICOM 保管庫）。選択と最終確認のダイアログは main が出す。

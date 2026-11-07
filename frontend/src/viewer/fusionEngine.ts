@@ -162,6 +162,178 @@ export function computeFusionSlice(
   return out;
 }
 
+/*
+ * ⚠ `computeFusionSlice`（上。画素ループを展開した元の実装）と `computeFusionPixel`（下。1 点版）は同じ式の二重実装。
+ * 1 点版を呼ぶ形に統合すると 512² で CPU が 20〜60% 遅くなった（関数境界と出力の書き込み。2026-11 実測）ので、
+ * ホットループは元のまま残してある。2 つが全画素でビット一致することは fusionEngine.bitParity.test.ts が縛る。
+ * 式を変えるときは両方を直すこと。
+ */
+
+/**
+ * 1 枚の背景スライスに対するリサンプルの前計算（画素に依らない量）。
+ * `computeFusionPixel` と、GPU 経路との一致検査（gpuResample/）が同じ量を使う。
+ */
+export interface FusionSliceContext {
+  fg: FusionVolume;
+  bg: BackgroundSliceMeta;
+  xf: WorldTransform | null;
+  useXf: boolean;
+  fRr: Vec3;
+  fRc: Vec3;
+  fRs: Vec3;
+  bRr: Vec3;
+  bRc: Vec3;
+  fgIpp0: Vec3;
+  /** 各前景スライスの法線方向距離（fgIpp0 基点）。 */
+  wPos: number[];
+  /** 変換の出力先。画素ごとに割り付けないよう使い回す（単一スレッド前提）。 */
+  xp: Vec3;
+  /** 背景の行 by ごとの前計算（`Py0..2 = bgIpp + by·bPy·bRc`）。行が変わったときだけ更新する。 */
+  rowBy: number;
+  rowP0: number;
+  rowP1: number;
+  rowP2: number;
+}
+
+/** 前景が 0 枚なら null。 */
+export function prepareFusionSlice(
+  fg: FusionVolume,
+  bg: BackgroundSliceMeta,
+  xf?: WorldTransform | null,
+): FusionSliceContext | null {
+  if (fg.slices.length === 0) return null;
+  const fRr: Vec3 = [fg.iop[0], fg.iop[1], fg.iop[2]];
+  const fRc: Vec3 = [fg.iop[3], fg.iop[4], fg.iop[5]];
+  const fRs = cross(fRr, fRc); // 前景スライス法線
+  const fgIpp0 = fg.slices[0].ipp;
+  return {
+    fg,
+    bg,
+    xf: xf ?? null,
+    useXf: !!xf && xf.kind !== "identity",
+    fRr,
+    fRc,
+    fRs,
+    bRr: [bg.iop[0], bg.iop[1], bg.iop[2]],
+    bRc: [bg.iop[3], bg.iop[4], bg.iop[5]],
+    fgIpp0,
+    wPos: fg.slices.map((s) => dot(sub(s.ipp, fgIpp0), fRs)),
+    xp: [0, 0, 0],
+    rowBy: -1,
+    rowP0: 0,
+    rowP1: 0,
+    rowP2: 0,
+  };
+}
+
+/** 背景画素 (bx=列, by=行) が前景の画素格子・法線方向のどこに載るか。 */
+export interface FusionSamplePoint {
+  u: number;
+  v: number;
+  w_mm: number;
+}
+
+/** 背景画素 → ワールド →（xf があれば fixed→moving の pull-back）→ 前景 (u, v, w_mm)。 */
+function fusionSamplePoint(ctx: FusionSliceContext, bx: number, by: number, out: FusionSamplePoint): void {
+  const bg = ctx.bg;
+  const bRr = ctx.bRr;
+  if (ctx.rowBy !== by) {
+    const bRc = ctx.bRc;
+    const bPy = bg.pixelSpacingRow;
+    ctx.rowP0 = bg.ipp[0] + by * bPy * bRc[0];
+    ctx.rowP1 = bg.ipp[1] + by * bPy * bRc[1];
+    ctx.rowP2 = bg.ipp[2] + by * bPy * bRc[2];
+    ctx.rowBy = by;
+  }
+  const bPx = bg.pixelSpacingCol;
+
+  // 背景画素 (bx=列, by=行) → ワールド座標
+  let Px = ctx.rowP0 + bx * bPx * bRr[0];
+  let Py = ctx.rowP1 + bx * bPx * bRr[1];
+  let Pz = ctx.rowP2 + bx * bPx * bRr[2];
+
+  // ★ レジストレーション: fixed world → moving world（pull-back）。
+  if (ctx.useXf) {
+    const xp = ctx.xp;
+    ctx.xf!.mapPoint(Px, Py, Pz, xp);
+    Px = xp[0]; Py = xp[1]; Pz = xp[2];
+  }
+
+  // ワールド → 前景座標
+  const ip = ctx.fgIpp0;
+  const dx = Px - ip[0];
+  const dy = Py - ip[1];
+  const dz = Pz - ip[2];
+  const fRr = ctx.fRr, fRc = ctx.fRc, fRs = ctx.fRs;
+
+  out.u = (dx * fRr[0] + dy * fRr[1] + dz * fRr[2]) / ctx.fg.pixelSpacingCol;
+  out.v = (dx * fRc[0] + dy * fRc[1] + dz * fRc[2]) / ctx.fg.pixelSpacingRow;
+  out.w_mm = dx * fRs[0] + dy * fRs[1] + dz * fRs[2];
+}
+
+const _pt: FusionSamplePoint = { u: 0, v: 0, w_mm: 0 };
+
+/**
+ * 背景画素 1 つ分の前景値（物理値）。前景範囲外は NaN。
+ * `computeFusionSlice` のループ本体を切り出したもの（式・演算の順序は同じ）。
+ */
+export function computeFusionPixel(ctx: FusionSliceContext, bx: number, by: number): number {
+  fusionSamplePoint(ctx, bx, by, _pt);
+  return fusionInterpolate(ctx.fg, ctx.wPos, _pt.u, _pt.v, _pt.w_mm);
+}
+
+/**
+ * 前景の (u, v, w_mm) での物理値（面内境界の外は NaN）。`computeFusionPixel` の後半で、式・分岐は同じ。
+ * (u, v, w_mm) を別の方法（GPU の計画層など）で求めた実装の、補間の部分だけを CPU の正で検査するために切り出してある。
+ */
+export function fusionInterpolate(fg: FusionVolume, wPos: number[], u: number, v: number, w_mm: number): number {
+  const d = fg.slices.length;
+  const fgW = fg.cols;
+  const fgH = fg.rows;
+
+  // 面内境界チェック
+  if (u < -0.5 || u > fgW - 0.5 || v < -0.5 || v > fgH - 0.5) return NaN;
+
+  // z 方向 trilinear のための前景スライスインデックス探索
+  const iw = lowerBound(wPos, w_mm);
+
+  if (iw < 0) {
+    const val = bilinear(fg.slices[0].pixels, fgW, fgH, u, v);
+    return isNaN(val) ? val : val * fg.slices[0].slope + fg.slices[0].intercept;
+  }
+  if (iw >= d - 1) {
+    const val = bilinear(fg.slices[d - 1].pixels, fgW, fgH, u, v);
+    return isNaN(val) ? val : val * fg.slices[d - 1].slope + fg.slices[d - 1].intercept;
+  }
+  const dw = wPos[iw + 1] - wPos[iw];
+  const wFrac = dw > 0 ? (w_mm - wPos[iw]) / dw : 0;
+  return trilinear(fg.slices[iw], fg.slices[iw + 1], fgW, fgH, u, v, wFrac);
+}
+
+/**
+ * 一致検査器が CPU 側で 8 点を読み直すための材料。`computeFusionPixel` と同じ (u, v, w_mm)・iw・wFrac を返す。
+ * 前景範囲外（面内境界の外）は null。検査専用で、描画経路は呼ばない。
+ */
+export interface FusionNeighborhood extends FusionSamplePoint {
+  /** 使う前景スライス（z 端のクランプでは 1 枚、通常は 2 枚）。 */
+  lo: FusionSlice;
+  hi: FusionSlice;
+  wFrac: number;
+}
+
+export function fusionNeighborhood(ctx: FusionSliceContext, bx: number, by: number): FusionNeighborhood | null {
+  const { fg, wPos } = ctx;
+  const d = fg.slices.length;
+  const pt: FusionSamplePoint = { u: 0, v: 0, w_mm: 0 };
+  fusionSamplePoint(ctx, bx, by, pt);
+  if (pt.u < -0.5 || pt.u > fg.cols - 0.5 || pt.v < -0.5 || pt.v > fg.rows - 0.5) return null;
+  const iw = lowerBound(wPos, pt.w_mm);
+  if (iw < 0) return { ...pt, lo: fg.slices[0], hi: fg.slices[0], wFrac: 0 };
+  if (iw >= d - 1) return { ...pt, lo: fg.slices[d - 1], hi: fg.slices[d - 1], wFrac: 0 };
+  const dw = wPos[iw + 1] - wPos[iw];
+  return { ...pt, lo: fg.slices[iw], hi: fg.slices[iw + 1], wFrac: dw > 0 ? (pt.w_mm - wPos[iw]) / dw : 0 };
+}
+
 /** wPos[result] <= w_mm < wPos[result+1] となる最大インデックスを返す（境界外: <0 または >=d-1）。 */
 function lowerBound(wPos: number[], w_mm: number): number {
   const d = wPos.length;

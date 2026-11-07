@@ -495,6 +495,17 @@ export const SETTINGS_REGISTRY: CategoryDef[] = [
             default: "",
             helpKey: "settings.field.fusionLut.help",
           },
+          {
+            key: "viewer.fusionResample",
+            labelKey: "settings.field.fusionResample",
+            type: "select",
+            default: "auto",
+            helpKey: "settings.field.fusionResample.help",
+            options: [
+              { value: "auto", labelKey: "settings.opt.fusionResample.auto" },
+              { value: "cpu", labelKey: "settings.opt.fusionResample.cpu" },
+            ],
+          },
         ],
       },
       {

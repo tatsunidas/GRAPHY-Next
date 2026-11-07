@@ -1,0 +1,52 @@
+name: Offline startup (Windows)
+
+# Windows の実機で、「LAN は繋がるが、インターネットには出られない」ときの起動（スプラッシュ → メイン画面）の待ちを測る。
+# アプリのコードは変えない。公開済みのインストーラを入れ、Windows ファイアウォールのプログラム単位の送信ブロックで
+# アプリ（GRAPHY-Next.exe・同梱 java.exe）だけをインターネットから切って測る（ランナー全体は止めない）。
+# 結果は job の Summary（表）と Artifact。設計・読み方: automator/src/smoke/offlineStartupWin.ts の冒頭。
+on:
+  workflow_dispatch:
+    inputs:
+      versions:
+        description: "測る版（カンマ区切り。公開済みのタグ）"
+        required: false
+        default: "v0.5.2,v0.6.1"
+      runs:
+        description: "各条件の測定回数（ウォームアップは別に 1 回）"
+        required: false
+        default: "2"
+
+permissions:
+  contents: read
+
+jobs:
+  measure:
+    name: Measure (windows-latest)
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install automator
+        working-directory: automator
+        shell: bash
+        run: npm ci
+      - name: Measure
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSIONS: ${{ inputs.versions }}
+          RUNS: ${{ inputs.runs }}
+        run: |
+          cd automator
+          npx tsx src/smoke/offlineStartupWin.ts --versions "$VERSIONS" --runs "$RUNS"
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: offline-startup-win
+          path: automator/.results/offline-startup-win
+          retention-days: 14
+          if-no-files-found: ignore

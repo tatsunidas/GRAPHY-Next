@@ -17,10 +17,13 @@ import { probeMetaOf } from "./fusionProbeMeta";
 import { toFusionSlice, type RawFusionSlice } from "./fusionSlice";
 import { subscribeSuvStore } from "./suvStore";
 import { extractIsolines, isolinesToPath } from "./isoline";
+import { recordFusionResample } from "./gpuResample/fusionResampleStats";
+import { createDefaultResampler, parseFusionResampleMode, type FusionResampleController } from "./gpuResample/fusionResampler";
+import { getAppliedVolumeMaxMb } from "./volumeMemory";
+import { fetchSettings } from "../settings/settingsApi";
 import { registerFusionProbe, setFusionProbeData, unregisterFusionProbe } from "./fusionProbe";
 import { fetchSeriesLayout, type Instance, type SeriesLayoutDto } from "../api";
 import {
-  computeFusionSlice,
   toImageData,
   autoWindowLevel,
   type FusionVolume,
@@ -279,6 +282,19 @@ export function FusionImageViewer({
   useEffect(() => subscribeSuvStore(() => setSuvTick((n) => n + 1)), []);
   const computingRef = useRef(false);
   const pendingRef = useRef(false);
+  // リサンプルの経路（CPU / GPU）。GPU は使えて・CPU と一致し・速いと確かめたときだけ（gpuResample/fusionResampler.ts）。
+  const resamplerRef = useRef<FusionResampleController | null>(null);
+  if (resamplerRef.current === null) resamplerRef.current = createDefaultResampler();
+  // 判定が済んだら描き直す（runFusion は下で定義するので ref 経由）
+  const runFusionRef = useRef<() => void>(() => undefined);
+  useEffect(() => {
+    const ctl = resamplerRef.current!;
+    let alive = true;
+    fetchSettings()
+      .then((m) => { if (alive) ctl.setMode(parseFusionResampleMode(m["viewer.fusionResample"])); })
+      .catch(() => undefined);
+    return () => { alive = false; ctl.release(); };
+  }, []);
 
   /**
    * 物理値配列 + W/L を canvas に描画する。
@@ -486,13 +502,69 @@ export function FusionImageViewer({
           }),
         };
 
-        const fusionPixels = computeFusionSlice(fgVolume, bgMeta, xf);
+        // 前景の全スライス（GPU のテクスチャにするとき裏で読む）。同時 6 件。1 枚でも読めなければ null
+        const buildFull = (loaded: { zIdx: number; slice: FusionSlice }[]): FusionVolume => ({
+          iop: fgSkeleton.iop,
+          pixelSpacingCol: fgSkeleton.pixelSpacingCol,
+          pixelSpacingRow: fgSkeleton.pixelSpacingRow,
+          cols: fgSkeleton.cols,
+          rows: fgSkeleton.rows,
+          slices: loaded.map(({ zIdx, slice }) => {
+            const ipp = fgSkeleton.zSpatialByZ.get(zIdx);
+            return ipp ? { ...slice, ipp } : slice;
+          }),
+        });
+        const prefetchAll = async (): Promise<FusionVolume | null> => {
+          const out: ({ zIdx: number; slice: FusionSlice } | null)[] = new Array(sortedZ.length).fill(null);
+          let next = 0;
+          let failed = false;
+          await Promise.all(Array.from({ length: 6 }, async () => {
+            while (!failed) {
+              const k = next++;
+              if (k >= sortedZ.length) return;
+              const zIdx = sortedZ[k][0];
+              const id = fgZStack[zIdx];
+              const slice = id ? await loadFusionSlice(id) : null;
+              if (!slice) { failed = true; return; }
+              out[k] = { zIdx, slice };
+            }
+          }));
+          return failed ? null : buildFull(out as { zIdx: number; slice: FusionSlice }[]);
+        };
+        // いまの校正での全スライス（全部キャッシュにあるときだけ。slope・intercept の作り直し用）
+        const fgFull = (): FusionVolume | null => {
+          const out: { zIdx: number; slice: FusionSlice }[] = [];
+          for (const [zIdx] of sortedZ) {
+            const id = fgZStack[zIdx];
+            const raw = id ? _sliceCache.get(id) : undefined;
+            if (!id || !raw) return null;
+            out.push({ zIdx, slice: toFusionSlice(raw, id) });
+          }
+          return buildFull(out);
+        };
+
+        const t0 = import.meta.env.DEV ? performance.now() : 0;
+        const resampled = resamplerRef.current!.compute({
+          key: `${seriesUid}|${cc}|${tc}`,
+          fgPartial: fgVolume,
+          bg: bgMeta,
+          xf,
+          slopeKey: suvTick,
+          prefetchAll,
+          fgFull,
+          onDecision: () => runFusionRef.current(),
+          memoryLimitBytes: getAppliedVolumeMaxMb() * 1024 * 1024,
+        });
+        const fusionPixels = resampled.values;
+        if (import.meta.env.DEV) {
+          recordFusionResample(performance.now() - t0, bgMeta.cols, bgMeta.rows, fgVolume.slices.length, !!xf);
+        }
         const fgSampleId = fgZStack[loadedSlices[0].zIdx] ?? "";
         const voiLut: AnyObj = metaData.get("voiLutModule", fgSampleId) ?? {};
         const { center, width } = resolveWL(voiLut, fusionPixels);
         drawValues(fusionPixels, bgCols, bgRows, center, width, activeLut);
         // 背景の画素格子に載った前景値。位置合わせを掛けているなら**ワープ後・補間後**の値。
-        setFusionProbeData(viewportId, { values: fusionPixels, cols: bgCols, rows: bgRows, ...probeMetaOf(fgSampleId), label: probeLabel });
+        setFusionProbeData(viewportId, { values: fusionPixels, cols: bgCols, rows: bgRows, ...probeMetaOf(fgSampleId), label: probeLabel, exactAt: resampled.exactAt });
         setIsoGrid({ values: fusionPixels, cols: bgCols, rows: bgRows });
       } else {
         // ── 非空間フォールバック: 比例 Z で前景スライスを base 矩形にストレッチ ──
@@ -532,6 +604,7 @@ export function FusionImageViewer({
       adjust, registration, notifySpatial, drawValues, clearCanvas, suvTick, probeLabel]);
 
   useEffect(() => {
+    runFusionRef.current = () => { void runFusion(); };
     void runFusion();
   }, [runFusion]);
 

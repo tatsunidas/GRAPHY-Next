@@ -18,6 +18,8 @@ import { addSphere3D } from "./sphere3dStore";
 import { worldToImageCoords } from "./imageCoords";
 import type { Geometry3DPixelStats } from "./vtkGeometryView";
 import type { VtkRenderStats } from "./vtkVolumeView";
+import { getFusionResampleStats, resetFusionResampleStats } from "./gpuResample/fusionResampleStats";
+import { probeFusionParity, resetFusionGpuForDebug, setFusionGpuFault, setFusionResampleModeForDebug } from "./gpuResample/fusionResampler";
 import type { CinematicStats } from "./cinematicScale";
 
 /**
@@ -952,6 +954,12 @@ declare global {
       getImagePixelRange: typeof getImagePixelRange;
       getPixelStats: typeof getPixelStats;
       getRender3dStats: typeof getRender3dStats;
+      getFusionResampleStats: typeof getFusionResampleStats;
+      resetFusionResampleStats: typeof resetFusionResampleStats;
+      probeFusionParity: typeof probeFusionParity;
+      setFusionResampleMode: typeof setFusionResampleModeForDebug;
+      setFusionGpuFault: typeof setFusionGpuFault;
+      resetFusionGpu: typeof resetFusionGpuForDebug;
       getCinematicStats: typeof getCinematicStats;
       benchCinematicFrames: typeof benchCinematicFrames;
       forceCinematicScale: typeof forceCinematicScale;
@@ -1123,6 +1131,12 @@ export function installDebugApi(): void {
     getImagePixelRange,
     getPixelStats,
     getRender3dStats,
+    getFusionResampleStats,
+    resetFusionResampleStats,
+    probeFusionParity,
+    setFusionResampleMode: setFusionResampleModeForDebug,
+    setFusionGpuFault,
+    resetFusionGpu: resetFusionGpuForDebug,
     getCinematicStats,
     benchCinematicFrames,
     forceCinematicScale,

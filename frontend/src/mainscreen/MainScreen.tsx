@@ -101,6 +101,8 @@ export function MainScreen({
     setImportedView(null);
     setAlbumView(null);
     setFilters(f);
+    // 同じ条件の再検索でも必ず問い合わせ直す（通知の無い経路で増えた検査を拾うため）。
+    setReloadKey((k) => k + 1);
   };
   const openAlbum = (v: AlbumView) => {
     setImportedView(null);

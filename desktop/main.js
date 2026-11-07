@@ -26,6 +26,7 @@ const readline = require("node:readline");
 const PROGRESS_PREFIX = "__GRAPHY_PROGRESS__";
 
 const externalOpen = require("./externalOpen");
+const appUpdate = require("./appUpdate");
 
 // --- 単一インスタンス（外部から検査を開く入口の前提。fw/external-open.md） ---
 // 外部（RIS など）が `graphynext://open?...` や `GRAPHY-Next --open-study <UID>` を呼ぶと、2 つ目の起動は、先に動いている
@@ -963,7 +964,9 @@ ipcMain.on("graphy:open-external", (_e, url) => {
 // HTTPS GET → JSON（リダイレクト追従・タイムアウト付き）。更新確認用の最小実装。
 function httpsGetJson(url, redirects = 3) {
   return new Promise((resolve, reject) => {
-    const req = https.get(
+    // http は開発（未パッケージ）で GRAPHY_UPDATE_API_BASE を指定したときだけ（appUpdate.releaseApiUrl が返す）。本番は https のみ。
+    const lib = !app.isPackaged && /^http:\/\/(127\.0\.0\.1|localhost)[:/]/.test(url) ? http : https;
+    const req = lib.get(
       url,
       { headers: { "User-Agent": "GRAPHY-Next", Accept: "application/vnd.github+json" }, timeout: 8000 },
       (res) => {
@@ -993,6 +996,59 @@ function httpsGetJson(url, redirects = 3) {
   });
 }
 
+// ── アプリ内の自動更新（Windows の NSIS・Linux の AppImage。設計は appUpdate.js の冒頭）────────────────
+// ダウンロードは利用者が「今すぐ」「終了時」を選んだときだけ始める。途中でネットワークが切れたら失敗として見送る。
+let updatePlan = null; // 直近の更新確認で選んだ計画（pickAsset）。レンダラには URL を渡さない
+function updateContext() {
+  const appImage = process.platform === "linux" ? process.env.APPIMAGE || null : null;
+  let writable = false;
+  if (appImage) {
+    try { fs.accessSync(path.dirname(appImage), fs.constants.W_OK); writable = true; } catch { /* 書けない場所の AppImage は自動では入れ替えない */ }
+  }
+  // APPIMAGE は開発（未パッケージ）でも上書きできる（AppImage の入れ替えの検証用）。パッケージ版は実際の AppImage のときだけ付く
+  return {
+    platform: process.platform, arch: process.arch, currentVersion: app.getVersion(), appImage, appImageDirWritable: writable,
+    allowLocalAssets: appUpdate.devOverrides(process.env, app.isPackaged).allowLocal,
+  };
+}
+const updateCtl = new appUpdate.UpdateController({
+  dir: path.join(app.getPath("userData"), "updates"),
+  // 公式鍵。開発（未パッケージ）で偽サーバーを指したときだけ、GRAPHY_UPDATE_TRUSTED_KEY の鍵を足せる（パッケージ版は常に公式鍵だけ）
+  trustedKeys: [...require("./update-trusted-keys.json").keys, ...appUpdate.devOverrides(process.env, app.isPackaged).extraKey],
+  ctx: { appImage: process.env.APPIMAGE || null },
+  // 開発（未パッケージ）で偽サーバーを指したときだけ http://127.0.0.1 を許す。パッケージ版は常に https の GitHub だけ
+  netOpts: { insecureLocal: !app.isPackaged && !!process.env.GRAPHY_UPDATE_API_BASE },
+  deps: { quit: () => app.quit() },
+});
+{
+  let lastSent = 0;
+  updateCtl.on("state", (st) => {
+    const now = Date.now();
+    // 進捗（downloading / verifying の bytes）は 250 ms ごとに間引く。フェーズが変わったときは必ず送る
+    if (st.bytes !== undefined && now - lastSent < 250 && st.bytes < st.total) return;
+    lastSent = now;
+    for (const w of BrowserWindow.getAllWindows()) {
+      if (!w.isDestroyed()) w.webContents.send("graphy:update-state", st);
+    }
+  });
+}
+ipcMain.handle("graphy:update-start", async (_e, mode) => {
+  if (!updatePlan || !updatePlan.supported) return { ok: false, reason: "no-plan" };
+  // start は async なので、拒否（不正な mode・実行中）はここで先に返す（Promise の中に隠れると呼び出し元に届かない）
+  if (mode !== "now" && mode !== "onQuit") return { ok: false, reason: "bad-mode" };
+  if (updateCtl.isBusy()) return { ok: false, reason: "busy" };
+  // 長いので待たない（進捗と結果は graphy:update-state のイベントで届く）。失敗は状態に入る
+  void updateCtl.start(updatePlan, mode).catch((e) => console.error("[update] start failed:", e && e.message));
+  return { ok: true };
+});
+ipcMain.handle("graphy:update-cancel", () => { updateCtl.cancel(); return { ok: true }; });
+ipcMain.handle("graphy:update-state", () => updateCtl.getState());
+// 終了の直前に、保留があれば入れ替える（Windows はインストーラを分離して起動、AppImage はファイルを置き換える）
+app.on("quit", () => {
+  updateCtl.cancel();
+  try { updateCtl.applyOnQuit(); } catch (e) { console.error("[update] apply failed:", e && e.message); }
+});
+
 // GitHub Releases の最新版情報を取得（Help＞更新を確認 / 起動時チェック）。
 // レンダラは CSP（connect-src が localhost のみ）で api.github.com を叩けないため、
 // main プロセスで取得して返す。バージョン比較・UI はレンダラ側で行う。失敗時 null。
@@ -1000,9 +1056,12 @@ ipcMain.handle("graphy:check-update", async () => {
   const repo = (cfg.update && cfg.update.repo) || "";
   if (!repo) return null;
   try {
-    const rel = await httpsGetJson(`https://api.github.com/repos/${repo}/releases/latest`);
+    const rel = await httpsGetJson(appUpdate.releaseApiUrl(repo, process.env, app.isPackaged));
     if (!rel || !rel.tag_name) return null;
+    // 自動更新できる資産（Windows の NSIS・Linux の AppImage）。URL はレンダラへ渡さず main が持つ（開始は update-start）。
+    updatePlan = appUpdate.pickAsset(rel, updateContext());
     return {
+      auto: appUpdate.describePlan(updatePlan),
       tagName: String(rel.tag_name),
       name: rel.name ? String(rel.name) : String(rel.tag_name),
       body: rel.body ? String(rel.body) : "",
@@ -2637,6 +2696,8 @@ app.whenReady().then(async () => {
       console.warn("[external-open] could not register the URL scheme:", e && e.message);
     }
   }
+  // 前回の更新の残り（更新済みの版のダウンロード・壊れた部分ファイル）を整理し、「終了時に更新」の保留を引き継ぐ
+  try { updateCtl.reconcile(app.getVersion()); } catch (e) { console.error("[update] reconcile failed:", e && e.message); }
   // マイクを許すのはアシスタント窓のメインフレームの音声だけ（プラグインに録音させない）。mediaPermission.js
   require("./mediaPermission").install(session.defaultSession);
   // 秘密情報の置き場は backend の CWD（H2・DICOM 保管庫と同じ場所）に揃える。
