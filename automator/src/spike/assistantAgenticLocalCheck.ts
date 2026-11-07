@@ -131,7 +131,11 @@ async function main(): Promise<void> {
     await main.reload({ waitUntil: "domcontentloaded" });
     await main.getByTestId("search-patientid-input").waitFor({ state: "visible", timeout: 30_000 });
     await dismissUpdateDialog(main);
-    await openFirstSeriesInViewer(main, createStepRecorder());
+    for (let attempt = 1; ; attempt++) {   // 新版の窓は、この操作の途中で出ることもある（共有の補助は素のクリックを使う）
+      try { await openFirstSeriesInViewer(main, createStepRecorder()); break; } catch (e) {
+        if (attempt >= 3 || !(await dismissUpdateDialog(main, 2000))) throw e;
+      }
+    }
     await dismissUpdateDialog(main);
     const vb = main.getByTestId("viewer2d-toolbar-button");
     console.log("  main:", main.url(), "ボタン数", await vb.count(), "無効", await vb.isDisabled(), "窓数", driver.app.windows().length);
