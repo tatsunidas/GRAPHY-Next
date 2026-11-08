@@ -6,10 +6,6 @@ name: Update E2E (real release)
 #   mode=published 公開後。製品の取得・検証のコード（pickAsset・fetchText・downloadToFile・verifyFile）を本物の releases/latest で通す
 #                  → Windows のサイレント更新、Linux の AppImage の置き換え。
 on:
-  # 一時: 新しいワークフローは既定ブランチに無いと手動実行できないので、検証の間だけブランチへの push で動かす（既定は draft。マージ前に外す）
-  push:
-    branches: [ci/update-e2e]
-    paths: [".github/workflows/update-e2e.yml", "automator/src/smoke/updateE2e*"]
   workflow_dispatch:
     inputs:
       mode:
@@ -50,9 +46,9 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-          MODE: ${{ inputs.mode || 'draft' }}
-          OLD_TAG: ${{ inputs.old_tag || 'v0.6.1' }}
-          NEW_TAG: ${{ inputs.new_tag || 'v0.6.2' }}
+          MODE: ${{ inputs.mode }}
+          OLD_TAG: ${{ inputs.old_tag }}
+          NEW_TAG: ${{ inputs.new_tag }}
         run: |
           cd automator
           npx tsx src/smoke/updateE2e.ts --mode "$MODE" --old "$OLD_TAG" --new "$NEW_TAG"
@@ -79,9 +75,9 @@ jobs:
       - name: End-to-end
         env:
           GH_TOKEN: ${{ github.token }}
-          MODE: ${{ inputs.mode || 'draft' }}
-          OLD_TAG: ${{ inputs.old_tag || 'v0.6.1' }}
-          NEW_TAG: ${{ inputs.new_tag || 'v0.6.2' }}
+          MODE: ${{ inputs.mode }}
+          OLD_TAG: ${{ inputs.old_tag }}
+          NEW_TAG: ${{ inputs.new_tag }}
         run: |
           cd automator
           xvfb-run -a --server-args="-screen 0 1600x1000x24" npx tsx src/smoke/updateE2e.ts --mode "$MODE" --old "$OLD_TAG" --new "$NEW_TAG"
