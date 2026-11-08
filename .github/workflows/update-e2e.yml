@@ -27,8 +27,10 @@ on:
         required: true
         default: "v0.6.2"
 
+# 下書きのリリースは contents: read のトークンでは見えない（release not found）ので write にする。
+# このワークフローは取得（読み取り）しかしない（書き込み・公開・削除はしない）。
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   windows:
