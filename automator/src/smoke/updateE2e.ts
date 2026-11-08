@@ -241,6 +241,8 @@ async function linuxFlow(): Promise<void> {
     const ap = au.buildApplyPlan("appimage", got.file, "now", { appImage });
     ck("適用の計画が置き換え＋再起動", ap.kind === "replace-appimage" && ap.relaunch === true, ap);
     const before = fs.statSync(appImage).size;
+    // 製品の再起動は process.env を引き継ぐ。CI には FUSE が無いので、旧版の起動と同じ指定を親の環境に置く
+    process.env.APPIMAGE_EXTRACT_AND_RUN = "1";
     au.executeApplyPlan(ap);
     ck("旧い AppImage が新しい中身に入れ替わった", fs.statSync(appImage).size === fs.statSync(got.file).size && fs.statSync(appImage).size !== before, { before, after: fs.statSync(appImage).size });
     ck("実行権限が付いている", (fs.statSync(appImage).mode & 0o111) !== 0);
