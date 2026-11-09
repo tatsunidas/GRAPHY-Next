@@ -13,6 +13,7 @@
  *   正例: 明日の予約が RETSYN1・RETSYN3（RETSYN2 は予約なし）→ 2 検査だけが取り込まれる
  *         再実行 → 取得済みなので 0 件取得、2 件が「取得済み」
  *   既定のまま通す経路: 「遡る年数」「モダリティ」「患者ごとの件数」は空のまま
+ *   一覧の自動更新: ［更新］を押さずに、待機中は届いた検査が一覧に出る。検査を選んでいる間は一覧を変えず、状態バーの通知が出て、押すと出る
  * 見るもの: 取り込まれた検査の UID が PACS 側の UID と一致する（件数だけでなく中身）。画面はスクリーンショットを
  *   .results/prefetch-check に残す（目視用）。
  * 範囲外: MWL（backend の統合試験で、実機の findscu -M MWL と偽の MWL SCP を通している）、Shift_JIS（同）。
@@ -83,6 +84,12 @@ async function main(): Promise<void> {
   if (gen.status !== 0) throw new Error(`合成データを作れません: ${gen.stderr}`);
   const truth = JSON.parse(fs.readFileSync(path.join(synthDir, "truth.json"), "utf8")) as Truth[];
   const [s1, s2, s3] = truth;
+  // 一覧の自動更新の検査用に、同じ患者で UID だけ違う検査をもう 1 組作る（a: 待機中に届く、b: 操作中に届く）
+  const synth2 = path.join(OUT_DIR, "synth2");
+  const gen2 = spawnSync(py, [path.join(import.meta.dirname, "retentionSynth.py"), synth2], { encoding: "utf8" });
+  if (gen2.status !== 0) throw new Error(`合成データ（2 組目）を作れません: ${gen2.stderr}`);
+  const truth2 = JSON.parse(fs.readFileSync(path.join(synth2, "truth.json"), "utf8")) as Truth[];
+  const [a1, a2] = truth2;
 
   const driver = new DesktopDriver();
   const base = `http://127.0.0.1:${driver.ports.http}`;
@@ -196,6 +203,35 @@ async function main(): Promise<void> {
     check(rows >= 2, "実行の記録が 2 回分以上ある", rows);
     await shot(page, "04-log");
     check((await studyUids()).length === 2, "検査は 2 件のまま（重複して取り込まない）");
+
+    console.log("\n[5] 一覧の自動更新: 待機中は、［更新］を押さなくても、届いた検査が一覧に出る");
+    await dismissStartupDialogs(page); // 設定の窓を閉じる
+    await page.getByTestId("search-allperiod-chip").click();
+    await page.getByTestId("search-submit-button").click();
+    await page.getByTestId(`study-row-${s1.studyUid}`).waitFor({ state: "visible", timeout: 20_000 });
+    check(await page.getByTestId(`study-row-${s3.studyUid}`).isVisible(), "全期間で検索すると、事前取得した 2 件が一覧にある");
+    check((await page.getByTestId(`study-row-${a1.studyUid}`).count()) === 0, "まだ届いていない検査は一覧に無い");
+    const recv = (dir: string) => spawnSync(dcm4cheTool("storescu"), ["-c", `GRAPHYNEXT@127.0.0.1:${driver.ports.scp}`, dir], { encoding: "utf8", shell: process.platform === "win32" });
+    check(recv(path.join(synth2, "s1")).status === 0, "別の検査（a）を、PACS からの受信と同じ経路（C-STORE）でアプリに送った");
+    // 押さずに待つ（3 秒周期の問い合わせ 2 回ぶん + 余裕）
+    await page.getByTestId(`study-row-${a1.studyUid}`).waitFor({ state: "visible", timeout: 20_000 }).catch(() => undefined);
+    check(await page.getByTestId(`study-row-${a1.studyUid}`).isVisible(), "何も押さずに、届いた検査が一覧に出た（自動更新）");
+    check((await page.getByTestId("statusbar-store-changed").count()) === 0, "待機中なので、通知は出ない");
+    await shot(page, "05-auto-refreshed");
+
+    console.log("\n[6] 負例: 検査を選んでいる間は、一覧を変えず、通知が出る。押すと出る");
+    await page.getByTestId(`study-row-${s1.studyUid}`).click();
+    check(recv(path.join(synth2, "s2")).status === 0, "さらに別の検査（b）を送った");
+    await page.getByTestId("statusbar-store-changed").waitFor({ state: "visible", timeout: 20_000 }).catch(() => undefined);
+    check(await page.getByTestId("statusbar-store-changed").isVisible(), "状態バーに通知が出た");
+    await sleep(7000); // 自動で読み直されないことを、周期 2 回ぶん待って確かめる
+    check((await page.getByTestId(`study-row-${a2.studyUid}`).count()) === 0, "選んでいる間は、一覧は変わらない（選択を壊さない）");
+    check(await page.getByTestId(`study-row-${s1.studyUid}`).isVisible(), "選んだ検査はそのまま");
+    await shot(page, "06-notify");
+    await page.getByTestId("statusbar-store-changed").click();
+    await page.getByTestId(`study-row-${a2.studyUid}`).waitFor({ state: "visible", timeout: 20_000 }).catch(() => undefined);
+    check(await page.getByTestId(`study-row-${a2.studyUid}`).isVisible(), "通知のボタンを押すと、届いた検査が一覧に出る");
+    check((await page.getByTestId("statusbar-store-changed").count()) === 0, "通知が消えた");
   } finally {
     if (pacs) killProcessTree(pacs);
     await driver.stop();

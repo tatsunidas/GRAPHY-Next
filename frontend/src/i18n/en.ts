@@ -2855,6 +2855,7 @@ export const en: Record<string, string> = {
   "recvAnon.bar.invalid": "Anonymize on receive: invalid settings (refusing all)",
   "importWatch.bar.counts": "imported {{imported}} · waiting {{waiting}} · failed {{failed}}",
   "importWatch.bar.error": "error",
+  "main.status.storeChanged": "Studies may have arrived or been removed — refresh list",
   "importWatch.bar.newItems": "{{n}} newly imported — refresh list",
 
   // monitor QC (mqc)
