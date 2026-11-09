@@ -60,6 +60,11 @@ async function main(): Promise<void> {
   if (!dcm || !fs.existsSync(dcm)) throw new Error("GRAPHY_DENTAL_DCM に PX の DICOM を指定してください");
   const bare = process.env.GRAPHY_DENTAL_BAREBIN;
   if (MODE === "missing-deps" && (!bare || !fs.existsSync(path.join(bare, "python")))) throw new Error("missing-deps には GRAPHY_DENTAL_BAREBIN（jupyter_server と ipykernel だけの venv の bin）が要る");
+  if (MODE === "missing-deps") {
+    // 前回の実行が「導入したことにする」ために書いた .pth が残っていると、最初から揃っていて不足の検査にならない
+    const lib = path.join(bare as string, "..", "lib");
+    for (const d of fs.readdirSync(lib).filter((x) => x.startsWith("python"))) fs.rmSync(path.join(lib, d, "site-packages", "zz-installed.pth"), { force: true });
+  }
   process.env.PATH = `${MODE === "missing-deps" ? (bare as string) : bin}${path.delimiter}${process.env.PATH}`;
   const emptyHome = fs.mkdtempSync(path.join(os.tmpdir(), "dental-home-"));
   if (MODE === "missing-weights") process.env.HOME = emptyHome; // 重みの置き場 ~/.graphy-next/models/... を空にする
