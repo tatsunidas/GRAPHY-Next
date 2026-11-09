@@ -4,9 +4,12 @@
  * 実行:  cd automator && GRAPHY_DENTAL_PYBIN=<ultralytics・torch・jupyter_server・ipykernel の入った venv の bin> \
  *          GRAPHY_DENTAL_DCM=<Modality PX の DICOM 1 枚> \
  *          GRAPHY_AUTOMATOR_HTTP_PORT=28710 GRAPHY_AUTOMATOR_SCP_PORT=28711 GRAPHY_AUTOMATOR_VITE_PORT=28713 \
- *          npx tsx src/spike/dentalPanoPluginCheck.ts [ok|no-spacing|missing-weights]
+ *          npx tsx src/spike/dentalPanoPluginCheck.ts [ok|no-spacing|missing-deps|missing-weights]
  *   ok              : 既定のまま（選択欄・チェックは触らない）事前チェック → 本処理 → 結果。本体の ROI が実際に置かれる
  *   no-spacing      : 画素間隔の無い DICOM（GRAPHY_DENTAL_DCM に指定）で、本体が ROI を置けない（no-geometry）とき、理由が画面に出て、チャートとレポートは使える（負例）
+ *   missing-deps    : ultralytics・torch などが何も入っていない環境（GRAPHY_DENTAL_BAREBIN: jupyter_server と ipykernel だけの venv の bin）で、
+ *                     事前チェックが不足と導入コマンドを出して止まる → 入れた（.pth で GRAPHY_DENTAL_PYBIN の site-packages を見せる）あと、
+ *                     本体を再起動せずに［再確認］で通り、最後まで実行できる（負例→正例）
  *   missing-weights : 重みの置き場（HOME）を空にした環境で、事前チェックが置き場つきで止まり、本処理は出ない（負例）
  *   起動前に frontend/node_modules/.vite を消すこと。Linux 専用。
  */
@@ -55,7 +58,9 @@ async function main(): Promise<void> {
   const dcm = process.env.GRAPHY_DENTAL_DCM;
   if (!bin || !fs.existsSync(path.join(bin, "python"))) throw new Error("GRAPHY_DENTAL_PYBIN に venv の bin を指定してください");
   if (!dcm || !fs.existsSync(dcm)) throw new Error("GRAPHY_DENTAL_DCM に PX の DICOM を指定してください");
-  process.env.PATH = `${bin}${path.delimiter}${process.env.PATH}`;
+  const bare = process.env.GRAPHY_DENTAL_BAREBIN;
+  if (MODE === "missing-deps" && (!bare || !fs.existsSync(path.join(bare, "python")))) throw new Error("missing-deps には GRAPHY_DENTAL_BAREBIN（jupyter_server と ipykernel だけの venv の bin）が要る");
+  process.env.PATH = `${MODE === "missing-deps" ? (bare as string) : bin}${path.delimiter}${process.env.PATH}`;
   const emptyHome = fs.mkdtempSync(path.join(os.tmpdir(), "dental-home-"));
   if (MODE === "missing-weights") process.env.HOME = emptyHome; // 重みの置き場 ~/.graphy-next/models/... を空にする
   fs.mkdirSync(OUT_DIR, { recursive: true });
@@ -120,6 +125,37 @@ async function main(): Promise<void> {
       check(pcode.includes("stage('probe'") && !pcode.includes("load_image('inputs/0.npz')"), "事前チェックの同意画面: コードは環境と重みの確認だけ（画像を読まない）");
       await pw.getByTestId("consent-ack").check();
       await pw.getByTestId("consent-send").click();
+    }
+    const approveProbe = async (): Promise<void> => {
+      const pw = await consentWindow(driver, 120_000);
+      await pw.getByTestId("consent-ack").check();
+      await pw.getByTestId("consent-send").click();
+    };
+    if (MODE === "missing-deps") {
+      const bareRoot = (bare as string).replace(/\/bin$/, "");
+      await viewer.getByTestId("dp-env").waitFor({ state: "visible", timeout: 120_000 });
+      const box = (await viewer.getByTestId("dp-env").textContent()) ?? "";
+      const cmd = await viewer.getByTestId("dp-env-command").inputValue();
+      await viewer.screenshot({ path: path.join(OUT_DIR, "viewer-env-panel.png") });
+      const st0 = await state(viewer);
+      check(st0.phase === "idle" && !(await viewer.getByTestId("dp-result").isVisible()), "不足のとき本処理は出ない（結果の欄も出ない）", st0.phase);
+      check(st0.env?.python?.startsWith(bareRoot), "使われる Python が検査した（空の）venv のもの", st0.env?.python);
+      check(/ultralytics.*(入っていません|not installed)/.test(box) && /torch.*(入っていません|not installed)/.test(box), "入っていないものが枠に出る", box.slice(0, 300));
+      check(cmd.startsWith(`${bareRoot}/bin/python`) && /-m pip install ultralytics==8\.4\.208 torch numpy pillow$/.test(cmd), "導入コマンドが、使われる Python を名指しして不足を揃えている", cmd);
+      console.log(`  導入コマンド: ${cmd}`);
+      const sites = (dir: string) => fs.readdirSync(path.join(dir, "..", "lib")).filter((d) => d.startsWith("python")).map((d) => path.join(dir, "..", "lib", d, "site-packages"));
+      fs.writeFileSync(path.join(sites(bare as string)[0], "zz-installed.pth"), sites(bin)[0] + "\n");
+      console.log("\n[2b] 導入したことにして（本体は再起動しない）［再確認］");
+      await viewer.getByTestId("dp-env-recheck").click();
+      await approveProbe();
+      await viewer.waitForFunction(
+        () => /環境は整いました|environment is ready/i.test(document.querySelector('[data-testid="dp-status"]')?.textContent ?? ""),
+        null,
+        { timeout: 120_000 },
+      );
+      check(!(await viewer.getByTestId("dp-env").isVisible()), "再確認で枠が消える（本体の再起動なし）");
+      await viewer.screenshot({ path: path.join(OUT_DIR, "viewer-env-fixed.png") });
+      await viewer.getByTestId("dp-run").click();
     }
     if (MODE === "missing-weights") {
       await viewer.getByTestId("dp-env").waitFor({ state: "visible", timeout: 120_000 });
@@ -216,7 +252,8 @@ async function main(): Promise<void> {
 
     const events = fs.readFileSync(AUDIT, "utf8").trim().split("\n").map((l) => JSON.parse(l));
     const reqs = events.filter((e: { event: string }) => e.event === "egress-requested");
-    check(reqs.length === 2 && reqs.every((e: { endpointKind: string }) => e.endpointKind === "local"), "監査: 送信の要求は 2 件（事前チェック・本処理）で、どちらも endpointKind=local", reqs);
+    const want = MODE === "missing-deps" ? 3 : 2; // 事前チェック・（再確認の事前チェック）・本処理
+    check(reqs.length === want && reqs.every((e: { endpointKind: string }) => e.endpointKind === "local"), `監査: 送信の要求は ${want} 件（事前チェックと本処理）で、すべて endpointKind=local`, reqs);
   } catch (e) {
     for (const [i, pg] of driver.app.windows().entries()) await pg.screenshot({ path: path.join(OUT_DIR, `fail-window-${i}.png`) }).catch(() => undefined);
     throw e;
