@@ -18,6 +18,7 @@ nav:
   - ROI・マスク・解析: analysis.md
   - 一括抽出と無人実行: batch-extraction.md
   - DICOM 通信: dicom-network.md
+  - 事前取得（予約一覧から過去検査を取り込む）: prefetch.md
   - 外部から検査を開く（RIS 連携）: external-open.md
   - プラグイン: plugins.md
   - 環境設定: settings.md
