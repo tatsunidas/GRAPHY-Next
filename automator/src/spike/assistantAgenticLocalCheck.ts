@@ -5,7 +5,9 @@
  *          npx tsx src/spike/assistantAgenticLocalCheck.ts
  *   任意: LLAMA_EXTRA（例 "--lora a.gguf"）、RUN_TAG（結果ファイル名の接尾辞）、SCENES（例 "2,4,1"。既定は全部）、
  *         REPEATS（各場面の繰り返し回数。既定 3。実機のチャットは毎回同じ出力とは限らない）、
- *         LOCAL_PORT（既定 19430）、CPU_THREADS
+ *         LOCAL_PORT（既定 19430）、CPU_THREADS、
+ *         CAPTURE_REQUESTS（ファイル。指定すると、アプリが llama-server に送る /v1/chat/completions の要求本文を 1 行 1 JSON で追記する。
+ *           LOCAL_PORT+1 の素通しプロキシをアプリの提供元にするだけで、応答は変えない。プロンプトが実アプリと学習時でずれていないかの確認用）
  *
  * 本物の Electron ＋ backend ＋ fixture(ct-basic, 43 枚) の #2dviewer 窓 ＋ 製品と同じ起動引数の llama-server。
  * 回帰の組（assistantEvalLocalModel.ts）はツール呼び出しの列だけを見る合成の土台なので、こちらは**画面の実体**で判定する:
@@ -15,6 +17,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import http from "node:http";
 import { createRequire } from "node:module";
 import type { Page } from "playwright";
 
@@ -113,8 +116,26 @@ async function main(): Promise<void> {
   const driver = new DesktopDriver(PORTS);
   const out: Record<string, unknown> = { model: MODEL_ID, threads, extra: EXTRA, ctx: 8192 };
   const results: SceneResult[] = [];
+  const CAPTURE = process.env.CAPTURE_REQUESTS;
+  let proxy: http.Server | null = null;
+  let appPort = LOCAL_PORT;
   try {
     await waitHealth(LOCAL_PORT, 10 * 60_000);
+    if (CAPTURE) {
+      appPort = LOCAL_PORT + 1;
+      proxy = http.createServer((req, res) => {
+        const chunks: Buffer[] = [];
+        req.on("data", (c: Buffer) => chunks.push(c));
+        req.on("end", () => {
+          const body = Buffer.concat(chunks);
+          if (req.method === "POST" && req.url?.includes("/v1/chat/completions")) fs.appendFileSync(CAPTURE, body.toString("utf8").replace(/\n/g, " ") + "\n");
+          const up = http.request({ host: "127.0.0.1", port: LOCAL_PORT, path: req.url, method: req.method, headers: req.headers }, (r) => { res.writeHead(r.statusCode ?? 502, r.headers); r.pipe(res); });
+          up.on("error", () => { res.statusCode = 502; res.end(); });
+          up.end(body);
+        });
+      });
+      await new Promise<void>((ok) => proxy!.listen(appPort, "127.0.0.1", ok));
+    }
     await driver.start();
     const info = await driver.app.evaluate(({ app, dialog }) => {
       dialog.showMessageBoxSync = (() => 0) as typeof dialog.showMessageBoxSync;
@@ -147,7 +168,7 @@ async function main(): Promise<void> {
     out.sliceCountAssumed = SLICES;
     console.log(`  スライダ max=${max}（${SLICES} 枚なら 42）`);
 
-    const local = { id: "local", label: "ローカル LLM", kind: "openai", endpoint: `http://127.0.0.1:${LOCAL_PORT}`, auth: "none", toolMode: md!.toolMode === "native" ? "native" : "none", models: { "text-to-text": MODEL_ID } };
+    const local = { id: "local", label: "ローカル LLM", kind: "openai", endpoint: `http://127.0.0.1:${appPort}`, auth: "none", toolMode: md!.toolMode === "native" ? "native" : "none", models: { "text-to-text": MODEL_ID } };
     const set = await main.evaluate((cfg) => (window as unknown as { graphyDesktop: { aiProvidersSet: (c: unknown) => Promise<{ ok: boolean }> } }).graphyDesktop.aiProvidersSet(cfg), { providers: [local], defaults: { "text-to-text": "local" } });
     if (!set.ok) throw new Error(`提供元を保存できない: ${JSON.stringify(set)}`);
 
@@ -303,6 +324,7 @@ async function main(): Promise<void> {
     out.finishedAt = new Date().toISOString();
     fs.writeFileSync(path.join(OUT_DIR, `${MODEL_ID}${TAG}.json`), JSON.stringify(out, null, 2));
     server.kill("SIGTERM");
+    proxy?.close();
     await driver.stop();
   }
 }
