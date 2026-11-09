@@ -54,6 +54,15 @@ class RetentionPlannerTest {
     }
 
     @Test
+    void 日数3日_診察室向けの短い保持_4日前は消え2日前は残り_ちょうど3日前は残る() {
+        var s = List.of(study("old4", 4, GB), study("edge3", 3, GB), study("new2", 2, GB));
+        var p = plan(s, Map.of(), new RetentionConfig(3, null, null), 100 * GB, 2 * GB);
+        assertEquals(List.of("old4"), uids(p), "期限は「最後の受信から 3 日を過ぎた」検査。ちょうど 3 日前は過ぎていない");
+        assertEquals("days", p.items().get(0).reason());
+        assertEquals(3, new RetentionConfig(3, null, null).validated().days());
+    }
+
+    @Test
     void 空き容量_古い順に下限以上になったところで止まる() {
         // 空き 5GB・下限 10GB。古い順に 3・4・2 GB → 3GB で 8GB（未達）→ 4GB で 12GB（達成）→ 2GB は消さない
         var s = List.of(study("a", 30, 3 * GB), study("b", 20, 4 * GB), study("c", 10, 2 * GB));
