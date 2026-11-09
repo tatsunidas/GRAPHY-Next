@@ -14,7 +14,7 @@
 //   GRAPHY_BACKEND_PROFILE     … backend プロファイル（既定 config.backend.profile）
 //   GRAPHY_DEV_SERVER_URL      … Vite dev サーバの URL（既定 config.devServerUrl の 5173）
 
-const { app, BrowserWindow, shell, dialog, ipcMain, nativeImage, screen, clipboard, powerSaveBlocker, session, systemPreferences } = require("electron");
+const { app, BrowserWindow, shell, dialog, ipcMain, nativeImage, screen, clipboard, powerSaveBlocker, session, systemPreferences, Tray, Menu } = require("electron");
 const { spawn } = require("node:child_process");
 const path = require("node:path");
 const os = require("node:os");
@@ -550,6 +550,11 @@ function enqueueExternal(parsed) {
 function showMainWindow() {
   if (mainWin && !mainWin.isDestroyed()) {
     if (mainWin.isMinimized()) mainWin.restore();
+    if (hiddenRestore) {
+      if (hiddenRestore.maximized) mainWin.maximize();
+      if (hiddenRestore.fullScreen) mainWin.setFullScreen(true);
+      hiddenRestore = null;
+    }
     mainWin.show();
     mainWin.focus();
   } else if (app.isReady()) {
@@ -579,6 +584,91 @@ if (!secondaryInstance) {
   enqueueExternal(externalOpen.parseArgv(process.argv));
 }
 
+
+// --- 常駐（閉じてもトレイに残る・ログイン時に起動する）---
+// 既定はどちらもオフ（窓を閉じるとアプリも終わる）。診察室のように予約日の前に事前取得を走らせたい PC で、
+// 利用者が環境設定 > 事前取得 からオンにする。オンの間、メインの窓の「閉じる」は隠すだけにして backend を止めない
+// （受信の SCP と定時の事前取得が動き続ける）。終了はトレイの［終了］から（更新・OS の終了では隠さず終える）。
+const background = require("./background");
+let backgroundPrefs = null;
+let tray = null;
+let quitting = false;
+let startHiddenPending = false; // ログイン時の起動（--hidden）で、最初の表示を見送る
+let hiddenRestore = null; // 見送った間に取っておいた、前回の窓の状態（最大化・全画面）
+
+function bgPrefs() {
+  if (!backgroundPrefs) {
+    backgroundPrefs = background.createBackgroundPrefs({ file: path.join(app.getPath("userData"), "background.json") });
+  }
+  return backgroundPrefs;
+}
+
+function keepInTray() {
+  try {
+    return bgPrefs().get().keepInTray;
+  } catch (e) {
+    console.warn("[background] could not read prefs:", e && e.message);
+    return false;
+  }
+}
+
+function trayLabels() {
+  return String(app.getLocale()).startsWith("ja") ? { open: "開く", quit: "終了" } : { open: "Open", quit: "Quit" };
+}
+
+function applyBackground() {
+  const p = bgPrefs().get();
+  if (p.keepInTray && !tray && process.platform !== "darwin") {
+    const l = trayLabels();
+    tray = new Tray(nativeImage.createFromPath(APP_ICON).resize({ width: 16, height: 16 }));
+    tray.setToolTip("GRAPHY-Next");
+    tray.setContextMenu(
+      Menu.buildFromTemplate([
+        { label: l.open, click: () => showMainWindow() },
+        { type: "separator" },
+        { label: l.quit, click: () => { quitting = true; app.quit(); } },
+      ]),
+    );
+    tray.on("click", () => showMainWindow());
+  } else if (!p.keepInTray && tray) {
+    tray.destroy();
+    tray = null;
+  }
+  // 登録はパッケージ版だけ（開発版で登録すると electron.exe が OS の起動項目に入る）。Linux には API が無い。
+  if (app.isPackaged && (process.platform === "win32" || process.platform === "darwin")) {
+    app.setLoginItemSettings(background.loginItemSettings(p));
+  }
+}
+
+function backgroundState() {
+  const p = bgPrefs().get();
+  return {
+    ...p,
+    loginSupported: app.isPackaged && (process.platform === "win32" || process.platform === "darwin"),
+    trayAvailable: process.platform !== "darwin",
+  };
+}
+
+function isMainSender(e) {
+  return !!mainWin && !mainWin.isDestroyed() && e.sender === mainWin.webContents;
+}
+
+ipcMain.handle("graphy:background-get", (e) => (isMainSender(e) ? backgroundState() : null));
+ipcMain.handle("graphy:background-set", (e, patch) => {
+  if (!isMainSender(e)) return { ok: false, error: "forbidden" };
+  try {
+    bgPrefs().set(patch);
+    applyBackground();
+    return { ok: true, state: backgroundState() };
+  } catch (err) {
+    console.warn("[background] set failed:", err && err.message);
+    return { ok: false, error: "invalid" };
+  }
+});
+app.on("before-quit", () => {
+  quitting = true;
+});
+
 function createWindow() {
   const keeper = createWindowStateKeeper("main", {
     width: WINDOW.width,
@@ -604,6 +694,16 @@ function createWindow() {
   win.webContents.on("did-start-loading", () => {
     if (mainWin === win) externalReady = false; // 再読み込みのあとも同じ
   });
+  win.on("close", (e) => {
+    // 常駐がオンなら、閉じずに隠す（終了の最中は隠さない）。ほかの窓（ビューアなど）は従来どおり閉じる。
+    if (background.shouldHideOnClose({ keepInTray: keepInTray(), quitting })) {
+      e.preventDefault();
+      win.hide();
+    }
+  });
+  win.on("session-end", () => {
+    quitting = true; // Windows のサインアウト・シャットダウンを、隠して止めない
+  });
   win.on("closed", () => {
     if (mainWin === win) {
       mainWin = null;
@@ -625,6 +725,14 @@ function createWindow() {
   });
 
   win.once("ready-to-show", () => {
+    if (startHiddenPending) {
+      // ログイン時の起動: 窓は出さず、トレイから開く。maximize()・setFullScreen() は隠れた窓を表示してしまうので、
+      // 前回の状態の復元は、最初に表示するとき（showMainWindow）まで取っておく。
+      startHiddenPending = false;
+      hiddenRestore = { maximized: keeper.isMaximized, fullScreen: keeper.isFullScreen };
+      closeSplash();
+      return;
+    }
     if (keeper.isMaximized) win.maximize();
     if (keeper.isFullScreen) win.setFullScreen(true);
     win.show();
@@ -2719,6 +2827,12 @@ app.whenReady().then(async () => {
   dbFolders.init(resolveDataDir());
   activeDbFolder = resolveStartupDbFolder();
   if (!activeDbFolder) return; // 利用者が「終了」を選んだ
+  try {
+    startHiddenPending = background.startsHidden({ argv: process.argv, keepInTray: keepInTray() });
+    applyBackground();
+  } catch (e) {
+    console.warn("[background] could not apply:", e && e.message);
+  }
   createSplash();
   try {
     // 再起動のあとは、前のアプリの backend がポートを離すのを待つ（後始末と並んで起動するため）
@@ -2758,8 +2872,10 @@ function stopBackend() {
 }
 
 app.on("window-all-closed", () => {
+  // 常駐中は backend を止めない（隠れたメインの窓があるうちは、ここへは来ない。ビューアだけが残る場合などの保険）
+  if (keepInTray() && !quitting) return;
   stopBackend();
-  if (process.platform !== "darwin") app.quit();
+  if (background.shouldQuitWhenAllClosed({ keepInTray: false, platform: process.platform })) app.quit();
 });
 
 // 確保した Colab のランタイムと、この PC で起動した Jupyter は閉じる前に止める
