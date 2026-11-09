@@ -18,6 +18,8 @@ import { Toolbar, type ToolKind } from "./Toolbar";
 import { SearchPanel } from "./SearchPanel";
 import { StatusBar } from "./StatusBar";
 import { useImportWatchStatus } from "./useImportWatchStatus";
+import { useStoreVersion } from "./useStoreVersion";
+import { isIdle } from "./storeRefreshView";
 import { useReceiveAnonStatus } from "./useReceiveAnonStatus";
 import { useComputeJobsStatus } from "./useComputeJobsStatus";
 import { TagExtractorDialog } from "./TagExtractorDialog";
@@ -103,6 +105,7 @@ export function MainScreen({
     setFilters(f);
     // 同じ条件の再検索でも必ず問い合わせ直す（通知の無い経路で増えた検査を拾うため）。
     setReloadKey((k) => k + 1);
+    storeRefresh.acknowledge();
   };
   const openAlbum = (v: AlbumView) => {
     setImportedView(null);
@@ -128,6 +131,16 @@ export function MainScreen({
   const [importMsg, setImportMsg] = useState<string | null>(null);
   const [selectedStudy, setSelectedStudy] = useState<Study | null>(null);
   const [selectedSeries, setSelectedSeries] = useState<Series | null>(null);
+  // 受信・事前取得・削除で保管庫が変わったら、待機中は一覧を自動で読み直し、操作中は状態バーで知らせる。
+  const [listBusy, setListBusy] = useState(false);
+  const storeRefresh = useStoreVersion({
+    active: isStandalone,
+    idle: isIdle({ selected: selectedStudy !== null, listBusy }),
+    onAutoReload: () => {
+      setReloadKey((k) => k + 1);
+      importWatch.acknowledge();
+    },
+  });
   const [openTool, setOpenTool] = useState<
     | "tagExtractor"
     | "seriesExtractor"
@@ -530,6 +543,7 @@ export function MainScreen({
             albumView={albumView}
             albumVersion={albumVersion}
             onAlbumChanged={onAlbumChanged}
+            onBusyChange={setListBusy}
           />
         </div>
         {isPaneLayout(listLayout) && (
@@ -545,6 +559,7 @@ export function MainScreen({
         status={status}
         error={error}
         importWatch={importWatch.view}
+        storeChanged={storeRefresh.notify}
         receiveAnon={receiveAnon}
         computeJobs={computeJobsStatus.counts}
         keepAwake={computeJobsStatus.keepAwake}
@@ -552,6 +567,7 @@ export function MainScreen({
         onReloadList={() => {
           setReloadKey((k) => k + 1);
           importWatch.acknowledge();
+          storeRefresh.acknowledge();
         }}
       />
       <TagExtractorDialog

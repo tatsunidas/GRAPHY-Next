@@ -64,6 +64,7 @@ export function StudyList({
   albumView,
   albumVersion = 0,
   onAlbumChanged,
+  onBusyChange,
 }: {
   filters?: StudyFilters | null;
   reloadKey?: number;
@@ -91,6 +92,11 @@ export function StudyList({
   albumVersion?: number;
   /** アルバムの中身・一覧が変わった（追加・外した・作成）。親がアルバムの表示を取り直す。 */
   onAlbumChanged?: () => void;
+  /**
+   * 一覧の読み込み直しで失われる操作（2 ページ目以降を見ている・アルバム用にチェックしている）の最中か。
+   * 親が、新しい検査が届いたときに自動で読み直してよいかを決めるために使う。
+   */
+  onBusyChange?: (busy: boolean) => void;
 }) {
   const { t } = useI18n();
   // 取得は hooks/useStudies に集約（モバイルシェルと共有。fw/mobile-ui-design.md §3.5）。
@@ -115,6 +121,12 @@ export function StudyList({
     onSelectStudy?.(s);
     onSelectSeries?.(null); // スタディ変更時はシリーズ選択をリセット
   };
+
+  const listBusy = page > 0 || checked.size > 0;
+  useEffect(() => {
+    onBusyChange?.(listBusy);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [listBusy]);
 
   // 検索条件・再読込キーが変わったら選択とページを初期化する（取得自体は useStudies が行う）。
   const filterKey = JSON.stringify(filters ?? null);

@@ -2844,6 +2844,7 @@ export const ja: Record<string, string> = {
   "recvAnon.bar.invalid": "受信時の匿名化: 設定が不正（受信を拒否中）",
   "importWatch.bar.counts": "取込 {{imported}} ・ 待機 {{waiting}} ・ 失敗 {{failed}}",
   "importWatch.bar.error": "エラー",
+  "main.status.storeChanged": "検査が届いた・消えた可能性があります（一覧を更新）",
   "importWatch.bar.newItems": "新しい取り込みが {{n}} 件あります（一覧を更新）",
 
   // monitor QC (mqc)
