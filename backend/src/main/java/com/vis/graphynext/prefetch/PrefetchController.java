@@ -10,6 +10,7 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
 
@@ -51,23 +52,28 @@ public class PrefetchController {
                 service.recentRuns().stream().map(RunDto::of).toList());
     }
 
-    /** 手動実行（設定が有効なときだけ。走行中は 409）。 */
+    /** 手動実行を始める（すぐ 202 を返す。結果は status の runs で見る。走行中は 409）。 */
     @PostMapping("/run")
-    public RunDto run() {
+    @ResponseStatus(HttpStatus.ACCEPTED)
+    public void run() {
         try {
-            return RunDto.of(service.run(PrefetchService.MANUAL_TRIGGER, PrefetchService.MANUAL));
+            service.startAsync(PrefetchService.MANUAL_TRIGGER, PrefetchService.MANUAL);
         } catch (IllegalStateException e) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "running");
         }
     }
 
+    /** 予約一覧の確認結果。取れたら days（YYYYMMDD → 患者数）、取れなければ error（理由のコード）。 */
+    public record PreviewDto(Map<String, Integer> days, String error) {
+    }
+
     /** 予約一覧だけ取って、日ごとの患者数を返す（取得はしない）。 */
     @PostMapping("/preview-schedule")
-    public Map<String, Integer> preview() {
+    public PreviewDto preview() {
         try {
-            return service.previewSchedule();
+            return new PreviewDto(service.previewSchedule(), null);
         } catch (PrefetchService.SourceException e) {
-            throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY, e.getMessage());
+            return new PreviewDto(Map.of(), e.getMessage());
         }
     }
 

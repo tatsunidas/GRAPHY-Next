@@ -34,7 +34,9 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.locks.ReentrantLock;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Stream;
 
 /**
@@ -75,7 +77,12 @@ public class PrefetchService {
     private final PrefetchItemRepository items;
     private final PrefetchHoldRepository holds;
     private final Clock clock;
-    private final ReentrantLock lock = new ReentrantLock();
+    private final AtomicBoolean running = new AtomicBoolean();
+    private final ExecutorService async = Executors.newSingleThreadExecutor(r -> {
+        Thread t = new Thread(r, "prefetch-manual");
+        t.setDaemon(true);
+        return t;
+    });
 
     @Autowired
     public PrefetchService(SettingsService settings, DimseQrService dimse, DicomRemoteAeService remoteAes,
@@ -104,7 +111,7 @@ public class PrefetchService {
     }
 
     public boolean isRunning() {
-        return lock.isLocked();
+        return running.get();
     }
 
     /** 設定の対象日（今日・明日）。 */
@@ -135,14 +142,43 @@ public class PrefetchService {
      * @param slotKey 定時の枠。手動は {@link #MANUAL}
      */
     public PrefetchRun run(String trigger, String slotKey) {
-        if (!lock.tryLock()) {
+        if (!running.compareAndSet(false, true)) {
             throw new IllegalStateException("running");
         }
         try {
             return execute(trigger, slotKey);
         } finally {
-            lock.unlock();
+            running.set(false);
         }
+    }
+
+    /**
+     * 手動実行用: 別のスレッドで走らせてすぐ返す（大きな取得は長くかかる）。走行中なら IllegalStateException("running")。
+     * 結果は実行の記録（{@link #recentRuns}）と {@link #isRunning} で見る。
+     */
+    public void startAsync(String trigger, String slotKey) {
+        if (!running.compareAndSet(false, true)) {
+            throw new IllegalStateException("running");
+        }
+        try {
+            async.execute(() -> {
+                try {
+                    execute(trigger, slotKey);
+                } catch (RuntimeException e) {
+                    log.warn("事前取得の手動実行に失敗しました", e);
+                } finally {
+                    running.set(false);
+                }
+            });
+        } catch (RuntimeException e) {
+            running.set(false);
+            throw e;
+        }
+    }
+
+    @jakarta.annotation.PreDestroy
+    void shutdown() {
+        async.shutdownNow();
     }
 
     private PrefetchRun execute(String trigger, String slotKey) {
