@@ -135,7 +135,7 @@ public class ComputeDatasetService {
     }
 
     /**
-     * @param localDestination 送り先が kind=local の計算機か。true のときだけ、単純X線（CR/DX/MG）をマスク無しで通す。
+     * @param localDestination 送り先が kind=local の計算機か。true のときだけ、単純X線（CR/DX/MG/PX/IO）をマスク無しで通す。
      *                         通したデータセットは {@code localOnly} になり、local 以外の宛先には送れない
      */
     public Dataset create(String studyUid, String seriesUid, Format format, boolean localDestination) {
