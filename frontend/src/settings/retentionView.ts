@@ -213,6 +213,7 @@ const PROTECTIONS = [
   "receivedAfterPlanStart",
   "unknownReceived",
   "nonImageDicom",
+  "prefetchScheduled",
 ];
 
 export function unitKey(u: DaysUnit): string {

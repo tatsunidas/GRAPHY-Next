@@ -75,6 +75,9 @@ public class SettingsService {
      */
     public static final String RETENTION_PREFIX = "retention.";
 
+    /** 予約一覧からの事前取得の設定（{@code prefetch.*}）。記録と保護期限が DB フォルダごとなので、設定も DB に置く。 */
+    public static final String PREFETCH_PREFIX = "prefetch.";
+
     private static final Logger log = LoggerFactory.getLogger(SettingsService.class);
     private static final TypeReference<LinkedHashMap<String, String>> MAP_TYPE = new TypeReference<>() {
     };
@@ -100,7 +103,7 @@ public class SettingsService {
 
     private static boolean isDbScoped(String key) {
         return key.startsWith(XA_CALIBRATION_PREFIX) || key.startsWith(IMPORT_WATCH_PREFIX)
-                || key.startsWith(RETENTION_PREFIX);
+                || key.startsWith(RETENTION_PREFIX) || key.startsWith(PREFETCH_PREFIX);
     }
 
     @Transactional(readOnly = true)

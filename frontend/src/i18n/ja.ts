@@ -5082,6 +5082,7 @@ export const ja: Record<string, string> = {
   "retention.protect.receivedAfterPlanStart": "判定中に受信",
   "retention.protect.unknownReceived": "受信日時不明",
   "retention.protect.nonImageDicom": "派生物を含む",
+  "retention.protect.prefetchScheduled": "予約日まで事前取得を保護",
   "retention.protect.unknown": "その他",
   "retention.result.deleted": "削除",
   "retention.result.partial": "一部失敗",
