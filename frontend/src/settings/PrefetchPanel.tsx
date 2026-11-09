@@ -10,6 +10,7 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import { desktop } from "../desktopBridge";
 import { fetchRemoteAes, type RemoteAe } from "../api";
+import type { BackgroundState } from "../desktopBridge";
 import { HttpError } from "../http";
 import { useI18n } from "../i18n/i18n";
 import { useDateFormat, formatClockTime } from "../i18n/dateFormat";
@@ -46,6 +47,8 @@ export function PrefetchPanel() {
   const [message, setMessage] = useState<string | null>(null);
   const [preview, setPreview] = useState<string | null>(null);
   const [logOpen, setLogOpen] = useState(false);
+  const [bg, setBg] = useState<BackgroundState | null>(null);
+  const [bgError, setBgError] = useState(false);
   const alive = useRef(true);
 
   const refresh = useCallback(async () => {
@@ -66,6 +69,9 @@ export function PrefetchPanel() {
     fetchSettings()
       .then((s) => alive.current && setForm((cur) => cur ?? formFromSettings(s)))
       .catch(() => alive.current && setUnavailable(true));
+    d?.getBackground?.()
+      ?.then((b) => alive.current && setBg(b))
+      .catch(() => undefined);
     fetchRemoteAes()
       .then((a) => alive.current && setAes(a))
       .catch(() => undefined);
@@ -136,6 +142,18 @@ export function PrefetchPanel() {
       setMessage(String(e));
     } finally {
       setBusy(false);
+    }
+  };
+
+  // 常駐の設定は main が持つ。保存ボタンは無く、押した時点で反映する。
+  const setBackground = async (patch: { keepInTray?: boolean; launchAtLogin?: boolean }) => {
+    setBgError(false);
+    try {
+      const r = await d?.setBackground?.(patch);
+      if (r?.ok && r.state) setBg(r.state);
+      else setBgError(true);
+    } catch {
+      setBgError(true);
     }
   };
 
@@ -320,6 +338,38 @@ export function PrefetchPanel() {
         <p style={note} data-testid="prefetch-preview-result">
           {preview}
         </p>
+      )}
+
+      {bg && (
+        <>
+          <h3 style={h3}>{t("prefetch.sec.background")}</h3>
+          <label style={row}>
+            <input
+              type="checkbox"
+              data-testid="prefetch-bg-tray"
+              checked={bg.keepInTray}
+              onChange={(e) => void setBackground({ keepInTray: e.target.checked })}
+            />
+            <span>{t("prefetch.bg.keepInTray")}</span>
+          </label>
+          {!bg.trayAvailable && <p style={muted}>{t("prefetch.bg.trayUnavailable")}</p>}
+          <label style={row}>
+            <input
+              type="checkbox"
+              data-testid="prefetch-bg-login"
+              checked={bg.launchAtLogin}
+              disabled={!bg.loginSupported}
+              onChange={(e) => void setBackground({ launchAtLogin: e.target.checked })}
+            />
+            <span>{t("prefetch.bg.launchAtLogin")}</span>
+          </label>
+          <p style={muted}>{bg.loginSupported ? t("prefetch.bg.note") : t("prefetch.bg.loginUnsupported")}</p>
+          {bgError && (
+            <div style={errBox} data-testid="prefetch-bg-error">
+              {t("prefetch.bg.failed")}
+            </div>
+          )}
+        </>
       )}
 
       <h3 style={h3}>{t("prefetch.status")}</h3>

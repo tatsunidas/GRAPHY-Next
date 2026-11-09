@@ -96,6 +96,52 @@ afterEach(async () => {
 });
 
 describe("PrefetchPanel（実際に描画して操作する）", () => {
+  it("常駐: デスクトップの橋があれば欄が出て、押すと main へ送り、状態が反映される。橋が無ければ欄を出さない", async () => {
+    expect(q("prefetch-bg-tray")).toBeNull(); // 橋が無い（web・ブラウザ）
+    const sent: unknown[] = [];
+    let state = { keepInTray: false, launchAtLogin: false, loginSupported: true, trayAvailable: true };
+    (window as unknown as { graphyDesktop?: unknown }).graphyDesktop = {
+      getBackground: () => Promise.resolve(state),
+      setBackground: (patch: Record<string, boolean>) => {
+        sent.push(patch);
+        state = { ...state, ...patch };
+        return Promise.resolve({ ok: true, state });
+      },
+    };
+    await act(async () => root.unmount());
+    root = createRoot(host);
+    await act(async () => {
+      root.render(createElement(I18nProvider, null, createElement(PrefetchPanel)));
+    });
+    await flush();
+    expect((q("prefetch-bg-tray") as HTMLInputElement).checked).toBe(false);
+    await click("prefetch-bg-tray");
+    expect(sent).toEqual([{ keepInTray: true }]);
+    expect((q("prefetch-bg-tray") as HTMLInputElement).checked).toBe(true);
+    await click("prefetch-bg-login");
+    expect(sent.at(-1)).toEqual({ launchAtLogin: true });
+    expect(q("prefetch-bg-error")).toBeNull();
+    delete (window as unknown as { graphyDesktop?: unknown }).graphyDesktop;
+  });
+
+  it("負例: main が受け付けなかったら、反映したことにせず失敗を見せる。ログイン起動が使えない環境では押せない", async () => {
+    (window as unknown as { graphyDesktop?: unknown }).graphyDesktop = {
+      getBackground: () => Promise.resolve({ keepInTray: false, launchAtLogin: false, loginSupported: false, trayAvailable: true }),
+      setBackground: () => Promise.resolve({ ok: false, error: "invalid" }),
+    };
+    await act(async () => root.unmount());
+    root = createRoot(host);
+    await act(async () => {
+      root.render(createElement(I18nProvider, null, createElement(PrefetchPanel)));
+    });
+    await flush();
+    expect((q("prefetch-bg-login") as HTMLInputElement).disabled).toBe(true);
+    await click("prefetch-bg-tray");
+    expect(q("prefetch-bg-error")).not.toBeNull();
+    expect((q("prefetch-bg-tray") as HTMLInputElement).checked).toBe(false);
+    delete (window as unknown as { graphyDesktop?: unknown }).graphyDesktop;
+  });
+
   it("既定のまま描画でき、無効のまま保存できる（何も入れていなくても保存が通る）", async () => {
     expect(q("prefetch-panel")).not.toBeNull();
     expect((q("prefetch-enabled") as HTMLInputElement).checked).toBe(false);
