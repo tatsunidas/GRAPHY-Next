@@ -19,7 +19,7 @@ import java.util.function.Predicate;
  * ダブルクォートの値・カンマ・クォート内の {@code ""} を扱う。<b>1 つでも不正があれば CSV 全体を拒否</b>し、何も適用しない。
  * 理由のコードに値そのものは含めない（個人情報をログ・画面へ出さない）。空の値は「指定なし」。
  */
-final class ImportWatchCsv {
+public final class ImportWatchCsv {
 
     /** 解析結果。{@code error} が null なら有効（{@code values} は指定のあった列だけ）。 */
     record Parsed(Map<String, String> values, String error) {
@@ -88,7 +88,7 @@ final class ImportWatchCsv {
     }
 
     /** RFC 4180 に沿った分割。空行は無視。BOM を除く。 */
-    static List<List<String>> rows(String text) {
+    public static List<List<String>> rows(String text) {
         List<List<String>> out = new ArrayList<>();
         if (text == null) {
             return out;

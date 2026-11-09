@@ -142,6 +142,12 @@ public class DimseQrService {
      * @return 取り込んだインスタンス数
      */
     public int getStudy(String host, int port, String calledAet, String studyUid, boolean tls) throws IOException {
+        return getStudy(host, port, calledAet, studyUid, tls, TOOL_TIMEOUT_MS);
+    }
+
+    /** {@link #getStudy(String, int, String, String, boolean)} のタイムアウト指定版（事前取得は大きな検査を扱う）。 */
+    public int getStudy(String host, int port, String calledAet, String studyUid, boolean tls, long timeoutMs)
+            throws IOException {
         Path tool = tools.require("getscu");
         Path outDir = Files.createTempDirectory("graphy-getscu-");
         List<String> cmd = new ArrayList<>(List.of(
@@ -152,7 +158,7 @@ public class DimseQrService {
                 "-m", "StudyInstanceUID=" + studyUid,
                 "--directory", outDir.toString()));
         cmd.addAll(tlsArgs(tls));
-        Dcm4cheTools.Result r = tools.run(cmd, TOOL_TIMEOUT_MS);
+        Dcm4cheTools.Result r = tools.run(cmd, timeoutMs);
         if (!r.ok()) {
             throw new IOException("getscu 失敗 (exit=" + r.exitCode() + "): " + tail(r.output()));
         }
@@ -188,6 +194,12 @@ public class DimseQrService {
      */
     public int moveStudy(String host, int port, String calledAet, String studyUid, String destAet, boolean tls)
             throws IOException {
+        return moveStudy(host, port, calledAet, studyUid, destAet, tls, TOOL_TIMEOUT_MS);
+    }
+
+    /** {@link #moveStudy(String, int, String, String, String, boolean)} のタイムアウト指定版。 */
+    public int moveStudy(String host, int port, String calledAet, String studyUid, String destAet, boolean tls,
+                         long timeoutMs) throws IOException {
         Path tool = tools.require("movescu");
         List<String> cmd = new ArrayList<>(List.of(
                 tool.toString(),
@@ -197,7 +209,7 @@ public class DimseQrService {
                 "-L", "STUDY",
                 "-m", "StudyInstanceUID=" + studyUid));
         cmd.addAll(tlsArgs(tls));
-        Dcm4cheTools.Result r = tools.run(cmd, TOOL_TIMEOUT_MS);
+        Dcm4cheTools.Result r = tools.run(cmd, timeoutMs);
         if (!r.ok()) {
             throw new IOException("movescu 失敗 (exit=" + r.exitCode() + "): " + tail(r.output()));
         }
@@ -267,6 +279,73 @@ public class DimseQrService {
         }
         log.info("QR C-FIND(STUDY) 完了: {} 件 ({}@{}:{})", rows.size(), calledAet, host, port);
         return rows;
+    }
+
+    /** 予約（Modality Worklist）1 件。必要な属性だけ。 */
+    public record WorklistEntry(String patientId, String scheduledDate, String modality, String stationAet) {
+    }
+
+    /**
+     * Modality Worklist の C-FIND（findscu -M MWL）。指定日（YYYYMMDD）に予約された項目を返す。
+     * {@code stationAet}・{@code modality} が null か空なら絞らない。
+     */
+    public List<WorklistEntry> findWorklist(String host, int port, String calledAet, String day, String stationAet,
+                                            String modality, boolean tls) throws IOException {
+        Path tool = tools.require("findscu");
+        Path outDir = Files.createTempDirectory("graphy-mwl-");
+        List<String> cmd = new ArrayList<>(List.of(
+                tool.toString(),
+                "-b", localAe.aeTitle(),
+                "-c", calledAet + "@" + host + ":" + port,
+                "-M", "MWL",
+                "-r", "00100020",
+                "-m", "00400100.00400002=" + day,
+                "-r", "00400100.00080060",
+                "-r", "00400100.00400001"));
+        if (stationAet != null && !stationAet.isBlank()) {
+            cmd.add("-m");
+            cmd.add("00400100.00400001=" + stationAet.trim());
+        }
+        if (modality != null && !modality.isBlank()) {
+            cmd.add("-m");
+            cmd.add("00400100.00080060=" + modality.trim());
+        }
+        cmd.add("--out-dir");
+        cmd.add(outDir.toString());
+        cmd.add("--out-file");
+        cmd.add("rsp-0000.dcm");
+        cmd.addAll(tlsArgs(tls));
+        Dcm4cheTools.Result r;
+        try {
+            r = tools.run(cmd, TOOL_TIMEOUT_MS);
+        } catch (IOException e) {
+            deleteQuietly(outDir);
+            throw e;
+        }
+        if (!r.ok()) {
+            deleteQuietly(outDir);
+            throw new IOException("findscu(MWL) 失敗 (exit=" + r.exitCode() + "): " + tail(r.output()));
+        }
+        List<WorklistEntry> out = new ArrayList<>();
+        try (Stream<Path> walk = Files.walk(outDir)) {
+            for (Path f : walk.filter(Files::isRegularFile).filter(p -> p.getFileName().toString().endsWith(".dcm")).toList()) {
+                try (DicomInputStream in = new DicomInputStream(f.toFile())) {
+                    Attributes a = in.readDataset();
+                    Attributes sps = a.getNestedDataset(Tag.ScheduledProcedureStepSequence);
+                    out.add(new WorklistEntry(
+                            a.getString(Tag.PatientID),
+                            sps == null ? null : sps.getString(Tag.ScheduledProcedureStepStartDate),
+                            sps == null ? null : sps.getString(Tag.Modality),
+                            sps == null ? null : sps.getString(Tag.ScheduledStationAETitle)));
+                } catch (Exception e) {
+                    log.warn("C-FIND(MWL) 応答のパースに失敗: {} ({})", f, e.getClass().getSimpleName());
+                }
+            }
+        } finally {
+            deleteQuietly(outDir);
+        }
+        log.info("MWL C-FIND 完了: {} 件 ({}@{}:{})", out.size(), calledAet, host, port);
+        return out;
     }
 
     /** SERIES レベル C-FIND。指定スタディ内のシリーズ一覧を返す。 */

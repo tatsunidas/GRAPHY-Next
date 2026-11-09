@@ -5091,6 +5091,7 @@ export const en: Record<string, string> = {
   "retention.protect.receivedAfterPlanStart": "received during run",
   "retention.protect.unknownReceived": "unknown receipt time",
   "retention.protect.nonImageDicom": "has derived objects",
+  "retention.protect.prefetchScheduled": "prefetched for an upcoming appointment",
   "retention.protect.unknown": "other",
   "retention.result.deleted": "Deleted",
   "retention.result.partial": "Partly failed",
