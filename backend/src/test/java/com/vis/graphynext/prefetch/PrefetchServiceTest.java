@@ -300,6 +300,22 @@ class PrefetchServiceTest {
     }
 
     @Test
+    void 手動の非同期実行_すぐ返り_終わると記録が残って走行中が戻る() throws Exception {
+        settings.putAll(Map.of(PrefetchConfig.KEY_ENABLED, "true")); // 不備のある設定 → すぐ ERROR で終わる
+        long before = runs.count();
+        PrefetchService s = service();
+        s.startAsync(PrefetchService.MANUAL_TRIGGER, PrefetchService.MANUAL);
+        long end = System.currentTimeMillis() + 15_000;
+        while ((s.isRunning() || runs.count() == before) && System.currentTimeMillis() < end) {
+            Thread.sleep(50);
+        }
+        assertTrue(!s.isRunning(), "終わったら走行中でなくなる");
+        assertEquals(before + 1, runs.count());
+        assertEquals(PrefetchRun.ERROR, runs.findTop20ByOrderByIdDesc().get(0).getStatus());
+        s.run(PrefetchService.MANUAL_TRIGGER, PrefetchService.MANUAL); // 走行中の印が残っていれば "running" で落ちる
+    }
+
+    @Test
     void 負例_設定が無効なら実行せず理由を記録する() {
         settings.putAll(Map.of(PrefetchConfig.KEY_ENABLED, "true"));
         PrefetchRun r = service().run(PrefetchService.MANUAL_TRIGGER, PrefetchService.MANUAL);

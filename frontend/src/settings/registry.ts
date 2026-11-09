@@ -643,6 +643,13 @@ export const SETTINGS_REGISTRY: CategoryDef[] = [
     sections: [],
   },
   {
+    // 事前取得は専用パネル（予約一覧の元・定時・取得の絞り込みと実行の状態）。SettingsDialog で特別扱い。standalone のみ動く。
+    id: "prefetch",
+    labelKey: "settings.cat.prefetch",
+    icon: "⏬",
+    sections: [],
+  },
+  {
     id: "dicom",
     labelKey: "settings.cat.dicom",
     icon: "🌐",
