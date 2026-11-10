@@ -80,6 +80,7 @@ const { createColabRuntimes } = require("./colabRuntimes");
 const { createGdriveAuth, REFRESH_KEY: GDRIVE_REFRESH_KEY } = require("./gdriveAuth");
 const gdrivePicker = require("./gdrivePicker");
 const renderPrefs = require("./renderPrefs");
+const rendererRecovery = require("./rendererRecovery");
 const gpuMemory = require("./gpuMemory");
 const { createBackupFolder, describeBackupFolder } = require("./gdriveFolder");
 const gdriveMode = require("./gdriveMode");
@@ -3015,6 +3016,45 @@ app.on("child-process-gone", (_e, details) => {
   // app.relaunch は今の環境変数を引き継ぐので、付けた GPU の指定を外してから起動し直す
   for (const k of [...Object.keys(renderPrefs.LINUX_ENV), ...Object.keys(renderPrefs.LINUX_ENV_AMD), "GRAPHY_RENDER_REEXEC"]) delete process.env[k];
   relaunchApp();
+});
+// 描画プロセスが落ちたとき（V8 の OOM など）、白いまま残さず読み込み直す。Colab の GPU を確保していれば、解放するか尋ねる。
+// 落ちても main は生きているので、Colab のランタイムは保持されたまま残る（放置すると次の実行が too-many-runtimes になる）。
+const recovery = rendererRecovery.createRecovery();
+const isAppRendererUrl = (url) => (DEV ? String(url).startsWith(DEV_URL) : String(url).includes("/renderer/index.html"));
+app.on("web-contents-created", (_e, wc) => {
+  wc.on("did-finish-load", () => recovery.onLoaded(wc.id));
+  wc.once("destroyed", () => recovery.forget(wc.id));
+});
+app.on("render-process-gone", (_e, wc, details) => {
+  const reason = details && details.reason;
+  const url = (() => {
+    try {
+      return wc.getURL();
+    } catch {
+      return "";
+    }
+  })();
+  if (quitting || !isAppRendererUrl(url)) return; // スプラッシュ・同意の窓などは対象外
+  const { action } = recovery.onGone(wc.id, reason);
+  if (action === "ignore") return;
+  console.warn(`[renderer-recovery] 描画プロセスが落ちました（${reason}, exitCode=${details && details.exitCode}）: ${url} → ${action}`);
+  const win = BrowserWindow.fromWebContents(wc);
+  if (!win || win.isDestroyed()) return;
+  if (action === "reload") {
+    try {
+      wc.reload();
+    } catch (err) {
+      console.warn("[renderer-recovery] 読み込み直せませんでした:", err && err.message);
+    }
+  }
+  const colab = !!colabRuntimes && colabRuntimes.endpoints().length > 0;
+  const d = rendererRecovery.describe({ giveup: action === "giveup", colab });
+  dialog
+    .showMessageBox(win, { type: "warning", buttons: d.buttons, defaultId: 0, cancelId: 0, title: "表示が異常終了しました", message: d.message, detail: d.detail })
+    .then(async (r) => {
+      if (r.response === d.releaseIndex && colabRuntimes) await colabRuntimes.releaseAll();
+    })
+    .catch((err) => console.warn("[renderer-recovery] 案内の表示に失敗:", err && err.message));
 });
 app.whenReady().then(() => {
   if (secondaryInstance || !renderGpuIsHigh()) return;
