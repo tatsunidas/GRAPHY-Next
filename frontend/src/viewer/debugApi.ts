@@ -564,6 +564,8 @@ export interface Viewer3dControl {
     parallelScaleMm?: number;
   }): { ok: boolean; reason?: string; applied?: unknown };
   setClipPlanes(planes: { origin: [number, number, number]; normal: [number, number, number] }[]): { ok: boolean; reason?: string };
+  /** 今の状態のまま 1 回描く（画素を読む直前に呼ぶ。視点は変えない）。 */
+  render(): void;
 }
 
 let viewer3dControl: Viewer3dControl | null = null;
@@ -573,12 +575,37 @@ export function publishViewer3dControl(c: Viewer3dControl | null): void {
   viewer3dControl = c;
 }
 
+/**
+ * 開いている 3D 窓へ「プラグインが指定した視点・クリップ面」を書き込む（dev のみ・検査用）。
+ * 起動コンテキストの `pluginView` を書き換えて知らせる。host API（出所を host が入れる）と同じ経路で窓に届く。
+ */
+function setViewer3dPluginView(view: object, ctxPatch?: object): boolean {
+  if (!import.meta.env.DEV) return false;
+  try {
+    const raw = localStorage.getItem("graphy-viewer3d-ctx");
+    if (!raw) return false;
+    const ctx = JSON.parse(raw) as Record<string, unknown>;
+    const next = { ...ctx, ...(ctxPatch ?? {}), pluginView: view, ts: Date.now() };
+    localStorage.setItem("graphy-viewer3d-ctx", JSON.stringify(next));
+    const bc = new BroadcastChannel("graphy-viewer3d");
+    bc.postMessage({ type: "updated" });
+    bc.close();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function getViewer3dState(): ReturnType<Viewer3dControl["getState"]> | null {
   return viewer3dControl ? viewer3dControl.getState() : null;
 }
 
 function applyViewer3dCamera(req: Parameters<Viewer3dControl["applyCamera"]>[0]): ReturnType<Viewer3dControl["applyCamera"]> | null {
   return viewer3dControl ? viewer3dControl.applyCamera(req) : null;
+}
+
+function renderViewer3d(): void {
+  viewer3dControl?.render();
 }
 
 function setViewer3dClipPlanes(planes: Parameters<Viewer3dControl["setClipPlanes"]>[0]): ReturnType<Viewer3dControl["setClipPlanes"]> | null {
@@ -999,6 +1026,8 @@ declare global {
       getPixelStats: typeof getPixelStats;
       getRender3dStats: typeof getRender3dStats;
       getViewer3dState: typeof getViewer3dState;
+      setViewer3dPluginView: typeof setViewer3dPluginView;
+      renderViewer3d: typeof renderViewer3d;
       applyViewer3dCamera: typeof applyViewer3dCamera;
       setViewer3dClipPlanes: typeof setViewer3dClipPlanes;
       getFusionResampleStats: typeof getFusionResampleStats;
@@ -1179,6 +1208,8 @@ export function installDebugApi(): void {
     getPixelStats,
     getRender3dStats,
     getViewer3dState,
+    setViewer3dPluginView,
+    renderViewer3d,
     applyViewer3dCamera,
     setViewer3dClipPlanes,
     getFusionResampleStats,
