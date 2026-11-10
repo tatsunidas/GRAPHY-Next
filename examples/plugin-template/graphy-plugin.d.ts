@@ -412,6 +412,8 @@ export interface VesselSegment {
   diameterMm: (number | null)[];
   /** 近位側の区間 id。根なら null。 */
   parentId: string | null;
+  /** 表示名（"LAD" など。プラグインが決める。本体は解釈しない）。無ければ `id` を出す。 */
+  name?: string;
 }
 
 /** 空間校正の状態。近似には近似と書くために要る。**H11**。 */
@@ -425,8 +427,9 @@ export interface VesselCalibration {
   /**
    * 径の測り方。半値法と密度計測では絶対値が 10% 以上違い、断面積はその 2 乗で効く。
    * 2 方向で違えば "mixed"（断面積はどちらの意味でもない）。分からなければ null。
+   * CT（マスクの幾何）は "mask-equivalent-area"（直交断面の面積から等価径）か "mask-min-width"（断面の最小幅）。
    */
-  diameterMethod: "half-max" | "densitometric" | "mixed" | null;
+  diameterMethod: "half-max" | "densitometric" | "mask-equivalent-area" | "mask-min-width" | "mixed" | null;
 }
 
 /** この数字がどこから来たか。注記を書くための材料。**H11**。 */
@@ -467,7 +470,7 @@ export interface VesselOrientation {
  * 🔴 **本体は FFR を計算しない。** 流体解析・学習モデルはプラグインの担当で、
  * 本体はモデルを渡し、返ってきた値を色で見せるだけ。
  */
-export interface VesselModel {
+export interface XaVesselModel {
   /** セッション内の鍵。🔴 本体の URL（ポート）を含み、**起動し直すと変わる**。保存の鍵にしない。 */
   runId: string;
   /**
@@ -488,10 +491,42 @@ export interface VesselModel {
   at: number;
 }
 
+/**
+ * CT 由来のモデルの出自（`kind: "ct-vessel"`）。どの画像のどのマスクから、どの解像度で作ったかを言えるだけの材料。
+ * 🔴 径はマスクの作り方（プラグイン）に依存し、**ボクセル間隔より細い血管の径は測れない**。本体は閾値を持たないので、
+ * `voxelSpacingMm` と `calibration.diameterMethod` を読み手が見ること。
+ */
+export interface CtVesselProvenance {
+  studyUid: string;
+  seriesUid: string;
+  /** 元ボリュームの FrameOfReferenceUID。無ければ null（同じ `seriesUid` の中だけで重ねられる）。 */
+  frameOfReferenceUid: string | null;
+  sopUids?: string[];
+  /** 元ボリュームの間隔 [mm]。正の有限値 3 つ。 */
+  voxelSpacingMm: [number, number, number];
+  /** 中心線・径の元になったマスクの出所。 */
+  maskOrigin: { type: "plugin" } | { type: "roi"; roiUids: string[] } | { type: "seg"; sopInstanceUid: string };
+  /** 多位相 CT の位相。 */
+  phase?: { c?: number; t?: number };
+}
+
+/** CT 由来の 3D 血管モデル（`kind: "ct-vessel"`）。`XaVesselModel` と同じ形で、`kind` と `provenance` だけが違う。 */
+export type CtVesselModel = Omit<XaVesselModel, "kind" | "provenance"> & {
+  kind: "ct-vessel";
+  provenance: CtVesselProvenance;
+};
+
+/**
+ * 登録簿の 3D 血管モデル（XA または CT）。`host.getVesselModel()` の戻り。**H11**。
+ * 🔴 **`kind` で見分けること。** `provenance` の形が違う（XA は角度・再投影誤差、CT は系列・間隔・マスクの出所）。
+ * `getVesselModel()`（`runId` 省略）は「最も新しいもの」なので、XA と CT が混ざると CT が返りうる。
+ */
+export type VesselModel = XaVesselModel | CtVesselModel;
+
 /** `host.listVesselModels()` の 1 件（点列を含まない要約）。**H11**。 */
 export interface VesselModelSummary {
   runId: string;
-  kind: "xa-qca3d" | "xa-bifurcation3d";
+  kind: "xa-qca3d" | "xa-bifurcation3d" | "ct-vessel";
   label: string;
   segmentCount: number;
   pointCount: number;
@@ -524,10 +559,15 @@ export interface VesselAnalysisInput {
 }
 
 /** `host.registerVesselModel()` に渡すモデル。`runId` / `at` / 出自は host が決めるので含まない。 */
-export type VesselModelInput = Omit<VesselModel, "runId" | "at" | "producer"> & {
-  /** 同じ鍵で登録し直すと置き換わる。1〜200 文字。 */
-  runKey: string;
-};
+export type VesselModelInput =
+  | (Omit<XaVesselModel, "runId" | "at" | "producer"> & {
+      /** 同じ鍵で登録し直すと置き換わる。1〜200 文字。 */
+      runKey: string;
+    })
+  | (Omit<CtVesselModel, "runId" | "at" | "producer"> & {
+      /** 同じ鍵で登録し直すと置き換わる。1〜200 文字。 */
+      runKey: string;
+    });
 
 /** `host.registerVesselModel()` の戻り。 */
 export type RegisterVesselModelResult = { ok: true; runId: string } | { ok: false; error: string };
@@ -2216,7 +2256,7 @@ export interface Viewer2DPluginHost extends PluginHostBase {
    * 退化した `range`）。捨てて残りを採用すると**ずれたまま色が乗り**、誰も気付けない。
    *
    * **成功すると、本体の 3D 画面（`#geometry3d`）が開く**（開いていれば前面に出て、中身が差し替わる）。
-   * 分岐部のモデル（`xa-bifurcation3d`）では開かない（3D 画面は中心線 1 本しか描かない）。
+   * 木（分岐部の XA・CT 由来）は区間ごとに 1 物体で描かれ、色も `segmentId` で区間ごとに乗る（値の無い区間は「値なし」）。
    */
   putVesselAnalysis: (runId: string, result: VesselAnalysisInput) => VesselAnalysisResult;
   /**
@@ -2224,12 +2264,14 @@ export interface Viewer2DPluginHost extends PluginHostBase {
    * が読む登録簿へ入る。同じ `runKey` は置き換える。セッション限り。`runId` / 登録時刻 / 出自は host が入れる。
    * 🔴 壊れた入力は理由つきで拒否する。測れなかった点の径は `null`（0 で埋めない）。未校正
    * （`calibration.diameterCalibrated: false`）なら**全点 null**でなければ拒否する。
+   * CT 由来のモデルは `kind: "ct-vessel"` と `CtVesselProvenance`（系列・FoR・元の間隔・マスクの出所）を渡す。
+   * `calibration.diameterMethod` に径の測り方（"mask-equivalent-area" / "mask-min-width"）を必ず書くこと。
    */
   registerVesselModel: (model: VesselModelInput) => RegisterVesselModelResult;
   /**
    * **登録した 3D 血管モデルの 3D 画面を開く**（H74。開いていれば前面に出て、中身が差し替わる）。`runId` は
    * `registerVesselModel` の戻り。色は乗らない（`putVesselAnalysis` が成功したときに、同じ画面へ乗る）。
-   * 🔴 開けないときは理由つきで `ok: false`（モデルが無い・分岐部モデル・中心線が 2 点未満）。
+   * 🔴 開けないときは理由つきで `ok: false`（モデルが無い・中心線が 2 点未満の区間がある）。木は区間ごとに描かれる。
    */
   openVesselModel3d: (runId: string) => { ok: true } | { ok: false; error: string };
   /**
