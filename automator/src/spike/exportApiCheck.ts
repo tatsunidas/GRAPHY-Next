@@ -169,6 +169,10 @@ async function main(): Promise<void> {
     const tp0 = truth.timepoints[0];
     console.log("\n[1] 2D Viewer を開き、CT のタイルを足す");
     const main = driver.page;
+    // 公開済みの最新版がこのビルドより新しいと「新しい版があります」が全操作を塞ぐ。この検査では更新を見ないので、
+    // 最新版をスキップ済みにして開き直す（別の版が出たら、その版に書き換える）。
+    await main.evaluate("localStorage.setItem('graphy.update.skipVersion', '0.6.2')");
+    await main.reload({ waitUntil: "domcontentloaded" });
     await main.getByTestId("search-patientid-input").waitFor({ state: "visible", timeout: 60_000 });
     await main.locator('input[type="date"]').nth(0).fill("");
     await main.locator('input[type="date"]').nth(1).fill("");
@@ -323,6 +327,12 @@ async function main(): Promise<void> {
       check(text.includes("ABSORBED_DOSE"), "★ 吸収線量の概念コードが入る");
       check(text.includes("99GRAPHY"), "★ 確認できない概念は私用スキームで書かれる");
       check(text.includes("2.5"), "★ 計測値がそのまま入る（2.5 Gy）");
+      // 単位を省略した計測に、種別ごとの既定の単位が入る（以前は常に mm と書かれていた）。
+      const unitCodes = rows.filter((r) => /^code ?value$/i.test(r.name)).map((r) => r.value);
+      for (const u of ["Gy", "mL", "g", "Bq.s", "h", "%"]) {
+        check(unitCodes.includes(u), `★ 単位省略で既定の単位 ${u} が入る`, unitCodes.filter((v) => v.length < 8));
+      }
+      check(text.includes("PERCENT") && text.includes("Ejection fraction"), "★ 割合の概念コードと量の名前が入る");
     }
 
     // --- H25 -------------------------------------------------------------

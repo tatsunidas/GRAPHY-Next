@@ -65,10 +65,17 @@ final class SrMeasurementConcepts {
      * @param defaultUnit 呼び出し側が単位を指定しなかったときの UCUM 単位。null なら単位は必須
      *                    （値の単位がモダリティで変わる種別。HU と SUV を取り違えて書かない）
      * @param signed      負の値を受け付けるか（平均 CT 値は脂肪などで負になる）
+     * @param nameRequired 量の名前（{@code Measurement.name}）が必須か。割合・比・スコアのような
+     *                    汎用の種別は、名前が無いと何の値か分からない
      */
-    record Concept(String codeValue, String scheme, String meaning, String defaultUnit, boolean signed) {
+    record Concept(String codeValue, String scheme, String meaning, String defaultUnit, boolean signed,
+            boolean nameRequired) {
         Concept(String codeValue, String scheme, String meaning, String defaultUnit) {
-            this(codeValue, scheme, meaning, defaultUnit, false);
+            this(codeValue, scheme, meaning, defaultUnit, false, false);
+        }
+
+        Concept(String codeValue, String scheme, String meaning, String defaultUnit, boolean signed) {
+            this(codeValue, scheme, meaning, defaultUnit, signed, false);
         }
 
         boolean isPrivate() {
@@ -100,7 +107,23 @@ final class SrMeasurementConcepts {
         put("area", new Concept("AREA", PRIVATE_SCHEME, "Area", "cm2"));
         put("meanValue", new Concept("MEAN_VALUE", PRIVATE_SCHEME, "Mean Value", null, true));
         put("stdDev", new Concept("STD_DEV", PRIVATE_SCHEME, "Standard Deviation", null));
+
+        // --- 汎用の種別（CA-CORE-008）。量ごとの種別（EF・ECV・Agatston…）は表に並べない ---
+        // どの量かは Measurement.name（NUM の修飾）で書く。割合・比・スコアは名前が無いと意味が決まらないので必須。
+        // 標準コードは確認していないので、ここも私用スキームで書く（誤った標準コードのほうが有害）。
+        put("percent", new Concept("PERCENT", PRIVATE_SCHEME, "Percent", "%", true, true));
+        put("ratio", new Concept("RATIO", PRIVATE_SCHEME, "Ratio", "1", false, true));
+        put("score", new Concept("SCORE", PRIVATE_SCHEME, "Score", "{score}", false, true));
+        put("perimeter", new Concept("PERIMETER", PRIVATE_SCHEME, "Perimeter", "mm"));
+        put("diameter", new Concept("DIAMETER", PRIVATE_SCHEME, "Diameter", "mm"));
+        // 符号付き距離（基準面の下側など）があるので負も受ける。
+        put("distance", new Concept("DISTANCE", PRIVATE_SCHEME, "Distance", "mm", true));
+        put("angle", new Concept("ANGLE", PRIVATE_SCHEME, "Angle", "deg"));
     }
+
+    /** 量の名前（NUM の修飾 TEXT）の概念名コード。 */
+    static final String QUANTITY_NAME_CODE = "QUANTITY_NAME";
+    static final String QUANTITY_NAME_MEANING = "Quantity Name";
 
     /** 表に無ければ null（＝呼び出し側が拒否する）。 */
     static Concept of(String type) {

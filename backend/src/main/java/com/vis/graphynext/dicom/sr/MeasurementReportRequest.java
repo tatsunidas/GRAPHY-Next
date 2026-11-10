@@ -52,11 +52,15 @@ public record MeasurementReportRequest(
     /**
      * 計測値 1 つ。
      *
-     * @param type  {@code longAxis} / {@code shortAxis}（それ以外は拒否する）
+     * @param type  計測種別（{@code SrMeasurementConcepts} の表にあるものだけ。それ以外は拒否する）
      * @param value 値
-     * @param unit  単位（既定 mm）
+     * @param unit  単位（UCUM）。省略（null・空）なら種別ごとの既定
+     * @param name  量の名前（任意。割合・比・スコアは必須）。NUM の修飾として書く
      */
-    public record Measurement(String type, Double value, String unit) {
+    public record Measurement(String type, Double value, String unit, String name) {
+        public Measurement(String type, Double value, String unit) {
+            this(type, value, unit, null);
+        }
     }
 
     /**

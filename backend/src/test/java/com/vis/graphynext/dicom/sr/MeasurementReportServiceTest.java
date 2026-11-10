@@ -409,4 +409,123 @@ class MeasurementReportServiceTest {
                 List.of(new Measurement("longAxis", -1.0, "mm")));
         assertThrows(IllegalArgumentException.class, () -> service.create(request(List.of(g), null)));
     }
+
+    // ---- 汎用の種別（割合・比・スコア・周囲長・径・距離・角度）と量の名前 ----
+
+    private static MeasurementReportRequest requestOf(Measurement... ms) {
+        MeasurementGroup g = new MeasurementGroup("g1", null, "Quantity", "1.2.3.4.9", "1.2.3.4.9.1", List.of(ms));
+        return request(List.of(g), null);
+    }
+
+    /** 計測値 NUM を概念コードで探し、(コード, 単位, 値) を返す。 */
+    private static Attributes numOf(Attributes sr, String codeValue) {
+        List<Attributes> found = find(sr, codeValue);
+        assertEquals(1, found.size(), "NUM が 1 件: " + codeValue);
+        return found.get(0);
+    }
+
+    private static String unitOf(Attributes num) {
+        return num.getSequence(Tag.MeasuredValueSequence).get(0)
+                .getSequence(Tag.MeasurementUnitsCodeSequence).get(0).getString(Tag.CodeValue);
+    }
+
+    private static String valueOf(Attributes num) {
+        return num.getSequence(Tag.MeasuredValueSequence).get(0).getString(Tag.NumericValue);
+    }
+
+    @Test
+    void 割合は私用コードと単位と量の名前が読み戻せる() {
+        Attributes sr = service.build(template(),
+                requestOf(new Measurement("percent", 55.2, null, "Ejection fraction")), NOW);
+        Attributes num = numOf(sr, "PERCENT");
+        assertEquals("99GRAPHY", num.getNestedDataset(Tag.ConceptNameCodeSequence).getString(Tag.CodingSchemeDesignator));
+        assertEquals("%", unitOf(num));
+        assertEquals("55.2", valueOf(num));
+        // 量の名前は同じ NUM の修飾（HAS CONCEPT MOD、TEXT）
+        Attributes mod = num.getSequence(Tag.ContentSequence).get(0);
+        assertEquals("HAS CONCEPT MOD", mod.getString(Tag.RelationshipType));
+        assertEquals("TEXT", mod.getString(Tag.ValueType));
+        assertEquals("QUANTITY_NAME", mod.getNestedDataset(Tag.ConceptNameCodeSequence).getString(Tag.CodeValue));
+        assertEquals("Ejection fraction", mod.getString(Tag.TextValue));
+        // 私用コードを使ったので、スキームの素性が 1 件入る
+        assertEquals(1, sr.getSequence(Tag.CodingSchemeIdentificationSequence).size());
+    }
+
+    @Test
+    void 比とスコアと長さ系と角度は既定の単位で読み戻せる() {
+        Attributes sr = service.build(template(), requestOf(
+                new Measurement("ratio", 0.92, null, "Min diameter / sheath OD"),
+                new Measurement("score", 4.0, null, "PI-RADS"),
+                new Measurement("perimeter", 76.4, null, null),
+                new Measurement("diameter", 24.1, null, null),
+                new Measurement("distance", -3.5, null, null),
+                new Measurement("angle", 42.0, null, null)), NOW);
+        assertEquals("1", unitOf(numOf(sr, "RATIO")));
+        assertEquals("{score}", unitOf(numOf(sr, "SCORE")));
+        assertEquals("mm", unitOf(numOf(sr, "PERIMETER")));
+        assertEquals("mm", unitOf(numOf(sr, "DIAMETER")));
+        assertEquals("mm", unitOf(numOf(sr, "DISTANCE")));
+        assertEquals("-3.5", valueOf(numOf(sr, "DISTANCE")));
+        assertEquals("deg", unitOf(numOf(sr, "ANGLE")));
+        assertEquals("42", valueOf(numOf(sr, "ANGLE")));
+        // 名前を付けなかった長さ系には修飾が付かない
+        assertNull(numOf(sr, "PERIMETER").getSequence(Tag.ContentSequence));
+    }
+
+    @Test
+    void 呼び出し側が単位を明示したらそれを優先する() {
+        Attributes sr = service.build(template(),
+                requestOf(new Measurement("percent", 1.0, "{fraction}", "Fraction")), NOW);
+        assertEquals("{fraction}", unitOf(numOf(sr, "PERCENT")));
+    }
+
+    @Test
+    void 量の名前が必須の種別で名前が無ければ拒否する() {
+        for (String type : List.of("percent", "ratio", "score")) {
+            for (String name : new String[] {null, "", "   "}) {
+                assertThrows(IllegalArgumentException.class,
+                        () -> service.validate(requestOf(new Measurement(type, 1.0, null, name))),
+                        type + " name=" + name);
+            }
+        }
+    }
+
+    @Test
+    void 名前が任意の種別は名前が無くても受ける() {
+        for (String type : List.of("perimeter", "diameter", "distance", "angle")) {
+            service.validate(requestOf(new Measurement(type, 1.0, null, null)));
+        }
+    }
+
+    @Test
+    void 負値は割合と距離だけ受け付ける() {
+        service.validate(requestOf(new Measurement("percent", -4.0, null, "Change")));
+        service.validate(requestOf(new Measurement("distance", -4.0, null, null)));
+        for (String type : List.of("ratio", "score")) {
+            assertThrows(IllegalArgumentException.class,
+                    () -> service.validate(requestOf(new Measurement(type, -1.0, null, "x"))), type);
+        }
+        for (String type : List.of("perimeter", "diameter", "angle")) {
+            assertThrows(IllegalArgumentException.class,
+                    () -> service.validate(requestOf(new Measurement(type, -1.0, null, null))), type);
+        }
+    }
+
+    @Test
+    void 未知の種別は拒否し_対応一覧に新しい種別が出る() {
+        IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                () -> service.validate(requestOf(new Measurement("ejectionFraction", 55.0, "%", "EF"))));
+        assertTrue(e.getMessage().contains("percent") && e.getMessage().contains("angle"), e.getMessage());
+    }
+
+    @Test
+    void JSONのnameは任意で_無い要求も読める() throws Exception {
+        com.fasterxml.jackson.databind.ObjectMapper om = new com.fasterxml.jackson.databind.ObjectMapper();
+        Measurement withName = om.readValue("{\"type\":\"percent\",\"value\":55.2,\"unit\":null,\"name\":\"EF\"}", Measurement.class);
+        assertEquals("EF", withName.name());
+        assertNull(withName.unit());
+        Measurement legacy = om.readValue("{\"type\":\"longAxis\",\"value\":10.0,\"unit\":\"mm\"}", Measurement.class);
+        assertNull(legacy.name());
+        assertEquals("mm", legacy.unit());
+    }
 }

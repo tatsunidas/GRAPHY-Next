@@ -72,6 +72,7 @@ import { computeOrientationMarkers, type OrientationMarkers } from "./orientatio
 import { computeScaleBar, type ScaleBar } from "./scaleBar";
 import { getOrCreateCameraSync, getOrCreateVoiSync, getOrCreatePresentationSync, getOrCreateSeriesVoiSync, broadcastSeriesProperties, captureVoiBaseline, clearVoiBaseline } from "./sync";
 import { registerReferenceSource, bumpReference, subscribeReference, computeReferenceSegments, type RefSegment } from "./referenceLines";
+import { srMeasurementPayload } from "./srPayload";
 import { registerViewerCommands, requestTool, type ViewerCommands, type ViewerDerivedSeriesRequest, type ViewerDerivedSeriesResult, type ViewerOverlay, type ViewerPixelData, type ViewerSrRequest, type ViewerSrResult, type ViewerPixelDataOptions, type ViewerAngioReportRequest, type ViewerPresentationStateRequest, type ViewerRoi, type ViewerSpatialCalibration, type ViewerTargetInfo, type ViewerViewState, type ViewerXaState, type ViewerXaCine, ViewerLabelVolume, ViewerLabelVolumeResult } from "./viewerCommands";
 import { buildPluginMeta, computeCalipers, hasShapeCalipers, pickPluginMeta, readRoiStats, roiPointsPx } from "./roiRead";
 import { CONTOUR_TOOL_NAMES, SPLINE_TYPE_LINEAR, cancelContourDrawing } from "./roiContourTools";
@@ -2057,11 +2058,7 @@ export function Viewer2D({
             // （SOP が無いときは画像参照なしの計測グループになる）。
             seriesInstanceUid: g.seriesInstanceUid ?? ctx.seriesUid,
             sopInstanceUid: g.sopInstanceUid ?? null,
-            measurements: g.measurements.map((m) => ({
-              type: m.type,
-              value: m.value,
-              unit: m.unit ?? "mm",
-            })),
+            measurements: g.measurements.map(srMeasurementPayload),
           })),
           findings: req.findings ?? [],
           producer,
