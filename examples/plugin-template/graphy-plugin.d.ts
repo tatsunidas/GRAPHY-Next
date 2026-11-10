@@ -2652,9 +2652,24 @@ export interface SrMeasurementGroup {
       // H66 の定量（fw/ct-quant-design.md §6）。meanValue・stdDev は unit 必須（HU / SUV を取り違えない）。meanValue は負も可
       | "area"
       | "meanValue"
-      | "stdDev";
+      | "stdDev"
+      // 汎用の種別。どの量かは `name` で書く。percent・ratio・score は `name` 必須。標準コードは確認できていないので私用スキーム
+      | "percent"
+      | "ratio"
+      | "score"
+      | "perimeter"
+      | "diameter"
+      | "distance"
+      | "angle";
     value: number;
     unit?: string;
+    /**
+     * 量の名前（例 "Ejection fraction"）。SR の NUM の修飾として書かれる。
+     * `percent`・`ratio`・`score` は必須（無いと何の値か決まらないので拒否される）。
+     * 既定の単位: percent `%` ／ ratio `1` ／ score `{score}` ／ perimeter・diameter・distance `mm` ／ angle `deg`。
+     * 負値は percent・distance だけ受ける。
+     */
+    name?: string;
   }[];
 }
 

@@ -113,7 +113,8 @@ class MeasurementReportLegacyGoldenTest {
             return;
         }
         try (InputStream in = getClass().getResourceAsStream(GOLDEN)) {
-            String expected = new String(in.readAllBytes(), StandardCharsets.UTF_8);
+            // Windows の checkout は autocrlf で CRLF になりうる。改行の違いで落とさない。
+            String expected = new String(in.readAllBytes(), StandardCharsets.UTF_8).replace("\r\n", "\n");
             assertEquals(expected, actual);
         }
     }
