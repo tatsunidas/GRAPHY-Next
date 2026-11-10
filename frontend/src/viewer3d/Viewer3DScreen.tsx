@@ -42,7 +42,7 @@ import { SliceDuplicatesError, sopGridIndexMap, volumeDepthNote, type VolumeDept
 import { VolumeDepthChip } from "../viewer/VolumeDepthChip";
 import { loadRenderEnvSummary } from "../viewer/renderEnvReport";
 import { parseRenderQuality, type RenderKind, type RenderQuality } from "../viewer/renderEnv";
-import { installDebugApi, publishRender3dStats } from "../viewer/debugApi";
+import { installDebugApi, publishRender3dStats, publishViewer3dControl } from "../viewer/debugApi";
 import { requestOpenSettings } from "../settings/settingsOpenEvents";
 import {
   createVtkVolumeView,
@@ -156,7 +156,36 @@ export function Viewer3DScreen({ status }: { status: AppStatus | null }) {
   useEffect(() => {
     installDebugApi();
     publishRender3dStats(() => viewRef.current?.getRenderStats() ?? null);
-    return () => publishRender3dStats(null);
+    // 視点・クリップ面を読み書きする口（dev のみ。視点の検査用。画面の挙動は変えない）。
+    publishViewer3dControl({
+      getState: () => {
+        const v = viewRef.current;
+        if (!v) throw new Error("3D is not ready");
+        const st = v.getState();
+        const d = [st.focalPoint[0] - st.position[0], st.focalPoint[1] - st.position[1], st.focalPoint[2] - st.position[2]];
+        const n = Math.hypot(d[0], d[1], d[2]) || 1;
+        return {
+          position: st.position,
+          focalPoint: st.focalPoint,
+          viewUp: st.viewUp,
+          parallelScale: st.parallelScale,
+          direction: [d[0] / n, d[1] / n, d[2] / n],
+          clipPlanes: v.getClipPlanes(),
+        };
+      },
+      applyCamera: (req) => {
+        const v = viewRef.current;
+        return v ? v.applyCamera(req) : { ok: false, reason: "3D is not ready" };
+      },
+      setClipPlanes: (planes) => {
+        const v = viewRef.current;
+        return v ? v.setClipPlanes(planes) : { ok: false, reason: "3D is not ready" };
+      },
+    });
+    return () => {
+      publishRender3dStats(null);
+      publishViewer3dControl(null);
+    };
   }, []);
   const [mode, setMode] = useState<VtkRenderMode>("VR");
   const [orthoPos, setOrthoPos] = useState<{ x: number; y: number; z: number }>({ x: 0.5, y: 0.5, z: 0.5 });

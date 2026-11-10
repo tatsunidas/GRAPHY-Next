@@ -19,6 +19,7 @@
  */
 import { cache, CONSTANTS } from "@cornerstonejs/core";
 import vtkImageData from "@kitware/vtk.js/Common/DataModel/ImageData";
+import vtkPlane from "@kitware/vtk.js/Common/DataModel/Plane";
 import vtkDataArray from "@kitware/vtk.js/Common/Core/DataArray";
 import vtkGenericRenderWindow from "@kitware/vtk.js/Rendering/Misc/GenericRenderWindow";
 import vtkVolume from "@kitware/vtk.js/Rendering/Core/Volume";
@@ -49,6 +50,7 @@ import {
   type SpinState,
 } from "./slabGeometry";
 import { snapCamera, type SnapKind } from "./cameraSnap";
+import { cameraFromView, validateClipPlanes, type ClipPlaneInput, type ViewRequest } from "./viewer3dCamera";
 import { geomFromImageData, worldToVoxel } from "./labelVolume";
 import { makeUnprojector } from "../viewer3d/measure3d";
 import { defaultSlabThickness, type SlabProjection } from "./slabPresets";
@@ -127,6 +129,22 @@ export interface VtkCinematicParams {
   ambientOcclusion: boolean;
 }
 
+/** {@link VtkVolumeView.applyCamera} の入力。 */
+export interface ApplyCameraRequest {
+  direction: [number, number, number];
+  up: [number, number, number];
+  focalPoint: [number, number, number];
+  /** 省略時は今の距離。 */
+  distanceMm?: number;
+  projection?: "perspective" | "parallel";
+  /** 平行投影のとき、画面の縦半分に写る長さ（mm）。 */
+  parallelScaleMm?: number;
+}
+
+export type ApplyCameraResult =
+  | { ok: true; applied: { direction: [number, number, number]; up: [number, number, number]; right: [number, number, number] } }
+  | { ok: false; reason: string };
+
 /** pure-vtk 3D ビューのコントローラ。 */
 export interface VtkVolumeView {
   setMode(mode: VtkRenderMode): void;
@@ -154,6 +172,19 @@ export interface VtkVolumeView {
   isSpinning(): boolean;
   /** 向きスナップ（全モード）。焦点・距離・ズームは保持。Actor 回転の蓄積もリセット。 */
   snapOrientation(kind: SnapKind, flip?: boolean): void;
+  /**
+   * 視点を患者座標（LPS mm）の視線・上・注視点で当てる（向きスナップの一般化）。Actor 回転の蓄積もリセット。
+   * `distanceMm` を省略すると今の距離を保つ。`projection` を省略すると今の投影のまま。
+   * 不正な入力は理由つきで拒否し、何も変えない。
+   */
+  applyCamera(req: ApplyCameraRequest): ApplyCameraResult;
+  /**
+   * 任意平面のクリップ（ボリュームだけ。最大 6 枚）。**法線の向く側を残す**。`[]` で全部消す。
+   * クロップ箱（`setClipEnabled`）とは独立で、両方効く。不正な入力は理由つきで拒否し、何も変えない。
+   */
+  setClipPlanes(planes: readonly ClipPlaneInput[]): { ok: true } | { ok: false; reason: string };
+  /** 今の任意クリップ面（法線は正規化済み）。 */
+  getClipPlanes(): { origin: [number, number, number]; normal: [number, number, number] }[];
   /** 背景色（0..1 の RGB）。 */
   setBackground(rgb: [number, number, number]): void;
   /**
@@ -899,6 +930,9 @@ export function createVtkVolumeView(
     axesWidget = null;
   }
 
+  // 任意クリップ面（setClipPlanes）。mapper のシェーダ面に渡した値を覚えておく（getClipPlanes・検査用）。
+  let pluginClipPlanes: { origin: [number, number, number]; normal: [number, number, number] }[] = [];
+
   // Actor 回転モードで蓄積した各アクターの回転を初期表示（原点・無回転）に戻す（resetView・向きスナップで共用）。
   // ⚠️ rotateWXYZ は model.rotation 行列に蓄積するが model.orientation(Euler) は変えないため、
   // setOrientation(0,0,0) は「orientation 未変化＝早期 return」で rotation 行列をクリアしない。
@@ -1089,6 +1123,53 @@ export function createVtkVolumeView(
       }
       render();
       notifyState();
+    },
+    applyCamera(req) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const cam: Any = renderer.getActiveCamera();
+      const dist = req.distanceMm ?? (cam.getDistance() as number);
+      const view: ViewRequest = { direction: req.direction, up: req.up, focalPoint: req.focalPoint, distanceMm: dist };
+      const r = cameraFromView(view);
+      if (!r.ok) return { ok: false, reason: r.reason };
+      if (req.parallelScaleMm !== undefined && !(Number.isFinite(req.parallelScaleMm) && req.parallelScaleMm > 0)) {
+        return { ok: false, reason: "平行投影の縦の半分の長さは正の有限値が必要です" };
+      }
+      resetActorRotations();
+      try {
+        cam.setFocalPoint(r.focalPoint[0], r.focalPoint[1], r.focalPoint[2]);
+        cam.setPosition(r.position[0], r.position[1], r.position[2]);
+        cam.setViewUp(r.viewUp[0], r.viewUp[1], r.viewUp[2]);
+        cam.orthogonalizeViewUp();
+        if (req.projection) cam.setParallelProjection(req.projection === "parallel");
+        if (req.parallelScaleMm !== undefined) cam.setParallelScale(req.parallelScaleMm);
+        renderer.resetCameraClippingRange();
+      } catch {
+        /* ignore */
+      }
+      render();
+      notifyState();
+      return { ok: true, applied: { direction: r.direction, up: r.viewUp, right: r.right } };
+    },
+    setClipPlanes(planes) {
+      const v = validateClipPlanes(planes);
+      if (!v.ok) return { ok: false, reason: v.reason };
+      try {
+        mapper.removeAllClippingPlanes();
+        for (const pl of v.planes) {
+          const p: Any = vtkPlane.newInstance();
+          p.setOrigin(pl.origin[0], pl.origin[1], pl.origin[2]);
+          p.setNormal(pl.normal[0], pl.normal[1], pl.normal[2]);
+          mapper.addClippingPlane(p);
+        }
+        pluginClipPlanes = v.planes;
+      } catch (e) {
+        return { ok: false, reason: `クリップ面を設定できません: ${String(e)}` };
+      }
+      render();
+      return { ok: true };
+    },
+    getClipPlanes() {
+      return pluginClipPlanes.map((p) => ({ origin: [...p.origin] as [number, number, number], normal: [...p.normal] as [number, number, number] }));
     },
     setColorLut(next) {
       lut = next;

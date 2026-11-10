@@ -541,6 +541,50 @@ function getRender3dStats(): VtkRenderStats | null {
   return render3dProbe ? render3dProbe() : null;
 }
 
+/**
+ * 開いている 3D（vtk）の視点・クリップ面を読み、当てるための口（dev のみ・automator 用）。
+ * 視点は視線・上・注視点・距離（患者 LPS mm）で返す。当てる側は `VtkVolumeView.applyCamera`・`setClipPlanes` と同じ入力。
+ * 3D が開いていなければ null。
+ */
+export interface Viewer3dControl {
+  getState(): {
+    position: number[];
+    focalPoint: number[];
+    viewUp: number[];
+    parallelScale: number;
+    direction: number[];
+    clipPlanes: { origin: number[]; normal: number[] }[];
+  };
+  applyCamera(req: {
+    direction: [number, number, number];
+    up: [number, number, number];
+    focalPoint: [number, number, number];
+    distanceMm?: number;
+    projection?: "perspective" | "parallel";
+    parallelScaleMm?: number;
+  }): { ok: boolean; reason?: string; applied?: unknown };
+  setClipPlanes(planes: { origin: [number, number, number]; normal: [number, number, number] }[]): { ok: boolean; reason?: string };
+}
+
+let viewer3dControl: Viewer3dControl | null = null;
+
+export function publishViewer3dControl(c: Viewer3dControl | null): void {
+  if (!import.meta.env.DEV) return;
+  viewer3dControl = c;
+}
+
+function getViewer3dState(): ReturnType<Viewer3dControl["getState"]> | null {
+  return viewer3dControl ? viewer3dControl.getState() : null;
+}
+
+function applyViewer3dCamera(req: Parameters<Viewer3dControl["applyCamera"]>[0]): ReturnType<Viewer3dControl["applyCamera"]> | null {
+  return viewer3dControl ? viewer3dControl.applyCamera(req) : null;
+}
+
+function setViewer3dClipPlanes(planes: Parameters<Viewer3dControl["setClipPlanes"]>[0]): ReturnType<Viewer3dControl["setClipPlanes"]> | null {
+  return viewer3dControl ? viewer3dControl.setClipPlanes(planes) : null;
+}
+
 /** シネマティック（パストレース）の描画の実測。オーバーレイが動いていないときは null。 */
 let cinematicProbe: (() => CinematicStats | null) | null = null;
 
@@ -954,6 +998,9 @@ declare global {
       getImagePixelRange: typeof getImagePixelRange;
       getPixelStats: typeof getPixelStats;
       getRender3dStats: typeof getRender3dStats;
+      getViewer3dState: typeof getViewer3dState;
+      applyViewer3dCamera: typeof applyViewer3dCamera;
+      setViewer3dClipPlanes: typeof setViewer3dClipPlanes;
       getFusionResampleStats: typeof getFusionResampleStats;
       resetFusionResampleStats: typeof resetFusionResampleStats;
       probeFusionParity: typeof probeFusionParity;
@@ -1131,6 +1178,9 @@ export function installDebugApi(): void {
     getImagePixelRange,
     getPixelStats,
     getRender3dStats,
+    getViewer3dState,
+    applyViewer3dCamera,
+    setViewer3dClipPlanes,
     getFusionResampleStats,
     resetFusionResampleStats,
     probeFusionParity,
