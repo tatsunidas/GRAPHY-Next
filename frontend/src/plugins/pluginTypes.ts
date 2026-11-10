@@ -25,6 +25,7 @@ import type {
 } from "./pluginCenterlineApi";
 import type { Vec3 } from "../viewer/reslice";
 import type { PluginCurvedMprResult, PluginCurvedMprSpec } from "./pluginCurvedMprApi";
+import type { PluginViewer3dResult, PluginViewer3dSpec } from "./pluginViewer3dApi";
 import type { PluginSeriesPanelHandle, PluginSeriesPanelOptions } from "./pluginSeriesPanelApi";
 import type { ViewerDerivedSeriesRequest, ViewerDerivedSeriesResult, ViewerOverlay, ViewerPixelDataOptions, ViewerRoiMeasurements, ViewerTarget, ViewerAngioReportRequest, ViewerPresentationStateRequest, ViewerTilePixelData, ViewerTileSpatialCalibration, ViewerTileXaState, ViewerTileXaCine, ViewerTileXaGeometry, ViewerTileRoi, ViewerTileViewState, ViewerSrMeasurementGroup, ViewerSrRequest, ViewerSrResult, ViewerLabelVolume, ViewerLabelVolumeResult } from "../viewer/viewerCommands";
 
@@ -1208,6 +1209,22 @@ export interface Viewer2DPluginHost extends PluginHostBase {
    * `options.frameMode` の省略時は `ROTATION_MINIMIZING`（血管向け）。
    */
   openCurvedMpr: (spec: PluginCurvedMprSpec) => Promise<PluginCurvedMprResult>;
+  /**
+   * **視点とクリップ面を指定して、本体の 3D ビューアを開く**（**次の本体の版以降**）。渡すのは患者座標（LPS mm）の
+   * 視線・上・注視点とクリップ面だけで、描画・操作・計測は本体が行う（プラグインに 3D の幾何を書かせない）。
+   * 3D 窓には「プラグイン <名前> の視点: <title>」の札と［指定に戻す］が出る（出所は host が入れる）。
+   * 窓が既に開いていて同じシリーズなら、**画面を読み直さず**視点と札だけが変わる（置いた計測・メッシュは残る）。
+   * 別のシリーズなら、従来どおり読み直す。利用者はその後ドラッグで自由に回せる（視点は固定されない）。
+   *
+   * <p>規約: **画面右 = 視線 × 上**（右手系）。`up` は視線に直交でなくてよく、本体が直交化して `applied.up` に返す
+   * （視線と平行なら拒否）。クリップ面は **法線の向く側を残す**（最大 6 枚、`[]` で全部消す、省略は変えない）。
+   * `mode` は VR / MIP / MINIP（ORTHO・SLAB は視点の意味が変わるので不可）。
+   *
+   * <p>🔴 戻り値は**検証と起動要求まで**（開いていない・一時・連結のシリーズ、視線 0、上が視線と平行、法線 0、
+   * 面が 7 枚以上、不正な `mode` などは `ok:false` で窓を開かない）。窓は非同期に開くので、描けたかどうかは分からない。
+   * `applied` は検証・正規化した値。シネマティック（パストレーサ）の表示中はクリップ面を表示できない（札に出る）。
+   */
+  openViewer3d: (spec: PluginViewer3dSpec) => Promise<PluginViewer3dResult>;
   /**
    * **プラグインが計算した値の画像を、2D ビューアの普通のタイルとして開く**（**次の本体の版以降**）。
    * ADC・cDWI のような float のボリュームを、**マップを C 次元にして 1 枚のタイル**に出す。

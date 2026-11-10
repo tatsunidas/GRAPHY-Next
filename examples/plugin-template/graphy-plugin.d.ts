@@ -1308,6 +1308,53 @@ export interface PluginCurvedMprResult {
   error?: string;
 }
 
+/** {@link Viewer2DPluginHost.openViewer3d} の引数（**次の本体の版以降**）。患者座標は LPS・mm。 */
+export interface PluginViewer3dSpec {
+  /** 開いているタイルのシリーズ（c/t 可）。一時シリーズ・連結タイルは不可。 */
+  source: PluginSeriesRef;
+  camera?: {
+    /** 視線方向（カメラ → 注視点）。長さは問わない（0・非有限は拒否）。 */
+    direction: [number, number, number];
+    /** 画面の上。視線に直交でなくてよい（本体が直交化して返す）。視線と平行なら拒否。画面右 = 視線 × 上。 */
+    up: [number, number, number];
+    /** 注視点。省略時は最初のクリップ面の原点、それも無ければボリューム中心。 */
+    focalPoint?: [number, number, number];
+    /** カメラから注視点までの距離（mm、> 0）。省略時は窓の今の距離。 */
+    distanceMm?: number;
+    /** 省略時は窓の現在値。 */
+    projection?: "perspective" | "parallel";
+    /** 平行投影のとき、画面の縦の半分に写る長さ（mm、> 0）。 */
+    parallelScaleMm?: number;
+  };
+  /** クリップ面。**法線の向く側を残す**。最大 6 枚。`[]` で全部消す。省略は変えない。 */
+  clipPlanes?: {
+    origin: [number, number, number];
+    normal: [number, number, number];
+    /** 右パネルの一覧に出す短い名前。 */
+    label?: string;
+  }[];
+  /** ORTHO・SLAB は視点の意味が変わるので受けない。省略は変えない。 */
+  mode?: "VR" | "MIP" | "MINIP";
+  /** VR のプリセット名（3D 窓の一覧にある名前）。省略は変えない。 */
+  preset?: string;
+  /** 札に出す短い説明。プラグイン名は host が必ず付ける。 */
+  title?: string;
+}
+
+export interface PluginViewer3dResult {
+  ok: boolean;
+  error?: string;
+  /** 本体が適用する値（正規化・直交化後）。検証の結果であり、描画の結果ではない。 */
+  applied?: {
+    direction: [number, number, number] | null;
+    up: [number, number, number] | null;
+    right: [number, number, number] | null;
+    /** 省略時は null（窓がクリップ面の原点かボリューム中心に決める）。 */
+    focalPoint: [number, number, number] | null;
+    clipPlanes: { origin: [number, number, number]; normal: [number, number, number]; label?: string }[];
+  };
+}
+
 export interface PluginCurveFrameOptions {
   /** フレームどうしの弧長間隔 mm。正の有限値。 */
   spacingMm: number;
@@ -2459,6 +2506,20 @@ export interface Viewer2DPluginHost extends PluginHostBase {
    * `options.frameMode` の省略時は `ROTATION_MINIMIZING`（血管向け）。
    */
   openCurvedMpr: (spec: PluginCurvedMprSpec) => Promise<PluginCurvedMprResult>;
+  /**
+   * **視点とクリップ面を指定して、本体の 3D ビューアを開く**（**次の本体の版以降**）。渡すのは患者座標（LPS mm）の
+   * 視線・上・注視点とクリップ面だけで、描画・操作・計測は本体が行う。3D 窓には「プラグイン <名前> の視点: <title>」の札と
+   * ［指定に戻す］が出る（出所は host が入れる）。窓が既に開いていて同じシリーズなら、画面を読み直さず視点と札だけが変わる。
+   * 別のシリーズなら従来どおり読み直す。利用者はその後ドラッグで自由に回せる。
+   *
+   * <p>規約: **画面右 = 視線 × 上**（右手系）。`up` は本体が直交化して `applied.up` に返す（視線と平行なら拒否）。
+   * クリップ面は **法線の向く側を残す**（最大 6 枚）。`mode` は VR / MIP / MINIP。
+   *
+   * <p>🔴 戻り値は**検証と起動要求まで**（開いていない・一時・連結のシリーズ、視線 0、上が視線と平行、法線 0、
+   * 面が 7 枚以上、不正な `mode` などは `ok:false` で窓を開かない）。窓は非同期に開くので、描けたかどうかは分からない。
+   * シネマティック（パストレーサ）の表示中はクリップ面を表示できない（札に出る）。
+   */
+  openViewer3d: (spec: PluginViewer3dSpec) => Promise<PluginViewer3dResult>;
   /**
    * **プラグインが計算した値の画像を、2D ビューアの普通のタイルとして開く**（**次の本体の版以降**）。
    * ADC・cDWI のような float のボリュームを、**マップを C 次元にして 1 枚のタイル**に出す。

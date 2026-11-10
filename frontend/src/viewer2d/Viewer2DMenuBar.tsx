@@ -251,6 +251,7 @@ export function Viewer2DMenuBar({
     sampleCenterlineFrames: (polyline, opts) => sampleCenterlineFrames(polyline, opts),
     // H73: 出所（id/name/version）は host がマニフェストから入れる。
     openCurvedMpr: (spec) => liveActions.openCurvedMpr(spec, { id: m.id, name: m.name, version: m.version }),
+    openViewer3d: (spec) => liveActions.openViewer3d(spec, { id: m.id, name: m.name, version: m.version }),
     // 出所（id/name）は host が入れる。一時タイルの見出しにプラグイン名が必ず出る。
     openTransientSeries: (spec) => liveActions.openTransientSeries(spec, { id: m.id, name: m.name }),
     mountSeriesPanel: (el, series, opts) => liveActions.mountSeriesPanel(el, series, opts),

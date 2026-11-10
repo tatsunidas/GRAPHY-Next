@@ -137,6 +137,7 @@ import {
 import { resamplePluginVolume } from "../plugins/pluginResample";
 import { readXaSeriesFrame, readXaSeriesInfo } from "../plugins/pluginXaSeriesApi";
 import { openCurvedMprFromPlugin } from "../plugins/pluginCurvedMprApi";
+import { openViewer3dFromPlugin } from "../plugins/pluginViewer3dApi";
 import {
   commitRtDoseExport,
   commitSegExport,
@@ -2355,6 +2356,27 @@ function TileGrid({
         isTransientSeriesUid(spec?.source?.seriesUid)
           ? Promise.resolve({ ok: false, error: TRANSIENT_REF_ERROR })
           : openCurvedMprFromPlugin(spec, producer, studyUidOfSeries),
+      // プラグインが視点・クリップ面を渡して 3D 窓を開く。開いているタイルのシリーズからしか引かない。
+      // 一時・連結のタイルは resolve が印を付け、検証が理由つきで拒否する。
+      openViewer3d: (spec, producer) =>
+        isTransientSeriesUid(spec?.source?.seriesUid)
+          ? Promise.resolve({ ok: false, error: TRANSIENT_REF_ERROR })
+          : openViewer3dFromPlugin(spec, producer, (seriesUid) => {
+              // 同じシリーズが普通のタイルにもあれば、一時・連結でないタイルを優先する。
+              const same = patient.tiles.filter((tl) => tl.series?.seriesInstanceUid === seriesUid);
+              const tile = same.find((tl) => !tl.transient && !tl.concat) ?? same[0];
+              if (!tile) return undefined;
+              const dims = tileDimsRef.current.get(tile.id);
+              return {
+                study: tile.study,
+                series: tile.series,
+                range: tile.range,
+                transient: !!tile.transient,
+                concat: !!tile.concat,
+                c: dims?.c ?? 0,
+                t: dims?.t ?? 0,
+              };
+            }),
       // 一時シリーズ: 参照タイルの幾何でプラグインの値を 1 枚のタイル（マップ = C）として開く。出所は host が入れる。
       openTransientSeries: async (spec, producer) => {
         const refId = spec.referenceTileId ?? pluginTargets()[0] ?? tilesRef.current.find((tl) => !tl.transient)?.id;
