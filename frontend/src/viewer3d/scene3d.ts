@@ -109,6 +109,8 @@ let colorSeq = 0;
 // 「埋め込み(embedded)」オブジェクトの mapper に同じ範囲のクリップ平面を付ける。
 let clipGeom: VolumeGeom | null = null;
 let clipExtent: number[] | null = null; // [i0,i1,j0,j1,k0,k1]（index）
+/** プラグインが指定した任意のクリップ面（患者 LPS mm）。法線の向く側を残す。ボリュームと同じ面で埋め込み表示のメッシュを切る。 */
+let pluginClipPlanes: { origin: V3; normal: V3 }[] = [];
 let fullExtent: number[] | null = null;
 
 // ── Ortho（3直交スライス）表示中の共有状態（埋め込み表示のため）────────
@@ -160,6 +162,7 @@ export function resetScene(): void {
   colorSeq = 0;
   clipGeom = null;
   clipExtent = null;
+  pluginClipPlanes = [];
   fullExtent = null;
   orthoActive = false;
   orthoSliceIdx = null;
@@ -179,6 +182,16 @@ export function setClipContext(geom: VolumeGeom | null): void {
  */
 export function updateClip(extent: number[] | null): void {
   clipExtent = extent && extent.length === 6 ? extent.slice() : null;
+  for (const [id] of dataById) applyObjectClip(id);
+  render();
+}
+
+/**
+ * プラグインが指定した任意のクリップ面を設定する（`[]` で解除）。埋め込み（embedded）オブジェクトは、
+ * クリップ箱の面に加えてこの面でも切れる（ボリュームの `setClipPlanes` と同じ面・同じ向き）。
+ */
+export function setPluginClipPlanes(planes: readonly { origin: V3; normal: V3 }[]): void {
+  pluginClipPlanes = planes.map((p) => ({ origin: [...p.origin] as V3, normal: [...p.normal] as V3 }));
   for (const [id] of dataById) applyObjectClip(id);
   render();
 }
@@ -207,7 +220,13 @@ function isClipActive(): boolean {
 
 /** クリップ箱（index extent + geom）から 6 枚の world 空間クリップ平面を作る。 */
 function computeClipPlanes(): Any[] {
-  if (!clipExtent || !clipGeom) return [];
+  const extra: Any[] = pluginClipPlanes.map((p) => {
+    const pl: Any = vtkPlane.newInstance();
+    pl.setOrigin(p.origin[0], p.origin[1], p.origin[2]);
+    pl.setNormal(p.normal[0], p.normal[1], p.normal[2]);
+    return pl;
+  });
+  if (!clipExtent || !clipGeom) return extra;
   const g = clipGeom;
   const d = g.direction;
   const xAxis: V3 = [d[0], d[3], d[6]]; // +i 方向（world 単位）
@@ -228,6 +247,7 @@ function computeClipPlanes(): Any[] {
     plane(voxelToWorld(g, 0, j1, 0), neg(yAxis)),
     plane(voxelToWorld(g, 0, 0, k0), zAxis),
     plane(voxelToWorld(g, 0, 0, k1), neg(zAxis)),
+    ...extra,
   ];
 }
 
@@ -303,7 +323,7 @@ function cancelClipRecompute(id: string): void {
 
 /** embedded カットが今効くべきか（Ortho 表示中はスライス位置基準、それ以外はクリップ箱基準）。 */
 function embeddedClipEngaged(): boolean {
-  return orthoActive ? orthoSliceIdx != null : isClipActive();
+  return orthoActive ? orthoSliceIdx != null : isClipActive() || pluginClipPlanes.length > 0;
 }
 
 /**
