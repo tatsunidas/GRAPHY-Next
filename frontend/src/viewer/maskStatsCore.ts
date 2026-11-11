@@ -65,9 +65,27 @@ export function accumulateMaskStats(slices: MaskSliceInput[], segmentIndex?: num
   return out;
 }
 
-/** 平均×体積の行の語。単位が `SUV` で始まるときだけ TLG。それ以外は null（行を出さない）。 */
-export function meanTimesVolumeLabelKey(unit: string | undefined): "roiMgr.statTlg" | null {
-  return unit && unit.startsWith("SUV") ? "roiMgr.statTlg" : null;
+/**
+ * 平均×体積の行の語。SUV 系（体積あたりの濃度を体重などで割った量）は TLG、%ID/cc は VOI 内の
+ * 注入量割合（%ID）。それ以外（SUVR などの比、Bq/mL、HU）は null（行を出さない）。
+ * 列挙は完全一致: 前方一致にすると、新しい単位（SUVR）に TLG が出てしまう。
+ */
+export function meanTimesVolumeLabelKey(unit: string | undefined): "roiMgr.statTlg" | "roiMgr.statPctId" | null {
+  switch (unit) {
+    case "SUVbw":
+    case "SUVlbm":
+    case "SUVbsa":
+      return "roiMgr.statTlg";
+    case "%ID/cc":
+      return "roiMgr.statPctId";
+    default:
+      return null;
+  }
+}
+
+/** 平均×体積の単位の表記。%ID/cc × mL は注入量の割合そのもの（%ID）。 */
+export function meanTimesVolumeUnit(unit: string | undefined): string {
+  return unit === "%ID/cc" ? "%ID" : `${unit ?? ""}·mL`;
 }
 
 export interface MaskValueSample {

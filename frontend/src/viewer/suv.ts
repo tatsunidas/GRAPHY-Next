@@ -29,7 +29,7 @@ import dicomImageLoader from "@cornerstonejs/dicom-image-loader";
 import { readDicomString } from "./dicomText";
 
 /** SUV 計算タイプ。 */
-export type SuvType = "bw" | "sul-james" | "sul-janma" | "bsa";
+export type SuvType = "bw" | "sul-james" | "sul-janma" | "bsa" | "pid";
 
 /** 抽出した SUV 計算用パラメータ。欠損は undefined（UI で手入力を促す）。 */
 export interface SuvParams {
@@ -360,6 +360,8 @@ export function suvUnitLabel(type: SuvType): string {
       return "SUVlbm";
     case "bsa":
       return "SUVbsa";
+    case "pid":
+      return "%ID/cc";
   }
 }
 
@@ -381,13 +383,17 @@ export function computeSuvScale(p: SuvParams, type: SuvType): SuvResult | SuvErr
 
   // すでに SUV 化済み: そのまま（校正不要）。
   if (units === "GML" || p.alreadySuv) {
+    // %ID/cc は注入量と濃度から決まる。SUV 化済み画像からは体重なしに戻せないので作らない。
+    if (type === "pid") return { error: "alreadySuvNoPid" };
     return { scale: 1, unit: suvUnitLabel(type), type, warnings: ["alreadySuv"] };
   }
 
   // Philips CNTS: 私設スケールファクタで直接 SUVbw 化。
   if (units === "CNTS") {
     if (p.philipsSuvScaleFactor && p.philipsSuvScaleFactor > 0) {
-      // (7053,1000) は counts → SUVbw の直接係数。BW 以外は非対応のため BW にフォールバック。
+      // (7053,1000) は counts → SUVbw の直接係数。%ID/cc は SUVbw に黙って丸めない。
+      if (type === "pid") return { error: "philipsPidUnsupported" };
+      // BW 以外は非対応のため BW にフォールバック。
       if (type !== "bw") warnings.push("philipsBwOnly");
       return { scale: p.philipsSuvScaleFactor, unit: "SUVbw", type: "bw", warnings };
     }
@@ -417,23 +423,27 @@ export function computeSuvScale(p: SuvParams, type: SuvType): SuvResult | SuvErr
   // --- 正規化ベース（g 相当）---
   const w = p.patientWeight;
   const h = p.patientHeight;
-  if (!w || w <= 0) return { error: "missingWeight" };
+  // 注入量比（%ID/cc）は体重を使わない: scale = 100 / 崩壊後投与量。
+  if (type !== "pid" && (!w || w <= 0)) return { error: "missingWeight" };
   let normBase: number;
   switch (type) {
+    case "pid":
+      normBase = 100;
+      break;
     case "bw":
-      normBase = w * 1000; // g
+      normBase = w! * 1000; // g
       break;
     case "sul-james":
       if (!h || h <= 0) return { error: "missingHeight" };
-      normBase = lbmJames(w, h, p.patientSex) * 1000;
+      normBase = lbmJames(w!, h, p.patientSex) * 1000;
       break;
     case "sul-janma":
       if (!h || h <= 0) return { error: "missingHeight" };
-      normBase = lbmJanma(w, h, p.patientSex) * 1000;
+      normBase = lbmJanma(w!, h, p.patientSex) * 1000;
       break;
     case "bsa":
       if (!h || h <= 0) return { error: "missingHeight" };
-      normBase = bsaDuBois(w, h) * 10000; // m^2 → cm^2
+      normBase = bsaDuBois(w!, h) * 10000; // m^2 → cm^2
       break;
   }
   if (!(normBase > 0)) return { error: "invalidNormBase" };
@@ -458,7 +468,9 @@ export interface SuvError {
     | "missingHeight"
     | "negativeDecay"
     | "invalidNormBase"
-    | "philipsInvalid";
+    | "philipsInvalid"
+    | "philipsPidUnsupported"
+    | "alreadySuvNoPid";
 }
 
 /** 型ガード。 */

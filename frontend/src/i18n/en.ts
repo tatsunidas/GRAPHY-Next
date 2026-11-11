@@ -1690,6 +1690,7 @@ export const en: Record<string, string> = {
   "roiMgr.statVol": "Volume",
   "roiMgr.statVoxels": "Voxels",
   "roiMgr.statSlices": "Slices",
+  "roiMgr.statPctId": "%ID (mean × volume)",
   "roiMgr.statTlg": "TLG (mean × volume)",
   "roiMgr.statMissingSlices": "{{n}} slice(s) with unreadable values (mean/SD/min/max not shown)",
   "roiMgr.statMean": "Mean",
@@ -3926,6 +3927,11 @@ export const en: Record<string, string> = {
   "suv.err.missingHeight": "This calculation type requires patient height.",
   "suv.err.negativeDecay": "Decay time is negative. Please check the times.",
   "suv.err.invalidNormBase": "Normalization base (weight/LBM/BSA) is invalid.",
+  "suv.type.pid": "%ID/cc (percent injected dose)",
+  "suv.field.weightOptional": "Patient Weight (kg) (optional)",
+  "suv.err.dosePid": "Total Dose must be between 0.01 and 1000 MBq.",
+  "suv.err.philipsPidUnsupported": "%ID/cc cannot be computed from the Philips SUV scale factor (private tag) alone; the activity-concentration factor is required.",
+  "suv.err.alreadySuvNoPid": "This image is already in SUV units and cannot be converted to %ID/cc.",
   "suv.err.philipsInvalid": "Units are CNTS but Philips private tag values are invalid.",
 
   // Texture (Radiomics visualization map)
