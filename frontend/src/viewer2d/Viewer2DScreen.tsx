@@ -107,7 +107,7 @@ import { initialCalcOp } from "../viewer/fusionCalc";
 import { isFusionCalcBlend, setFusionMeasure } from "../viewer/fusionMeasureContext";
 import { StitchDialog } from "./StitchDialog";
 import { FourierDialog } from "./FourierDialog";
-import { SUVCalibrationDialog } from "../viewer/SUVCalibrationDialog";
+import { SUVCalibrationDialog, type SuvSaveContext } from "../viewer/SUVCalibrationDialog";
 import { getSuv, subscribeSuvStore } from "../viewer/suvStore";
 import { TagViewerDialog } from "../mainscreen/TagViewerDialog";
 import { ReportEditorDialog } from "../report/ReportEditorDialog";
@@ -1294,7 +1294,7 @@ function TileGrid({
   const [resample, setResample] = useState<{ tile: Tile; c: number; t: number } | null>(null);
   const [stitchOpen, setStitchOpen] = useState(false);
   const [fourier, setFourier] = useState<{ tileId: string; label: string } | null>(null);
-  const [suvTarget, setSuvTarget] = useState<{ imageId: string; seriesUid: string } | null>(null);
+  const [suvTarget, setSuvTarget] = useState<{ imageId: string; seriesUid: string; save?: SuvSaveContext } | null>(null);
   const [tagTarget, setTagTarget] = useState<{ tile: Tile; sop: string | null } | null>(null);
   const [reportTarget, setReportTarget] = useState<Tile | null>(null);
   const [maxSectionTarget, setMaxSectionTarget] = useState<Tile | null>(null);
@@ -2436,7 +2436,13 @@ function TileGrid({
         if (!ctx) { comingSoon(t("suv.menu")); return; }
         const mod = ctx.modality.toUpperCase();
         if (mod !== "PT" && mod !== "PET") { setToast(t("suv.petOnly")); return; }
-        setSuvTarget({ imageId: ctx.imageId, seriesUid: ctx.seriesUid });
+        // 校正値の保存先は同じタイルのシリーズ（リサンプルと同じ作り。仮想タイルは保存しない）。
+        const tile = patient.tiles.find((tl) => tl.id === first);
+        const dims = tile ? tileDimsRef.current.get(tile.id) : undefined;
+        const save = tile && !isVirtualTile(tile)
+          ? { study: tile.study, series: tile.series, instances: tile.instances, mode, c: dims?.c ?? 0, t: dims?.t ?? 0 }
+          : undefined;
+        setSuvTarget({ imageId: ctx.imageId, seriesUid: ctx.seriesUid, save });
       },
       // Tag Viewer: 対象（選択→無ければ先頭）タイルのシリーズで既存の DICOM 属性ビューアを開く。
       openTagViewer: () => {
@@ -2988,6 +2994,7 @@ function TileGrid({
           imageId={suvTarget.imageId}
           seriesUid={suvTarget.seriesUid}
           applied={getSuv(suvTarget.seriesUid)}
+          saveCtx={suvTarget.save}
           onClose={() => setSuvTarget(null)}
         />
       )}

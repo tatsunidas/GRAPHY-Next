@@ -25,6 +25,19 @@ import {
 import { setSuv, type SuvCalibration } from "./suvStore";
 import { suvrScale, type RefMeasure } from "./suvr";
 import { loadReferenceMeasures } from "./suvrReference";
+import { saveCalibratedSeries } from "./calibratedSeriesSaveRun";
+import type { Instance, Series, Study } from "../api";
+import type { ViewerMode } from "./imageId";
+
+/** 校正値を派生シリーズとして保存するときの対象（対象タイルのシリーズ）。無ければ保存ボタンは出さない。 */
+export interface SuvSaveContext {
+  study: Study;
+  series: Series;
+  instances: Instance[];
+  mode: ViewerMode;
+  c: number;
+  t: number;
+}
 
 /** SUV 計算タイプの選択肢。 */
 type DialogType = SuvType | "suvr";
@@ -64,6 +77,7 @@ export function SUVCalibrationDialog({
   imageId,
   seriesUid,
   applied,
+  saveCtx,
   onClose,
 }: {
   /** 対象 PET シリーズの表示中 imageId。 */
@@ -72,6 +86,8 @@ export function SUVCalibrationDialog({
   seriesUid: string;
   /** 現在この シリーズに適用中の SUV 校正（あれば「解除」を表示）。 */
   applied?: SuvCalibration | null;
+  /** 校正値の保存先（シリーズ）。 */
+  saveCtx?: SuvSaveContext;
   onClose: () => void;
 }) {
   const { t } = useI18n();
@@ -180,6 +196,29 @@ export function SUVCalibrationDialog({
     onClose();
   };
 
+  // 適用中の校正（ダイアログ内の未適用の編集ではなく）を、新しいシリーズとして保存する。
+  const [saveBusy, setSaveBusy] = useState(false);
+  const [saveMsg, setSaveMsg] = useState<{ text: string; err: boolean } | null>(null);
+  const onSaveDerived = async () => {
+    if (!applied || !saveCtx || saveBusy) return;
+    setSaveBusy(true);
+    setSaveMsg({ text: t("suv.saving"), err: false });
+    try {
+      const r = await saveCalibratedSeries({
+        cal: applied,
+        ...saveCtx,
+        confirmMemory: (mb, limit) => window.confirm(t("resample.confirmMemory", { mb, limit })),
+      });
+      if (r.ok) setSaveMsg({ text: t("suv.saved", { n: r.count }), err: false });
+      else if (r.reason === "declined") setSaveMsg(null);
+      else setSaveMsg({ text: t(r.reason === "nonUniform" ? "suv.saveNonUniform" : "suv.saveNoGeometry"), err: true });
+    } catch (e) {
+      setSaveMsg({ text: `${t("suv.saveFailed")}: ${String(e)}`, err: true });
+    } finally {
+      setSaveBusy(false);
+    }
+  };
+
   const onClear = () => {
     setSuv(seriesUid, null);
     onClose();
@@ -258,6 +297,22 @@ export function SUVCalibrationDialog({
         )}
 
         {error && <div style={errText}>{error}</div>}
+
+        {saveCtx && (
+          <div style={{ marginTop: 10 }}>
+            <button
+              data-testid="suv-save-derived"
+              onClick={onSaveDerived}
+              disabled={!applied || saveBusy}
+              title={applied ? undefined : t("suv.saveNoCalibration")}
+              style={{ ...btn, opacity: !applied || saveBusy ? 0.5 : 1 }}
+            >
+              {t("suv.saveDerived")}
+            </button>
+            {!applied && <div style={{ ...fieldLabel, marginTop: 4 }} data-testid="suv-save-hint">{t("suv.saveNoCalibration")}</div>}
+            {saveMsg && <div data-testid="suv-save-msg" style={saveMsg.err ? errText : { ...fieldLabel, marginTop: 4 }}>{saveMsg.text}</div>}
+          </div>
+        )}
 
         <div style={{ display: "flex", gap: 6, marginTop: 12, justifyContent: "flex-end" }}>
           {applied && (
