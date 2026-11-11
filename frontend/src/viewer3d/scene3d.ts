@@ -51,6 +51,7 @@ import {
   getSceneObjects,
   type SceneObject,
   type SceneObjectSource,
+  type SceneRepresentation,
 } from "./scene3dStore";
 import { record, clearUndo } from "./undoStore";
 import {
@@ -452,6 +453,12 @@ function applyVisibleInternal(id: string, visible: boolean): void {
   updateSceneObject(id, { visible });
   render();
 }
+function applyRepresentationInternal(id: string, representation: SceneRepresentation): void {
+  const d = dataById.get(id);
+  if (d?.ma) updateActorAppearance(d.ma, { representation });
+  updateSceneObject(id, { representation });
+  render();
+}
 function applyDisplayModeInternal(id: string, mode: "float" | "embedded"): void {
   updateSceneObject(id, { displayMode: mode });
   applyObjectClip(id);
@@ -558,6 +565,7 @@ export function addMeshObject(polydata: Any, opts: AddOptions = {}): string | nu
     opacity,
     visible: true,
     displayMode: "float",
+    representation: "surface",
     volumeMm3: m.volumeMm3,
     volumeMl: m.volumeMl,
     surfaceAreaMm2: m.surfaceAreaMm2,
@@ -595,6 +603,7 @@ export function addRoiObject(lv: LabelVolume, opts: AddOptions = {}): string | n
     opacity,
     visible: true,
     displayMode: "float",
+    representation: "surface",
     source: opts.source,
     voxels,
     volumeDepthSource: own.source,
@@ -615,6 +624,38 @@ function recordAdd(id: string, obj: SceneObject, data: SceneData): void {
     label: obj.name,
     undo: () => detachObjectInternal(id),
     redo: () => attachObjectInternal(id, obj, data),
+  });
+}
+
+const REPRESENTATION_LABEL: Record<SceneRepresentation, string> = { surface: "面", wireframe: "線", points: "点" };
+
+/** 描き方（面・線・点）を設定。選んだ物体の見た目だけを変え、計測・ピッキングは変えない。 */
+export function setObjectRepresentation(id: string, representation: SceneRepresentation): void {
+  const old = getSceneObject(id)?.representation ?? "surface";
+  if (old === representation) return;
+  applyRepresentationInternal(id, representation);
+  record({
+    label: `描き方: ${REPRESENTATION_LABEL[representation]}`,
+    undo: () => applyRepresentationInternal(id, old),
+    redo: () => applyRepresentationInternal(id, representation),
+  });
+}
+
+/** dev・検査用: 各物体の store の描き方と、アクターから読んだ値（食い違いを拾う）。 */
+export function readSceneActorStates(): {
+  id: string; kind: string; storeRepresentation: SceneRepresentation; actorRepresentation: number | null;
+  color: [number, number, number] | null; opacity: number | null; visible: boolean | null;
+}[] {
+  return getSceneObjects().map((o) => {
+    const p = dataById.get(o.id)?.ma?.actor.getProperty();
+    const actor = dataById.get(o.id)?.ma?.actor;
+    return {
+      id: o.id, kind: o.kind, storeRepresentation: o.representation,
+      actorRepresentation: p ? p.getRepresentation() : null,
+      color: p ? (p.getColor() as [number, number, number]) : null,
+      opacity: p ? p.getOpacity() : null,
+      visible: actor ? actor.getVisibility() : null,
+    };
   });
 }
 
@@ -1080,6 +1121,7 @@ export function addCenterlineObject(cl: Centerline3D, opts: AddOptions = {}): st
     opacity,
     visible: true,
     displayMode: "float",
+    representation: "surface",
     lengthMm: total,
     lengthMl: undefined,
   };
