@@ -52,7 +52,7 @@ final class VolumeAssembler implements AnonymizeService.Sink {
     static final long MAX_RAW_BYTES = 1L << 30;
 
     /** 整数の画像は {@code raw}、Parametric Map は実際の量の {@code values}（どちらか一方）。 */
-    private record Slice(byte[] raw, float[] values, int frame, double[] ipp, int instanceNumber, double slope,
+    record Slice(byte[] raw, float[] values, int frame, double[] ipp, int instanceNumber, double slope,
             double intercept) {
     }
 
@@ -78,6 +78,9 @@ final class VolumeAssembler implements AnonymizeService.Sink {
     private double[] windowCenter;
     private double[] windowWidth;
     private String voiLutFunction;
+    /** 1 枚だけのシリーズで NIfTI の段差に使う値（SpacingBetweenSlices → SliceThickness）と出どころ。無ければ NaN。 */
+    private double sliceStepMm = Double.NaN;
+    private String sliceStepSource;
 
     VolumeAssembler(PixelCodec codec) {
         this.codec = codec;
@@ -140,6 +143,13 @@ final class VolumeAssembler implements AnonymizeService.Sink {
             studyUid = ds.getString(Tag.StudyInstanceUID);
             valueUnit = ds.getString(Tag.RescaleType, "");
             readVoi(ds);
+            if (ds.getDouble(Tag.SpacingBetweenSlices, 0) > 0) {
+                sliceStepMm = ds.getDouble(Tag.SpacingBetweenSlices, 0);
+                sliceStepSource = "SpacingBetweenSlices";
+            } else if (ds.getDouble(Tag.SliceThickness, 0) > 0) {
+                sliceStepMm = ds.getDouble(Tag.SliceThickness, 0);
+                sliceStepSource = "SliceThickness";
+            }
         } else if (r != rows || c != cols || ba != bitsAllocated) {
             throw new UnsupportedLayout("npz-mixed-geometry");
         }
@@ -233,8 +243,17 @@ final class VolumeAssembler implements AnonymizeService.Sink {
         return slices.size();
     }
 
-    /** npz を書く。 */
-    void writeNpz(OutputStream out, ObjectMapper mapper) throws IOException {
+    /** 並べ替えと幾何の組み立ての結果（npz・NIfTI で共有。画素はまだ書かない）。 */
+    record Assembled(List<Slice> sorted, String order, boolean spatial, double dz, double[] origin, double dy,
+            double dx, double[] direction, double[] normal) {
+    }
+
+    /**
+     * 並べ替え・間隔の検査・origin/direction の計算。npz・NIfTI の両方がこの結果を使う。
+     *
+     * @throws UnsupportedLayout 空・混在・重複位置・不等間隔など、1 本の格子にできない形
+     */
+    Assembled assemble() throws IOException {
         if (slices.isEmpty()) {
             throw new UnsupportedLayout("npz-empty");
         }
@@ -293,6 +312,19 @@ final class VolumeAssembler implements AnonymizeService.Sink {
             System.arraycopy(iop, 3, direction, 3, 3);  // y 軸（行が増える向き）
             System.arraycopy(normal, 0, direction, 6, 3);
         }
+        return new Assembled(sorted, order, spatial, dz, origin, dy, dx, direction, normal);
+    }
+
+    /** npz を書く。 */
+    void writeNpz(OutputStream out, ObjectMapper mapper) throws IOException {
+        Assembled asm = assemble();
+        List<Slice> sorted = asm.sorted();
+        String order = asm.order();
+        double dz = asm.dz();
+        double[] origin = asm.origin();
+        double dy = asm.dy();
+        double dx = asm.dx();
+        double[] direction = asm.direction();
 
         ZipOutputStream zip = new ZipOutputStream(out);
         zip.putNextEntry(new ZipEntry("volume.npy"));
@@ -340,6 +372,21 @@ final class VolumeAssembler implements AnonymizeService.Sink {
         zip.write(mapper.writerWithDefaultPrettyPrinter().writeValueAsBytes(meta));
         zip.closeEntry();
         zip.finish();
+    }
+
+    int rows() { return rows; }
+    int cols() { return cols; }
+    String modality() { return modality; }
+    String valueUnit() { return valueUnit; }
+    double[] windowCenter() { return windowCenter; }
+    double[] windowWidth() { return windowWidth; }
+    double sliceStepMm() { return sliceStepMm; }
+    String sliceStepSource() { return sliceStepSource; }
+    double[] iop() { return iop; }
+
+    /** 1 枚ぶんを Rescale 適用後の float32（リトルエンディアン）で {@code out} に積む。 */
+    void putFloats(Slice s, ByteBuffer out) {
+        writeFloats(s, out);
     }
 
     private void writeFloats(Slice s, ByteBuffer out) {
