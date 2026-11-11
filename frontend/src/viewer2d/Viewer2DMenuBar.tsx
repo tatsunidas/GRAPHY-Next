@@ -26,6 +26,7 @@ import { mountValueViewport, mountVolumeView } from "../plugins/pluginViewportAp
 import { measureMask } from "../plugins/pluginMeshApi";
 import { measureLabels } from "../plugins/pluginLabelStatsApi";
 import { extractCenterline, sampleCenterlineFrames } from "../plugins/pluginCenterlineApi";
+import { measureMaskCrossSections, orientCenterlineGraph } from "../plugins/pluginVesselMeasureApi";
 import { deletePluginStore, loadPluginStore, savePluginStore } from "../plugins/pluginStore";
 import { openLogViewer } from "../system/LogViewer";
 import { openMemoryMonitor } from "../system/memoryMonitor";
@@ -249,6 +250,8 @@ export function Viewer2DMenuBar({
     measureLabels: (labels, values, opts) => measureLabels(labels, values, opts),
     extractCenterline: (mask, opts) => extractCenterline(mask, opts),
     sampleCenterlineFrames: (polyline, opts) => sampleCenterlineFrames(polyline, opts),
+    measureMaskCrossSections: (mask, polyline, opts) => measureMaskCrossSections(mask, polyline, opts),
+    orientCenterlineGraph: (graph, rootNodeId) => orientCenterlineGraph(graph, rootNodeId),
     // H73: 出所（id/name/version）は host がマニフェストから入れる。
     openCurvedMpr: (spec) => liveActions.openCurvedMpr(spec, { id: m.id, name: m.name, version: m.version }),
     openViewer3d: (spec) => liveActions.openViewer3d(spec, { id: m.id, name: m.name, version: m.version }),

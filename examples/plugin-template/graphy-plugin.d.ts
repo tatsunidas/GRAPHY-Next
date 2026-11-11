@@ -1409,6 +1409,52 @@ export interface PluginCurveFrameOptions {
   frameMode?: "FIXED_Z" | "ROTATION_MINIMIZING";
 }
 
+/** 断面計測（`measureMaskCrossSections`）のオプション。 */
+export interface CrossSectionOptions {
+  /** 断面どうしの弧長間隔 mm。正の有限値。 */
+  spacingMm: number;
+  /** 断面の走査半径 mm。正の有限値。**既定値は無い**。 */
+  maxRadiusMm: number;
+  /** 指定するとその値のセルだけを前景とする（1..255）。省略すると 0 以外すべて。 */
+  segment?: number;
+  /** 第 2 軸の規約。既定 `"ROTATION_MINIMIZING"`。 */
+  frameMode?: "FIXED_Z" | "ROTATION_MINIMIZING";
+  /** 断面格子の刻み mm。既定はマスクの最小ボクセル間隔の 1/2。 */
+  gridStepMm?: number;
+  /** この点列の近傍（半径 radiusMm 以内）の断面は測らない（全値 null）。分岐点の近傍を外すのに使う。 */
+  excludeNear?: { points: [number, number, number][]; radiusMm: number };
+}
+
+export interface CrossSectionFrame {
+  arcLengthMm: number;
+  positionWorld: [number, number, number];
+  /** 中心がマスクの外（真のとき計測値はすべて null）。 */
+  centerInMask: boolean;
+  /** 中心を含む成分が走査範囲の縁に触れた（真のとき計測値はすべて null）。 */
+  touchesBoundary: boolean;
+  /** `excludeNear` で外した（真のとき計測値はすべて null）。 */
+  excluded: boolean;
+  areaMm2: number | null;
+  /** 面積と同じ円の直径。`diameterMethod: "mask-equivalent-area"` に対応。 */
+  equivalentDiameterMm: number | null;
+  /** 全方位の最小幅。`diameterMethod: "mask-min-width"` に対応。 */
+  minWidthMm: number | null;
+}
+
+export type CrossSectionResult = { ok: true; frames: CrossSectionFrame[] } | { ok: false; error: string };
+
+export interface OrientedSegment {
+  /** `String(枝の id)`。 */
+  id: string;
+  /** 根 → 先の向き（患者 LPS mm）。 */
+  points: [number, number, number][];
+  /** 根の側でつながる区間の id。根の区間は null。 */
+  parentId: string | null;
+  lengthMm: number;
+}
+
+export type OrientResult = { ok: true; segments: OrientedSegment[] } | { ok: false; error: string };
+
 interface PluginHostBase {
   /** 自分の plugin.json の id。 */
   pluginId: string;
@@ -2538,6 +2584,41 @@ export interface Viewer2DPluginHost extends PluginHostBase {
     polylineWorld: readonly [number, number, number][],
     opts: PluginCurveFrameOptions,
   ) => PluginCurveFrame[];
+  /**
+   * **中心線に直交する断面でマスクの内腔を測る**（H76・仮番号）。面積・等価径・最小幅を、弧長 `spacingMm` ごとに返す。
+   * 血管モデル（`registerVesselModel`）の `diameterMm` を作る素材。`diameterMethod` は等価径なら
+   * `"mask-equivalent-area"`、最小幅なら `"mask-min-width"`。
+   *
+   * <p>本体は**幾何だけ**を測る（マスクは 0/1。HU・造影濃度・石灰化・どの枝がどの血管かは解釈しない）。
+   * 返るフレームは弧長 0・間隔ごと・終点（最後だけ間隔が短い）。**`positionWorld` をそのまま区間の `points`、
+   * `equivalentDiameterMm` を `diameterMm` にすれば 1 点ごとの径になる**（H41 の疎な頂点に径を載せると、
+   * 頂点の間は補間されて径の分布が崩れる）。
+   * `maxRadiusMm` に既定値は無い。数えるのは**中心を含む 4 連結成分だけ**（隣の血管は混ざらない）。
+   *
+   * <p>🔴 **測れない断面は null**（0 や近くの別の構造の値で埋めない）: 中心がマスクの外・成分が走査半径の縁に触れた・
+   * `excludeNear` で外した。
+   *
+   * <p>🔴 **分岐点の近傍は信頼できない**（他枝の内腔が断面に入る。合成の Y 字〔幹 4.0・枝 3.0 mm〕で、節点をまたぐ経路の
+   * 節点付近は +0.5 mm 過大、または縁に触れて null になった。過大になる場合は自動では検出できない）→
+   * `excludeNear` に H41 の分岐節点（`degree >= 3`）を渡すこと。
+   *
+   * <p>精度（合成の直円柱での実測）: 等価径は真値の ±2% 程度（直径 2〜6 mm・ボクセル 0.25〜0.5 mm）、
+   * **最小幅は +0.1〜0.35 mm 大きく出る**。どちらもマスクの作り方に依存し、ボクセル間隔より細い血管は測れない。
+   * 狭窄の評価には等価径を使うこと。入力が壊れていれば `{ok:false, error}`。
+   */
+  measureMaskCrossSections: (
+    mask: PluginMaskInput,
+    polylineWorld: readonly [number, number, number][],
+    opts: CrossSectionOptions,
+  ) => CrossSectionResult;
+  /**
+   * **中心線グラフ（H41）を根から木に向き付ける**（H77・仮番号）。枝ごとに点列を根→先にそろえ、`parentId` を付ける。
+   * 出力の `segments` に `diameterMm` を足せばそのまま `registerVesselModel` の区間になる。
+   *
+   * <p>根は**端点（degree 1）の節点**。木でない（ループ・多重辺・非連結）・根が無い・根が端点でない場合は
+   * `{ok:false, error}`。どの端点が根（大動脈側など）かはプラグインが決める。
+   */
+  orientCenterlineGraph: (graph: PluginCenterlineGraph, rootNodeId: number) => OrientResult;
   /**
    * **中心線を渡して、本体の Curved MPR 窓を開く**（H73）。渡すのは制御点（患者 LPS mm・2 点以上）と
    * 見え方のオプションだけで、再構成・表示・保存は本体が行う。窓には「プラグイン <名前> が指定した
