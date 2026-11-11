@@ -48,6 +48,8 @@ export interface ImageInfo {
   suvScale?: number;
   /** SUV 単位ラベル（"SUVbw" 等）。 */
   suvUnit?: string;
+  /** SUVR の参照領域（適用時に測った値）。 */
+  suvRef?: { label: string; mean: number; unit: string; n: number };
   /**
    * XA/XRF の空間校正の解決結果（`fw/angio-design.md` §7）。XA 以外は undefined。
    * **出自を必ず画面に出す**ための情報で、mm/px 自体は既に imagePlaneModule へ注入済み。
@@ -93,6 +95,7 @@ export function readImageInfo(imageId: string): ImageInfo {
     modality: series.modality,
     suvScale: suv?.scale,
     suvUnit: suv?.unit,
+    suvRef: suv?.ref,
     rows,
     columns,
     rowPixelSpacing,

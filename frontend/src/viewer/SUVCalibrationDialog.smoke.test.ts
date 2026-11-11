@@ -29,8 +29,13 @@ vi.mock("./suv", async (orig) => {
     alreadySuv: false,
     modality: "PT",
   };
-  return { ...actual, extractSuvParams: () => fake };
+  return { ...actual, extractSuvParams: () => ({ ...fake, ...(globalThis as { __fakeSuv?: Partial<SuvParams> }).__fakeSuv }) };
 });
+
+import type { RefMeasure } from "./suvr";
+
+let fakeMeasures: RefMeasure[] = [];
+vi.mock("./suvrReference", () => ({ loadReferenceMeasures: async () => fakeMeasures }));
 
 import { SUVCalibrationDialog } from "./SUVCalibrationDialog";
 import { getSuv, setSuv } from "./suvStore";
@@ -69,10 +74,10 @@ afterEach(() => {
   setSuv(UID, null);
 });
 
-async function open() {
+async function open(applied?: import("./suvStore").SuvCalibration | null) {
   await act(async () => {
     root.render(
-      createElement(I18nProvider, null, createElement(SUVCalibrationDialog, { imageId: "wadouri:x", seriesUid: UID, onClose: () => {} })),
+      createElement(I18nProvider, null, createElement(SUVCalibrationDialog, { imageId: "wadouri:x", seriesUid: UID, applied, onClose: () => {} })),
     );
   });
 }
@@ -120,5 +125,73 @@ describe("SUVCalibrationDialog（煙テスト）", () => {
     await setInput("suv-dose", "5");
     await apply();
     expect(getSuv(UID)?.unit).toBe("SUVbw");
+  });
+
+  describe("SUVR", () => {
+    const ok: RefMeasure = { key: "a", label: "小脳", group: false, mean: 500, n: 120, unit: "BQML" };
+    it("SUVR を選ぶと SUV 用の欄が無効になり、参照の候補と平均が出る。適用すると参照の平均が 1 になる乗数・単位 SUVR・ref つき", async () => {
+      fakeMeasures = [ok, { key: "b", label: "背景", group: false, mean: 100, n: 50, unit: "BQML" }];
+      await open();
+      await setInput("suv-type", "suvr");
+      expect((q("suv-weight") as HTMLInputElement).disabled).toBe(true);
+      expect((q("suv-dose") as HTMLInputElement).disabled).toBe(true);
+      expect(host.querySelectorAll('[data-testid="suv-ref"] option')).toHaveLength(2);
+      expect(q("suv-ref-note").textContent).toContain("500");
+      await apply();
+      const cal = getSuv(UID)!;
+      expect(cal.unit).toBe("SUVR");
+      expect(cal.type).toBe("suvr");
+      expect(cal.ref).toEqual({ label: "小脳", mean: 500, unit: "BQML", n: 120 });
+      expect(Math.abs(500 * cal.scale - 1)).toBeLessThan(1e-12);
+    });
+    it("参照を選び直せる（背景を参照にすると目的は別の値になる）", async () => {
+      fakeMeasures = [ok, { key: "b", label: "背景", group: false, mean: 100, n: 50, unit: "BQML" }];
+      await open();
+      await setInput("suv-type", "suvr");
+      await setInput("suv-ref", "b");
+      await apply();
+      expect(100 * getSuv(UID)!.scale).toBeCloseTo(1, 12);
+      expect(getSuv(UID)!.ref!.label).toBe("背景");
+    });
+    it("候補なしは適用できず理由が出る（負例）", async () => {
+      fakeMeasures = [];
+      await open();
+      await setInput("suv-type", "suvr");
+      expect((q("suv-apply") as HTMLButtonElement).disabled).toBe(true);
+      expect(q("suv-ref-note").textContent).toContain("参照にできる ROI");
+      await apply();
+      expect(getSuv(UID)).toBeUndefined();
+    });
+    it("参照の平均が 0 以下は適用できず理由が出る（負例）", async () => {
+      fakeMeasures = [{ key: "z", label: "空", group: false, mean: 0, n: 10, unit: "BQML", reason: "refNotPositive" }];
+      await open();
+      await setInput("suv-type", "suvr");
+      expect((q("suv-apply") as HTMLButtonElement).disabled).toBe(true);
+      expect(q("suv-ref-note").textContent).toContain("0 以下");
+      expect(getSuv(UID)).toBeUndefined();
+    });
+    it("SUV 化済み（GML）の画像でも SUVR だけは作れる。種類は SUVR だけで、%ID/cc は選べない", async () => {
+      (globalThis as { __fakeSuv?: Partial<SuvParams> }).__fakeSuv = { units: "GML", alreadySuv: true };
+      try {
+        fakeMeasures = [{ key: "a", label: "小脳", group: false, mean: 2.5, n: 120, unit: "GML" }];
+        await open();
+        const opts = [...host.querySelectorAll('[data-testid="suv-type"] option')].map((o) => (o as HTMLOptionElement).value);
+        expect(opts).toEqual(["suvr"]);
+        await apply();
+        const cal = getSuv(UID)!;
+        expect(cal.unit).toBe("SUVR");
+        expect(Math.abs(2.5 * cal.scale - 1)).toBeLessThan(1e-12); // 今の乗数は 1 とみなす
+      } finally {
+        delete (globalThis as { __fakeSuv?: Partial<SuvParams> }).__fakeSuv;
+      }
+    });
+    it("すでに SUV を掛けてある状態から適用しても、参照の平均（SUV 値）が 1 になる", async () => {
+      // 現在の乗数 3e-4。統計は校正込みで返るので、参照 500 Bq/mL は 0.15 SUV。
+      fakeMeasures = [{ key: "a", label: "小脳", group: false, mean: 0.15, n: 120, unit: "SUVbw" }];
+      await open({ scale: 3e-4, unit: "SUVbw", type: "bw" });
+      await setInput("suv-type", "suvr");
+      await apply();
+      expect(Math.abs(500 * getSuv(UID)!.scale - 1)).toBeLessThan(1e-9);
+    });
   });
 });
