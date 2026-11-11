@@ -115,7 +115,10 @@ const geoPages = (driver: DesktopDriver): Page[] => driver.app.windows().filter(
 async function colorStats(page: Page, png: string): Promise<{ red: number; blue: number; cyan: number; grey: number; drawn: number }> {
   await page.evaluate("globalThis.__name = (f) => f");
   const buf = await page.screenshot({ path: png });
-  return page.evaluate(async (b64) => {
+  // 3D の描画領域（キャンバス）の下端まで。その下の径プロファイルの帯（折れ線もシアン）は数えない。
+  const hostBox = await page.getByTestId("geometry3d-canvas-host").boundingBox();
+  const bottom = hostBox ? hostBox.y + hostBox.height : null;
+  return page.evaluate(async ({ b64, bottom }) => {
     const bin = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
     const bmp = await createImageBitmap(new Blob([bin], { type: "image/png" }));
     const cv = document.createElement("canvas");
@@ -128,7 +131,7 @@ async function colorStats(page: Page, png: string): Promise<{ red: number; blue:
     const bg = at(2, 2);
     let red = 0, blue = 0, cyan = 0, grey = 0, drawn = 0;
     // 凡例（右上）・物体一覧（右）・上下の帯は数えない（色ランプの赤・青が混ざる）。
-    const x1 = Math.floor(cv.width * 0.72), y0 = 40, y1 = cv.height - 30;
+    const x1 = Math.floor(cv.width * 0.72), y0 = 40, y1 = bottom === null ? cv.height - 30 : Math.min(cv.height, Math.floor(bottom) - 2);
     for (let y = y0; y < y1; y++) for (let x = 0; x < x1; x++) {
       const i = (y * cv.width + x) * 4;
       const r = d[i], g = d[i + 1], b = d[i + 2];
@@ -140,7 +143,7 @@ async function colorStats(page: Page, png: string): Promise<{ red: number; blue:
       else if (Math.max(r, g, b) - Math.min(r, g, b) < 40 && Math.max(r, g, b) > 90) grey++;
     }
     return { red, blue, cyan, grey, drawn };
-  }, buf.toString("base64"));
+  }, { b64: buf.toString("base64"), bottom });
 }
 
 async function main(): Promise<void> {
@@ -212,6 +215,8 @@ async function main(): Promise<void> {
     check((await objs.getAttribute("data-count")) === "3", "物体が 3 つ（区間ごと）", await objs.getAttribute("data-count"));
     const footer = (await geo.getByTestId("geometry3d-footer").textContent()) ?? "";
     check(/CT/.test(footer), "フッターが CT 用の注記", footer);
+    const stripText = (await geo.getByTestId("geometry3d-min-diameter").textContent().catch(() => "")) ?? "";
+    check(/(最小径|Minimum diameter) 4\.0 mm/.test(stripText), "CT の木では径プロファイルの帯が出て、最小径が入力どおり（4.0 mm）", stripText);
     const s0 = await colorStats(geo, path.join(OUT_DIR, "1-tree-no-analysis.png"));
     console.log(`  解析前: ${JSON.stringify(s0)}`);
     check(s0.drawn > 200, "🔴 画面が真っ黒でない（管が描かれている）", s0);
@@ -247,6 +252,7 @@ async function main(): Promise<void> {
     await call(viewer, { op: "open", runId: regXa.runId });
     await geo.waitForTimeout(2500);
     check((await objs.getAttribute("data-count")) === "1", "XA 単一血管は物体 1 つ", await objs.getAttribute("data-count"));
+    check((await geo.getByTestId("geometry3d-profile-strip").count()) === 0, "🔴 XA 単一血管には径プロファイルの帯が出ない（従来どおり）");
     const footerXa = (await geo.getByTestId("geometry3d-footer").textContent()) ?? "";
     check(!/CT/.test(footerXa) || footerXa !== footer, "フッターは XA 用（CT 用と違う）", footerXa);
     const sx = await colorStats(geo, path.join(OUT_DIR, "4-xa-single.png"));

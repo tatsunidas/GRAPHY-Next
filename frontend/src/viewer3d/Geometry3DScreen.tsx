@@ -37,6 +37,7 @@ import { getVesselModel, useVesselAnalysis } from "../viewer/xaVesselModelStore"
 import { buildSegmentColors } from "./vesselSegmentColors";
 import { segmentValues, valuesToRgb } from "./vesselColorMap";
 import { VesselAnalysisLegend } from "./VesselAnalysisLegend";
+import { DiameterProfileStrip } from "./DiameterProfileStrip";
 import { getSceneObjects, useSceneObjects } from "./scene3dStore";
 import { removeObject } from "./scene3d";
 import { SceneObjectPanel } from "./SceneObjectPanel";
@@ -226,6 +227,7 @@ export function Geometry3DScreen({ status }: { status: AppStatus | null }) {
           <SceneObjectPanel geom={null} />
         </div>
       </div>
+      {ctx?.kind === "ct-vessel" && model ? <DiameterProfileStrip model={model} /> : null}
       {error ? (
         <div style={errorBar} data-testid="geometry3d-error">
           {error}

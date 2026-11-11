@@ -56,7 +56,8 @@ function installProbePlugin(): void {
   fs.mkdirSync(dst, { recursive: true });
   fs.writeFileSync(path.join(dst, "plugin.json"), JSON.stringify({ id: PLUGIN_ID, name: "Vessel Measure Probe", version: "0.0.1", engines: { graphy: ">=0.0.0" }, contributes: ["viewer2d.menu"], ui: "ui.js" }, null, 2));
   fs.writeFileSync(path.join(dst, "ui.js"), `
-function cylinder(a, b, r) {
+function cylinder(a, b, rr) {
+  const r = typeof rr === "function" ? rr : () => rr;
   const ax = [b[0]-a[0], b[1]-a[1], b[2]-a[2]];
   const len = Math.hypot(ax[0], ax[1], ax[2]);
   const u = [ax[0]/len, ax[1]/len, ax[2]/len];
@@ -65,12 +66,14 @@ function cylinder(a, b, r) {
     const s = d[0]*u[0] + d[1]*u[1] + d[2]*u[2];
     if (s < 0 || s > len) return 0;
     const perp = Math.hypot(d[0]-s*u[0], d[1]-s*u[1], d[2]-s*u[2]);
-    return perp <= r ? 1 : 0;
+    return perp <= r(s) ? 1 : 0;
   };
 }
-function buildMask(trunkD, branchD) {
+function buildMask(trunkD, branchD, stenosis) {
   const sp = 0.5, dims = [60, 60, 80];
-  const t = cylinder([15,15,2], [15,15,22], trunkD/2);
+  // 狭窄: 幹の軸方向 s=10 mm（z=12）で半径が 1.0 mm まで絞られるガウス型（最小径 2.0 mm・幅 σ≈1 mm）。
+  const trunkR = stenosis ? (s) => trunkD/2 - (trunkD/2 - 1.0) * Math.exp(-(((s - 10) / 1.5) ** 2)) : trunkD/2;
+  const t = cylinder([15,15,2], [15,15,22], trunkR);
   const b1 = cylinder([15,15,22], [27,15,34], branchD/2);
   const b2 = cylinder([15,15,22], [3,15,34], branchD/2);
   const data = new Uint8Array(dims[0]*dims[1]*dims[2]);
@@ -89,7 +92,7 @@ export default {
     window.__vmResult = undefined;
     try {
       if (c.op === "pipeline") {
-        const mask = buildMask(c.trunkD, c.branchD);
+        const mask = buildMask(c.trunkD, c.branchD, c.stenosis);
         const g = host.extractCenterline(mask, { pruneMinLengthMm: 3 });
         if (!g) { window.__vmResult = { ok: false, error: "no graph" }; return; }
         const leaves = g.nodes.filter((n) => n.degree === 1).sort((a, b) => a.world[2] - b.world[2]);
@@ -119,13 +122,13 @@ export default {
         const withEx = host.measureMaskCrossSections(mask, crossing, { spacingMm: 1, maxRadiusMm: 6, excludeNear: exclude });
         const tooSmall = host.measureMaskCrossSections(mask, trunk.points, { spacingMm: 3, maxRadiusMm: 1.5 });
         const reg = host.registerVesselModel({
-          runKey: "vm1", stableKey: null, orientation: { proximalFirst: true, source: "user" }, kind: "ct-vessel", label: "測定した木",
+          runKey: c.runKey || "vm1", stableKey: null, orientation: { proximalFirst: true, source: "user" }, kind: "ct-vessel", label: "測定した木",
           segments: segments.map((s) => ({ id: s.id, name: s.name, points: s.points, parentId: s.parentId, diameterMm: s.diameterMm })),
           calibration: { diameterCalibrated: true, sources: [], tiers: [], diameterMethod: "mask-equivalent-area" },
           provenance: { studyUid: "1.2.3", seriesUid: "1.2.3.4", frameOfReferenceUid: null, voxelSpacingMm: [0.5, 0.5, 0.5], maskOrigin: { type: "plugin" } },
         });
         window.__vmResult = {
-          ok: true, reg, badRootOk: badRoot.ok, badRootError: badRoot.ok ? null : badRoot.error,
+          ok: true, reg, trunkStartZ: trunk.points[0][2], segIds: o.segments.map((x) => x.id), badRootOk: badRoot.ok, badRootError: badRoot.ok ? null : badRoot.error,
           segs: segments.map((s) => ({ id: s.id, parentId: s.parentId, mean: s.mean, nValid: s.nValid, nFrames: s.nFrames, nPoints: s.points.length })),
           // 節点から 2 mm 以内の断面の（値, 節点までの距離）。真値は幹 4.0・枝 3.0。
           bareNear: bare.frames.filter((f) => near(f) <= 2).map((f) => ({ d: f.equivalentDiameterMm, dist: near(f), boundary: f.touchesBoundary })),
@@ -157,7 +160,10 @@ async function call(viewer: Page, kase: unknown): Promise<any> {
 async function colorStats(page: Page, png: string): Promise<{ red: number; blue: number; cyan: number; grey: number; drawn: number }> {
   await page.evaluate("globalThis.__name = (f) => f");
   const buf = await page.screenshot({ path: png });
-  return page.evaluate(async (b64) => {
+  // 3D の描画領域（キャンバス）の下端まで。その下の径プロファイルの帯（折れ線もシアン）は数えない。
+  const hostBox = await page.getByTestId("geometry3d-canvas-host").boundingBox();
+  const bottom = hostBox ? hostBox.y + hostBox.height : null;
+  return page.evaluate(async ({ b64, bottom }) => {
     const bin = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
     const bmp = await createImageBitmap(new Blob([bin], { type: "image/png" }));
     const cv = document.createElement("canvas");
@@ -169,7 +175,7 @@ async function colorStats(page: Page, png: string): Promise<{ red: number; blue:
     const bgi = (2 * cv.width + 2) * 4;
     const bg = [d[bgi], d[bgi + 1], d[bgi + 2]];
     let red = 0, blue = 0, cyan = 0, grey = 0, drawn = 0;
-    const x1 = Math.floor(cv.width * 0.72), y0 = 40, y1 = cv.height - 30;
+    const x1 = Math.floor(cv.width * 0.72), y0 = 40, y1 = bottom === null ? cv.height - 30 : Math.min(cv.height, Math.floor(bottom) - 2);
     for (let y = y0; y < y1; y++) for (let x = 0; x < x1; x++) {
       const i = (y * cv.width + x) * 4;
       const r = d[i], g = d[i + 1], b = d[i + 2];
@@ -181,6 +187,29 @@ async function colorStats(page: Page, png: string): Promise<{ red: number; blue:
       else if (Math.max(r, g, b) - Math.min(r, g, b) < 40 && Math.max(r, g, b) > 90) grey++;
     }
     return { red, blue, cyan, grey, drawn };
+  }, { b64: buf.toString("base64"), bottom });
+}
+
+/** 径プロファイルの折れ線（#5ac8e0）の画素: 列ごとの最上端の y（無ければ null）と全画素数。 */
+async function profileColumns(page: Page, testid: string, png: string): Promise<{ w: number; h: number; top: (number | null)[]; n: number }> {
+  await page.evaluate("globalThis.__name = (f) => f");
+  const buf = await page.getByTestId(testid).screenshot({ path: png });
+  return page.evaluate(async (b64) => {
+    const bin = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+    const bmp = await createImageBitmap(new Blob([bin], { type: "image/png" }));
+    const cv = document.createElement("canvas");
+    cv.width = bmp.width;
+    cv.height = bmp.height;
+    const ctx = cv.getContext("2d", { willReadFrequently: true })!;
+    ctx.drawImage(bmp, 0, 0);
+    const d = ctx.getImageData(0, 0, cv.width, cv.height).data;
+    const top: (number | null)[] = Array.from({ length: cv.width }, () => null);
+    let n = 0;
+    for (let x = 0; x < cv.width; x++) for (let y = 0; y < cv.height; y++) {
+      const i = (y * cv.width + x) * 4;
+      if (d[i] < 120 && d[i + 1] > 160 && d[i + 2] > 190) { n++; if (top[x] === null) top[x] = y; }
+    }
+    return { w: cv.width, h: cv.height, top, n };
   }, buf.toString("base64"));
 }
 
@@ -267,6 +296,47 @@ async function main(): Promise<void> {
     const s1 = await colorStats(geo, path.join(OUT_DIR, "2-tree-colored-by-diameter.png"));
     console.log(`  色付け後: ${JSON.stringify(s1)}`);
     check(s1.red > 500 && s1.blue > 300 && s1.cyan < 30, "🔴 細い枝=赤・太い幹=青の画素が揃い、既定のシアンは消える", s1);
+
+    console.log("\n[4] 径プロファイルの帯（狭窄つき: 幹の z=12 で最小径 2.0 mm）");
+    const stripShown = await geo.getByTestId("geometry3d-profile-strip").count();
+    check(stripShown === 1, "CT の木では下帯が出る（狭窄なしの木。既定は幹）", stripShown);
+    const w0 = driver.app.windows().length;
+    const r2 = await call(viewer, { op: "pipeline", trunkD: TRUNK_D, branchD: BRANCH_D, stenosis: true, runKey: "vm2" });
+    check(r2?.ok === true && r2.reg?.ok === true, "狭窄つきの通し・登録が ok", r2?.reg ?? r2);
+    const o2 = await call(viewer, { op: "open", runId: r2.reg.runId });
+    check(o2?.ok === true, "同じ窓で開く（openVesselModel3d ok）", o2);
+    await geo.waitForTimeout(2500);
+    check(driver.app.windows().length === w0, "窓が増えない", { before: w0, after: driver.app.windows().length });
+    const prof = geo.getByTestId("geometry3d-diameter-profile");
+    await prof.waitFor({ state: "visible", timeout: 20_000 });
+    const minText = (await geo.getByTestId("geometry3d-min-diameter").textContent()) ?? "";
+    const minD = Number(await prof.getAttribute("data-min"));
+    const minArc = Number(await prof.getAttribute("data-min-arc"));
+    const truthArc = 12 - r2.trunkStartZ; // 狭窄の中心 z=12 の、幹の始点からの弧長（幹は z 軸に平行）
+    console.log(`  帯の最小径: "${minText}"（真値 2.0 mm・弧長 ${truthArc.toFixed(1)} mm）`);
+    check(Math.abs(minD - 2.0) <= 0.5, "🔴 最小径が真値 2.0 mm（±0.5）", { minD });
+    check(Math.abs(minArc - truthArc) <= 1.0, "🔴 最小径の位置が狭窄の中心 ±1.0 mm", { minArc, truthArc });
+    check(new RegExp(`${minD.toFixed(1)}`).test(minText), "画面の文字列が data 属性の値（小数 1 桁）と一致", { minText, minD });
+    const px = await profileColumns(geo, "geometry3d-diameter-profile", path.join(OUT_DIR, "3-profile-trunk.png"));
+    check(px.n > 200, "🔴 折れ線の画素が帯にある（背景だけでない）", px.n);
+    const lenMm = Number(await prof.getAttribute("data-length"));
+    const colAt = (frac: number) => Math.min(px.w - 1, Math.max(0, Math.round(frac * px.w)));
+    const yEnd = px.top[colAt(0.04)];
+    const yMin = px.top[colAt(minArc / lenMm)];
+    console.log(`  画素: 始点付近の最上端 y=${yEnd}・最小径の位置 y=${yMin}（帯の高さ ${px.h}px、全長 ${lenMm} mm）`);
+    check(yEnd !== null && yMin !== null && yMin - yEnd > 20, "🔴 狭窄が谷として画素に出る（最小径の位置の線が始点付近より 20px 以上下）", { yEnd, yMin });
+    const segsMeta = (r2.segs as { id: string; nValid: number; nFrames: number; parentId: string | null }[]);
+    const branchId = segsMeta.find((x) => x.parentId !== null)!.id;
+    const trunkMeta = segsMeta.find((x) => x.parentId === null)!;
+    check((await prof.getAttribute("data-valid")) === String(trunkMeta.nValid), "有効点の数が測定結果（幹）と一致", { attr: await prof.getAttribute("data-valid"), nValid: trunkMeta.nValid });
+    check(Number(await prof.getAttribute("data-runs")) >= 1, "幹の線の本数 ≥ 1");
+    await geo.getByTestId("geometry3d-profile-segment").selectOption(branchId);
+    await geo.waitForTimeout(800);
+    const branchMin = Number(await prof.getAttribute("data-min"));
+    const branchMeta = segsMeta.find((x) => x.id === branchId)!;
+    check((await prof.getAttribute("data-segment")) === branchId && Math.abs(branchMin - BRANCH_D) <= 0.5, "セレクタで枝に替えると最小径が枝の径（3.0 ±0.5）になる", { branchMin });
+    check((await prof.getAttribute("data-valid")) === String(branchMeta.nValid) && branchMeta.nValid < branchMeta.nFrames, "枝: 有効点が測定結果と一致し、除外した断面の分だけ全点より少ない（null の点は線にならない）", { branchMeta });
+    await geo.screenshot({ path: path.join(OUT_DIR, "4-window-with-profile.png") });
     notReached("実 CT（冠動脈 CTA）での径の妥当性", "手元に実データが無い（公開データはライセンス確認後）。この検査は解析式の合成マスクのみ");
   } finally {
     await driver.stop().catch(() => undefined);
