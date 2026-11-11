@@ -10,19 +10,20 @@ const PID_UPPER_QUANTILE = 0.995;
  * 校正値 = モダリティ値 × scale。
  *
  * - SUV 4 種: 校正値 0〜7（従来どおり）。
- * - %ID/cc: 校正値 0〜（表示中スライスの 99.5 百分位）。分布が使えない（値なし・上限が 0 以下）ときは最大値、
+ * - %ID/cc・SUVR: 校正値 0〜（表示中スライスの 99.5 百分位）。分布が使えない（値なし・上限が 0 以下）ときは最大値、
  *   それも無ければ SUV と同じ 0〜7 に戻す（真っ黒な画面を出さない）。
  *
  * @param calibratedValues 表示中スライスの校正済みの値（`readModalitySliceSync().values`）。無くてもよい。
  */
 export function defaultCalibratedWindow(
-  type: SuvType,
+  type: SuvType | "suvr",
   scale: number,
   calibratedValues?: ArrayLike<number> | null,
 ): { lower: number; upper: number } | null {
   if (!(scale > 0)) return null;
   const fallback = { lower: 0, upper: SUV_WINDOW_UPPER / scale };
-  if (type !== "pid") return fallback;
+  // 固定の臨床標準があるのは SUV 4 種だけ。%ID/cc・SUVR は分布から決める。
+  if (type !== "pid" && type !== "suvr") return fallback;
   if (!calibratedValues || calibratedValues.length === 0) return fallback;
   const finite: number[] = [];
   for (let i = 0; i < calibratedValues.length; i++) {

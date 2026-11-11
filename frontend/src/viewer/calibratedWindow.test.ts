@@ -18,6 +18,12 @@ describe("defaultCalibratedWindow", () => {
     expect(w.lower).toBe(0);
     expect(w.upper).toBeCloseTo(0.996 / 4, 6);
   });
+  it("SUVR も %ID/cc と同じく分布から決める", () => {
+    const vals = Float32Array.from({ length: 1000 }, (_, i) => (i + 1) / 250); // 0.004..4
+    const w = defaultCalibratedWindow("suvr", 2, vals)!;
+    expect(w.lower).toBe(0);
+    expect(w.upper).toBeCloseTo(3.984 / 2, 6);
+  });
   it("%ID/cc: 外れ値 1 点（0.5% 未満）は上限に影響しない", () => {
     const vals = new Float32Array(1000).fill(1);
     vals[0] = 1e6;

@@ -13,7 +13,7 @@
  * <p>時刻は本家同様 {@code HH:mm:ss}（秒精度）で扱い、投与→スキャンの経過で崩壊補正する
  * （日跨ぎは +24h 補正）。すでに SUV 化済み（Units=GML 等）の場合は入力をロックする。
  */
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useI18n } from "../i18n/i18n";
 import {
   extractSuvParams,
@@ -23,14 +23,18 @@ import {
   type SuvType,
 } from "./suv";
 import { setSuv, type SuvCalibration } from "./suvStore";
+import { suvrScale, type RefMeasure } from "./suvr";
+import { loadReferenceMeasures } from "./suvrReference";
 
 /** SUV 計算タイプの選択肢。 */
-const TYPES: { value: SuvType; labelKey: string }[] = [
+type DialogType = SuvType | "suvr";
+const TYPES: { value: DialogType; labelKey: string }[] = [
   { value: "bw", labelKey: "suv.type.bw" },
   { value: "sul-james", labelKey: "suv.type.sulJames" },
   { value: "sul-janma", labelKey: "suv.type.sulJanma" },
   { value: "bsa", labelKey: "suv.type.bsa" },
   { value: "pid", labelKey: "suv.type.pid" },
+  { value: "suvr", labelKey: "suv.type.suvr" },
 ];
 
 /** epoch ms（相対）→ "HH:mm:ss"。 */
@@ -75,7 +79,9 @@ export function SUVCalibrationDialog({
   // DICOM から一度だけ抽出（マウント時）。
   const base: SuvParams = useMemo(() => extractSuvParams(imageId), [imageId]);
 
-  const [type, setType] = useState<SuvType>(applied?.type ?? "bw");
+  const locked = base.alreadySuv;
+  // SUV 化済みの画像は SUVR（比）だけ作れる。%ID/cc・SUV の再計算はできない。
+  const [type, setType] = useState<DialogType>(locked ? "suvr" : (applied?.type ?? "bw"));
   const [weight, setWeight] = useState(fmt2(base.patientWeight));
   const [height, setHeight] = useState(fmt2(base.patientHeight));
   const [sex, setSex] = useState<"M" | "F">(base.patientSex);
@@ -85,12 +91,48 @@ export function SUVCalibrationDialog({
   const [serTime, setSerTime] = useState(fmtHms(base.scanTimeMs));
   const [error, setError] = useState<string | null>(null);
 
-  const locked = base.alreadySuv;
   const isPid = type === "pid";
+  const isSuvr = type === "suvr";
+  const fieldsOff = locked || isSuvr;
+  // SUVR の参照領域: この PET シリーズの ROI／VOI／グループの平均（今の校正込み）。
+  const [measures, setMeasures] = useState<RefMeasure[] | null>(null);
+  const [refKey, setRefKey] = useState("");
+  useEffect(() => {
+    if (!isSuvr) return;
+    let cancelled = false;
+    setMeasures(null);
+    loadReferenceMeasures(seriesUid)
+      .then((m) => {
+        if (cancelled) return;
+        setMeasures(m);
+        setRefKey((cur) => (m.some((x) => x.key === cur) ? cur : (m[0]?.key ?? "")));
+      })
+      .catch(() => !cancelled && setMeasures([]));
+    return () => {
+      cancelled = true;
+    };
+  }, [isSuvr, seriesUid]);
+  const refMeasure = measures?.find((x) => x.key === refKey);
+  const suvrReady = isSuvr && refMeasure !== undefined && refMeasure.reason === undefined;
   const philips = (base.philipsSuvScaleFactor ?? 0) > 0;
 
   const onApply = () => {
     setError(null);
+    if (isSuvr) {
+      if (!refMeasure) return setError(t("suv.err.refNone"));
+      if (refMeasure.reason) return setError(t(`suv.err.${refMeasure.reason}`));
+      // 参照の平均は今の校正込みの値なので、今の乗数を渡して打ち消す。
+      const r = suvrScale(refMeasure.mean!, applied?.scale);
+      if ("error" in r) return setError(t(`suv.err.${r.error}`));
+      setSuv(seriesUid, {
+        scale: r.scale,
+        unit: "SUVR",
+        type: "suvr",
+        ref: { label: refMeasure.label, mean: refMeasure.mean!, unit: refMeasure.unit ?? "", n: refMeasure.n ?? 0 },
+      });
+      onClose();
+      return;
+    }
     // 必須（BW 以外は身長も）。
     const w = Number(weight);
     const h = height.trim() === "" ? 0 : Number(height);
@@ -156,8 +198,8 @@ export function SUVCalibrationDialog({
         )}
 
         <Field label={t("suv.field.type")}>
-          <select data-testid="suv-type" value={type} onChange={(e) => setType(e.target.value as SuvType)} disabled={locked} style={input}>
-            {TYPES.map((tp) => (
+          <select data-testid="suv-type" value={type} onChange={(e) => setType(e.target.value as DialogType)} style={input}>
+            {TYPES.filter((tp) => !locked || tp.value === "suvr").map((tp) => (
               <option key={tp.value} value={tp.value}>{t(tp.labelKey)}</option>
             ))}
           </select>
@@ -168,29 +210,52 @@ export function SUVCalibrationDialog({
         </Field>
 
         <Field label={isPid ? t("suv.field.weightOptional") : t("suv.field.weight")}>
-          <input data-testid="suv-weight" value={weight} onChange={(e) => setWeight(e.target.value)} disabled={locked} inputMode="decimal" style={input} />
+          <input data-testid="suv-weight" value={weight} onChange={(e) => setWeight(e.target.value)} disabled={fieldsOff} inputMode="decimal" style={input} />
         </Field>
         <Field label={t("suv.field.height")}>
-          <input data-testid="suv-height" value={height} onChange={(e) => setHeight(e.target.value)} disabled={locked || isPid} inputMode="decimal" style={input} />
+          <input data-testid="suv-height" value={height} onChange={(e) => setHeight(e.target.value)} disabled={fieldsOff || isPid} inputMode="decimal" style={input} />
         </Field>
         <Field label={t("suv.field.sex")}>
-          <select value={sex} onChange={(e) => setSex(e.target.value as "M" | "F")} disabled={locked || isPid} style={input}>
+          <select value={sex} onChange={(e) => setSex(e.target.value as "M" | "F")} disabled={fieldsOff || isPid} style={input}>
             <option value="M">{t("suv.sex.male")}</option>
             <option value="F">{t("suv.sex.female")}</option>
           </select>
         </Field>
         <Field label={t("suv.field.dose")}>
-          <input data-testid="suv-dose" value={dose} onChange={(e) => setDose(e.target.value)} disabled={locked} inputMode="decimal" style={input} />
+          <input data-testid="suv-dose" value={dose} onChange={(e) => setDose(e.target.value)} disabled={fieldsOff} inputMode="decimal" style={input} />
         </Field>
         <Field label={t("suv.field.halfLife")}>
-          <input data-testid="suv-half-life" value={halfLife} onChange={(e) => setHalfLife(e.target.value)} disabled={locked} inputMode="decimal" style={input} />
+          <input data-testid="suv-half-life" value={halfLife} onChange={(e) => setHalfLife(e.target.value)} disabled={fieldsOff} inputMode="decimal" style={input} />
         </Field>
         <Field label={t("suv.field.injTime")}>
-          <input data-testid="suv-inj-time" value={injTime} onChange={(e) => setInjTime(e.target.value)} disabled={locked} placeholder="HH:mm:ss" style={input} />
+          <input data-testid="suv-inj-time" value={injTime} onChange={(e) => setInjTime(e.target.value)} disabled={fieldsOff} placeholder="HH:mm:ss" style={input} />
         </Field>
         <Field label={t("suv.field.serTime")}>
-          <input data-testid="suv-ser-time" value={serTime} onChange={(e) => setSerTime(e.target.value)} disabled={locked} placeholder="HH:mm:ss" style={input} />
+          <input data-testid="suv-ser-time" value={serTime} onChange={(e) => setSerTime(e.target.value)} disabled={fieldsOff} placeholder="HH:mm:ss" style={input} />
         </Field>
+
+        {isSuvr && (
+          <>
+            <Field label={t("suv.field.reference")}>
+              <select data-testid="suv-ref" value={refKey} onChange={(e) => setRefKey(e.target.value)} disabled={!measures?.length} style={input}>
+                {(measures ?? []).map((m) => (
+                  <option key={m.key} value={m.key}>
+                    {m.label}{m.group ? " (group)" : ""}{m.mean !== undefined ? ` — ${m.mean.toPrecision(4)} ${m.unit ?? ""}` : ""}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <div data-testid="suv-ref-note" style={refMeasure?.reason || (measures && measures.length === 0) ? errText : { ...fieldLabel, marginTop: 4 }}>
+              {measures === null
+                ? "…"
+                : measures.length === 0
+                  ? t("suv.err.refNone")
+                  : refMeasure?.reason
+                    ? t(`suv.err.${refMeasure.reason}`)
+                    : `${t("suv.ref.mean")}: ${refMeasure?.mean?.toPrecision(5)} ${refMeasure?.unit ?? ""} / n=${refMeasure?.n}`}
+            </div>
+          </>
+        )}
 
         {error && <div style={errText}>{error}</div>}
 
@@ -199,7 +264,7 @@ export function SUVCalibrationDialog({
             <button onClick={onClear} style={btn}>{t("suv.clear")}</button>
           )}
           <button onClick={onClose} style={btn}>{t("common.cancel")}</button>
-          <button data-testid="suv-apply" onClick={onApply} disabled={locked} style={{ ...btnPrimary, opacity: locked ? 0.5 : 1 }}>
+          <button data-testid="suv-apply" onClick={onApply} disabled={isSuvr ? !suvrReady : locked} style={{ ...btnPrimary, opacity: (isSuvr ? !suvrReady : locked) ? 0.5 : 1 }}>
             {t("suv.apply")}
           </button>
         </div>

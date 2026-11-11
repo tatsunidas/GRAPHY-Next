@@ -2376,7 +2376,7 @@ export function Viewer2D({
   // 校正の付与時に既定ウィンドウを適用する。voiRange はモダリティ値(Bq/mL)空間のため、
   // 校正値 = modalityValue×scale の逆算で設定する。SUV は 0〜7（本家 setSUVFactor 準拠）、
   // %ID/cc は表示中スライスの分布から決める（defaultCalibratedWindow）。
-  const applyCalibratedWindow = (type: SuvType, scale: number, imageId: string) => {
+  const applyCalibratedWindow = (type: SuvType | "suvr", scale: number, imageId: string) => {
     const v = vp();
     if (!v) return;
     const w = defaultCalibratedWindow(type, scale, readModalitySliceSync(imageId)?.values);
