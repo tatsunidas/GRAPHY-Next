@@ -902,7 +902,7 @@ export function RoiManagerPanel({
                 {meanTimesVolumeLabelKey(st.unit) && st.meanTimesVolumeMl !== undefined && (
                   <>
                     <br />
-                    {t("roiMgr.statTlg")}: {formatNumber(st.meanTimesVolumeMl!)} {valueUnitLabel(st.unit ?? "", t)}·mL
+                    {t(meanTimesVolumeLabelKey(st.unit)!)}: {formatNumber(st.meanTimesVolumeMl!)} {st.unit === "%ID/cc" ? "%ID" : `${valueUnitLabel(st.unit ?? "", t)}·mL`}
                   </>
                 )}
               </>

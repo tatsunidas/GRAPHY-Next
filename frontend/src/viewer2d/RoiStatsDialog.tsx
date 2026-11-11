@@ -29,7 +29,7 @@ import {
 } from "../viewer/roiStatsText";
 import { ENTROPY_BINS, type RoiStatsResult, type RoiValueStats } from "../viewer/roiStats";
 import { buildMaskVoxelDumpAsync, computeMaskStatsAsync, type MaskStatsResult } from "../viewer/roi3d";
-import { meanTimesVolumeLabelKey } from "../viewer/maskStatsCore";
+import { meanTimesVolumeLabelKey, meanTimesVolumeUnit } from "../viewer/maskStatsCore";
 import type { HistogramData } from "../viewer/histogram";
 import { LoadingSpinner } from "../viewer/LoadingSpinner";
 import { fusionMeasureForSeries, useFusionMeasure, type FusionMeasureInfo } from "../viewer/fusionMeasureContext";
@@ -413,7 +413,7 @@ function MaskDetail({ stats }: { stats: MaskStatsResult }) {
       <div style={detailLine}>{parts.join(" / ")}</div>
       <ValueLine v={v} />
       {tlgKey && stats.meanTimesVolumeMl !== undefined && (
-        <div style={detailLine}>{`${t(tlgKey)}: ${formatNumber(stats.meanTimesVolumeMl)} ${stats.unit}·mL`}</div>
+        <div style={detailLine}>{`${t(tlgKey)}: ${formatNumber(stats.meanTimesVolumeMl)} ${meanTimesVolumeUnit(stats.unit)}`}</div>
       )}
       {stats.histogram && <HistogramOf h={stats.histogram} unit={v?.unit ?? stats.unit} />}
       <div style={{ ...detailLine, ...dim }}>

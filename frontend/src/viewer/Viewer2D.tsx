@@ -59,7 +59,9 @@ import { applyTransform, isPanned, readTransform, type ViewTransform, FIT_TRANSF
 import { fmtValue, scaleBarColors, scaleBarLabels, SCALE_BAR_WIDTH } from "./valueScaleBar";
 import { readImageInfo, sampleAtCanvas, computeSliceSpacing, calibratedUnit, type ImageInfo, type PixelSample } from "./imageInfo";
 import { dicomDateToIso, readColormapName, readInvert, resolveSliceIndex } from "./viewportRead";
-import { readModalitySlice } from "./pixelCalibration";
+import { readModalitySlice, readModalitySliceSync } from "./pixelCalibration";
+import { defaultCalibratedWindow } from "./calibratedWindow";
+import type { SuvType } from "./suv";
 import { autoWindow, rasterizeOverlay, type OverlayWindow } from "./overlayRaster";
 import { encodeFrames, framePixelsBase64, hasNonFinite } from "./derivedSeriesEncode";
 import { httpSend } from "../http";
@@ -1502,7 +1504,7 @@ export function Viewer2D({
       setInfo(merged);
       // 校正状態が変化したときだけウィンドウを操作する（ユーザーの手動 W/L を尊重）。
       if (scale !== suvScaleRef.current) {
-        if (scale) applySuvWindow(scale);
+        if (scale) applyCalibratedWindow(suvForImageId(curId)!.type, scale, curId);
         else resetWindow();
         suvScaleRef.current = scale;
       }
@@ -2371,16 +2373,18 @@ export function Viewer2D({
     return true;
   };
 
-  // SUV 化時に臨床標準ウィンドウ（SUV 0〜7）を適用する。voiRange はモダリティ値(Bq/mL)空間のため
-  // SUV=modalityValue×scale の逆算で modalityValue [0, 7/scale] を設定する（本家 setSUVFactor 準拠）。
-  const applySuvWindow = (scale: number) => {
+  // 校正の付与時に既定ウィンドウを適用する。voiRange はモダリティ値(Bq/mL)空間のため、
+  // 校正値 = modalityValue×scale の逆算で設定する。SUV は 0〜7（本家 setSUVFactor 準拠）、
+  // %ID/cc は表示中スライスの分布から決める（defaultCalibratedWindow）。
+  const applyCalibratedWindow = (type: SuvType, scale: number, imageId: string) => {
     const v = vp();
-    if (!v || !(scale > 0)) return;
-    const upper = 7 / scale;
+    if (!v) return;
+    const w = defaultCalibratedWindow(type, scale, readModalitySliceSync(imageId)?.values);
+    if (!w) return;
     try {
-      v.setProperties({ voiRange: { lower: 0, upper } });
+      v.setProperties({ voiRange: { lower: w.lower, upper: w.upper } });
       v.render();
-      setVoi({ ww: upper, wc: upper / 2 });
+      setVoi({ ww: w.upper - w.lower, wc: (w.upper + w.lower) / 2 });
     } catch {
       /* ignore */
     }

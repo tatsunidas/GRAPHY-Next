@@ -1692,6 +1692,7 @@ export const ja: Record<string, string> = {
   "roiMgr.statVol": "体積",
   "roiMgr.statVoxels": "ボクセル",
   "roiMgr.statSlices": "スライス",
+  "roiMgr.statPctId": "%ID（平均×体積）",
   "roiMgr.statTlg": "TLG（平均×体積）",
   "roiMgr.statMissingSlices": "値を読めないスライス {{n}} 枚（平均・SD・最小・最大は出しません）",
   "roiMgr.statMean": "平均",
@@ -3917,6 +3918,11 @@ export const ja: Record<string, string> = {
   "suv.err.missingHeight": "この計算タイプには患者身長が必要です。",
   "suv.err.negativeDecay": "崩壊時間が負になりました。時刻をご確認ください。",
   "suv.err.invalidNormBase": "正規化ベース（体重/LBM/BSA）が不正です。",
+  "suv.type.pid": "%ID/cc（注入量比）",
+  "suv.field.weightOptional": "患者体重 (kg)（任意）",
+  "suv.err.dosePid": "投与量は 0.01〜1000 MBq の範囲で入力してください。",
+  "suv.err.philipsPidUnsupported": "Philips の SUV 係数（私設タグ）だけでは %ID/cc を計算できません（投与量と濃度の係数が必要です）。",
+  "suv.err.alreadySuvNoPid": "この画像は SUV 化済みのため %ID/cc には換算できません。",
   "suv.err.philipsInvalid": "Units が CNTS ですが Philips 私設タグの値が不正です。",
 
   // Texture（Radiomics 可視化マップ）

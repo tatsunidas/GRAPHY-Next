@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { accumulateMaskStats, meanTimesVolumeLabelKey } from "./maskStatsCore";
+import { accumulateMaskStats, meanTimesVolumeLabelKey, meanTimesVolumeUnit } from "./maskStatsCore";
 
 const close = (a: number, b: number) => expect(Math.abs(a - b) <= 1e-6 * Math.max(1, Math.abs(b))).toBe(true);
 
@@ -90,6 +90,11 @@ describe("meanTimesVolumeLabelKey", () => {
     expect(meanTimesVolumeLabelKey("SUVlbm")).toBe("roiMgr.statTlg");
   });
   it("SUV 以外は行を出さない", () => {
-    for (const u of ["HU", "Bq/ml", "raw", "", undefined]) expect(meanTimesVolumeLabelKey(u)).toBeNull();
+    expect(meanTimesVolumeLabelKey("SUVbsa")).toBe("roiMgr.statTlg");
+    expect(meanTimesVolumeLabelKey("%ID/cc")).toBe("roiMgr.statPctId");
+    expect(meanTimesVolumeUnit("%ID/cc")).toBe("%ID");
+    expect(meanTimesVolumeUnit("SUVbw")).toBe("SUVbw·mL");
+    // 比（SUVR）や未知の SUV… は TLG ではない
+    for (const u of ["SUVR", "SUVx", "HU", "Bq/ml", "raw", "", undefined]) expect(meanTimesVolumeLabelKey(u)).toBeNull();
   });
 });

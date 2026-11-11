@@ -151,12 +151,54 @@ describe("computeSuvScale", () => {
   });
 });
 
+describe("computeSuvScale %ID/cc", () => {
+  it("scale = 100 ÷ 崩壊補正後投与量、単位 %ID/cc（体重・身長は不要）", () => {
+    const r = computeSuvScale(baseParams({ patientWeight: undefined, patientHeight: undefined }), "pid");
+    if (isSuvError(r)) throw new Error(`unexpected error: ${r.error}`);
+    expect(Math.abs(r.scale / (100 / DECAYED_DOSE_BQ) - 1)).toBeLessThan(1e-9);
+    expect(r.unit).toBe("%ID/cc");
+    expect(r.type).toBe("pid");
+  });
+
+  it("SUVbw では体重なしが missingWeight、pid は成功（負例と正例）", () => {
+    const p = baseParams({ patientWeight: undefined });
+    expect(computeSuvScale(p, "bw")).toEqual({ error: "missingWeight" });
+    expect(isSuvError(computeSuvScale(p, "pid"))).toBe(false);
+  });
+
+  it("体重があれば pid = SUVbw × 100 ÷ 体重g（検算）", () => {
+    const bw = computeSuvScale(baseParams(), "bw");
+    const pid = computeSuvScale(baseParams(), "pid");
+    if (isSuvError(bw) || isSuvError(pid)) throw new Error("unexpected error");
+    expect(Math.abs(pid.scale / ((bw.scale * 100) / 70000) - 1)).toBeLessThan(1e-12);
+  });
+
+  it("投与量 0・半減期なし・時刻なしは従来どおりエラー", () => {
+    expect(computeSuvScale(baseParams({ totalDoseBq: 0 }), "pid")).toEqual({ error: "missingDose" });
+    expect(computeSuvScale(baseParams({ halfLifeSec: undefined }), "pid")).toEqual({ error: "missingHalfLife" });
+    expect(computeSuvScale(baseParams({ scanTimeMs: undefined }), "pid")).toEqual({ error: "missingTime" });
+  });
+
+  it("GML（SUV 化済み）は pid を作らない", () => {
+    expect(computeSuvScale(baseParams({ units: "GML" }), "pid")).toEqual({ error: "alreadySuvNoPid" });
+  });
+
+  it("Philips CNTS: (7053,1000) だけなら pid はエラー、(7053,1009) があれば成功", () => {
+    const only1000 = baseParams({ units: "CNTS", philipsSuvScaleFactor: 0.5 });
+    expect(computeSuvScale(only1000, "pid")).toEqual({ error: "philipsPidUnsupported" });
+    const r = computeSuvScale(baseParams({ units: "CNTS", philipsActivityConcScaleFactor: 2 }), "pid");
+    if (isSuvError(r)) throw new Error(`unexpected error: ${r.error}`);
+    expect(Math.abs(r.scale / ((100 / DECAYED_DOSE_BQ) * 2) - 1)).toBeLessThan(1e-9);
+  });
+});
+
 describe("suvUnitLabel", () => {
   it("タイプごとの表示単位", () => {
     expect(suvUnitLabel("bw")).toBe("SUVbw");
     expect(suvUnitLabel("sul-james")).toBe("SUVlbm");
     expect(suvUnitLabel("sul-janma")).toBe("SUVlbm");
     expect(suvUnitLabel("bsa")).toBe("SUVbsa");
+    expect(suvUnitLabel("pid")).toBe("%ID/cc");
   });
 });
 

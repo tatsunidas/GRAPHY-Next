@@ -30,6 +30,7 @@ const TYPES: { value: SuvType; labelKey: string }[] = [
   { value: "sul-james", labelKey: "suv.type.sulJames" },
   { value: "sul-janma", labelKey: "suv.type.sulJanma" },
   { value: "bsa", labelKey: "suv.type.bsa" },
+  { value: "pid", labelKey: "suv.type.pid" },
 ];
 
 /** epoch ms（相対）→ "HH:mm:ss"。 */
@@ -85,6 +86,7 @@ export function SUVCalibrationDialog({
   const [error, setError] = useState<string | null>(null);
 
   const locked = base.alreadySuv;
+  const isPid = type === "pid";
   const philips = (base.philipsSuvScaleFactor ?? 0) > 0;
 
   const onApply = () => {
@@ -94,14 +96,16 @@ export function SUVCalibrationDialog({
     const h = height.trim() === "" ? 0 : Number(height);
     const doseMBq = Number(dose);
     const hlMin = Number(halfLife);
-    if (weight.trim() === "" || dose.trim() === "" || halfLife.trim() === "") {
+    // %ID/cc は体重を使わないので任意。
+    if ((!isPid && weight.trim() === "") || dose.trim() === "" || halfLife.trim() === "") {
       setError(t("suv.err.missingFields"));
       return;
     }
     // 臨床レンジチェック（本家準拠）。
-    if (!(w >= 0.001 && w <= 250)) return setError(t("suv.err.weight"));
+    if (!(isPid && weight.trim() === "") && !(w >= 0.001 && w <= 250)) return setError(t("suv.err.weight"));
     if (h !== 0 && !(h >= 0.4 && h <= 2.5)) return setError(t("suv.err.height"));
-    if (!(doseMBq >= 1 && doseMBq <= 1000)) return setError(t("suv.err.dose"));
+    // 小動物 PET の %ID/cc は 1 MBq 未満があり得る（下限 0.01 MBq）。SUV 4 種は従来の 1 MBq。
+    if (!(doseMBq >= (isPid ? 0.01 : 1) && doseMBq <= 1000)) return setError(t(isPid ? "suv.err.dosePid" : "suv.err.dose"));
     if (!(hlMin >= 1 && hlMin <= 10000)) return setError(t("suv.err.halfLife"));
 
     const injectionTimeMs = parseHms(injTime);
@@ -116,7 +120,7 @@ export function SUVCalibrationDialog({
 
     const params: SuvParams = {
       ...base,
-      patientWeight: w,
+      patientWeight: weight.trim() === "" ? undefined : w,
       patientHeight: h > 0 ? h : undefined,
       patientSex: sex,
       totalDoseBq: doseMBq * 1e6,
@@ -163,14 +167,14 @@ export function SUVCalibrationDialog({
           <span style={{ fontWeight: 600 }}>{base.radionuclideName || "Unknown"}</span>
         </Field>
 
-        <Field label={t("suv.field.weight")}>
+        <Field label={isPid ? t("suv.field.weightOptional") : t("suv.field.weight")}>
           <input data-testid="suv-weight" value={weight} onChange={(e) => setWeight(e.target.value)} disabled={locked} inputMode="decimal" style={input} />
         </Field>
         <Field label={t("suv.field.height")}>
-          <input value={height} onChange={(e) => setHeight(e.target.value)} disabled={locked} inputMode="decimal" style={input} />
+          <input data-testid="suv-height" value={height} onChange={(e) => setHeight(e.target.value)} disabled={locked || isPid} inputMode="decimal" style={input} />
         </Field>
         <Field label={t("suv.field.sex")}>
-          <select value={sex} onChange={(e) => setSex(e.target.value as "M" | "F")} disabled={locked} style={input}>
+          <select value={sex} onChange={(e) => setSex(e.target.value as "M" | "F")} disabled={locked || isPid} style={input}>
             <option value="M">{t("suv.sex.male")}</option>
             <option value="F">{t("suv.sex.female")}</option>
           </select>
