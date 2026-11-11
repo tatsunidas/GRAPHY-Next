@@ -34,6 +34,20 @@ vi.mock("./suv", async (orig) => {
 
 import type { RefMeasure } from "./suvr";
 
+import type { SaveCalibratedInput, SaveCalibratedResult } from "./calibratedSeriesSaveRun";
+
+const saveCalls: SaveCalibratedInput[] = [];
+let saveResult: SaveCalibratedResult | Error = { ok: true, count: 21 };
+let saveGate: Promise<void> | null = null;
+vi.mock("./calibratedSeriesSaveRun", () => ({
+  saveCalibratedSeries: async (i: SaveCalibratedInput) => {
+    saveCalls.push(i);
+    if (saveGate) await saveGate;
+    if (saveResult instanceof Error) throw saveResult;
+    return saveResult;
+  },
+}));
+
 let fakeMeasures: RefMeasure[] = [];
 vi.mock("./suvrReference", () => ({ loadReferenceMeasures: async () => fakeMeasures }));
 
@@ -74,10 +88,23 @@ afterEach(() => {
   setSuv(UID, null);
 });
 
-async function open(applied?: import("./suvStore").SuvCalibration | null) {
+const SAVE_CTX = {
+  study: { studyInstanceUid: "1.2" },
+  series: { seriesInstanceUid: UID, seriesDescription: "PET small animal" },
+  instances: [],
+  mode: "web",
+  c: 0,
+  t: 0,
+} as unknown as import("./SUVCalibrationDialog").SuvSaveContext;
+
+async function open(applied?: import("./suvStore").SuvCalibration | null, withSave = false) {
   await act(async () => {
     root.render(
-      createElement(I18nProvider, null, createElement(SUVCalibrationDialog, { imageId: "wadouri:x", seriesUid: UID, applied, onClose: () => {} })),
+      createElement(
+        I18nProvider,
+        null,
+        createElement(SUVCalibrationDialog, { imageId: "wadouri:x", seriesUid: UID, applied, saveCtx: withSave ? SAVE_CTX : undefined, onClose: () => {} }),
+      ),
     );
   });
 }
@@ -192,6 +219,63 @@ describe("SUVCalibrationDialog（煙テスト）", () => {
       await setInput("suv-type", "suvr");
       await apply();
       expect(Math.abs(500 * getSuv(UID)!.scale - 1)).toBeLessThan(1e-9);
+    });
+  });
+
+  describe("校正値を派生シリーズとして保存", () => {
+    const click = async (id: string) => {
+      await act(async () => {
+        q(id).dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      });
+    };
+    it("保存先が無ければボタンを出さない。校正が無ければ押せず理由が出る（負例）", async () => {
+      saveCalls.length = 0;
+      await open(null, false);
+      expect(host.querySelector('[data-testid="suv-save-derived"]')).toBeNull();
+      await open(null, true);
+      expect((q("suv-save-derived") as HTMLButtonElement).disabled).toBe(true);
+      expect(q("suv-save-hint").textContent).toContain("先に校正を適用");
+      await click("suv-save-derived");
+      expect(saveCalls).toHaveLength(0);
+    });
+    it("適用中の校正があれば押せ、その校正（未適用の編集ではなく）を 1 回だけ保存に渡す。結果が出る", async () => {
+      saveCalls.length = 0;
+      saveResult = { ok: true, count: 21 };
+      const cal = { scale: 0.002, unit: "SUVR", type: "suvr" as const, ref: { label: "小脳", mean: 500, unit: "BQML", n: 120 } };
+      await open(cal, true);
+      // ダイアログ内の未適用の編集（タイプを %ID/cc にする）は保存に影響しない
+      await setInput("suv-type", "pid");
+      expect((q("suv-save-derived") as HTMLButtonElement).disabled).toBe(false);
+      await click("suv-save-derived");
+      expect(saveCalls).toHaveLength(1);
+      expect(saveCalls[0].cal).toEqual(cal);
+      expect(saveCalls[0].series.seriesInstanceUid).toBe(UID);
+      expect(q("suv-save-msg").textContent).toContain("21 枚");
+    });
+    it("保存中は二重に押せない", async () => {
+      saveCalls.length = 0;
+      let release!: () => void;
+      saveGate = new Promise<void>((r) => (release = r));
+      try {
+        await open({ scale: 1e-3, unit: "%ID/cc", type: "pid" }, true);
+        await click("suv-save-derived");
+        expect((q("suv-save-derived") as HTMLButtonElement).disabled).toBe(true);
+        await click("suv-save-derived");
+        expect(saveCalls).toHaveLength(1);
+      } finally {
+        release();
+        saveGate = null;
+        await act(async () => {});
+      }
+    });
+    it("元が不均一・失敗は理由を赤字で出す", async () => {
+      saveResult = { ok: false, reason: "nonUniform" };
+      await open({ scale: 1e-3, unit: "%ID/cc", type: "pid" }, true);
+      await click("suv-save-derived");
+      expect(q("suv-save-msg").textContent).toContain("スライス間隔が一定でない");
+      saveResult = new Error("boom");
+      await click("suv-save-derived");
+      expect(q("suv-save-msg").textContent).toContain("保存に失敗しました: Error: boom");
     });
   });
 });
