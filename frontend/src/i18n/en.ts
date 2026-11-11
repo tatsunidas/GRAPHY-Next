@@ -2495,6 +2495,7 @@ export const en: Record<string, string> = {
   "geometry3d.noContext": "Nothing to show. Press \"Open in 3D viewer\" from a 3D QCA result.",
   "geometry3d.empty": "Not enough centerline points.",
   "geometry3d.resetCamera": "Fit view",
+  "geometry3d.caveatCt": "CT: diameters are measured from the mask geometry. They depend on how the mask was made (by the plugin), and vessels thinner than the voxel spacing cannot be measured. For research use.",
   "geometry3d.caveat": "This view has no volume (XA has none to build from). The shape is correct, but the orientation in patient coordinates is not recovered: view A is held fixed as the gauge, so its angle error remains as a pose error of the whole model.",
   // XA/XRF spatial calibration (fw/angio-design.md §7)
   "xa.calib.label": "Calibration",

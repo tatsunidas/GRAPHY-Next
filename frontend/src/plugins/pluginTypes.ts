@@ -34,9 +34,9 @@ export type { PluginStoreDoc, PluginStoreSaveResult };
 import type {
   RegisterVesselModelResult,
   VesselAnalysisResult,
+  VesselModel,
+  VesselModelInput,
   XaVesselAnalysisInput,
-  XaVesselModelInput,
-  XaVesselModel,
   XaVesselModelSummary,
 } from "./pluginVesselApi";
 
@@ -64,6 +64,10 @@ export type {
   XaVesselAnalysisPoint,
   XaVesselCalibration,
   XaVesselModel,
+  CtVesselModel,
+  CtVesselProvenance,
+  VesselModel,
+  VesselModelInput,
   XaVesselModelSummary,
   XaVesselProvenance,
   XaVesselSegment,
@@ -764,7 +768,7 @@ export interface Viewer2DPluginHost extends PluginHostBase {
    * **再構成済み 3D 血管モデル**（H11）。`runId` 省略時は最も新しいもの。無ければ null。
    *
    * <p>中心線（患者 LPS mm）・点ごとの内腔径・分岐のトポロジ（`parentId`）と、
-   * **校正と出自**が入る。3D QCA（A6a）／分岐部（A6b）のダイアログで再構成すると登録される。
+   * **校正と出自**が入る。プラグインが登録する（H73）。🔴 **`kind` で見分けること**: `xa-*`（XA の 2 方向の再構成）と `ct-vessel`（CT のマスクの幾何）で `provenance` の形が違う。`runId` 省略時は最も新しいものなので、XA と CT が混ざると CT が返りうる。
    *
    * <p>🔴 **測れなかった点の径は `null`。** 0 や補間値で埋めていない——埋めた値は
    * 「そこが細い / 太い」という所見に化ける。**受け取った側が埋めるのも同じ理由でやめること。**
@@ -775,7 +779,7 @@ export interface Viewer2DPluginHost extends PluginHostBase {
    *
    * <p>⚠️ **セッション限り**。アプリを閉じると消える（結果そのものの保存は SR）。
    */
-  getVesselModel: (runId?: string) => XaVesselModel | null;
+  getVesselModel: (runId?: string) => VesselModel | null;
   /**
    * **解析結果（点ごとの値）を書き戻す**（H12）。3D ウィンドウが色マップと凡例で表示する。
    *
@@ -795,7 +799,7 @@ export interface Viewer2DPluginHost extends PluginHostBase {
    * host が凡例の脇に必ず出す。
    *
    * <p>**成功すると、本体の 3D 画面（`#geometry3d`）が開く**（開いていれば前面に出て、中身が差し替わる）。
-   * 色が見える場所はここしかない。分岐部のモデル（`xa-bifurcation3d`）では開かない（3D 画面は中心線 1 本しか描かない）。
+   * 色が見える場所はここしかない。木（分岐部の XA・CT 由来）は区間ごとに 1 物体で描かれ、色も `segmentId` で区間ごとに乗る（値の無い区間は「値なし」）。
    */
   putVesselAnalysis: (runId: string, result: XaVesselAnalysisInput) => VesselAnalysisResult;
   /**
@@ -809,11 +813,11 @@ export interface Viewer2DPluginHost extends PluginHostBase {
    * FFR の入力に入る事故を入口で止める。点は有限、セグメントは 1 つ以上・各 2 点以上、`diameterMm` は点と同数、
    * `parentId` は他のセグメントの id、総点数は 20000 以下。
    */
-  registerVesselModel: (model: XaVesselModelInput) => RegisterVesselModelResult;
+  registerVesselModel: (model: VesselModelInput) => RegisterVesselModelResult;
   /**
    * **登録した 3D 血管モデルの 3D 画面（`#geometry3d`）を開く**（H74。開いていれば前面に出て、中身が差し替わる）。
    * `runId` は `registerVesselModel` の戻り。色は乗らない（色は `putVesselAnalysis` が成功したときに、同じ画面へ乗る）。
-   * 🔴 開けないときは理由つきで `ok: false`（モデルが無い・分岐部モデル・中心線が 2 点未満）。何もせず成功を返さない。
+   * 🔴 開けないときは理由つきで `ok: false`（モデルが無い・中心線が 2 点未満の区間がある）。何もせず成功を返さない。
    */
   openVesselModel3d: (runId: string) => { ok: true } | { ok: false; error: string };
   /**

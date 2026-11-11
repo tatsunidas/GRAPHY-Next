@@ -34,6 +34,7 @@ import {
 } from "./geometry3dContext";
 import { addCenterlineObject, attachSceneRenderer, resetScene, setClipContext } from "./scene3d";
 import { getVesselModel, useVesselAnalysis } from "../viewer/xaVesselModelStore";
+import { buildSegmentColors } from "./vesselSegmentColors";
 import { segmentValues, valuesToRgb } from "./vesselColorMap";
 import { VesselAnalysisLegend } from "./VesselAnalysisLegend";
 import { getSceneObjects, useSceneObjects } from "./scene3dStore";
@@ -93,10 +94,17 @@ export function Geometry3DScreen({ status }: { status: AppStatus | null }) {
     setError(null);
     // 既存の物体を消してから作り直す（`scene3d.removeObject` はアクターも外す）。
     for (const o of [...getSceneObjects()]) removeObject(o.id);
-    const cl = new Centerline3D();
-    for (const p of c.centerlineLps) cl.addControlPoint([p[0], p[1], p[2]]);
-    const id = addCenterlineObject(cl, { name: c.name, pointColors: colorsRef.current ?? undefined });
-    if (!id) {
+    // 木（segments あり）は区間ごとに 1 物体。単一の XA は従来どおり中心線 1 本。
+    const drawn = c.segments && c.segments.length > 0
+      ? c.segments.map((seg) => ({ name: seg.name ?? seg.id, points: seg.points, colors: segmentColorsRef.current.get(seg.id) }))
+      : [{ name: c.name, points: c.centerlineLps, colors: colorsRef.current ?? undefined }];
+    let any = false;
+    for (const d of drawn) {
+      const cl = new Centerline3D();
+      for (const p of d.points) cl.addControlPoint([p[0], p[1], p[2]]);
+      if (addCenterlineObject(cl, { name: d.name, pointColors: d.colors })) any = true;
+    }
+    if (!any) {
       setError(t("geometry3d.empty"));
       return;
     }
@@ -130,15 +138,27 @@ export function Geometry3DScreen({ status }: { status: AppStatus | null }) {
     return valuesToRgb(values, analysis.range);
   }, [analysis, model]);
 
+  // 木（segments あり）の区間ごとの色。`segmentId` で値を振り分ける（他の区間の値が混ざらない）。値の無い区間は値なしの色。
+  // 🚨 deps は ctx そのものではなく区間の署名（id と点数）。ctx は読み直すたびに新しい object になり、
+  //    deps に入れると「色が変わる → 読み直す → ctx が変わる → 色が変わる」の無限ループになる。
+  const segmentsSig = ctx?.segments?.map((s) => `${s.id}:${s.points.length}`).join("|") ?? "";
+  const segmentColors = useMemo(
+    () => (ctx?.segments ? buildSegmentColors(ctx.segments, analysis) : new Map<string, Uint8Array>()),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [segmentsSig, analysis],
+  );
+
   // 色は管を作る時点で焼き込む（vtkTubeFilter が入力点のデータを複製する）ので、
   // 値が届いたら**シーンを作り直す**。ref 経由なのは loadRef が最新を読むため。
   const colorsRef = useRef<Uint8Array | null>(null);
+  const segmentColorsRef = useRef<Map<string, Uint8Array>>(new Map());
   useEffect(() => {
     colorsRef.current = pointColors;
+    segmentColorsRef.current = segmentColors;
     if (ctx) loadRef.current();
     // ctx を依存に入れない（loadRef 内で setCtx するので無限ループになる）。
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pointColors]);
+  }, [pointColors, segmentColors]);
 
   // アンマウントで vtk とシーンを片付ける（ウィンドウを閉じ直して開くと二重に載るため）。
   useEffect(() => {
@@ -211,7 +231,9 @@ export function Geometry3DScreen({ status }: { status: AppStatus | null }) {
           {error}
         </div>
       ) : null}
-      <div style={footer}>{t("geometry3d.caveat")}</div>
+      <div style={footer} data-testid="geometry3d-footer">
+        {ctx?.kind === "ct-vessel" ? t("geometry3d.caveatCt") : t("geometry3d.caveat")}
+      </div>
     </div>
   );
 }

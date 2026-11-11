@@ -2484,6 +2484,7 @@ export const ja: Record<string, string> = {
   "geometry3d.noContext": "表示するものがありません。3D QCA の結果から「3D ビューアで開く」を押してください。",
   "geometry3d.empty": "中心線の点が足りません。",
   "geometry3d.resetCamera": "全体を表示",
+  "geometry3d.caveatCt": "CT: マスクの幾何から測った径です。マスクの作り方（プラグイン）に依存し、ボクセル間隔より細い血管は測れません。研究用です。",
   "geometry3d.caveat": "ボリュームを持たない表示です（XA には元となるボリュームがありません）。形は正しく出ますが、患者座標系での向きは復元できません — 方向 A を基準に固定するため、その角度誤差はモデル全体の姿勢誤差として残ります。",
   // XA/XRF の空間校正（fw/angio-design.md §7）
   "xa.calib.label": "空間校正",
