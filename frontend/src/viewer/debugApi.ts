@@ -21,6 +21,7 @@ import type { VtkRenderStats } from "./vtkVolumeView";
 import { getFusionResampleStats, resetFusionResampleStats } from "./gpuResample/fusionResampleStats";
 import { probeFusionParity, resetFusionGpuForDebug, setFusionGpuFault, setFusionResampleModeForDebug } from "./gpuResample/fusionResampler";
 import type { CinematicStats } from "./cinematicScale";
+import { readSceneActorStates } from "../viewer3d/scene3d";
 
 /**
  * automator（自律検証ツール）専用のデバッグAPI。`window.__graphyDebug` として公開し、
@@ -1026,6 +1027,8 @@ declare global {
       getPixelStats: typeof getPixelStats;
       getRender3dStats: typeof getRender3dStats;
       getViewer3dState: typeof getViewer3dState;
+      /** 3D シーンの各物体の描き方（store とアクターから読んだ値）・色・不透明度・可視。 */
+      getScene3dState: typeof readSceneActorStates;
       setViewer3dPluginView: typeof setViewer3dPluginView;
       renderViewer3d: typeof renderViewer3d;
       applyViewer3dCamera: typeof applyViewer3dCamera;
@@ -1208,6 +1211,7 @@ export function installDebugApi(): void {
     getPixelStats,
     getRender3dStats,
     getViewer3dState,
+    getScene3dState: readSceneActorStates,
     setViewer3dPluginView,
     renderViewer3d,
     applyViewer3dCamera,

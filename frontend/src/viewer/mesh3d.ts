@@ -228,12 +228,28 @@ export function makeSurfaceActor(
   return { actor, mapper };
 }
 
-/** アクターの色/透明度/可視を更新。 */
+/**
+ * 線・点で描くときの太さ（CSS px）。線は細いほど奥のボリュームや物体が見える（線で描く目的）ので最小の 1。
+ * 点は線と区別でき、ボリュームの上で 1 px の点が埋もれないための最小として 3。画面の画素には devicePixelRatio を掛ける。
+ */
+export const WIREFRAME_LINE_WIDTH_CSS_PX = 1;
+export const POINTS_SIZE_CSS_PX = 3;
+
+export type MeshRepresentation = "surface" | "wireframe" | "points";
+const VTK_REPRESENTATION: Record<MeshRepresentation, number> = { points: 0, wireframe: 1, surface: 2 };
+
+/** アクターの色/透明度/可視/描き方を更新。渡した項目だけ変える。 */
 export function updateActorAppearance(
   ma: MeshActor,
-  opts: { color?: V3; opacity?: number; visible?: boolean },
+  opts: { color?: V3; opacity?: number; visible?: boolean; representation?: MeshRepresentation },
 ): void {
   const prop = ma.actor.getProperty();
+  if (opts.representation) {
+    const dpr = typeof window !== "undefined" && window.devicePixelRatio > 0 ? window.devicePixelRatio : 1;
+    prop.setRepresentation(VTK_REPRESENTATION[opts.representation]);
+    prop.setLineWidth(WIREFRAME_LINE_WIDTH_CSS_PX * dpr);
+    prop.setPointSize(POINTS_SIZE_CSS_PX * dpr);
+  }
   if (opts.color) prop.setColor(opts.color[0], opts.color[1], opts.color[2]);
   if (opts.opacity != null) prop.setOpacity(opts.opacity);
   if (opts.visible != null) ma.actor.setVisibility(opts.visible);
