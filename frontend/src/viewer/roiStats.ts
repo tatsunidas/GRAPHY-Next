@@ -35,6 +35,12 @@
 import { analyzeValues, type HistogramData } from "./histogram";
 import { computeCalipers, convexHull, type PointPx } from "./roiRead";
 
+/** world ↔ 画素の換算に使う間隔 [mm/画素]（列方向 = x、行方向 = y）。 */
+export interface WorldBasis {
+  col: number;
+  row: number;
+}
+
 /** ROI から画素値をどう拾うか。 */
 export type RoiSampleKind = "area" | "line" | "point" | "none";
 
@@ -218,20 +224,31 @@ export function polygonizeEllipse(
   return out;
 }
 
-/** 円の 2 ハンドル [center, edge] を閉多角形へ。純関数。 */
+/**
+ * 円の 2 ハンドル [center, edge] を閉多角形へ。純関数。
+ *
+ * <p>Cornerstone の円は **world（mm）空間の円**。画素間隔が非正方（行 ≠ 列）だと、画素空間では楕円になる。
+ * 半径は world で測り（`hypot(Δx·col, Δy·row)`）、x 方向 r/col・y 方向 r/row の楕円として返す。
+ * `basis` は world ↔ 画素の換算に使う間隔（`imageCoords.worldSpacingOf`。校正値ではない）。省略は等方（1, 1）。
+ */
 export function polygonizeCircle(
   handlesPx: ReadonlyArray<PointPx>,
   segments: number = ELLIPSE_MESH_SEGMENTS,
+  basis?: WorldBasis,
 ): PointPx[] {
   if (handlesPx.length < 2) return [];
   const [c, e] = handlesPx;
-  const r = Math.hypot(e[0] - c[0], e[1] - c[1]);
+  const col = basis && basis.col > 0 ? basis.col : 1;
+  const row = basis && basis.row > 0 ? basis.row : 1;
+  const r = Math.hypot((e[0] - c[0]) * col, (e[1] - c[1]) * row);
   if (!(r > 0)) return [];
+  const rx = r / col;
+  const ry = r / row;
   const n = Math.max(8, Math.round(segments));
   const out: PointPx[] = [];
   for (let i = 0; i < n; i++) {
     const th = (2 * Math.PI * i) / n;
-    out.push([c[0] + r * Math.cos(th), c[1] + r * Math.sin(th)]);
+    out.push([c[0] + rx * Math.cos(th), c[1] + ry * Math.sin(th)]);
   }
   return out;
 }
@@ -248,6 +265,7 @@ export function buildRoiMesh(
   pointsPx: ReadonlyArray<PointPx>,
   closed: boolean | undefined,
   ellipseSegments: number = ELLIPSE_MESH_SEGMENTS,
+  basis?: WorldBasis,
 ): RoiMesh | null {
   const t = (tool ?? "").trim().toLowerCase();
   const kind = pickSampleKind(t, closed);
@@ -259,7 +277,7 @@ export function buildRoiMesh(
     return poly.length ? { pointsPx: poly, closed: true } : null;
   }
   if (t === "circleroi") {
-    const poly = polygonizeCircle(pointsPx, ellipseSegments);
+    const poly = polygonizeCircle(pointsPx, ellipseSegments, basis);
     return poly.length ? { pointsPx: poly, closed: true } : null;
   }
   if (t === "rectangleroi" || t === "rectangleroithreshold") {
@@ -578,6 +596,8 @@ export interface RoiStatsInput {
   unit: string;
   spacingX: number | null | undefined;
   spacingY: number | null | undefined;
+  /** world ↔ 画素の基準間隔（円の形に使う）。省略は等方。校正値（spacingX/Y）とは別。 */
+  worldBasis?: WorldBasis;
   /** 開 ROI の線プロファイルも作るか（詳細表示のときだけ true）。 */
   withProfile?: boolean;
   /** ヒストグラムも作るか（詳細表示のときだけ true）。要約統計と**同じ母集団**から作る。 */
@@ -589,7 +609,7 @@ export interface RoiStatsInput {
  * 画素が無ければ幾何だけ返し、`warnings` に理由を入れる。
  */
 export function computeRoiStatsFrom(input: RoiStatsInput): RoiStatsResult {
-  const { roiUid, tool, imageId, pointsPx, closed, slice, unit, spacingX, spacingY } = input;
+  const { roiUid, tool, imageId, pointsPx, closed, slice, unit, spacingX, spacingY, worldBasis } = input;
   const warnings: string[] = [];
   const kind = pickSampleKind(tool, closed);
   const calibrated = isPositive(spacingX) && isPositive(spacingY);
@@ -608,7 +628,7 @@ export function computeRoiStatsFrom(input: RoiStatsInput): RoiStatsResult {
     return base;
   }
 
-  const mesh = buildRoiMesh(tool, pointsPx, closed);
+  const mesh = buildRoiMesh(tool, pointsPx, closed, ELLIPSE_MESH_SEGMENTS, worldBasis);
   // 面型・線型は**2 点未満では何も測れない**（周囲長 0 のような無意味な値を作らない）。
   // 描いている最中の輪郭がここへ来る。点型は 1 点で足りる。
   const minPoints = kind === "point" ? 1 : 2;

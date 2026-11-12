@@ -97,6 +97,8 @@ interface Resolved {
   closed?: boolean;
   spacingX: number | null;
   spacingY: number | null;
+  /** world ↔ 画素の基準間隔（円の形）。校正値とは別。 */
+  worldBasis: { col: number; row: number };
   unit: string;
 }
 
@@ -131,6 +133,7 @@ function resolveInputs(ann: Any): Resolved | null {
     closed: ann?.data?.contour?.closed as boolean | undefined,
     spacingX,
     spacingY,
+    worldBasis: { col: basis.col, row: basis.row },
     unit: resolveValueUnit(refImageId),
   };
 }
@@ -209,6 +212,7 @@ function computeWithSlice(
     unit: r.unit,
     spacingX: r.spacingX,
     spacingY: r.spacingY,
+    worldBasis: r.worldBasis,
     withProfile: !!detail.withProfile,
     withHistogram: !!detail.withHistogram,
   });
@@ -292,7 +296,7 @@ export async function buildRoiPixelDumpAsync(uid: string, label: string): Promis
   if (!r) return undefined;
   const kind = pickSampleKind(r.tool, r.closed);
   if (kind !== "area" && kind !== "point") return undefined;
-  const mesh = buildRoiMesh(r.tool, r.pointsPx, r.closed);
+  const mesh = buildRoiMesh(r.tool, r.pointsPx, r.closed, undefined, r.worldBasis);
   if (!mesh) return undefined;
   const slice = await readModalitySlice(r.refImageId);
   if (!slice || !slice.width || !slice.height) return undefined;
