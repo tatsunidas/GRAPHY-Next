@@ -19,6 +19,7 @@ import { roiKindOf } from "./roiKind";
 import { deleteRoiMaskMeta, getRoiMaskMeta, setRoiMaskMeta } from "./roiMaskStore";
 import { worldToImageCoords, worldSpacingOf } from "./imageCoords";
 import { rasterizeRoiPx } from "./roiRaster";
+import { roiPointsPx } from "./roiRead";
 import { alignToStack, combineLabelSlices, scopeZFromForeground, withTemp, type BoolOp } from "./maskScope";
 import { isSegmentForeground } from "./maskStatsCore";
 
@@ -223,15 +224,14 @@ function rasterizeRoi(
   // 頂点（world）: フリーハンドは contour.polyline、その他は handles.points。
   const world: number[][] = ann?.data?.contour?.polyline ?? ann?.data?.handles?.points ?? [];
   if (!world.length) return null;
-  const ipts: Array<[number, number]> = [];
-  for (const w of world) {
-    try {
-      const ic = worldToImageCoords(refImageId, w as [number, number, number]) as [number, number];
-      ipts.push([ic[0], ic[1]]);
-    } catch {
-      /* skip */
-    }
-  }
+  // 幾何（IPP/IOP）が無いスタック（XA など）でも頂点を失わない換算（NaN を作らない）は roiPointsPx に集約してある。
+  const basis = worldSpacingOf(refImageId);
+  const ipts = roiPointsPx(
+    world,
+    (w) => worldToImageCoords(refImageId, w as [number, number, number]) as [number, number],
+    basis.col,
+    basis.row,
+  ) as Array<[number, number]>;
   if (!ipts.length) return null;
 
   return rasterizeRoiPx(

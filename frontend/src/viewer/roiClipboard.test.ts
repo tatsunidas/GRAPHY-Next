@@ -3,9 +3,9 @@
  * Author: Tatsuaki Kobayashi
  */
 import { describe, expect, it } from "vitest";
-import { carryOver, entryToSavedRoi, retargetEntries, retargetEntry, type ImageGrid, type RoiClipboardEntry } from "./roiClipboard";
+import { carryOver, entryToSavedRoi, makePixelToWorld, retargetEntries, retargetEntry, type ImageGrid, type RoiClipboardEntry } from "./roiClipboard";
 import { buildAnnotationData } from "./roiPersistence";
-import type { PointPx } from "./roiRead";
+import { roiPointsPx, type PointPx } from "./roiRead";
 
 const SQUARE: PointPx[] = [
   [10, 10],
@@ -169,5 +169,20 @@ describe("retargetEntries（複数をまとめて別の画像へ写す）", () =
     expect(retargetEntries([], grid(64, 64, 0.1))).toEqual([]);
     const unknown: ImageGrid = { cols: 512, rows: 512, colSpacing: null, rowSpacing: null };
     expect(retargetEntries([a, b], unknown)).toEqual([a, b]);
+  });
+});
+
+describe("makePixelToWorld（幾何なし。roiPointsPx の逆）", () => {
+  it("画素座標（左上隅が 0）→ world → 画素座標が恒等。画素 (10,20) の中心 (10.5, 20.5) は world (10, 20)（間隔 1・原点は画素 (0,0) の中心）", () => {
+    // 画像が無い imageId は幾何も間隔も取れず、フォールバック（間隔 1）に落ちる。
+    const toWorld = makePixelToWorld("no-such-image");
+    const w = toWorld([10.5, 20.5]);
+    expect(w[0]).toBeCloseTo(10, 12);
+    expect(w[1]).toBeCloseTo(20, 12);
+    for (const p of [[10.5, 20.5], [33.25, 7.75], [0, 0]] as PointPx[]) {
+      const back = roiPointsPx([toWorld(p)], () => null, 1, 1)[0];
+      expect(back[0]).toBeCloseTo(p[0], 12);
+      expect(back[1]).toBeCloseTo(p[1], 12);
+    }
   });
 });

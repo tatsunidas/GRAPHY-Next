@@ -947,9 +947,8 @@ export interface Viewer2DPluginHost extends PluginHostBase {
    * （形状から本体が算出＝最遠 2 点と、それに直交する広がり）を使う。**黙って片方を代入しない**。
    * 画素間隔が不明なシリーズでは算出値は `undefined`（mm を捏造しない）。
    *
-   * <p>⚠ **`roiUid` はセッション内でのみ安定**である（本体に ROI の永続化が無い）。
-   * 時系列で同じ病変を追うなら `sopInstanceUid` ＋ `points`（画素座標）＋プラグイン自身の ID で
-   * 記録し、`roiUid` を鍵にしないこと。また `zScope === "all"`（global ROI）は
+   * <p>`roiUid` は ROI の永続化で同じ UID のまま読み戻されるが、ROI を消して作り直せば別 UID になる。
+   * 時系列で同じ病変を追うなら `sopInstanceUid` ＋ `points`（画素座標）＋プラグイン自身の ID でも記録すること。また `zScope === "all"`（global ROI）は
    * `sliceIndex` / `sopInstanceUid` が「いま見ているスライス」を指すだけなので、計測記録では弾くこと。
    *
    * <p>**呼ぶたびに現在値を読む**。ユーザーは ROI を編集し続けるので、活性化時の
@@ -972,7 +971,7 @@ export interface Viewer2DPluginHost extends PluginHostBase {
   setRoiMeta: (roiUid: string, patch: Record<string, string>) => boolean;
   /**
    * **ROI（楕円・矩形）を、表示中のスライスへ作る。** `tileId` 省略時は対象タイルの先頭。
-   * 中心は患者座標 LPS（mm）の `centerLps`、または表示中のスライスの画素座標 `[列, 行]` の `centerPx`（`getRois()` の `points` と同じ座標）の**どちらか一方**。
+   * 中心は患者座標 LPS（mm）の `centerLps`、または表示中のスライスの画素座標 `[列, 行]` の `centerPx`（`getRois()` の `points` と同じ座標。**画素の左上隅が原点**: 画素 (i, j) の中心は (i+0.5, j+0.5)。幾何の有無によらず同じ）の**どちらか一方**。
    * LPS の中心は表示中のスライスの面内であること（面外は `off-slice` で拒否。別のスライスへは作らない）。成功すると、作った ROI の中心（LPS）も返る。
    * 半径（矩形は半幅）は**表示の水平・垂直方向**の mm。作った ROI には本体が出自の印（このプラグイン）とラベルを付け、
    * ROI マネージャで見分けられる。保存は本体が予約する。AI ツール（`effect: "write"`）から呼ぶときは、その実行前に本体が利用者の確認を出す。

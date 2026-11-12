@@ -182,16 +182,7 @@ async function startWand(viewport: AnyObj, world: [number, number, number], mode
     plane.rowPixelSpacing,
   )[0];
   if (!ic) return;
-  // 幾何（IPP/IOP）が無い画像は roiPointsPx のフォールバック（画素中心が整数の座標）に落ちている。
-  const hasGeometry = (() => {
-    try {
-      const g = worldToImageCoords(refImageId, world) as [number, number];
-      return Number.isFinite(g[0]) && Number.isFinite(g[1]);
-    } catch {
-      return false;
-    }
-  })();
-  const seed = seedPixelOf(ic, cols, rows, hasGeometry ? "corner" : "center");
+  const seed = seedPixelOf(ic, cols, rows);
   if (!seed) return;
   const [sx, sy] = seed;
   const comps = Math.max(1, Math.round(px.length / (cols * rows)));

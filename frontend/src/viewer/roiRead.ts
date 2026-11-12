@@ -244,7 +244,8 @@ export function worldToPixelOnPlane(
  * <p>🚨 **幾何（IPP/IOP）が無いシリーズがある**。XA がまさにそれで、そこでは Cornerstone の
  * `worldToImageCoords` が 1 点も変換できず、**計測が丸ごと落ちる**（2026-08-25 に実機で判明。
  * プラグインからは「ユーザーが引いた線が存在しない」ように見え、アンギオの解析が成立しない）。
- * 幾何が無いスタックの world は `画素 × 画素間隔`（原点 0）なので、割って戻せばよい。
+ * 幾何が無いスタックの world は `画素 × 画素間隔`（原点は画素 (0,0) の中心）なので、割って 0.5 を足せば
+ * 幾何ありと同じ「画素の左上隅が 0」の座標になる。
  *
  * <p>この換算はもともと `Viewer2D.getRois()` と `XaAnalysisDialog.worldToImagePx()` に
  * 別々に書かれていた。**3 か所目を作らないため**にここへ集約する。
@@ -272,11 +273,13 @@ export function roiPointsPx(
   }
   if (points.length) return points;
 
-  // 幾何が無いスタック: world = 画素 × 画素間隔（原点 0）なので割って戻す。
+  // 幾何が無いスタック: world = 画素 × 画素間隔で、原点は画素 (0,0) の**中心**。割って戻すと「画素 i の中心が
+  // 整数 i」になるので、+0.5 して幾何ありと同じ「左上隅が 0」の規約に揃える（逆変換は
+  // `roiClipboard.makePixelToWorld`。必ず対で直す）。
   const col = Number.isFinite(spacingX) && (spacingX as number) > 0 ? (spacingX as number) : 1;
   const row = Number.isFinite(spacingY) && (spacingY as number) > 0 ? (spacingY as number) : 1;
   for (const w of world) {
-    if (Number.isFinite(w?.[0]) && Number.isFinite(w?.[1])) points.push([w[0] / col, w[1] / row]);
+    if (Number.isFinite(w?.[0]) && Number.isFinite(w?.[1])) points.push([w[0] / col + 0.5, w[1] / row + 0.5]);
   }
   return points;
 }
