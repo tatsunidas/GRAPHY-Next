@@ -192,6 +192,68 @@ describe("computeSuvScale %ID/cc", () => {
   });
 });
 
+describe("computeSuvScale DecayCorrection（画素値の補正時刻）", () => {
+  // 濃度 3500 Bq/mL・体重 70 kg・投与量 3.5e8 Bq。真値は手計算。
+  const dose = 3.5e8;
+  const conc = 3500;
+  const sameDay = { totalDoseBq: dose, halfLifeSec: 6586.2 };
+  const bw = (over: Partial<SuvParams>) => {
+    const r = computeSuvScale(baseParams({ ...sameDay, ...over }), "bw");
+    if (isSuvError(r)) throw new Error(`unexpected error: ${r.error}`);
+    return r;
+  };
+
+  it("ADMIN: 投与量を減衰させない。SUVbw = 濃度 × 体重(g) ÷ 投与量 = 0.7", () => {
+    const r = bw({ decayCorrection: "ADMIN" });
+    expect(r.scale * conc).toBeCloseTo((conc * 70000) / dose, 9);
+    expect(r.scale * conc).toBeCloseTo(0.7, 9);
+    expect(r.warnings).toContain("decayAdmin");
+  });
+
+  it("START: 従来どおり、投与量を 3600 秒・半減期 6586.2 秒で減衰させる（ADMIN との比 2^(3600/6586.2)）", () => {
+    const start = bw({ decayCorrection: "START" });
+    const admin = bw({ decayCorrection: "ADMIN" });
+    expect(start.scale / admin.scale).toBeCloseTo(Math.pow(2, 3600 / 6586.2), 9);
+    expect(start.scale * conc).toBeCloseTo(0.7 * Math.exp((Math.LN2 * 3600) / 6586.2), 9);
+    expect(start.warnings).not.toContain("decayAdmin");
+  });
+
+  it("未指定・NONE は START と同じ近似（NONE は記録だけ残す）", () => {
+    const start = bw({ decayCorrection: "START" });
+    expect(bw({ decayCorrection: undefined }).scale).toBe(start.scale);
+    const none = bw({ decayCorrection: "NONE" });
+    expect(none.scale).toBe(start.scale);
+    expect(none.warnings).toContain("decayNone");
+  });
+
+  it("大文字小文字・前後の空白を無視する", () => {
+    expect(bw({ decayCorrection: "admin" }).scale).toBe(bw({ decayCorrection: "ADMIN" }).scale);
+    expect(bw({ decayCorrection: " ADMIN " }).scale).toBe(bw({ decayCorrection: "ADMIN" }).scale);
+  });
+
+  it("ADMIN は投与時刻・スキャン時刻が無くても計算できる（START は missingTime）", () => {
+    const noTime = { injectionTimeMs: undefined, scanTimeMs: undefined };
+    expect(bw({ decayCorrection: "ADMIN", ...noTime }).scale * conc).toBeCloseTo(0.7, 9);
+    const r = computeSuvScale(baseParams({ ...sameDay, ...noTime, decayCorrection: "START" }), "bw");
+    expect(isSuvError(r) && r.error).toBe("missingTime");
+  });
+
+  it("SUL（James）・SUVbsa・%ID/cc も ADMIN では減衰させない", () => {
+    for (const type of ["sul-james", "bsa", "pid"] as const) {
+      const a = computeSuvScale(baseParams({ ...sameDay, decayCorrection: "ADMIN" }), type);
+      const s = computeSuvScale(baseParams({ ...sameDay, decayCorrection: "START" }), type);
+      if (isSuvError(a) || isSuvError(s)) throw new Error("unexpected error");
+      expect(s.scale / a.scale).toBeCloseTo(Math.pow(2, 3600 / 6586.2), 9);
+    }
+  });
+
+  it("負例: ADMIN を START と同じ式で計算すると 1.46 倍高く出る（旧式。検査が効いている）", () => {
+    const old = (conc * 70000) / (dose * Math.pow(2, -3600 / 6586.2));
+    expect(old / 0.7).toBeCloseTo(1.4608, 3);
+    expect(bw({ decayCorrection: "ADMIN" }).scale * conc).not.toBeCloseTo(old, 2);
+  });
+});
+
 describe("suvUnitLabel", () => {
   it("タイプごとの表示単位", () => {
     expect(suvUnitLabel("bw")).toBe("SUVbw");

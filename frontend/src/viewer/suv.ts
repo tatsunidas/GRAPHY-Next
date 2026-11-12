@@ -53,7 +53,7 @@ export interface SuvParams {
   units?: string;
   /** CorrectedImage (0028,0051) の値配列（"ATTN","DECY" 等）。 */
   correctedImage: string[];
-  /** DecayCorrection (0054,1102): "START" 等。 */
+  /** DecayCorrection (0054,1102): "START"（スキャン開始時刻）/ "ADMIN"（投与時刻）/ "NONE"。 */
   decayCorrection?: string;
   /** Philips 私設 SUV Scale Factor (7053,1000)。 */
   philipsSuvScaleFactor?: number;
@@ -407,17 +407,29 @@ export function computeSuvScale(p: SuvParams, type: SuvType): SuvResult | SuvErr
   // --- 崩壊補正後投与量 ---
   if (!p.totalDoseBq || p.totalDoseBq <= 0) return { error: "missingDose" };
   if (!p.halfLifeSec || p.halfLifeSec <= 0) return { error: "missingHalfLife" };
-  if (p.injectionTimeMs === undefined || p.scanTimeMs === undefined) {
-    return { error: "missingTime" };
+  // DecayCorrection (0054,1102): 画素値がどの時刻の放射能に補正済みか（DICOM PS3.3 C.8.9）。
+  //   ADMIN = 投与時刻に補正済み → 画素値は投与量と同じ時刻の放射能。投与量は減衰させない。
+  //   START = スキャン開始時刻に補正済み → 投与量もスキャン時刻まで減衰させる。
+  //   NONE  = 補正なし（各フレームの実測時刻の放射能）。フレームごとの時刻は持たないので START と同じ近似にする。
+  const decayCorrection = (p.decayCorrection ?? "").trim().toUpperCase();
+  let decayedDoseBq: number;
+  if (decayCorrection === "ADMIN") {
+    warnings.push("decayAdmin");
+    decayedDoseBq = p.totalDoseBq;
+  } else {
+    if (decayCorrection === "NONE") warnings.push("decayNone");
+    if (p.injectionTimeMs === undefined || p.scanTimeMs === undefined) {
+      return { error: "missingTime" };
+    }
+    let decaySec = (p.scanTimeMs - p.injectionTimeMs) / 1000;
+    if (decaySec < 0) {
+      // 日跨ぎ（時刻のみで日付欠損）: 24h 補正を試みる。
+      decaySec += 86400;
+      warnings.push("midnightAdjust");
+    }
+    if (decaySec < 0) return { error: "negativeDecay" };
+    decayedDoseBq = p.totalDoseBq * Math.pow(2, -decaySec / p.halfLifeSec);
   }
-  let decaySec = (p.scanTimeMs - p.injectionTimeMs) / 1000;
-  if (decaySec < 0) {
-    // 日跨ぎ（時刻のみで日付欠損）: 24h 補正を試みる。
-    decaySec += 86400;
-    warnings.push("midnightAdjust");
-  }
-  if (decaySec < 0) return { error: "negativeDecay" };
-  const decayedDoseBq = p.totalDoseBq * Math.pow(2, -decaySec / p.halfLifeSec);
   if (!(decayedDoseBq > 0)) return { error: "negativeDecay" };
 
   // --- 正規化ベース（g 相当）---
