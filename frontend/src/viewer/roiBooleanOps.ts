@@ -17,7 +17,8 @@ import { cache, imageLoader, getRenderingEngines } from "@cornerstonejs/core";
 import { annotation as csAnnotation, segmentation as csSeg, Enums as csToolsEnums } from "@cornerstonejs/tools";
 import { roiKindOf } from "./roiKind";
 import { deleteRoiMaskMeta, getRoiMaskMeta, setRoiMaskMeta } from "./roiMaskStore";
-import { worldToImageCoords } from "./imageCoords";
+import { worldToImageCoords, worldSpacingOf } from "./imageCoords";
+import { rasterizeCircleFg } from "./roiCircleRaster";
 import { alignToStack, combineLabelSlices, scopeZFromForeground, withTemp, type BoolOp } from "./maskScope";
 import { isSegmentForeground } from "./maskStatsCore";
 import { fillPolygonsEvenOdd } from "./maskContour";
@@ -249,11 +250,8 @@ function rasterizeRoi(
   const y0 = Math.max(0, Math.floor(minY)), y1 = Math.min(rows - 1, Math.ceil(maxY));
 
   if (/circle/i.test(tool) && ipts.length >= 2) {
-    const [cx, cy] = ipts[0];
-    const r = Math.hypot(ipts[1][0] - cx, ipts[1][1] - cy) || 0.5;
-    for (let y = Math.max(0, Math.floor(cy - r)); y <= Math.min(rows - 1, Math.ceil(cy + r)); y++)
-      for (let x = Math.max(0, Math.floor(cx - r)); x <= Math.min(cols - 1, Math.ceil(cx + r)); x++)
-        if (Math.hypot(x + 0.5 - cx, y + 0.5 - cy) <= r) set(x, y);
+    // 半径は world（mm）で測る（非正方画素で画素空間の真円にならないように）。`roiStats.polygonizeCircle` と同じ図形。
+    return rasterizeCircleFg(ipts[0], ipts[1], cols, rows, worldSpacingOf(refImageId));
   } else if (/ellip/i.test(tool)) {
     const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
     const rx = (maxX - minX) / 2 || 0.5, ry = (maxY - minY) / 2 || 0.5;

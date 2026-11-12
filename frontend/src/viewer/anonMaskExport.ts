@@ -103,7 +103,7 @@ export function maskPolygonFrom(
   const sop = sopFromImageId(refImageId) ?? sopUidFromImageId(refImageId);
   // XA の 1 ラン数十〜数百フレームは全部同じ SOP なので、フレーム番号も要る。
   const frame = frameOfImageId(refImageId);
-  return maskPolygonFromResolved(tool, pointsPx, closed, sop, frame, frameScope);
+  return maskPolygonFromResolved(tool, pointsPx, closed, sop, frame, frameScope, worldSpacingOf(refImageId));
 }
 
 /**
@@ -128,12 +128,13 @@ export function maskPolygonFromResolved(
   sop: string | null,
   frame: number | null,
   frameScope: MaskFrameScope = "wholeInstance",
+  basis?: { col: number; row: number },
 ): { polygon: AnonMaskPolygon } | { reason: MaskSkipReason } {
   if (!pointsPx.length) return { reason: "noVertices" };
   if (pickSampleKind((tool ?? "").trim().toLowerCase(), closed) !== "area") {
     return { reason: "notClosedArea" };
   }
-  const mesh = buildRoiMesh(tool, pointsPx, closed);
+  const mesh = buildRoiMesh(tool, pointsPx, closed, undefined, basis);
   if (!mesh || !mesh.closed || mesh.pointsPx.length < 3) {
     return { reason: "notClosedArea" };
   }

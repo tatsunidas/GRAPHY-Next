@@ -124,6 +124,10 @@ export async function loadAnonRoiCandidates(
       !roi.isOpenContour,
       roi.sopInstanceUid,
       roi.frame ?? null,
+      undefined,
+      layout && layout.pixelSpacingRow > 0 && layout.pixelSpacingCol > 0
+        ? { col: layout.pixelSpacingCol, row: layout.pixelSpacingRow }
+        : undefined,
     );
     if (!("polygon" in r)) {
       skipped.push({ label, reason: r.reason });
