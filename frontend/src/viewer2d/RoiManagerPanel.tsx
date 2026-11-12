@@ -528,9 +528,20 @@ export function RoiManagerPanel({
     setBusy(true);
     setSegImportProgress(0);
     try {
-      const n = await importSegForCurrentView((frac) => setSegImportProgress(frac));
-      if (n === 0) window.alert(t("roiMgr.importSegEmpty"));
-      else emitToast(t("roiMgr.importSegDone", { n }));
+      const r = await importSegForCurrentView((frac) => setSegImportProgress(frac));
+      const rej = r.rejected;
+      const nRej = rej.otherSeries + rej.positionMismatch + rej.noPosition + rej.sizeMismatch;
+      // 位置が合わず載せなかった理由は、黙らずに伝える（別シリーズの SEG・格子のずれ・画像サイズの違い）。
+      const reason =
+        rej.positionMismatch + rej.noPosition > 0
+          ? t("roiMgr.importSegRejectedGrid", { n: rej.positionMismatch + rej.noPosition, labels: r.rejectedLabels.join(", ") })
+          : rej.otherSeries > 0
+            ? t("roiMgr.importSegRejectedSeries", { n: rej.otherSeries, labels: r.rejectedLabels.join(", ") })
+            : rej.sizeMismatch > 0
+              ? t("roiMgr.importSegRejectedSize", { labels: r.rejectedLabels.join(", ") })
+              : "";
+      if (r.segments === 0) window.alert(nRej > 0 ? reason : t("roiMgr.importSegEmpty"));
+      else emitToast(nRej > 0 ? `${t("roiMgr.importSegDone", { n: r.segments })} ${reason}` : t("roiMgr.importSegDone", { n: r.segments }));
     } catch {
       window.alert(t("roiMgr.opFailed"));
     } finally {
