@@ -18,10 +18,9 @@ import { annotation as csAnnotation, segmentation as csSeg, Enums as csToolsEnum
 import { roiKindOf } from "./roiKind";
 import { deleteRoiMaskMeta, getRoiMaskMeta, setRoiMaskMeta } from "./roiMaskStore";
 import { worldToImageCoords, worldSpacingOf } from "./imageCoords";
-import { rasterizeCircleFg } from "./roiCircleRaster";
+import { rasterizeRoiPx } from "./roiRaster";
 import { alignToStack, combineLabelSlices, scopeZFromForeground, withTemp, type BoolOp } from "./maskScope";
 import { isSegmentForeground } from "./maskStatsCore";
-import { fillPolygonsEvenOdd } from "./maskContour";
 
 const LABELMAP = csToolsEnums.SegmentationRepresentations.Labelmap;
 const MAX_SEGMENTS = 64; // SPLIT の成分数上限（色枯渇/重さ回避）。
@@ -235,39 +234,14 @@ function rasterizeRoi(
   }
   if (!ipts.length) return null;
 
-  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-  for (const [x, y] of ipts) {
-    if (x < minX) minX = x;
-    if (x > maxX) maxX = x;
-    if (y < minY) minY = y;
-    if (y > maxY) maxY = y;
-  }
-  const fg = new Uint8Array(cols * rows);
-  const set = (x: number, y: number) => {
-    if (x >= 0 && y >= 0 && x < cols && y < rows) fg[y * cols + x] = 1;
-  };
-  const x0 = Math.max(0, Math.floor(minX)), x1 = Math.min(cols - 1, Math.ceil(maxX));
-  const y0 = Math.max(0, Math.floor(minY)), y1 = Math.min(rows - 1, Math.ceil(maxY));
-
-  if (/circle/i.test(tool) && ipts.length >= 2) {
-    // 半径は world（mm）で測る（非正方画素で画素空間の真円にならないように）。`roiStats.polygonizeCircle` と同じ図形。
-    return rasterizeCircleFg(ipts[0], ipts[1], cols, rows, worldSpacingOf(refImageId));
-  } else if (/ellip/i.test(tool)) {
-    const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
-    const rx = (maxX - minX) / 2 || 0.5, ry = (maxY - minY) / 2 || 0.5;
-    for (let y = y0; y <= y1; y++)
-      for (let x = x0; x <= x1; x++) {
-        const nx = (x + 0.5 - cx) / rx, ny = (y + 0.5 - cy) / ry;
-        if (nx * nx + ny * ny <= 1) set(x, y);
-      }
-  } else if (/rect/i.test(tool)) {
-    for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) set(x, y);
-  } else {
-    // 画素中心の偶奇判定。マスク→輪郭（maskContour）の塗り直しと同じ関数を使う。
-    const filled = fillPolygonsEvenOdd([ipts], cols, rows);
-    for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) if (filled[y * cols + x]) set(x, y);
-  }
-  return fg;
+  return rasterizeRoiPx(
+    tool,
+    ipts,
+    ann?.data?.contour?.closed as boolean | undefined,
+    cols,
+    rows,
+    worldSpacingOf(refImageId),
+  );
 }
 
 /** ROI の referencedImageId を含む stack viewport を探し、source スタックと表示先を返す。 */
