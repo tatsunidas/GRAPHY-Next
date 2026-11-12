@@ -35,6 +35,7 @@ import {
 } from "./levelSetsStore";
 import type { LevelSetWorkerRequest, LevelSetWorkerResponse } from "./levelSetsProtocol";
 import { worldToImageCoords } from "./imageCoords";
+import { seedPixelOf } from "./seedPixel";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type AnyObj = Record<string, any>;
@@ -271,9 +272,18 @@ async function startLevelSet(viewport: AnyObj, world: [number, number, number]):
   if (!cols || !rows) return;
   const ic = worldToImageCoords(refImageId, world) as [number, number] | undefined;
   if (!ic) return;
-  const sx = Math.round(ic[0]);
-  const sy = Math.round(ic[1]);
-  if (sx < 0 || sy < 0 || sx >= cols || sy >= rows) return;
+  // 幾何（IPP/IOP）が無い画像は roiPointsPx のフォールバック（画素中心が整数の座標）に落ちている。
+  const hasGeometry = (() => {
+    try {
+      const g = worldToImageCoords(refImageId, world) as [number, number];
+      return Number.isFinite(g[0]) && Number.isFinite(g[1]);
+    } catch {
+      return false;
+    }
+  })();
+  const seed = seedPixelOf(ic, cols, rows, hasGeometry ? "corner" : "center");
+  if (!seed) return;
+  const [sx, sy] = seed;
   const seedValue = Number(px[sy * cols + sx]);
 
   // シードスライスの輝度 min/max（Wand と同じ発想、wandTool.ts の rangeMin/rangeMax）。
