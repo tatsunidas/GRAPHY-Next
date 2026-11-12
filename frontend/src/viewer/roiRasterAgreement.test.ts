@@ -151,13 +151,3 @@ describe("ImageJ 書き出しの oval / rect", () => {
     if (s2.kind === "polygon") expect(s2.xs.length).toBe(4);
   });
 });
-
-describe("シード画素（幾何なしの画像）", () => {
-  it("画素中心が整数の座標では round: 画素 5 の中（4.5〜5.5 未満）を押すと 5", () => {
-    for (const dx of [-0.45, -0.2, 0, 0.2, 0.45]) {
-      expect(seedPixelOf([5 + dx, 7 + dx], 20, 20, "center")).toEqual([5, 7]);
-    }
-    // 隅原点の floor を当てると、左半分で隣（4）を掴む（実機の失敗の再現）
-    expect(Math.floor(5 - 0.3)).toBe(4);
-  });
-});

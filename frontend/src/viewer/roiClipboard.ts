@@ -167,7 +167,7 @@ export function hasClipboardRoi(): boolean {
 /**
  * 画素 → world の変換器を作る。**幾何が無いスタック（XA）でも頂点を失わない。**
  *
- * <p>`roiRead.roiPointsPx()` のフォールバック（world = 画素 × 画素間隔・原点 0）の逆。
+ * <p>`roiRead.roiPointsPx()` のフォールバック（world = 画素 × 画素間隔・原点は画素 (0,0) の中心。画素座標は +0.5 して左上隅 0 に揃える）の逆。
  * 規則が 2 つあると「コピーした場所と貼り付いた場所が違う」になるので、必ず対にする。
  */
 export function makePixelToWorld(imageId: string): (p: PointPx) => number[] {
@@ -181,7 +181,8 @@ export function makePixelToWorld(imageId: string): (p: PointPx) => number[] {
     } catch {
       /* 幾何が無いスタックではフォールバックへ */
     }
-    return [p[0] * col, p[1] * row, 0];
+    // 画素座標は左上隅が 0。幾何なしの world は画素 (0,0) の中心が原点なので 0.5 を引く（roiPointsPx の逆）。
+    return [(p[0] - 0.5) * col, (p[1] - 0.5) * row, 0];
   };
 }
 

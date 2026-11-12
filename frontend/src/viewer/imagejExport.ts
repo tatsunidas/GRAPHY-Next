@@ -15,7 +15,7 @@ import { getRoiMaskMeta } from "./roiMaskStore";
 import type { ImageJRoiDto } from "../api";
 import { worldToImageCoords, worldSpacingOf } from "./imageCoords";
 import { buildRoiMesh } from "./roiStats";
-import { convexHull, type PointPx } from "./roiRead";
+import { convexHull, roiPointsPx, type PointPx } from "./roiRead";
 
 /** 単一アノテーション → ImageJ DTO（面積/線/点系。変換不能なら null）。 */
 export function annotationToImageJDto(annotationUid: string): ImageJRoiDto | null {
@@ -27,17 +27,16 @@ export function annotationToImageJDto(annotationUid: string): ImageJRoiDto | nul
   const world: number[][] = ann.data?.contour?.polyline ?? ann.data?.handles?.points ?? [];
   if (!world.length) return null;
 
-  const xs: number[] = [];
-  const ys: number[] = [];
-  for (const w of world) {
-    try {
-      const ic = worldToImageCoords(refId, w as [number, number, number]) as [number, number];
-      xs.push(ic[0]);
-      ys.push(ic[1]);
-    } catch {
-      /* skip */
-    }
-  }
+  // 幾何（IPP/IOP）が無いスタック（XA など）でも頂点を失わない換算は roiPointsPx に集約してある。
+  const basis = worldSpacingOf(refId);
+  const ptsPx = roiPointsPx(
+    world,
+    (w) => worldToImageCoords(refId, w as [number, number, number]) as [number, number],
+    basis.col,
+    basis.row,
+  );
+  const xs: number[] = ptsPx.map((p) => p[0]);
+  const ys: number[] = ptsPx.map((p) => p[1]);
   if (!xs.length) return null;
 
   // スライス位置（1-based）: ROI 表示中スタックでの index。

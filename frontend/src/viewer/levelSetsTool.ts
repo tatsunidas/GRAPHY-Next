@@ -272,16 +272,7 @@ async function startLevelSet(viewport: AnyObj, world: [number, number, number]):
   if (!cols || !rows) return;
   const ic = worldToImageCoords(refImageId, world) as [number, number] | undefined;
   if (!ic) return;
-  // 幾何（IPP/IOP）が無い画像は roiPointsPx のフォールバック（画素中心が整数の座標）に落ちている。
-  const hasGeometry = (() => {
-    try {
-      const g = worldToImageCoords(refImageId, world) as [number, number];
-      return Number.isFinite(g[0]) && Number.isFinite(g[1]);
-    } catch {
-      return false;
-    }
-  })();
-  const seed = seedPixelOf(ic, cols, rows, hasGeometry ? "corner" : "center");
+  const seed = seedPixelOf(ic, cols, rows);
   if (!seed) return;
   const [sx, sy] = seed;
   const seedValue = Number(px[sy * cols + sx]);
