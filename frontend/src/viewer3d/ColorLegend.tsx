@@ -9,7 +9,7 @@
  *
  * - 色: `lutName` があれば backend LUT（`fetchLutData`）の r/g/b、無ければグレースケール。
  * - 値域: `view.getState()` の center/width（VOI）から算出。`onStateChanged` で W/L 変更に追従。
- * - 単位: CT=HU、その他はモダリティ名（近似）。位置は四隅から選択（既定=右下）。
+ * - 単位: 3D のボリュームの実際の単位（`legendUnit`）。位置は四隅から選択（既定=右下）。
  *
  * 表示専用（操作はビューポート側）。単一入口の輝度校正（HU）に従い値域はモダリティ値空間。
  */
@@ -54,23 +54,17 @@ function lutStops(lut: { r: number[]; g: number[]; b: number[] }): Stop[] {
   return out;
 }
 
-function unitFor(modality: string | null): string {
-  const m = (modality ?? "").toUpperCase();
-  if (m === "CT") return "HU";
-  if (m === "PT") return "SUV";
-  return "";
-}
-
 export function ColorLegend({
   view,
   lutName,
-  modality,
+  unit,
   corner = "br",
   onClose,
 }: {
   view: VtkVolumeView;
   lutName: string | null;
-  modality: string | null;
+  /** 値の単位（3D のボリュームの実際の単位。{@link ./legendUnit}）。空なら括弧を出さない。 */
+  unit: string;
   corner?: LegendCorner;
   onClose?: () => void;
 }) {
@@ -126,7 +120,6 @@ export function ColorLegend({
     [stops],
   );
 
-  const unit = unitFor(modality);
   const mid = (range.lo + range.hi) / 2;
   // 1 未満は有効数字で（ADC の 0.0007 を 0.0 に潰さない）
   const fmt = (v: number) =>

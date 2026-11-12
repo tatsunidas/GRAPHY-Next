@@ -65,6 +65,8 @@ import { Viewer3DCinematicOverlay } from "./Viewer3DCinematicOverlay";
 import { CenterlineDialog } from "./CenterlineDialog";
 import { MeshRepairDialog } from "./MeshRepairDialog";
 import { ColorLegend } from "./ColorLegend";
+import { legendUnit } from "./legendUnit";
+import { resolveValueUnit } from "../viewer/pixelCalibration";
 import { Viewer3DMenuBar } from "./Viewer3DMenuBar";
 import { CinematicSettingsDialog } from "./CinematicSettingsDialog";
 import { SlabPanel } from "./SlabPanel";
@@ -246,6 +248,8 @@ export function Viewer3DScreen({ status }: { status: AppStatus | null }) {
   const [repairTarget, setRepairTarget] = useState<{ id: string; name: string } | null>(null);
   // カラーレジェンド overlay 表示。
   const [legendOn, setLegendOn] = useState(false);
+  // 凡例の単位（3D のボリュームの実際の単位）。ボリュームを作ったあとに決める。
+  const [legendUnitText, setLegendUnitText] = useState("");
   // Cinematic v2（パストレース）オーバーレイ表示。
   const [pathTraceOn, setPathTraceOn] = useState(false);
 
@@ -438,6 +442,9 @@ export function Viewer3DScreen({ status }: { status: AppStatus | null }) {
         kind: built.geometry.kind,
       });
       setVolumeId(volId);
+      // 先頭スライスのメタデータ（RescaleType）から単位を決める。imageId が無い連結の再サンプルはモダリティ既定。
+      const firstId = built.sortedImageIds?.[0];
+      setLegendUnitText(legendUnit(firstId ? resolveValueUnit(firstId) : undefined, series.modality));
 
       // Cornerstone が構築したボリュームから scalar 付き vtkImageData を組み立てて pure vtk へ渡す
       // （streaming volume の imageData は scalar を pointData に持たないため作り直す）。
@@ -975,7 +982,7 @@ export function Viewer3DScreen({ status }: { status: AppStatus | null }) {
             <ColorLegend
               view={viewRef.current}
               lutName={lutName}
-              modality={modalityRef.current}
+              unit={legendUnitText}
               corner="tr"
               onClose={() => setLegendOn(false)}
             />
