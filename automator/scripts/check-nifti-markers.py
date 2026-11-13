@@ -6,7 +6,7 @@
       インスタンスは位置の**逆順**で番号を振り、LPS の既知の位置 3 点（左前上の角・右後下の角・中心）だけ値 30000 を置く。
       患者情報なし。IOP は単位ベクトルで直交、IPP は法線方向に等間隔（作った後に検算する）。<出力>/<向き>/*.dcm と <出力>/truth.json。
   check <向き> <書き出した .nii.gz> <make の出力フォルダ>
-  pm    <元の .nii.gz> <書き出した .nii.gz>
+  pm    <元の .nii.gz> <書き出した .nii.gz> [allow-no-nan]
       float の NIfTI を取り込んで（Parametric Map）書き出した往復: 形・affine（1e-4）・画素（NaN の位置を含めてビット一致）が元と同じか。
       nibabel で読み、(1) 形・float32、(2) 画素が pydicom で別に計算した float32(stored×slope+intercept) とビット一致、
       (3) 値 30000−1024 の 3 画素について、添字に affine を掛けた RAS が LPS の既知の位置の (−x,−y,z) と 0.01 mm 以内、
@@ -138,7 +138,7 @@ def check(name, nii, root):
     return fails
 
 
-def check_pm(orig, exported):
+def check_pm(orig, exported, need_nan=True):
     import nibabel as nib
     a, b = nib.load(orig), nib.load(exported)
     fails = []
@@ -147,7 +147,9 @@ def check_pm(orig, exported):
     ok(np.allclose(a.affine, b.affine, atol=1e-4), "pm: affine が元と 1e-4 以内で同じ（取り込み→書き出しで向き・原点・間隔が戻る）", f"\n{a.affine}\n{b.affine}")
     da, db = np.asanyarray(a.dataobj).astype(np.float32), np.asanyarray(b.dataobj)
     ok(db.dtype == np.float32, "pm: float32", db.dtype)
-    ok(np.array_equal(np.isnan(da), np.isnan(db)) and int(np.isnan(da).sum()) > 0, f"pm: NaN の位置と個数が一致（{int(np.isnan(da).sum())} 個）")
+    # NaN を含む元（float の Parametric Map）では、NaN が 1 個以上あることまで確かめる（NaN が消えて通るのを防ぐ）。
+    # NaN の無い元（CT の往復など）は need_nan=False で、位置と個数（0 個）が一致することだけを確かめる。
+    ok(np.array_equal(np.isnan(da), np.isnan(db)) and (int(np.isnan(da).sum()) > 0 or not need_nan), f"pm: NaN の位置と個数が一致（{int(np.isnan(da).sum())} 個）")
     ok(np.array_equal(np.nan_to_num(da, nan=-1).view(np.uint32), np.nan_to_num(db, nan=-1).view(np.uint32)), "pm: 画素が元とビット一致")
     return fails
 
@@ -156,7 +158,7 @@ if __name__ == "__main__":
     if sys.argv[1] == "make":
         make(sys.argv[2])
     elif sys.argv[1] == "pm":
-        sys.exit(1 if check_pm(sys.argv[2], sys.argv[3]) else 0)
+        sys.exit(1 if check_pm(sys.argv[2], sys.argv[3], need_nan="allow-no-nan" not in sys.argv[4:]) else 0)
     else:
         f = check(sys.argv[2], sys.argv[3], sys.argv[4])
         sys.exit(1 if f else 0)

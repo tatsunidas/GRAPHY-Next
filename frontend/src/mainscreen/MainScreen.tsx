@@ -3,7 +3,7 @@
  * Author: Tatsuaki Kobayashi
  */
 import { useEffect, useRef, useState } from "react";
-import { cancelImportJob, deleteUrlImportFile, getImportJob, submitImportJob, type AppStatus, type ImportJobStatus, type ImportResult, type Study, type Series, type StudyFilters } from "../api";
+import { exportSeriesNifti, cancelImportJob, deleteUrlImportFile, getImportJob, submitImportJob, type AppStatus, type ImportJobStatus, type ImportResult, type Study, type Series, type StudyFilters } from "../api";
 import { desktop } from "../desktopBridge";
 import { droppedPaths, hasDroppedFiles } from "./droppedPaths";
 import { ImportProgressBanner } from "./ImportProgressBanner";
@@ -14,6 +14,7 @@ import { StudyList } from "../StudyList";
 import { PreviewDock } from "./PreviewDock";
 import { LIST_LAYOUT_STORAGE_KEY, isPaneLayout, parseListLayout, type ListLayout } from "./listLayout";
 import { MenuBar } from "./MenuBar";
+import { downloadBlob, niftiExportAvailability, runNiftiExport } from "./niftiExport";
 import { Toolbar, type ToolKind } from "./Toolbar";
 import { SearchPanel } from "./SearchPanel";
 import { StatusBar } from "./StatusBar";
@@ -129,6 +130,9 @@ export function MainScreen({
       .catch(() => closeAlbum());
   };
   const [importMsg, setImportMsg] = useState<string | null>(null);
+  // ［ファイル］→「NIfTI で書き出し…」の結果の帯（成功・理由つきの失敗）。
+  const [niftiMsg, setNiftiMsg] = useState<{ text: string; error: boolean } | null>(null);
+  const [niftiBusy, setNiftiBusy] = useState(false);
   const [selectedStudy, setSelectedStudy] = useState<Study | null>(null);
   const [selectedSeries, setSelectedSeries] = useState<Series | null>(null);
   // 受信・事前取得・削除で保管庫が変わったら、待機中は一覧を自動で読み直し、操作中は状態バーで知らせる。
@@ -460,6 +464,18 @@ export function MainScreen({
       }
     : {};
 
+  const niftiAvail = niftiExportAvailability({ series: selectedSeries, isStandalone, busy: niftiBusy });
+  const handleExportNifti = async () => {
+    if (!selectedStudy || !selectedSeries || !niftiAvail.enabled) return;
+    setNiftiBusy(true);
+    setNiftiMsg({ text: t("niftiExport.running"), error: false });
+    try {
+      setNiftiMsg(await runNiftiExport(selectedStudy, selectedSeries, { exportSeries: exportSeriesNifti, save: downloadBlob, t }));
+    } finally {
+      setNiftiBusy(false);
+    }
+  };
+
   return (
     <div style={shell} {...dropHandlers} data-testid="main-screen">
       {dropActive && (
@@ -479,6 +495,7 @@ export function MainScreen({
         onOpenDb={onOpenDb}
         onOpenHelp={onOpenHelp}
         onOpenMobileUi={onOpenMobileUi}
+        niftiExport={isDemo ? undefined : { onClick: () => void handleExportNifti(), disabledReason: niftiAvail.enabled ? null : t(niftiAvail.reasonKey) }}
       />
       <Toolbar
         isStandalone={isStandalone}
@@ -503,6 +520,12 @@ export function MainScreen({
         />
       )}
       {importMsg && <div style={banner}>{importMsg}</div>}
+      {niftiMsg && (
+        <div style={{ ...banner, ...(niftiMsg.error ? { color: "#b00020" } : null) }} data-testid="nifti-export-msg">
+          {niftiMsg.text}
+          <button style={{ marginLeft: 8 }} onClick={() => setNiftiMsg(null)} aria-label={t("common.close")}>×</button>
+        </div>
+      )}
       <div style={middle}>
         {/* status（isDemo）は非同期取得のため、確定後に isDemo が変わったら SearchPanel を
             再マウントして初期日付(1900/01/01〜当日)を再計算させる。 */}
