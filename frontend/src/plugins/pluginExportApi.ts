@@ -182,6 +182,8 @@ export async function prepareSegExport(
     imageOrientationPatient: geom.iop,
     pixelSpacing: geom.pixelSpacing,
     sliceThickness: step > 0 ? step : 1,
+    // 格子は matchGrid が一様であることを確かめてあり、|sliceStep| が中心間距離。
+    spacingBetweenSlices: step > 0 ? step : 0,
     frameOfReferenceUID: geom.frameOfReferenceUid,
     seriesDescription: req.seriesDescription ?? "Segmentation",
     // 出所は**本体が付ける**（プラグインに名乗らせない）。
