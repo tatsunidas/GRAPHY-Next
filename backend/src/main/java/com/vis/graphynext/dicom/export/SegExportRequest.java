@@ -19,11 +19,12 @@ import java.util.List;
  * @param columns                 列数（=参照画像 Columns）
  * @param imageOrientationPatient IOP 6 要素
  * @param pixelSpacing            [row, col] mm
- * @param sliceThickness          mm（0 なら省略）
+ * @param sliceThickness          公称のスライス厚 mm（0 なら 1.0）
  * @param frameOfReferenceUID     参照シリーズの FoR（null/空なら省略）
  * @param seriesDescription       生成シリーズの説明（null 可）
  * @param segments                セグメント群（{@code labelPlanes} を渡すときは空でよい）
  * @param producer                プラグイン由来の場合の出所（null なら本体の機能による生成）
+ * @param spacingBetweenSlices    隣接スライスの中心間距離 mm。間隔が一様なときだけ渡す（0 なら SpacingBetweenSlices を書かない）
  * @param labelPlanes             ラベルの volume をスライスごとの平面で渡す形（host API の H64）。null なら {@code segments} だけ
  */
 public record SegExportRequest(
@@ -38,7 +39,20 @@ public record SegExportRequest(
         String seriesDescription,
         List<Segment> segments,
         Producer producer,
-        LabelPlanes labelPlanes) {
+        LabelPlanes labelPlanes,
+        double spacingBetweenSlices) {
+
+    /**
+     * 間隔を明示しない呼び出し（ラベルの平面を渡す H64 など、格子が一様な呼び出し側）。従来どおり {@code sliceThickness} を
+     * 中心間距離としても使う。
+     */
+    public SegExportRequest(String studyInstanceUid, String seriesInstanceUid, int rows, int columns,
+                            double[] imageOrientationPatient, double[] pixelSpacing, double sliceThickness,
+                            String frameOfReferenceUID, String seriesDescription, List<Segment> segments,
+                            Producer producer, LabelPlanes labelPlanes) {
+        this(studyInstanceUid, seriesInstanceUid, rows, columns, imageOrientationPatient, pixelSpacing,
+                sliceThickness, frameOfReferenceUID, seriesDescription, segments, producer, labelPlanes, sliceThickness);
+    }
 
     /** 既存の呼び出し（ラベルの平面なし）。 */
     public SegExportRequest(String studyInstanceUid, String seriesInstanceUid, int rows, int columns,

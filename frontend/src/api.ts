@@ -1020,7 +1020,10 @@ export interface SegExportRequest {
   columns: number;
   imageOrientationPatient: number[];
   pixelSpacing: [number, number]; // [row, col]
+  /** 公称のスライス厚 [mm]。 */
   sliceThickness: number;
+  /** 隣接スライスの中心間距離 [mm]（間隔が一様なときだけ）。0 または省略なら SpacingBetweenSlices を書かない。 */
+  spacingBetweenSlices?: number;
   frameOfReferenceUID?: string | null;
   seriesDescription?: string | null;
   segments: SegExportSegment[];
