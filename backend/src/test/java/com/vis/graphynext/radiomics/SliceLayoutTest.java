@@ -121,6 +121,20 @@ class SliceLayoutTest {
     }
 
     @Test
+    void localGap_isTheLargerOfTheTwoNeighbouringGaps() {
+        // 位置 0, 2.0, 5.5, 8.0（間隔 2.0, 3.5, 2.5）
+        SliceLayout l = SliceLayout.of(zs(0, 2.0, 5.5, 8.0), AXIAL);
+        assertEquals(2.0, l.localGap(0), 1e-12, "端は片側だけ");
+        assertEquals(3.5, l.localGap(1), 1e-12);
+        assertEquals(3.5, l.localGap(2), 1e-12);
+        assertEquals(2.5, l.localGap(3), 1e-12);
+        // 順不同の index でも位置で決まる
+        SliceLayout sh = SliceLayout.of(zs(8.0, 0, 5.5, 2.0), AXIAL);
+        assertEquals(2.5, sh.localGap(0), 1e-12);
+        assertEquals(2.0, sh.localGap(1), 1e-12);
+    }
+
+    @Test
     void singleSliceAndUnknown() {
         assertEquals(SliceLayout.Kind.SINGLE, SliceLayout.of(zs(3), AXIAL).kind());
         assertTrue(SliceLayout.of(zs(3), AXIAL).isRegularGrid());

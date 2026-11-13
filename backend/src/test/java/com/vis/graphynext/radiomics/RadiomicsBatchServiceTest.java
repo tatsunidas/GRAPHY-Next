@@ -290,6 +290,16 @@ class RadiomicsBatchServiceTest {
             return new LoadedVolume(img, mask(), W, H, D, 1, true, img.getCalibration(), null, 0.8, 0.8,
                     new HashMap<>(), sops, null, null, false);
         }
+
+        @Override
+        public LoadedVolume load(String study, String series, int channel, int timePoint, String maskSeries,
+                                 int maskChannel, int label, Map<String, String> settings, boolean allowRectify) {
+            ImagePlus img = phantom(1000L + series.hashCode());
+            String[] sops = new String[D];
+            for (int z = 0; z < D; z++) sops[z] = "1.2.3." + z;
+            return new LoadedVolume(img, mask(), W, H, D, 1, true, img.getCalibration(), null, 0.8, 0.8,
+                    new HashMap<>(), sops, null, null, false);
+        }
     }
 
     private final AtomicInteger extractions = new AtomicInteger();
