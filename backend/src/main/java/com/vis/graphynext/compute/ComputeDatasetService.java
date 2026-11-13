@@ -50,7 +50,9 @@ public class ComputeDatasetService {
     static final String PSEUDONYM = "GRAPHY-ANON";
 
     public enum Format {
-        DICOM_ZIP("dicom-zip", ".zip"), NPZ("npz", ".npz");
+        DICOM_ZIP("dicom-zip", ".zip"), NPZ("npz", ".npz"),
+        /** NIfTI-1（.nii.gz・float32）。書き出し専用（計算機への送信には使えない）。 */
+        NIFTI("nifti", ".nii.gz");
 
         final String code;
         final String extension;
@@ -62,6 +64,11 @@ public class ComputeDatasetService {
 
         public String code() {
             return code;
+        }
+
+        /** 計算機への送信（egress）で使える形式。{@link #NIFTI} は書き出し専用なので含めない（送信側の同意画面・規則の範囲外）。 */
+        public static Optional<Format> forEgress(String code) {
+            return of(code).filter(f -> f != NIFTI);
         }
 
         public static Optional<Format> of(String code) {
@@ -160,7 +167,7 @@ public class ComputeDatasetService {
             AnonymizeService.Result r;
             String modality = facts.modalities().size() == 1 ? facts.modalities().iterator().next() : null;
             try (OutputStream out = new DigestOutputStream(Files.newOutputStream(file), sha)) {
-                if (format == Format.NPZ) {
+                if (format == Format.NPZ || format == Format.NIFTI) {
                     VolumeAssembler va = new VolumeAssembler(codec);
                     r = anonymizer.anonymizeSeries(studyUid, seriesUid, cfg, decision.burnIn(), va);
                     if (va.failure() != null) {
@@ -168,7 +175,14 @@ public class ComputeDatasetService {
                     }
                     check(r, decision);
                     try {
-                        va.writeNpz(out, mapper);
+                        if (format == Format.NIFTI) {
+                            String step = NiftiWriter.write(out, va, va.assemble());
+                            if (step != null) {
+                                log.info("[compute] nifti single slice: slice step from {}", step);
+                            }
+                        } else {
+                            va.writeNpz(out, mapper);
+                        }
                     } catch (VolumeAssembler.UnsupportedLayout e) {
                         throw new DatasetRefused(e.getMessage(), null); // 並べてみて分かる形（重なり・欠け）
                     }
