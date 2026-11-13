@@ -73,7 +73,7 @@ public class GlamAnalysisService {
 
         int label = labelOf(req.settings());
         RadiomicsMapEngine.LoadedVolume vol = engine.load(req.studyInstanceUid(), req.sourceSeriesUid(),
-                req.channel(), req.timePoint(), req.maskSeriesUid(), req.maskChannel(), label, req.settings());
+                req.channel(), req.timePoint(), req.maskSeriesUid(), req.maskChannel(), label, req.settings(), true);
 
         if (vol.slices() < 2) {
             throw new IllegalArgumentException(

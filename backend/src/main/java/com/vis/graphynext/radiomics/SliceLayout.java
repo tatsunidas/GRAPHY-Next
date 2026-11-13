@@ -70,6 +70,24 @@ final class SliceLayout {
 
     double maxGap() { return maxGap; }
 
+    /**
+     * スライス index の局所間隔 [mm] = 隣り合うスライスとの間隔の大きい方（端は片側だけ）。位置が決まらなければ 0。
+     * マスクの z 整列の許容（その局所間隔の半分）に使う。全体の最大間隔を使うと、間隔の狭い所でも許容が広がり、
+     * マスクの端の外側のスライスまで拾ってしまう。
+     */
+    double localGap(int index) {
+        double p = positionsByIndex[index];
+        if (Double.isNaN(p)) return 0;
+        double below = Double.NaN, above = Double.NaN;
+        for (double q : positionsByIndex) {
+            if (Double.isNaN(q) || q == p) continue;
+            if (q < p && (Double.isNaN(below) || q > below)) below = q;
+            if (q > p && (Double.isNaN(above) || q < above)) above = q;
+        }
+        double a = Double.isNaN(below) ? 0 : p - below, b = Double.isNaN(above) ? 0 : above - p;
+        return Math.max(a, b);
+    }
+
     /** 欠けたスライスの枚数（{@link Kind#MISSING} のとき。他は 0）。 */
     int missingCount() { return missingCount; }
 
