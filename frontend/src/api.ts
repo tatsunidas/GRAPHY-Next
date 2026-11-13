@@ -2381,3 +2381,31 @@ export const fetchIbsiCheck = (refresh = false) =>
 
 /** RadiomicsJ のリリース時の記録（CT ファントム 構成 C・D。この PC では実行していない値）。 */
 export const fetchIbsiRecords = () => httpGet<IbsiReport[]>("/api/radiomics/ibsi-check/records");
+
+// ── NIfTI の書き出し（backend は `POST /api/nifti/export`）──────────────────
+
+/** NIfTI の書き出しを backend が断った。`reason` は理由コード（`volume-sheared` など）、`status` は HTTP。 */
+export class NiftiExportRefused extends Error {
+  constructor(
+    readonly reason: string,
+    readonly status: number,
+  ) {
+    super(reason);
+    this.name = "NiftiExportRefused";
+  }
+}
+
+/**
+ * 1 シリーズを NIfTI-1（.nii.gz・float32）として書き出す。断られたら（4xx・501）{@link NiftiExportRefused}。
+ * 本文は backend が**流し始める前**に断る契約なので、200 の本文は必ずファイルの全体。
+ */
+export async function exportSeriesNifti(studyUid: string, seriesUid: string): Promise<{ blob: Blob; slices: number | null }> {
+  const res = await fetch(`${apiBase()}/api/nifti/export`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ studyUid, seriesUid }),
+  });
+  if (!res.ok) throw new NiftiExportRefused(await extractErrorMessage(res), res.status);
+  const n = Number(res.headers.get("X-Graphy-Slices"));
+  return { blob: await res.blob(), slices: Number.isFinite(n) && n > 0 ? n : null };
+}
