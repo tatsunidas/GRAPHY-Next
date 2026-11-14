@@ -50,6 +50,9 @@ const REFUSAL_REASONS = new Set([
   "npz-multiple-multiframe",
   "npz-duplicate-positions",
   "npz-uneven-spacing",
+  "nifti-uneven-phases",
+  "nifti-ambiguous-phases",
+  "nifti-mosaic",
 ]);
 
 export const NIFTI_REFUSAL_REASONS: readonly string[] = [...REFUSAL_REASONS];

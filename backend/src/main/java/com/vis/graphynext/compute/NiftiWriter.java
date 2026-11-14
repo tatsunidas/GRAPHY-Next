@@ -37,15 +37,24 @@ final class NiftiWriter {
     }
 
     /**
-     * @return 1 枚だけのシリーズのとき、段差（スライス間隔）をどこから取ったか（SpacingBetweenSlices / SliceThickness / default-1mm）。
-     *         2 枚以上は IPP の並びから取るので null
+     * 書き出した内容の注記（ログ用）。
+     *
+     * @param stepSource 1 枚だけのシリーズのとき、段差（スライス間隔）をどこから取ったか（SpacingBetweenSlices / SliceThickness /
+     *                   default-1mm）。2 枚以上は IPP の並びから取るので null
+     * @param phases     時相の数（3D は 1）
+     * @param timeKey    時相を並べた鍵（TemporalPosition / AcquisitionTime / InstanceNumber）。3D は null
+     * @param dtSeconds  時相の間隔（秒）。均等と確かめられなかった・AcquisitionTime が無いときは 0（推測で埋めない）
      */
-    static String write(OutputStream out, VolumeAssembler va, VolumeAssembler.Assembled a) throws IOException {
+    record Info(String stepSource, int phases, String timeKey, double dtSeconds) {
+    }
+
+    static Info write(OutputStream out, VolumeAssembler va, VolumeAssembler.Assembled a) throws IOException {
         if (!a.spatial() || a.normal() == null || Double.isNaN(a.dx()) || Double.isNaN(a.dy())) {
             throw new VolumeAssembler.UnsupportedLayout("nifti-no-geometry");
         }
         List<VolumeAssembler.Slice> sorted = a.sorted();
-        int n = sorted.size();
+        int phases = a.phases();
+        int n = sorted.size() / phases; // 1 時相あたりのスライス数。sorted は t が最も遅い（t 番目の z 番目 = t*n + z）
         double[] normal = a.normal();
         double[] p0 = sorted.get(0).ipp();
         double[] s;
@@ -68,8 +77,9 @@ final class NiftiWriter {
             throw new VolumeAssembler.UnsupportedLayout("volume-sheared");
         }
         double tol = Math.max(0.01, 0.01 * len);
-        for (int k = 0; k < n; k++) {
-            double[] p = sorted.get(k).ipp();
+        for (int idx = 0; idx < sorted.size(); idx++) {
+            int k = idx % n;
+            double[] p = sorted.get(idx).ipp();
             double dx = p[0] - (p0[0] + k * s[0]);
             double dy = p[1] - (p0[1] + k * s[1]);
             double dz = p[2] - (p0[2] + k * s[2]);
@@ -96,13 +106,14 @@ final class NiftiWriter {
         ByteBuffer h = ByteBuffer.allocate(VOX_OFFSET).order(ByteOrder.LITTLE_ENDIAN);
         h.putInt(0, HEADER_BYTES);
         h.position(40);
-        short[] dim = {3, (short) va.cols(), (short) va.rows(), (short) n, 1, 1, 1, 1};
+        short[] dim = {(short) (phases > 1 ? 4 : 3), (short) va.cols(), (short) va.rows(), (short) n, (short) phases, 1, 1, 1};
         for (short d : dim) {
             h.putShort(d);
         }
         h.putShort(70, (short) 16);   // datatype FLOAT32
         h.putShort(72, (short) 32);   // bitpix
-        float[] pixdim = {1f, (float) a.dx(), (float) a.dy(), (float) len, 0f, 0f, 0f, 0f}; // [0]=qfac(+1: 右手系)
+        double dt = phases > 1 && a.dtSeconds() > 0 ? a.dtSeconds() : 0.0;
+        float[] pixdim = {1f, (float) a.dx(), (float) a.dy(), (float) len, (float) dt, 0f, 0f, 0f}; // [0]=qfac(+1: 右手系)
         h.position(76);
         for (float f : pixdim) {
             h.putFloat(f);
@@ -110,7 +121,7 @@ final class NiftiWriter {
         h.putFloat(108, (float) VOX_OFFSET);
         h.putFloat(112, 1f);          // scl_slope（値は実際の量のまま）
         h.putFloat(116, 0f);          // scl_inter
-        h.put(123, (byte) 2);         // xyzt_units: mm
+        h.put(123, (byte) (dt > 0 ? 10 : 2)); // xyzt_units: mm（時間の間隔が分かるときは mm + 秒）
         double[] wc = va.windowCenter();
         double[] ww = va.windowWidth();
         float calMax = 0f;
@@ -155,7 +166,7 @@ final class NiftiWriter {
             gz.write(buf.array(), 0, buf.position());
         }
         gz.finish();
-        return stepSource;
+        return new Info(stepSource, phases, a.timeKey(), dt);
     }
 
     /** 回転行列（det=+1）→ NIfTI の quaternion（b, c, d。a は 1 から作られる）。 */
