@@ -71,7 +71,7 @@ describe("runNiftiExport", () => {
 
   it("成功: 選んだシリーズで書き出し、保存は既定名で 1 回、枚数つきの文言", async () => {
     const blob = new Blob(["x"]);
-    const exportSeries = vi.fn().mockResolvedValue({ blob, slices: 21 });
+    const exportSeries = vi.fn().mockResolvedValue({ blob, slices: 21, frames: 1, timeStepSec: null, timeStepStatus: "none" });
     const save = vi.fn();
     const r = await runNiftiExport(st, series(), { exportSeries, save, t });
     expect(exportSeries).toHaveBeenCalledWith("9.8", "1.2.3");
@@ -80,8 +80,22 @@ describe("runNiftiExport", () => {
     expect(r).toEqual({ error: false, text: 'niftiExport.done{"name":"CT_S4.nii.gz","n":21}' });
   });
   it("枚数が分からなければ枚数なしの文言", async () => {
-    const r = await runNiftiExport(st, series(), { exportSeries: async () => ({ blob: new Blob(), slices: null }), save: () => {}, t });
+    const r = await runNiftiExport(st, series(), { exportSeries: async () => ({ blob: new Blob(), slices: null, frames: 1, timeStepSec: null, timeStepStatus: "none" as const }), save: () => {}, t });
     expect(r.text).toContain("niftiExport.doneNoCount");
+  });
+  it("4D: 時相数と時間の間隔（決まるときだけ）を文言に出す。3D は今までどおり", async () => {
+    const mk = (over: object) => ({ exportSeries: async () => ({ blob: new Blob(), slices: 160, frames: 10, timeStepSec: 5, timeStepStatus: "uniform" as const, ...over }), save: () => {}, t });
+    const uniform = await runNiftiExport(st, series(), mk({}));
+    expect(uniform.error).toBe(false);
+    expect(uniform.text).toContain('niftiExport.done{"name":"CT_S4.nii.gz","n":160}');
+    expect(uniform.text).toContain('niftiExport.frames{"frames":10}');
+    expect(uniform.text).toContain('niftiExport.timeStep{"sec":5}');
+    // 間隔が決まらない・不均一のときは、書いていないことを言う（推測で埋めない）
+    expect((await runNiftiExport(st, series(), mk({ timeStepSec: null, timeStepStatus: "unknown" }))).text).toContain("niftiExport.timeStepUnknown");
+    expect((await runNiftiExport(st, series(), mk({ timeStepSec: null, timeStepStatus: "nonuniform" }))).text).toContain("niftiExport.timeStepNonuniform");
+    // 3D（時相 1）には 4D の文言を出さない
+    const flat = await runNiftiExport(st, series(), mk({ frames: 1, timeStepStatus: "none", timeStepSec: null }));
+    expect(flat.text).not.toContain("niftiExport.frames");
   });
   it("負例: 断られたら保存しない。理由の文言（ガントリーチルト）が出る", async () => {
     const save = vi.fn();

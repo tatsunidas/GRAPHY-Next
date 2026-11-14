@@ -20,6 +20,7 @@ import java.nio.ByteOrder;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.stream.IntStream;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 
@@ -53,7 +54,7 @@ final class VolumeAssembler implements AnonymizeService.Sink {
 
     /** 整数の画像は {@code raw}、Parametric Map は実際の量の {@code values}（どちらか一方）。 */
     record Slice(byte[] raw, float[] values, int frame, double[] ipp, int instanceNumber, double slope,
-            double intercept) {
+            double intercept, Integer temporalPosition, double frameReferenceTimeMs, double triggerTimeMs) {
     }
 
     private final PixelCodec codec;
@@ -170,10 +171,16 @@ final class VolumeAssembler implements AnonymizeService.Sink {
         double intercept = ds.getDouble(Tag.RescaleIntercept, 0.0);
         double[] ipp = ds.getDoubles(Tag.ImagePositionPatient);
         int in = ds.getInt(Tag.InstanceNumber, 0);
+        // 時相の手がかり（4D の NIfTI だけが使う。AcquisitionTime など時刻の欄は匿名化で消えるので、消えない欄だけ読む）。
+        // 多フレームの 1 インスタンスは時相の手がかりを持たない（4D は古典の単一フレームだけ）。
+        Integer tpi = frames == 1 && ds.containsValue(Tag.TemporalPositionIdentifier)
+                ? Integer.valueOf(ds.getInt(Tag.TemporalPositionIdentifier, 0)) : null;
+        double frt = frames == 1 && ds.containsValue(Tag.FrameReferenceTime) ? ds.getDouble(Tag.FrameReferenceTime, Double.NaN) : Double.NaN;
+        double trig = frames == 1 && ds.containsValue(Tag.TriggerTime) ? ds.getDouble(Tag.TriggerTime, Double.NaN) : Double.NaN;
         for (int f = 0; f < frames; f++) {
             byte[] one = frames == 1 && all.length == frameBytes ? all
                     : java.util.Arrays.copyOfRange(all, f * frameBytes, (f + 1) * frameBytes);
-            slices.add(new Slice(one, null, f, frames == 1 ? ipp : null, in, slope, intercept));
+            slices.add(new Slice(one, null, f, frames == 1 ? ipp : null, in, slope, intercept, tpi, frt, trig));
         }
     }
 
@@ -235,7 +242,8 @@ final class VolumeAssembler implements AnonymizeService.Sink {
             if (v == null) {
                 throw new UnsupportedLayout("npz-pixels-unreadable");
             }
-            slices.add(new Slice(null, v, f, com.vis.graphynext.dicom.ConfocalGeometry.framePosition(ds, f), in, 1.0, 0.0));
+            slices.add(new Slice(null, v, f, com.vis.graphynext.dicom.ConfocalGeometry.framePosition(ds, f), in, 1.0, 0.0,
+                    null, Double.NaN, Double.NaN));
         }
     }
 
@@ -277,6 +285,11 @@ final class VolumeAssembler implements AnonymizeService.Sink {
             order = "instance-number";
         }
 
+        return finish(sorted, order, spatial, normal);
+    }
+
+    /** 並んだ 1 本のボリュームの間隔の検査と、origin・direction の計算（{@link #assemble}・{@link #assembleNifti} 共通）。 */
+    private Assembled finish(List<Slice> sorted, String order, boolean spatial, double[] normal) throws UnsupportedLayout {
         double dz = Double.NaN;
         double[] origin = {Double.NaN, Double.NaN, Double.NaN};
         if (spatial) {
@@ -313,6 +326,188 @@ final class VolumeAssembler implements AnonymizeService.Sink {
             System.arraycopy(normal, 0, direction, 6, 3);
         }
         return new Assembled(sorted, order, spatial, dz, origin, dy, dx, direction, normal);
+    }
+
+    /**
+     * NIfTI 用の 4D の結果。{@code sorted} は時相が最も遅い順（t ごとに、位置の昇順）。{@code geometry} は最初の時相の
+     * ボリュームの幾何（全時相は同じ位置＝{@link #assembleNifti} が保証）。3D は {@code frames == 1}。
+     *
+     * @param timeStepSec     時相の間隔（秒）。決まらないときは NaN（推測で埋めない）
+     * @param timeStepStatus  {@code none}（3D）・{@code uniform}・{@code nonuniform}・{@code unknown}
+     */
+    record Assembled4d(List<Slice> sorted, int frames, int positions, Assembled geometry, double timeStepSec,
+            String timeStepStatus, String timeSource) {
+    }
+
+    /** 時相の間隔が「一定」とみなす許容（ms）。FrameReferenceTime は整数の ms なので、1 ms 以内のずれは丸めの範囲。 */
+    static final double TIME_STEP_TOLERANCE_MS = 1.0;
+    /** 同じ位置とみなす距離（mm）。{@link #finish} の許容の床と同じ（DICOM の DS の精度）。 */
+    private static final double SAME_POSITION_MM = 0.01;
+
+    /**
+     * NIfTI 用の組み立て。同じ位置に複数枚あるシリーズ（動態）を、明示の時相の手がかりがあるときだけ 4D にする。
+     * 3D（重複なし）の結果は {@link #assemble} と同じ（出力を変えない）。
+     *
+     * <p>時相の手がかりは匿名化で消えないものだけ（AcquisitionTime などは Basic プロファイルで除去される）:
+     * ① TemporalPositionIdentifier ② FrameReferenceTime ③ TriggerTime。InstanceNumber だけでは決めない
+     * （撮影が 2 回ぶん混ざったシリーズを黙って 4D にしてしまう）。
+     *
+     * @throws UnsupportedLayout 1 本の格子にできない形。位置ごとの枚数が違う（{@code nifti-4d-uneven-frames}）、
+     *                           時相の手がかりが位置ごとに違う（{@code nifti-4d-inconsistent-times}）、手がかりが無い重複
+     *                           （{@code npz-duplicate-positions}）など
+     */
+    Assembled4d assembleNifti() throws IOException {
+        try {
+            Assembled a = assemble();
+            return new Assembled4d(a.sorted(), 1, a.sorted().size(), a, Double.NaN, "none", "none");
+        } catch (UnsupportedLayout e) {
+            if (!"npz-duplicate-positions".equals(e.getMessage()) && !"npz-uneven-spacing".equals(e.getMessage())) {
+                throw e;
+            }
+            return assemble4d(e);
+        }
+    }
+
+    private Assembled4d assemble4d(UnsupportedLayout original) throws IOException {
+        double[] normal = normal();
+        if (normal == null || !slices.stream().allMatch(s -> s.ipp() != null && s.ipp().length == 3)) {
+            throw original;
+        }
+        List<Slice> byPos = new ArrayList<>(slices);
+        byPos.sort(Comparator.comparingDouble(s -> dot(s.ipp(), normal)));
+        List<List<Slice>> clusters = new ArrayList<>();
+        double last = Double.NaN;
+        for (Slice sl : byPos) {
+            double p = dot(sl.ipp(), normal);
+            if (clusters.isEmpty() || p - last >= SAME_POSITION_MM) {
+                clusters.add(new ArrayList<>());
+            }
+            clusters.get(clusters.size() - 1).add(sl);
+            last = p;
+        }
+        int t = clusters.get(0).size();
+        if (t == 1 && clusters.stream().allMatch(c -> c.size() == 1)) {
+            throw original; // 重複が無い＝単に不等間隔の 3D
+        }
+        // 時相の手がかりが 1 つも揃わない重複は、どちらを残すか決められない（撮影が 2 回ぶん混ざったシリーズなど）。
+        // 枚数の食い違いより先に、従来の理由で断る（実例: ct-basic の C-A-P は位置 38 か所のうち 28 か所が 2 枚）。
+        if (IntStream.range(0, 3).noneMatch(key -> slices.stream().allMatch(s -> hasKey(s, key)))) {
+            throw original;
+        }
+        for (List<Slice> c : clusters) {
+            if (c.size() != t) {
+                throw new UnsupportedLayout("nifti-4d-uneven-frames");
+            }
+        }
+        // 時相の順は明示の手がかりだけで決める（優先順: TemporalPositionIdentifier → FrameReferenceTime → TriggerTime）
+        List<List<Slice>> ordered = null;
+        boolean keyedButInconsistent = false;
+        for (int key = 0; key < 3 && ordered == null; key++) {
+            final int k = key;
+            if (!slices.stream().allMatch(s -> hasKey(s, k))) {
+                continue;
+            }
+            List<List<Slice>> trial = new ArrayList<>();
+            boolean distinct = true;
+            for (List<Slice> c : clusters) {
+                List<Slice> sc = new ArrayList<>(c);
+                sc.sort(Comparator.comparingDouble(s -> keyOf(s, k)));
+                for (int i = 1; i < sc.size(); i++) {
+                    if (!(keyOf(sc.get(i), k) > keyOf(sc.get(i - 1), k))) {
+                        distinct = false;
+                    }
+                }
+                trial.add(sc);
+            }
+            if (!distinct) {
+                continue; // 同じ位置の中で手がかりが重複している＝時相を決められない
+            }
+            boolean same = true;
+            for (List<Slice> sc : trial) {
+                for (int i = 0; i < t; i++) {
+                    if (Math.abs(keyOf(sc.get(i), k) - keyOf(trial.get(0).get(i), k)) > 1e-6) {
+                        same = false;
+                    }
+                }
+            }
+            if (!same) {
+                keyedButInconsistent = true; // 時相 t の値が位置によって違う
+                continue;
+            }
+            ordered = trial;
+        }
+        if (ordered == null) {
+            throw keyedButInconsistent ? new UnsupportedLayout("nifti-4d-inconsistent-times") : original;
+        }
+        List<Slice> sorted = new ArrayList<>();
+        for (int f = 0; f < t; f++) {
+            for (List<Slice> sc : ordered) {
+                sorted.add(sc.get(f));
+            }
+        }
+        // 幾何は最初の時相のボリュームで求める（位置は全時相で同じ）。間隔の検査もここ（不均一なら npz-uneven-spacing）
+        Assembled geometry = finish(new ArrayList<>(sorted.subList(0, clusters.size())), "position", true, normal);
+
+        // 時間間隔: 時相の順（上）とは別に、FrameReferenceTime（無ければ TriggerTime）の差。先頭の位置で見る
+        double[] times = null;
+        String source = "none";
+        for (int key = 1; key <= 2 && times == null; key++) {
+            final int k = key;
+            if (slices.stream().allMatch(s -> hasKey(s, k))) {
+                times = new double[t];
+                for (int f = 0; f < t; f++) {
+                    times[f] = keyOf(ordered.get(0).get(f), k);
+                }
+                source = key == 1 ? "FrameReferenceTime" : "TriggerTime";
+            }
+        }
+        double step = Double.NaN;
+        String status = "unknown";
+        if (times != null) {
+            double[] diffs = new double[t - 1];
+            boolean increasing = true;
+            for (int f = 1; f < t; f++) {
+                diffs[f - 1] = times[f] - times[f - 1];
+                if (!(diffs[f - 1] > 0)) {
+                    increasing = false;
+                }
+            }
+            if (increasing) {
+                double[] sd = diffs.clone();
+                java.util.Arrays.sort(sd);
+                double median = sd[sd.length / 2];
+                boolean uniform = true;
+                for (double d : diffs) {
+                    if (Math.abs(d - median) > TIME_STEP_TOLERANCE_MS) {
+                        uniform = false;
+                    }
+                }
+                if (uniform) {
+                    step = median / 1000.0;
+                    status = "uniform";
+                } else {
+                    status = "nonuniform";
+                }
+            }
+        }
+        return new Assembled4d(sorted, t, clusters.size(), geometry, step, status, source);
+    }
+
+    /** 時相の手がかりの種類 0=TemporalPositionIdentifier・1=FrameReferenceTime・2=TriggerTime が、このスライスにあるか。 */
+    private static boolean hasKey(Slice s, int key) {
+        return switch (key) {
+            case 0 -> s.temporalPosition() != null;
+            case 1 -> !Double.isNaN(s.frameReferenceTimeMs());
+            default -> !Double.isNaN(s.triggerTimeMs());
+        };
+    }
+
+    private static double keyOf(Slice s, int key) {
+        return switch (key) {
+            case 0 -> s.temporalPosition();
+            case 1 -> s.frameReferenceTimeMs();
+            default -> s.triggerTimeMs();
+        };
     }
 
     /** npz を書く。 */

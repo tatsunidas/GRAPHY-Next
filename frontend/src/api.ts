@@ -2402,7 +2402,19 @@ export class NiftiExportRefused extends Error {
  * 1 シリーズを NIfTI-1（.nii.gz・float32）として書き出す。断られたら（4xx・501）{@link NiftiExportRefused}。
  * 本文は backend が**流し始める前**に断る契約なので、200 の本文は必ずファイルの全体。
  */
-export async function exportSeriesNifti(studyUid: string, seriesUid: string): Promise<{ blob: Blob; slices: number | null }> {
+export interface NiftiExportResult {
+  blob: Blob;
+  /** 書き出したインスタンス数（4D は位置×時相）。分からなければ null。 */
+  slices: number | null;
+  /** 時相の数（3D は 1）。 */
+  frames: number;
+  /** 時相の間隔（秒）。決まらないとき（不明・不均一）や 3D は null。 */
+  timeStepSec: number | null;
+  /** `none`（3D）・`uniform`・`nonuniform`・`unknown`。 */
+  timeStepStatus: "none" | "uniform" | "nonuniform" | "unknown";
+}
+
+export async function exportSeriesNifti(studyUid: string, seriesUid: string): Promise<NiftiExportResult> {
   const res = await fetch(`${apiBase()}/api/nifti/export`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -2410,5 +2422,14 @@ export async function exportSeriesNifti(studyUid: string, seriesUid: string): Pr
   });
   if (!res.ok) throw new NiftiExportRefused(await extractErrorMessage(res), res.status);
   const n = Number(res.headers.get("X-Graphy-Slices"));
-  return { blob: await res.blob(), slices: Number.isFinite(n) && n > 0 ? n : null };
+  const frames = Number(res.headers.get("X-Graphy-Frames"));
+  const ts = res.headers.get("X-Graphy-Time-Step") ?? "none";
+  const sec = Number(ts);
+  return {
+    blob: await res.blob(),
+    slices: Number.isFinite(n) && n > 0 ? n : null,
+    frames: Number.isInteger(frames) && frames > 1 ? frames : 1,
+    timeStepSec: Number.isFinite(sec) && sec > 0 ? sec : null,
+    timeStepStatus: Number.isFinite(sec) && sec > 0 ? "uniform" : ts === "nonuniform" || ts === "unknown" ? ts : "none",
+  };
 }

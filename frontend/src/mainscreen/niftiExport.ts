@@ -3,7 +3,7 @@
  * Author: Tatsuaki Kobayashi
  */
 /** メイン画面の［ファイル］→［NIfTI で書き出し…］の純関数と保存。 */
-import { NiftiExportRefused, type Series } from "../api";
+import { NiftiExportRefused, type NiftiExportResult, type Series } from "../api";
 
 /**
  * 既定のファイル名。**患者情報を入れない**（NIfTI は研究で外へ渡すことが多い。SeriesDescription は自由記述で
@@ -50,6 +50,8 @@ const REFUSAL_REASONS = new Set([
   "npz-multiple-multiframe",
   "npz-duplicate-positions",
   "npz-uneven-spacing",
+  "nifti-4d-uneven-frames",
+  "nifti-4d-inconsistent-times",
 ]);
 
 export const NIFTI_REFUSAL_REASONS: readonly string[] = [...REFUSAL_REASONS];
@@ -71,7 +73,7 @@ export function downloadBlob(blob: Blob, filename: string): void {
 }
 
 export interface NiftiExportDeps {
-  exportSeries: (studyUid: string, seriesUid: string) => Promise<{ blob: Blob; slices: number | null }>;
+  exportSeries: (studyUid: string, seriesUid: string) => Promise<NiftiExportResult>;
   save: (blob: Blob, filename: string) => void;
   t: (key: string, params?: Record<string, string | number>) => string;
 }
@@ -95,7 +97,14 @@ export async function runNiftiExport(
   try {
     const r = await deps.exportSeries(study.studyInstanceUid, series.seriesInstanceUid);
     deps.save(r.blob, name);
-    return { error: false, text: r.slices === null ? t("niftiExport.doneNoCount", { name }) : t("niftiExport.done", { name, n: r.slices }) };
+    const base = r.slices === null ? t("niftiExport.doneNoCount", { name }) : t("niftiExport.done", { name, n: r.slices });
+    if (r.frames <= 1) return { error: false, text: base };
+    // 4D: 4 つ目の軸の長さと、時間の間隔（決まるときだけ。推測で埋めない）。軸が時相かは DICOM で確かめてもらう
+    const step =
+      r.timeStepSec !== null
+        ? t("niftiExport.timeStep", { sec: r.timeStepSec })
+        : t(r.timeStepStatus === "nonuniform" ? "niftiExport.timeStepNonuniform" : "niftiExport.timeStepUnknown");
+    return { error: false, text: `${base} ${t("niftiExport.frames", { frames: r.frames })} ${step}` };
   } catch (e) {
     if (e instanceof NiftiExportRefused) {
       const key = niftiRefusalKey(e.reason);

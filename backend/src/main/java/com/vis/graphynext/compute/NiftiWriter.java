@@ -41,11 +41,22 @@ final class NiftiWriter {
      *         2 枚以上は IPP の並びから取るので null
      */
     static String write(OutputStream out, VolumeAssembler va, VolumeAssembler.Assembled a) throws IOException {
+        return write(out, va, new VolumeAssembler.Assembled4d(a.sorted(), 1, a.sorted().size(), a, Double.NaN, "none", "none"));
+    }
+
+    /**
+     * 4D（{@code frames > 1}）は {@code dim=[4, cols, rows, 位置の数, 時相数]}。画素は時相が最も遅く、時相ごとに位置の昇順。
+     * 幾何（向き・原点・段差・チルトの検査）は最初の時相のボリュームで求める（全時相は同じ位置）。
+     * 時相の間隔が決まっているときだけ {@code pixdim[4]}（秒）と {@code xyzt_units} の時間の単位を書く（決まらなければ 0・mm だけ）。
+     */
+    static String write(OutputStream out, VolumeAssembler va, VolumeAssembler.Assembled4d a4) throws IOException {
+        VolumeAssembler.Assembled a = a4.geometry();
         if (!a.spatial() || a.normal() == null || Double.isNaN(a.dx()) || Double.isNaN(a.dy())) {
             throw new VolumeAssembler.UnsupportedLayout("nifti-no-geometry");
         }
-        List<VolumeAssembler.Slice> sorted = a.sorted();
-        int n = sorted.size();
+        List<VolumeAssembler.Slice> all = a4.sorted();
+        int n = a4.positions();
+        List<VolumeAssembler.Slice> sorted = a.sorted(); // 最初の時相のボリューム（幾何の検査・原点に使う）
         double[] normal = a.normal();
         double[] p0 = sorted.get(0).ipp();
         double[] s;
@@ -96,13 +107,15 @@ final class NiftiWriter {
         ByteBuffer h = ByteBuffer.allocate(VOX_OFFSET).order(ByteOrder.LITTLE_ENDIAN);
         h.putInt(0, HEADER_BYTES);
         h.position(40);
-        short[] dim = {3, (short) va.cols(), (short) va.rows(), (short) n, 1, 1, 1, 1};
+        boolean fourD = a4.frames() > 1;
+        short[] dim = {(short) (fourD ? 4 : 3), (short) va.cols(), (short) va.rows(), (short) n, (short) a4.frames(), 1, 1, 1};
         for (short d : dim) {
             h.putShort(d);
         }
         h.putShort(70, (short) 16);   // datatype FLOAT32
         h.putShort(72, (short) 32);   // bitpix
-        float[] pixdim = {1f, (float) a.dx(), (float) a.dy(), (float) len, 0f, 0f, 0f, 0f}; // [0]=qfac(+1: 右手系)
+        boolean timed = fourD && !Double.isNaN(a4.timeStepSec());
+        float[] pixdim = {1f, (float) a.dx(), (float) a.dy(), (float) len, timed ? (float) a4.timeStepSec() : 0f, 0f, 0f, 0f}; // [0]=qfac(+1: 右手系)
         h.position(76);
         for (float f : pixdim) {
             h.putFloat(f);
@@ -110,7 +123,7 @@ final class NiftiWriter {
         h.putFloat(108, (float) VOX_OFFSET);
         h.putFloat(112, 1f);          // scl_slope（値は実際の量のまま）
         h.putFloat(116, 0f);          // scl_inter
-        h.put(123, (byte) 2);         // xyzt_units: mm
+        h.put(123, (byte) (timed ? 2 | 8 : 2));  // xyzt_units: mm（時間の間隔が決まっていれば sec も）
         double[] wc = va.windowCenter();
         double[] ww = va.windowWidth();
         float calMax = 0f;
@@ -149,7 +162,7 @@ final class NiftiWriter {
         GZIPOutputStream gz = new GZIPOutputStream(out);
         gz.write(h.array());          // 348 バイトのヘッダ＋拡張なしの 4 バイト（0）
         ByteBuffer buf = ByteBuffer.allocate(va.rows() * va.cols() * 4).order(ByteOrder.LITTLE_ENDIAN);
-        for (VolumeAssembler.Slice sl : sorted) {
+        for (VolumeAssembler.Slice sl : all) {
             buf.clear();
             va.putFloats(sl, buf);
             gz.write(buf.array(), 0, buf.position());

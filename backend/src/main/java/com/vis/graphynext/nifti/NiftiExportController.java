@@ -91,7 +91,14 @@ public class NiftiExportController {
             }
         };
         log.info("[nifti] export series={} slices={} bytes={}", req.seriesUid(), d.instances(), d.bytes());
+        ComputeDatasetService.NiftiInfo info = d.niftiInfo();
+        int frames = info == null ? 1 : info.frames();
+        // 時相の間隔（秒）。決まらないときは unknown／nonuniform（推測の値は返さない）。3D は none
+        String timeStep = info == null ? "none"
+                : "uniform".equals(info.timeStepStatus()) ? Double.toString(info.timeStepSec()) : info.timeStepStatus();
         return ResponseEntity.ok()
+                .header("X-Graphy-Frames", String.valueOf(frames))
+                .header("X-Graphy-Time-Step", timeStep)
                 .contentType(GZIP)
                 .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + name + "\"")
                 .header(HttpHeaders.CONTENT_LENGTH, String.valueOf(d.bytes()))

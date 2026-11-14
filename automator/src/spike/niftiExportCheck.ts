@@ -11,6 +11,9 @@
  *  3. 保存したファイルを本体の NIfTI 取り込みで戻し、もう一度書き出す → 最初のファイルと形・affine・画素が一致（往復）。
  *  4. 負例: ガントリーチルト・欠けたスライスは、理由つきの帯が出て、ファイルは保存されない。
  *  5. 画面を目で確認（メニュー・成功の帯・失敗の帯）。
+ *  6. 4D（動態）: FrameReferenceTime・TriggerTime・TemporalPositionIdentifier だけ・不均一な間隔の 4 種を書き出し、帯に時相数と時間の間隔
+ *     （決まらないときは「書いていない」）が出て、nibabel（check-nifti-4d.py）で形・pixdim[4]・[..., t] のビット一致・印を照合。
+ *     枚数が揃わない・手がかり無しの重複・手がかりが位置ごとに違う形は、理由つきの帯が出てファイルは保存されない。
  * 結果は 合格・失敗・未達 に分けて数える。患者情報を含まない合成データ。
  */
 import { spawnSync } from "node:child_process";
@@ -28,6 +31,7 @@ import { createChecker } from "./computeSpikeShared.js";
 const { check, summary } = createChecker();
 const PY = process.env.NIFTI_PY ?? "python3";
 const TOOL = path.join(AUTOMATOR_ROOT, "scripts", "check-nifti-markers.py");
+const TOOL4D = path.join(AUTOMATOR_ROOT, "scripts", "check-nifti-4d.py");
 const OUT_DIR = path.join(AUTOMATOR_ROOT, ".results", "nifti-export-ui");
 
 function py(args: string[]): { status: number; out: string } {
@@ -144,6 +148,51 @@ async function main(): Promise<number> {
       check(word.test(t), `${name}（${reason}）: 理由の文言が帯に出る`, t);
       check(!downloaded, `${name}: ファイルは保存されない（ダウンロードが起きない）`, null);
       await p.screenshot({ path: path.join(OUT_DIR, `4-refused-${name}.png`) });
+    }
+    console.log("\n[6] 4D（動態）: メニューを押して保存 → nibabel で照合");
+    const ph4 = path.join(work, "ph4d");
+    const made4 = py([TOOL4D, "make", ph4]);
+    if (made4.status !== 0) throw new Error(`4D の合成シリーズを作れませんでした: ${made4.out}`);
+    const truth4 = JSON.parse(fs.readFileSync(path.join(ph4, "truth.json"), "utf8")) as Record<string, { study: string; series: string; T: number; step: number | null; refused: string | null }>;
+    const imp4 = await importPaths(d.ports.http, Object.keys(truth4).map((n) => path.join(ph4, n)));
+    check(imp4.failed === 0 && imp4.imported === 16 * (3 + 3 + 4 + 4 + 2 + 2 + 2) - 1, "（前提）4D の合成シリーズを取り込めた", imp4);
+    const bannerWord: Record<string, RegExp> = {
+      "dyn-frt": /3 時相です。\s*時間の間隔: 5 秒/,
+      "dyn-trig": /3 時相です。\s*時間の間隔: 0\.25 秒/,
+      "dyn-tpi": /4 時相です。\s*時間の間隔は分からない/,
+      "dyn-nonuniform": /4 時相です。\s*時間の間隔が一定でない/,
+    };
+    for (const name of ["dyn-frt", "dyn-trig", "dyn-tpi", "dyn-nonuniform"]) {
+      await selectSeries(p, truth4[name].study, truth4[name].series);
+      await openFileMenu(p);
+      const [dl] = await Promise.all([p.waitForEvent("download", { timeout: 60_000 }), p.getByTestId("menu-item-nifti-export").click()]);
+      const f = path.join(OUT_DIR, `${name}.nii.gz`);
+      await dl.saveAs(f);
+      const msg = p.getByTestId("nifti-export-msg");
+      await msg.filter({ hasText: /書き出しました/ }).waitFor({ state: "visible", timeout: 30_000 });
+      const text = await msg.innerText();
+      check(bannerWord[name].test(text), `${name}: 帯に時相数と時間の間隔（決まらないときは書いていないこと）が出る`, text);
+      await p.screenshot({ path: path.join(OUT_DIR, `6-${name}.png`) });
+      const r4 = py([TOOL4D, "check", name, f, ph4]);
+      console.log(r4.out.split("\n").filter(Boolean).map((l) => `    ${l.trim()}`).join("\n"));
+      check(r4.status === 0, `${name}: nibabel の独立照合（形・pixdim[4]・xyzt_units・[..., t] のビット一致・印・軸の向き）がすべて合格`);
+    }
+    console.log("\n[7] 4D の負例: 理由つきの帯が出て、ファイルは保存されない");
+    for (const [name, word] of [["dyn-uneven", /枚数や位置がそろっていません/], ["dyn-nokey", /同じ位置に 2 枚以上/], ["dyn-inconsistent", /位置ごとに食い違って/]] as const) {
+      await selectSeries(p, truth4[name].study, truth4[name].series);
+      await openFileMenu(p);
+      let downloaded = false;
+      const onDl = () => { downloaded = true; };
+      p.on("download", onDl);
+      await p.getByTestId("menu-item-nifti-export").click();
+      const msg = p.getByTestId("nifti-export-msg");
+      await msg.filter({ hasText: /書き出せませんでした/ }).waitFor({ state: "visible", timeout: 20_000 });
+      await p.waitForTimeout(1500);
+      p.off("download", onDl);
+      const t = await msg.innerText();
+      check(word.test(t), `${name}（${truth4[name].refused}）: 理由の文言が帯に出る`, t);
+      check(!downloaded, `${name}: ファイルは保存されない`, null);
+      await p.screenshot({ path: path.join(OUT_DIR, `7-refused-${name}.png`) });
     }
     console.log(`\n出力: ${OUT_DIR}`);
     return summary();
