@@ -151,6 +151,28 @@ describe("computeSuvScale", () => {
   });
 });
 
+describe("computeSuvScale 性別が不明のとき（推測で埋めない）", () => {
+  for (const type of ["sul-james", "sul-janma"] as const) {
+    it(`${type}: 性別が未設定なら missingSex。M・F を明示すれば値が出て、F の scale は M より小さい`, () => {
+      const none = computeSuvScale(baseParams({ patientSex: undefined }), type);
+      expect(isSuvError(none) && none.error).toBe("missingSex");
+      const m = computeSuvScale(baseParams({ patientSex: "M" }), type);
+      const f = computeSuvScale(baseParams({ patientSex: "F" }), type);
+      if (isSuvError(m) || isSuvError(f)) throw new Error("unexpected error");
+      // scale ∝ LBM / 投与量。同じ体重・身長では女性の LBM は男性より小さい。
+      expect(f.scale).toBeLessThan(m.scale);
+    });
+  }
+  it("SUVbw・SUVbsa・%ID/cc は性別を使わないので、未設定でも値が出て、M と同じ", () => {
+    for (const type of ["bw", "bsa", "pid"] as const) {
+      const none = computeSuvScale(baseParams({ patientSex: undefined }), type);
+      const m = computeSuvScale(baseParams({ patientSex: "M" }), type);
+      if (isSuvError(none) || isSuvError(m)) throw new Error(`unexpected error: ${type}`);
+      expect(none.scale).toBe(m.scale);
+    }
+  });
+});
+
 describe("computeSuvScale %ID/cc", () => {
   it("scale = 100 ÷ 崩壊補正後投与量、単位 %ID/cc（体重・身長は不要）", () => {
     const r = computeSuvScale(baseParams({ patientWeight: undefined, patientHeight: undefined }), "pid");

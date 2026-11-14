@@ -37,8 +37,8 @@ export interface SuvParams {
   patientWeight?: number;
   /** 身長(m)。 */
   patientHeight?: number;
-  /** 性別 "M" | "F"。 */
-  patientSex: "M" | "F";
+  /** 性別 "M" | "F"。欠損・不明（"O" など）は undefined（SUL では計算不可。推測で埋めない）。 */
+  patientSex?: "M" | "F";
   /** 投与量(Bq)。DICOM は Bq、UI 表示は MBq。 */
   totalDoseBq?: number;
   /** 半減期(秒)。DICOM は秒、UI 表示は分。 */
@@ -227,8 +227,8 @@ export function extractSuvParams(imageId: string): SuvParams {
     dsFloat(ds, "x00101030") ?? numOrU(study.patientWeight);
   const patientHeight =
     dsFloat(ds, "x00101020") ?? numOrU(study.patientSize); // m
-  const sexRaw = (dsStr(ds, "x00100040") ?? study.patientSex ?? "M").toString().toUpperCase();
-  const patientSex: "M" | "F" = sexRaw.startsWith("F") ? "F" : "M";
+  const sexRaw = (dsStr(ds, "x00100040") ?? study.patientSex ?? "").toString().trim().toUpperCase();
+  const patientSex: "M" | "F" | undefined = sexRaw.startsWith("F") ? "F" : sexRaw.startsWith("M") ? "M" : undefined;
 
   // --- 投与量(Bq): seq → root → metaData ---
   let totalDoseBq =
@@ -447,10 +447,12 @@ export function computeSuvScale(p: SuvParams, type: SuvType): SuvResult | SuvErr
       break;
     case "sul-james":
       if (!h || h <= 0) return { error: "missingHeight" };
+      if (!p.patientSex) return { error: "missingSex" };
       normBase = lbmJames(w!, h, p.patientSex) * 1000;
       break;
     case "sul-janma":
       if (!h || h <= 0) return { error: "missingHeight" };
+      if (!p.patientSex) return { error: "missingSex" };
       normBase = lbmJanma(w!, h, p.patientSex) * 1000;
       break;
     case "bsa":
@@ -478,6 +480,7 @@ export interface SuvError {
     | "missingTime"
     | "missingWeight"
     | "missingHeight"
+    | "missingSex"
     | "negativeDecay"
     | "invalidNormBase"
     | "philipsInvalid"
