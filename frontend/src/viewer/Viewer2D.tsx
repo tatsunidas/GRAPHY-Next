@@ -1046,7 +1046,7 @@ export function Viewer2D({
       const ps = (vp.getCamera() as { parallelScale?: number })?.parallelScale;
       if (!ps || !Number.isFinite(ps) || ps <= 0) return;
       const inf = infoRef.current;
-      const hWorld = (inf?.rows ?? 512) * (inf?.rowPixelSpacing ?? 1);
+      const hWorld = (inf?.rows ?? 512) * (inf?.rowPixelSpacing ?? inf?.pixelAspect ?? 1);
       const wWorld = (inf?.columns ?? 512) * (inf?.columnPixelSpacing ?? 1);
       const fitGuess = Math.max(hWorld, wWorld) / 2; // 概略フィット規模
       if (fitGuess > 0 && ps > fitGuess * 50) {

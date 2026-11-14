@@ -23,6 +23,7 @@
  * 署名（{@link signatureOf}）に**校正エポック**を混ぜてあるので、SUV 校正や XA 空間校正を
  * 変えると全 ROI が自動的に stale になる。
  */
+import { calibratedSpacingOf, aspectOf } from "./pixelAspect";
 import {
   eventTarget,
   getRenderingEngines,
@@ -97,6 +98,8 @@ interface Resolved {
   closed?: boolean;
   spacingX: number | null;
   spacingY: number | null;
+  /** 縦横比だけの画像の比（垂直 ÷ 水平）。px の値に反映する。それ以外は null。 */
+  pixelAspect: number | null;
   /** world ↔ 画素の基準間隔（円の形）。校正値とは別。 */
   worldBasis: { col: number; row: number };
   unit: string;
@@ -111,8 +114,11 @@ function resolveInputs(ann: Any): Resolved | null {
   if (!world.length) return null;
 
   const plane = metaData.get("imagePlaneModule", refImageId) as Any;
-  const spacingX = numOrNull(plane?.columnPixelSpacing);
-  const spacingY = numOrNull(plane?.rowPixelSpacing);
+  // mm の寸法は校正済みのときだけ。縦横比だけの間隔（PixelAspectRatio）は mm として読まない。
+  const cal = calibratedSpacingOf(plane);
+  const spacingX = cal ? cal.col : null;
+  const spacingY = cal ? cal.row : null;
+  const pixelAspect = aspectOf(plane);
   // 幾何(IPP/IOP)が無いシリーズ（XA）でも頂点を失わない換算は roiRead に集約してある。
   // 🔴 幾何の無いシリーズで world → 画素に戻すときは「world の基準の間隔」（画像が作られたときの間隔）で割る。
   //    imagePlaneModule の値（校正値）で割ると、読み込みの後で校正した XA で画素の位置が 1/mmPerPx 倍に膨らみ、
@@ -133,6 +139,7 @@ function resolveInputs(ann: Any): Resolved | null {
     closed: ann?.data?.contour?.closed as boolean | undefined,
     spacingX,
     spacingY,
+    pixelAspect,
     worldBasis: { col: basis.col, row: basis.row },
     unit: resolveValueUnit(refImageId),
   };
@@ -212,6 +219,7 @@ function computeWithSlice(
     unit: r.unit,
     spacingX: r.spacingX,
     spacingY: r.spacingY,
+    pixelAspect: r.pixelAspect ?? undefined,
     worldBasis: r.worldBasis,
     withProfile: !!detail.withProfile,
     withHistogram: !!detail.withHistogram,
