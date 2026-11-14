@@ -53,7 +53,10 @@ final class VolumeAssembler implements AnonymizeService.Sink {
 
     /** 整数の画像は {@code raw}、Parametric Map は実際の量の {@code values}（どちらか一方）。 */
     record Slice(byte[] raw, float[] values, int frame, double[] ipp, int instanceNumber, double slope,
-            double intercept) {
+            double intercept, Integer temporalPosition, Double acquisitionSeconds) {
+        Slice(byte[] raw, float[] values, int frame, double[] ipp, int instanceNumber, double slope, double intercept) {
+            this(raw, values, frame, ipp, instanceNumber, slope, intercept, null, null);
+        }
     }
 
     private final PixelCodec codec;
@@ -78,6 +81,8 @@ final class VolumeAssembler implements AnonymizeService.Sink {
     private double[] windowCenter;
     private double[] windowWidth;
     private String voiLutFunction;
+    /** ImageType に MOSAIC を含む（Siemens のモザイク: 1 枚に多数のスライスがタイル状に入る。NIfTI では断る）。 */
+    private boolean mosaic;
     /** 1 枚だけのシリーズで NIfTI の段差に使う値（SpacingBetweenSlices → SliceThickness）と出どころ。無ければ NaN。 */
     private double sliceStepMm = Double.NaN;
     private String sliceStepSource;
@@ -157,6 +162,12 @@ final class VolumeAssembler implements AnonymizeService.Sink {
         if (frames > 1) {
             multiFrameInstances++;
         }
+        String[] imageType = ds.getStrings(Tag.ImageType);
+        if (imageType != null && java.util.Arrays.stream(imageType).anyMatch("MOSAIC"::equals)) {
+            mosaic = true;
+        }
+        Integer temporal = firstInt(ds, Tag.TemporalPositionIdentifier, Tag.TemporalPositionIndex);
+        Double acqSeconds = acquisitionSeconds(ds);
         byte[] all = PixelCodec.isUncompressed(tsuid) ? ds.getBytes(Tag.PixelData) : codec.decompress(ds, tsuid);
         int frameBytes = rows * cols * (ba / 8);
         if (all == null || all.length < (long) frameBytes * frames) {
@@ -173,7 +184,7 @@ final class VolumeAssembler implements AnonymizeService.Sink {
         for (int f = 0; f < frames; f++) {
             byte[] one = frames == 1 && all.length == frameBytes ? all
                     : java.util.Arrays.copyOfRange(all, f * frameBytes, (f + 1) * frameBytes);
-            slices.add(new Slice(one, null, f, frames == 1 ? ipp : null, in, slope, intercept));
+            slices.add(new Slice(one, null, f, frames == 1 ? ipp : null, in, slope, intercept, temporal, acqSeconds));
         }
     }
 
@@ -245,7 +256,12 @@ final class VolumeAssembler implements AnonymizeService.Sink {
 
     /** 並べ替えと幾何の組み立ての結果（npz・NIfTI で共有。画素はまだ書かない）。 */
     record Assembled(List<Slice> sorted, String order, boolean spatial, double dz, double[] origin, double dy,
-            double dx, double[] direction, double[] normal) {
+            double dx, double[] direction, double[] normal, int phases, double dtSeconds, String timeKey) {
+        /** 3D（時相 1）。{@code sorted} は z の昇順。4D のときは時相ごとに z の昇順を並べた t の昇順（t が最も遅い）。 */
+        Assembled(List<Slice> sorted, String order, boolean spatial, double dz, double[] origin, double dy, double dx,
+                double[] direction, double[] normal) {
+            this(sorted, order, spatial, dz, origin, dy, dx, direction, normal, 1, Double.NaN, null);
+        }
     }
 
     /**
@@ -313,6 +329,153 @@ final class VolumeAssembler implements AnonymizeService.Sink {
             System.arraycopy(normal, 0, direction, 6, 3);
         }
         return new Assembled(sorted, order, spatial, dz, origin, dy, dx, direction, normal);
+    }
+
+    private static Integer firstInt(Attributes ds, int... tags) {
+        for (int t : tags) {
+            if (ds.containsValue(t)) {
+                return ds.getInt(t, 0);
+            }
+        }
+        return null;
+    }
+
+    /** AcquisitionTime（HHMMSS.FFFFFF）の秒。無い・読めないときは null（日付は見ない。時相の間隔は同じ日の中だけ）。 */
+    private static Double acquisitionSeconds(Attributes ds) {
+        String t = ds.getString(Tag.AcquisitionTime);
+        if (t == null || t.length() < 6) {
+            return null;
+        }
+        try {
+            return Integer.parseInt(t.substring(0, 2)) * 3600.0 + Integer.parseInt(t.substring(2, 4)) * 60.0
+                    + Double.parseDouble(t.substring(4));
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
+    /**
+     * NIfTI 用の並べ方。3D は {@link #assemble()} と同じ。同じ位置に同じ枚数ずつ（T &gt; 1）あれば、時相として並べる。
+     *
+     * <p>時相の鍵は、全インスタンスが持つ最初のもの（TemporalPosition → AcquisitionTime → InstanceNumber）で、位置の中で
+     * 昇順・重複なしになるものを使う。**モザイク（1 枚に多数のスライス）は、位置が 1 つ・時相が多数に見えて黙って誤った幾何になる**ので
+     * 3D・4D とも断る。
+     *
+     * @throws UnsupportedLayout {@code nifti-mosaic}・{@code nifti-uneven-phases}・{@code nifti-ambiguous-phases} ほか
+     */
+    Assembled assemble4d() throws IOException {
+        if (mosaic) {
+            throw new UnsupportedLayout("nifti-mosaic");
+        }
+        double[] normal = normal();
+        boolean spatial = !slices.isEmpty() && normal != null && multiFrameInstances == 0
+                && slices.stream().allMatch(s -> s.ipp() != null && s.ipp().length == 3);
+        if (!spatial) {
+            return assemble();
+        }
+        List<Slice> byPos = new ArrayList<>(slices);
+        byPos.sort(Comparator.comparingDouble(s -> dot(s.ipp(), normal)));
+        // 位置でまとめる（同じ位置 = 法線方向の差が 0.01 mm 以内）
+        List<List<Slice>> groups = new ArrayList<>();
+        double last = Double.NaN;
+        for (Slice s : byPos) {
+            double d = dot(s.ipp(), normal);
+            if (groups.isEmpty() || d - last > 0.01) {
+                groups.add(new ArrayList<>());
+            }
+            groups.get(groups.size() - 1).add(s);
+            last = d;
+        }
+        int t = groups.get(0).size();
+        if (t == 1 && groups.size() == slices.size()) {
+            return assemble();
+        }
+        for (List<Slice> g : groups) {
+            if (g.size() != t) {
+                throw new UnsupportedLayout("nifti-uneven-phases");
+            }
+        }
+        // 位置の間隔（3D と同じ検査。各位置の先頭の位置で見る）
+        if (groups.size() > 1) {
+            double[] gaps = new double[groups.size() - 1];
+            for (int i = 1; i < groups.size(); i++) {
+                gaps[i - 1] = dot(groups.get(i).get(0).ipp(), normal) - dot(groups.get(i - 1).get(0).ipp(), normal);
+            }
+            double[] sg = gaps.clone();
+            java.util.Arrays.sort(sg);
+            double dz = sg[sg.length / 2];
+            double tol = Math.max(0.01, 0.01 * Math.abs(dz));
+            for (double g : gaps) {
+                if (Math.abs(g - dz) > tol) {
+                    throw new UnsupportedLayout("npz-uneven-spacing");
+                }
+            }
+        }
+        // 時相の鍵: 全インスタンスが持ち、各位置の中で重ならないもの
+        String key = null;
+        List<java.util.function.Function<Slice, Double>> keys = List.of(
+                s -> s.temporalPosition() == null ? null : (double) s.temporalPosition(),
+                Slice::acquisitionSeconds,
+                s -> (double) s.instanceNumber());
+        String[] names = {"TemporalPosition", "AcquisitionTime", "InstanceNumber"};
+        for (int ki = 0; ki < keys.size() && key == null; ki++) {
+            var f = keys.get(ki);
+            boolean usable = slices.stream().allMatch(s -> f.apply(s) != null);
+            if (usable) {
+                for (List<Slice> g : groups) {
+                    g.sort(Comparator.comparingDouble(s -> f.apply(s)));
+                    for (int i = 1; i < g.size() && usable; i++) {
+                        usable = f.apply(g.get(i)) > f.apply(g.get(i - 1));
+                    }
+                }
+            }
+            // 時相番号は、どの位置でも同じ並びでなければ（ずれていれば）時相を決められない
+            if (usable && ki == 0) {
+                for (List<Slice> g : groups) {
+                    for (int i = 0; i < t && usable; i++) {
+                        usable = f.apply(g.get(i)).equals(f.apply(groups.get(0).get(i)));
+                    }
+                }
+            }
+            if (usable) {
+                key = names[ki];
+            }
+        }
+        if (key == null) {
+            throw new UnsupportedLayout("nifti-ambiguous-phases");
+        }
+        List<Slice> sorted = new ArrayList<>(slices.size());
+        for (int ti = 0; ti < t; ti++) {
+            for (List<Slice> g : groups) {
+                sorted.add(g.get(ti));
+            }
+        }
+        // 時相の間隔（秒）: AcquisitionTime が全部にあり、先頭の位置の時相ごとの差が均等（中央値の 1% 以内）のときだけ
+        double dt = Double.NaN;
+        if (slices.stream().allMatch(s -> s.acquisitionSeconds() != null) && t > 1) {
+            double[] diffs = new double[t - 1];
+            for (int i = 1; i < t; i++) {
+                diffs[i - 1] = groups.get(0).get(i).acquisitionSeconds() - groups.get(0).get(i - 1).acquisitionSeconds();
+            }
+            double[] sd = diffs.clone();
+            java.util.Arrays.sort(sd);
+            double med = sd[sd.length / 2];
+            boolean even = med > 0;
+            for (double d : diffs) {
+                even = even && Math.abs(d - med) <= 0.01 * med;
+            }
+            if (even) {
+                dt = med;
+            }
+        }
+        double dy = pixelSpacing != null && pixelSpacing.length == 2 ? pixelSpacing[0] : Double.NaN;
+        double dx = pixelSpacing != null && pixelSpacing.length == 2 ? pixelSpacing[1] : Double.NaN;
+        double[] direction = new double[9];
+        System.arraycopy(iop, 0, direction, 0, 3);
+        System.arraycopy(iop, 3, direction, 3, 3);
+        System.arraycopy(normal, 0, direction, 6, 3);
+        return new Assembled(sorted, "position+" + key, true, Double.NaN, groups.get(0).get(0).ipp().clone(), dy, dx, direction,
+                normal, t, dt, key);
     }
 
     /** npz を書く。 */

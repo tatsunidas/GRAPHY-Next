@@ -99,10 +99,56 @@ class NiftiWriterTest {
         return (k * NY + j) * NX + i;
     }
 
+    /** 時相つきの合成の指定。 */
+    private record Phases(int count, boolean temporalTag, Double dtSeconds, boolean acqTimeJitter, boolean timeReversedInStorage,
+                          boolean mosaic, int dropT, int dropK, int dupK, boolean zeroInstanceNumber) {
+        static Phases of(int count) {
+            return new Phases(count, true, 2.0, false, false, false, -1, -1, -1, false);
+        }
+
+        Phases with(boolean temporalTag, Double dtSeconds) {
+            return new Phases(count, temporalTag, dtSeconds, acqTimeJitter, timeReversedInStorage, mosaic, dropT, dropK, dupK, zeroInstanceNumber);
+        }
+
+        Phases reversedStorage() {
+            return new Phases(count, temporalTag, dtSeconds, acqTimeJitter, true, mosaic, dropT, dropK, dupK, zeroInstanceNumber);
+        }
+
+        Phases jitter() {
+            return new Phases(count, temporalTag, dtSeconds, true, timeReversedInStorage, mosaic, dropT, dropK, dupK, zeroInstanceNumber);
+        }
+
+        Phases asMosaic() {
+            return new Phases(count, temporalTag, dtSeconds, acqTimeJitter, timeReversedInStorage, true, dropT, dropK, dupK, zeroInstanceNumber);
+        }
+
+        Phases drop(int t, int k) {
+            return new Phases(count, temporalTag, dtSeconds, acqTimeJitter, timeReversedInStorage, mosaic, t, k, dupK, zeroInstanceNumber);
+        }
+
+        Phases dup(int k) {
+            return new Phases(count, temporalTag, dtSeconds, acqTimeJitter, timeReversedInStorage, mosaic, dropT, dropK, k, zeroInstanceNumber);
+        }
+
+        Phases zeroInstanceNumbers() {
+            return new Phases(count, temporalTag, dtSeconds, acqTimeJitter, timeReversedInStorage, mosaic, dropT, dropK, dupK, true);
+        }
+    }
+
     private record Spec(double[] iop, double[] step, boolean reverse, int skip, boolean sheared, int bits, boolean signed,
-                        double slope, double intercept, int samples, int count, List<int[]> marks, Double thickness) {
+                        double slope, double intercept, int samples, int count, List<int[]> marks, Double thickness,
+                        Phases phases) {
+        Spec(double[] iop, double[] step, boolean reverse, int skip, boolean sheared, int bits, boolean signed,
+             double slope, double intercept, int samples, int count, List<int[]> marks, Double thickness) {
+            this(iop, step, reverse, skip, sheared, bits, signed, slope, intercept, samples, count, marks, thickness, null);
+        }
+
         static Spec basic(double[] iop) {
             return new Spec(iop, null, true, -1, false, 16, true, 1.0, -1024.0, 1, NZ, List.of(), null);
+        }
+
+        Spec withPhases(Phases p) {
+            return new Spec(iop, step, reverse, skip, sheared, bits, signed, slope, intercept, samples, count, marks, thickness, p);
         }
     }
 
@@ -121,8 +167,25 @@ class NiftiWriterTest {
         if (sp.reverse()) {
             Collections.reverse(ks);
         }
-        int inst = 0;
+        Phases ph = sp.phases();
+        List<int[]> order = new ArrayList<>(); // {k, t}（保管の順）
         for (int k : ks) {
+            int tc = ph == null ? 1 : ph.count();
+            for (int ti = 0; ti < tc; ti++) {
+                int t = ph != null && ph.timeReversedInStorage() ? tc - 1 - ti : ti;
+                if (ph != null && t == ph.dropT() && k == ph.dropK()) {
+                    continue;
+                }
+                order.add(new int[]{k, t});
+                if (ph != null && k == ph.dupK() && t == 0) {
+                    order.add(new int[]{k, t});
+                }
+            }
+        }
+        int inst = 0;
+        for (int[] kt : order) {
+            int k = kt[0];
+            int t = kt[1];
             inst++;
             String sop = SERIES + "." + inst;
             Attributes ds = new Attributes();
@@ -133,7 +196,21 @@ class NiftiWriterTest {
             ds.setString(Tag.PatientName, VR.PN, PHI_NAME);
             ds.setString(Tag.PatientID, VR.LO, PHI_ID);
             ds.setString(Tag.Modality, VR.CS, modality);
-            ds.setInt(Tag.InstanceNumber, VR.IS, inst);
+            ds.setInt(Tag.InstanceNumber, VR.IS, ph != null && ph.zeroInstanceNumber() ? 0 : inst);
+            if (ph != null) {
+                if (ph.temporalTag()) {
+                    ds.setInt(Tag.TemporalPositionIdentifier, VR.IS, t + 1);
+                }
+                if (ph.dtSeconds() != null) {
+                    // 時相 t の取得時刻（HHMMSS.FFFFFF）。スライスごとに少しずらす（スライスタイミング）。jitter で不均等にもする
+                    double sec = 10 * 3600 + 5 * 60 + t * ph.dtSeconds() + k * 0.05 + (ph.acqTimeJitter() && t == 1 ? 0.7 : 0);
+                    int hh = (int) (sec / 3600), mm = (int) ((sec - hh * 3600) / 60);
+                    ds.setString(Tag.AcquisitionTime, VR.TM, String.format("%02d%02d%09.6f", hh, mm, sec - hh * 3600 - mm * 60));
+                }
+                if (ph.mosaic()) {
+                    ds.setString(Tag.ImageType, VR.CS, "ORIGINAL", "PRIMARY", "M", "ND", "MOSAIC");
+                }
+            }
             double[] step = sp.step() != null ? sp.step() : new double[]{n[0] * DS, n[1] * DS, n[2] * DS};
             double[] shear = sp.sheared() ? new double[]{r[0] * 1.0, r[1] * 1.0, r[2] * 1.0} : new double[]{0, 0, 0};
             ds.setDouble(Tag.ImagePositionPatient, VR.DS, P0[0] + k * (step[0] + shear[0]), P0[1] + k * (step[1] + shear[1]),
@@ -160,7 +237,7 @@ class NiftiWriterTest {
             for (int j = 0; j < NY; j++) {
                 for (int i = 0; i < NX; i++) {
                     for (int s = 0; s < sp.samples(); s++) {
-                        px.putShort((short) stored(i, j, k, sp.marks()));
+                        px.putShort((short) (ph == null ? stored(i, j, k, sp.marks()) : phaseValue(i, j, k, t)));
                     }
                 }
             }
@@ -172,6 +249,11 @@ class NiftiWriterTest {
             fx.index(SERIES, sop, f, modality, UID.CTImageStorage);
         }
         return fx;
+    }
+
+    /** 時相つきの画素値（時相ごとに値の帯を変える。int16 に収まる）。 */
+    private static int phaseValue(int i, int j, int k, int t) {
+        return ((k * NY + j) * NX + i) % 8000 + t * 8000;
     }
 
     private static byte[] gunzip(Path f) throws IOException {
@@ -402,9 +484,9 @@ class NiftiWriterTest {
         // 欠けたスライス
         Spec gap = new Spec(axial, null, true, 7, false, 16, true, 1.0, -1024.0, 1, NZ, List.of(), null);
         assertEquals("npz-uneven-spacing", reason(series(gap, "CT")));
-        // 同じ位置に 2 枚: 段差ベクトルをゼロに近い値にして位置を重ねる
-        Spec dup = new Spec(axial, new double[]{0, 0, 0}, true, -1, false, 16, true, 1.0, -1024.0, 1, NZ, List.of(), null);
-        assertEquals("npz-duplicate-positions", reason(series(dup, "CT")));
+        // 5 番目の位置にだけ 2 枚（撮影が 2 回ぶん混ざったシリーズ。時相として並べると位置ごとの枚数が揃わない）
+        Spec dup = Spec.basic(axial).withPhases(new Phases(1, false, null, false, false, false, -1, -1, 5, false));
+        assertEquals("nifti-uneven-phases", reason(series(dup, "CT")));
         // ガントリーチルト: スライスの位置が法線方向以外（行方向）にもずれる
         Spec tilt = new Spec(axial, null, true, -1, true, 16, true, 1.0, -1024.0, 1, NZ, List.of(), null);
         assertEquals("volume-sheared", reason(series(tilt, "CT")));
@@ -415,6 +497,108 @@ class NiftiWriterTest {
 
     private String reason(DatasetFixture fx) {
         return assertThrows(ComputeDatasetService.DatasetRefused.class, () -> write(fx)).reason();
+    }
+
+    // ── 4D（時相） ───────────────────────────────────────────────────
+
+    private static float voxel4(byte[] nii, int i, int j, int k, int t) {
+        return le(nii).getFloat(352 + 4 * (int) ((((long) t * NZ + k) * NY + j) * NX + i));
+    }
+
+    /** 全時相・全スライスの画素が、時相ごとの期待値（別に計算した float32）とビット一致する。 */
+    private static void assertPhaseValues(byte[] nii, int phases) {
+        assertEquals(352 + 4 * NX * NY * NZ * phases, nii.length, "ヘッダ + float32 × 時相");
+        for (int t = 0; t < phases; t++) {
+            for (int k = 0; k < NZ; k++) {
+                for (int j = 0; j < NY; j += 5) {
+                    for (int i = 0; i < NX; i += 7) {
+                        assertEquals(Float.floatToIntBits((float) (phaseValue(i, j, k, t) * 1.0 + (-1024.0))),
+                                Float.floatToIntBits(voxel4(nii, i, j, k, t)), "t=" + t + " k=" + k + " j=" + j + " i=" + i);
+                    }
+                }
+            }
+        }
+    }
+
+    @Test
+    void fourDKeepsThe3dGeometryAndPutsEachPhaseInItsOwnVolume() throws Exception {
+        // 時相を位置ごとにインターリーブして保管（位置は逆順）。TemporalPositionIdentifier と AcquisitionTime（2 秒間隔）つき
+        byte[] nii = gunzip(write(series(Spec.basic(orients().get(0).iop()).withPhases(Phases.of(3)), "CT")).file());
+        ByteBuffer b = le(nii);
+        assertEquals(4, b.getShort(40), "dim[0]");
+        assertEquals(NX, b.getShort(42));
+        assertEquals(NY, b.getShort(44));
+        assertEquals(NZ, b.getShort(46));
+        assertEquals(3, b.getShort(48), "dim[4] = 時相の数");
+        assertEquals(2.0f, b.getFloat(92), 1e-6, "pixdim[4] = 時相間隔（秒）");
+        assertEquals(10, b.get(123), "xyzt_units = mm + 秒");
+        double[][] s = srows(nii);
+        double[] expected = {-DC, -DR, DS};
+        for (int row = 0; row < 3; row++) {
+            assertEquals(expected[row], s[row][row], 1e-4, "srow は 3D と同じ " + row);
+        }
+        assertEquals(10.0, s[0][3], 1e-4);
+        assertPhaseValues(nii, 3);
+    }
+
+    @Test
+    void thePhaseKeyIsTemporalPositionThenAcquisitionTimeThenInstanceNumber() throws Exception {
+        double[] axial = orients().get(0).iop();
+        // ① TemporalPosition あり。保管は時相を逆順にして InstanceNumber の順と矛盾させる → 鍵が TemporalPosition なら時相どおりに並ぶ
+        byte[] a = gunzip(write(series(Spec.basic(axial).withPhases(Phases.of(3).with(true, null).reversedStorage()), "CT")).file());
+        assertPhaseValues(a, 3);
+        assertEquals(0f, le(a).getFloat(92), 0f, "AcquisitionTime が無ければ時相間隔は 0（推測しない）");
+        assertEquals(2, le(a).get(123), "間隔が分からなければ xyzt_units は mm だけ");
+    }
+
+    @Test
+    void acquisitionTimeIsTheKeyWhenThereIsNoTemporalPosition() throws Exception {
+        double[] axial = orients().get(0).iop();
+        byte[] b = gunzip(write(series(Spec.basic(axial).withPhases(Phases.of(3).with(false, 1.5).reversedStorage()), "CT")).file());
+        assertPhaseValues(b, 3);
+        assertEquals(1.5f, le(b).getFloat(92), 1e-6, "pixdim[4] = AcquisitionTime の間隔");
+    }
+
+    @Test
+    void instanceNumberIsTheLastResort() throws Exception {
+        double[] axial = orients().get(0).iop();
+        byte[] c = gunzip(write(series(Spec.basic(axial).withPhases(Phases.of(3).with(false, null)), "CT")).file());
+        assertPhaseValues(c, 3);
+        assertEquals(0f, le(c).getFloat(92), 0f);
+    }
+
+    @Test
+    void anUnevenAcquisitionTimeStillOrdersThePhasesButLeavesTheIntervalZero() throws Exception {
+        byte[] d = gunzip(write(series(Spec.basic(orients().get(0).iop()).withPhases(Phases.of(3).jitter()), "CT")).file());
+        assertPhaseValues(d, 3);
+        assertEquals(0f, le(d).getFloat(92), 0f, "均等でない間隔は採用しない");
+        assertEquals(2, le(d).get(123));
+    }
+
+    @Test
+    void fourDRefusesWhatCannotBePhases_andTheMosaicInBoth3dAnd4d() throws Exception {
+        double[] axial = orients().get(0).iop();
+        assertEquals(3 * NZ, write(series(Spec.basic(axial).withPhases(Phases.of(3)), "CT")).instances(), "（正例）揃った時相は通る");
+        assertEquals("nifti-uneven-phases", reason(series(Spec.basic(axial).withPhases(Phases.of(3).drop(2, 5)), "CT")),
+                "ある位置だけ時相が 1 つ欠ける");
+        assertEquals("nifti-mosaic", reason(series(Spec.basic(axial).withPhases(Phases.of(3).asMosaic()), "CT")), "モザイク（4D）");
+        assertEquals("nifti-mosaic", reason(series(Spec.basic(axial).withPhases(Phases.of(1).asMosaic().with(false, null)), "CT")),
+                "モザイク（3D に見える形でも、黙って通さない）");
+        assertEquals("nifti-ambiguous-phases",
+                reason(series(Spec.basic(axial).withPhases(Phases.of(2).with(false, null).zeroInstanceNumbers()), "CT")),
+                "時相の鍵がどれも使えない（TemporalPosition・AcquisitionTime が無く InstanceNumber が全部 0）");
+    }
+
+    @Test
+    void aSingleVolumeIsUnchangedByThe4dPath() throws Exception {
+        // 時相が 1 つの 3D は、dim[0]=3・dim[4]=1・pixdim[4]=0・xyzt_units=2 のまま（4D の対応前と同じ形）
+        byte[] nii = gunzip(write(series(Spec.basic(orients().get(0).iop()), "CT")).file());
+        ByteBuffer b = le(nii);
+        assertEquals(3, b.getShort(40));
+        assertEquals(1, b.getShort(48));
+        assertEquals(0f, b.getFloat(92), 0f);
+        assertEquals(2, b.get(123));
+        assertHeader(nii);
     }
 
     @Test

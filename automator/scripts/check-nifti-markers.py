@@ -6,6 +6,9 @@
       インスタンスは位置の**逆順**で番号を振り、LPS の既知の位置 3 点（左前上の角・右後下の角・中心）だけ値 30000 を置く。
       患者情報なし。IOP は単位ベクトルで直交、IPP は法線方向に等間隔（作った後に検算する）。<出力>/<向き>/*.dcm と <出力>/truth.json。
   check <向き> <書き出した .nii.gz> <make の出力フォルダ>
+  4d    <書き出した .nii.gz> <make の出力フォルダ>
+      時相つき（dyn: 3 時相 × 16 枚・TemporalPositionIdentifier と AcquisitionTime 2 秒間隔・位置の逆順＋時相インターリーブ保管）の書き出し。
+      形 32×24×16×3・時相間隔・各時相の画素のビット一致・単位 mm と sec・軸の向き。make には断られるべき mosaic・uneven4d も入る。
   pm    <元の .nii.gz> <書き出した .nii.gz> [allow-no-nan]
       float の NIfTI を取り込んで（Parametric Map）書き出した往復: 形・affine（1e-4）・画素（NaN の位置を含めてビット一致）が元と同じか。
       nibabel で読み、(1) 形・float32、(2) 画素が pydicom で別に計算した float32(stored×slope+intercept) とビット一致、
@@ -35,7 +38,10 @@ ORIENT = {
     "oblique": [C20, S20, 0, -S20 * C20, C20 * C20, S20],   # 軸位を x 軸まわり 20°、続けて z 軸まわり 20°
 }
 # 断られるべき形（書き出しの負例）。軸位の向きで作る。tilt = スライスが行方向にも 1 mm ずつずれる（ガントリーチルト）、gap = 7 枚目が欠ける
-REFUSED = {"tilt": "volume-sheared", "gap": "npz-uneven-spacing"}
+REFUSED = {"tilt": "volume-sheared", "gap": "npz-uneven-spacing", "mosaic": "nifti-mosaic", "uneven4d": "nifti-uneven-phases"}
+# 時相つき（4D）。軸位の向きで、3 時相 × 16 枚。TemporalPositionIdentifier と AcquisitionTime（2 秒間隔。スライスごとに 0.05 秒ずつずれる）つき。
+PHASES, DT = 3, 2.0
+FOURD = ["dyn"]
 AXCODES = {"axial": ("L", "P", "S"), "coronal": ("L", "I", "P"), "sagittal": ("P", "I", "R")}
 MARKS = [(0, 0, 0), (NX - 1, NY - 1, NZ - 1), (NX // 2, NY // 2, NZ // 2)]
 
@@ -51,7 +57,7 @@ def lps_of(r, c, n, i, j, k):
 def make(out):
     truth = {}
     uid_root = generate_uid()
-    cases = list(ORIENT.items()) + [(k, ORIENT["axial"]) for k in REFUSED]
+    cases = list(ORIENT.items()) + [(k, ORIENT["axial"]) for k in list(REFUSED) + FOURD]
     for oi, (name, iop) in enumerate(cases):
         r, c = np.array(iop[:3], float), np.array(iop[3:], float)
         n = np.cross(r, c)
@@ -60,9 +66,15 @@ def make(out):
         os.makedirs(d, exist_ok=True)
         study, series = generate_uid(), generate_uid()
         ks = [k for k in reversed(range(NZ)) if not (name == "gap" and k == 7)]
-        for inst, k in enumerate(ks, start=1):       # 位置の逆順で保管
+        four = name in ("dyn", "uneven4d")
+        pairs = [(k, t) for k in ks for t in (range(PHASES) if four else [0])]
+        if name == "uneven4d":
+            pairs = [p for p in pairs if p != (5, 2)]          # ある位置だけ時相が 1 つ欠ける
+        if name == "mosaic":                                    # モザイク: 同じ位置に多数の時相（タイルをスライスに展開していない）
+            pairs = [(0, t) for t in range(5)]
+        for inst, (k, t) in enumerate(pairs, start=1):         # 位置の逆順・時相をインターリーブして保管
             ipp = P0 + k * DS * n + (k * 1.0 * r if name == "tilt" else 0)
-            if name not in REFUSED:
+            if name not in REFUSED and name not in FOURD:
                 assert abs((ipp - P0) @ n - k * DS) < 1e-9 and np.allclose(ipp, P0 + k * DS * n), "IPP は法線方向に等間隔"
             meta = FileMetaDataset()
             meta.MediaStorageSOPClassUID = "1.2.840.10008.5.1.4.1.1.2"
@@ -73,6 +85,13 @@ def make(out):
             ds.StudyInstanceUID, ds.SeriesInstanceUID = study, series
             ds.PatientID, ds.PatientName = "PH-NIFTI-" + name, "PHANTOM^NIFTI"
             ds.Modality, ds.SeriesNumber, ds.InstanceNumber = "CT", 1, inst
+            if four:
+                ds.TemporalPositionIdentifier = t + 1
+                sec = 10 * 3600 + 5 * 60 + t * DT + k * 0.05
+                hh, mm = int(sec // 3600), int((sec % 3600) // 60)
+                ds.AcquisitionTime = f"{hh:02d}{mm:02d}{sec - hh * 3600 - mm * 60:09.6f}"
+            if name == "mosaic":
+                ds.ImageType = ["ORIGINAL", "PRIMARY", "M", "ND", "MOSAIC"]
             ds.ImagePositionPatient = [f"{x:.10f}" for x in ipp]
             ds.ImageOrientationPatient = [f"{x:.10f}" for x in iop]
             ds.PixelSpacing = [f"{DR}", f"{DC}"]
@@ -82,7 +101,10 @@ def make(out):
             ds.BitsAllocated, ds.BitsStored, ds.HighBit, ds.PixelRepresentation = 16, 16, 15, 1
             ds.RescaleSlope, ds.RescaleIntercept, ds.RescaleType = SLOPE, INTER, "HU"
             ds.WindowCenter, ds.WindowWidth = 40, 400
-            arr = np.array([[stored(i, j, k) for i in range(NX)] for j in range(NY)], dtype="<i2")
+            if four or name == "mosaic":
+                arr = np.array([[((k * NY + j) * NX + i) % 8000 + t * 8000 for i in range(NX)] for j in range(NY)], dtype="<i2")
+            else:
+                arr = np.array([[stored(i, j, k) for i in range(NX)] for j in range(NY)], dtype="<i2")
             ds.PixelData = arr.tobytes()
             ds.save_as(os.path.join(d, f"i{(inst * 7) % 100:02d}_{inst}.dcm"), write_like_original=False)
         truth[name] = {
@@ -138,6 +160,39 @@ def check(name, nii, root):
     return fails
 
 
+def check_4d(nii, root):
+    """時相つき: 形・時相間隔・各時相の画素（pydicom で時相番号ごとに別に組む）・軸の向き・単位。"""
+    import nibabel as nib
+    truth = json.load(open(os.path.join(root, "truth.json")))["dyn"]
+    iop = truth["iop"]
+    n = np.cross(np.array(iop[:3], float), np.array(iop[3:], float))
+    fails = []
+    ok = lambda cond, label, detail="": (print(f"  [ok  ] {label}") if cond else (print(f"  [FAIL] {label} {detail}"), fails.append(label)))
+    img = nib.load(nii)
+    ok(img.shape == (NX, NY, NZ, PHASES), f"dyn: 形 {NX}×{NY}×{NZ}×{PHASES}", img.shape)
+    h = img.header
+    ok(abs(float(h.get_zooms()[3]) - DT) < 1e-6, f"dyn: 時相間隔 {DT} 秒（AcquisitionTime から。スライスごとのずれに引きずられない）", h.get_zooms())
+    ok(h.get_xyzt_units() == ("mm", "sec"), "dyn: 単位 mm と sec", h.get_xyzt_units())
+    ok(nib.aff2axcodes(img.affine) == ("L", "P", "S"), "dyn: 軸の向き LPS（3D の軸位と同じ）", nib.aff2axcodes(img.affine))
+    files = sorted(os.path.join(root, "dyn", f) for f in os.listdir(os.path.join(root, "dyn")))
+    dss = [pydicom.dcmread(f) for f in files]
+    want = np.zeros((NX, NY, NZ, PHASES), np.float32)
+    seen = set()
+    for d in dss:
+        k = int(round(float((np.array(d.ImagePositionPatient, float) - P0) @ n) / DS))
+        t = int(d.TemporalPositionIdentifier) - 1
+        assert (k, t) not in seen
+        seen.add((k, t))
+        want[:, :, k, t] = (d.pixel_array.astype(np.float64) * float(d.RescaleSlope) + float(d.RescaleIntercept)).astype(np.float32).T
+    ok(len(seen) == NZ * PHASES, f"dyn: 位置×時相が全部そろう（{NZ * PHASES} 枚）", len(seen))
+    got = np.asanyarray(img.dataobj)
+    ok(np.array_equal(got.view(np.uint32), want.view(np.uint32)), "dyn: 画素が、時相ごとに pydicom の期待値とビット一致",
+       f"{int((got.view(np.uint32) != want.view(np.uint32)).sum())} 画素が違う")
+    for t in range(PHASES):
+        ok(np.array_equal(got[..., t].view(np.uint32), want[..., t].view(np.uint32)), f"dyn: 時相 {t} の体積が元の時相 {t}")
+    return fails
+
+
 def check_pm(orig, exported, need_nan=True):
     import nibabel as nib
     a, b = nib.load(orig), nib.load(exported)
@@ -157,6 +212,8 @@ def check_pm(orig, exported, need_nan=True):
 if __name__ == "__main__":
     if sys.argv[1] == "make":
         make(sys.argv[2])
+    elif sys.argv[1] == "4d":
+        sys.exit(1 if check_4d(sys.argv[2], sys.argv[3]) else 0)
     elif sys.argv[1] == "pm":
         sys.exit(1 if check_pm(sys.argv[2], sys.argv[3], need_nan="allow-no-nan" not in sys.argv[4:]) else 0)
     else:

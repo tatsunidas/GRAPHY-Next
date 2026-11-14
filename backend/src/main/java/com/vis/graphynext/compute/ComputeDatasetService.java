@@ -157,7 +157,7 @@ public class ComputeDatasetService {
                     facts.modalities());
             throw new DatasetRefused(decision.reason(), null);
         }
-        AnonymizeConfig cfg = remoteConfig();
+        AnonymizeConfig cfg = format == Format.NIFTI ? niftiConfig() : remoteConfig();
         String handle = "dsh_" + UUID.randomUUID();
         Path dir = null;
         try {
@@ -176,9 +176,13 @@ public class ComputeDatasetService {
                     check(r, decision);
                     try {
                         if (format == Format.NIFTI) {
-                            String step = NiftiWriter.write(out, va, va.assemble());
-                            if (step != null) {
-                                log.info("[compute] nifti single slice: slice step from {}", step);
+                            NiftiWriter.Info info = NiftiWriter.write(out, va, va.assemble4d());
+                            if (info.stepSource() != null) {
+                                log.info("[compute] nifti single slice: slice step from {}", info.stepSource());
+                            }
+                            if (info.phases() > 1) {
+                                log.info("[compute] nifti 4D: phases={} ordered by {} dt={}s", info.phases(), info.timeKey(),
+                                        info.dtSeconds() > 0 ? String.valueOf(info.dtSeconds()) : "unknown(0)");
                             }
                         } else {
                             va.writeNpz(out, mapper);
@@ -263,6 +267,17 @@ public class ComputeDatasetService {
         cfg.addOption(AnonymizeConfig.Option.CleanPixelData);
         cfg.setReplacePatientId(PSEUDONYM);
         cfg.setReplacePatientName(PSEUDONYM);
+        return cfg;
+    }
+
+    /**
+     * NIfTI の書き出し用。{@link #remoteConfig()} に、時刻を残す Retain Longitudinal Temporal Information（日付はずらす）を足す。
+     * 時相の並べ替えと時相間隔（AcquisitionTime）に要るため。時刻はメモリの中で時相の間隔を求めるのに使うだけで、NIfTI には書かない
+     * （患者の識別・日付は今までどおり置き換わる・消える）。
+     */
+    static AnonymizeConfig niftiConfig() {
+        AnonymizeConfig cfg = remoteConfig();
+        cfg.addOption(AnonymizeConfig.Option.RetainLongitudinalTemporalInformationModifiedDates);
         return cfg;
     }
 
