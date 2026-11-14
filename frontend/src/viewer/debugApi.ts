@@ -654,6 +654,42 @@ function benchCinematicFrames(ks: number[]): { k: number; ms: number }[] | null 
   return cinematicBench ? cinematicBench(ks) : null;
 }
 
+/**
+ * シネマティックの 3D テクスチャの検査用の操作（オーバーレイが動いているときだけ）。dev ビルドのみ。
+ * 予算の上書きは次の開始（オーバーレイの作り直し）から効く。
+ */
+export interface CinematicTexControl {
+  stats(): CinematicTexStats | null;
+  loseContext(): boolean;
+  readTexLayer(z: number): Float32Array | null;
+  setSeedOffset(n: number): void;
+  /** 乱数の種を変えたあと、蓄積をやり直す。 */
+  reset(): void;
+  frameCount(): number;
+}
+export interface CinematicTexStats {
+  texDims: [number, number, number];
+  srcDims: [number, number, number];
+  spacingMm: [number, number, number];
+  gpuBytes: number;
+  textureBytes: number;
+  budgetBytes: number | null;
+  budgetSource: string;
+  reason: string;
+  lost: boolean;
+  failure: string | null;
+}
+let cinematicTex: CinematicTexControl | null = null;
+export function publishCinematicTexture(c: CinematicTexControl | null): void {
+  if (!import.meta.env.DEV) return;
+  cinematicTex = c;
+}
+/** 予算の上書き（検査用）。bytes=null で上書きなし。forceFull は予算を無視して元の解像度（3D テクスチャの上限だけ守る）。 */
+let cinematicBudgetOverride: { bytes: number | null; forceFull: boolean } = { bytes: null, forceFull: false };
+export function getCinematicBudgetOverride(): { bytes: number | null; forceFull: boolean } {
+  return import.meta.env.DEV ? cinematicBudgetOverride : { bytes: null, forceFull: false };
+}
+
 function getGeometry3dStats(): Geometry3DPixelStats | null {
   return geometry3dProbe ? geometry3dProbe() : null;
 }
@@ -1027,6 +1063,19 @@ declare global {
       getPixelStats: typeof getPixelStats;
       getRender3dStats: typeof getRender3dStats;
       getViewer3dState: typeof getViewer3dState;
+      /** シネマティックの 3D テクスチャの状態（大きさ・予算・失敗）。動いていなければ null。 */
+      cine2Stats: () => CinematicTexStats | null;
+      /** 次のシネマティック開始の予算（テクスチャのバイト数）を上書き。null で解除。 */
+      cine2SetBudget: (bytes: number | null) => void;
+      /** 予算を無視して元の解像度で開始する（3D テクスチャの上限だけ守る）。 */
+      cine2ForceFull: (on: boolean) => void;
+      /** パストレーサのコンテキストだけを失わせる（vtk は残る）。 */
+      cine2LoseContext: () => boolean;
+      /** 3D テクスチャの z 層を読み戻す（[0,1] に正規化した値）。 */
+      cine2ReadTexLayer: (z: number) => number[] | null;
+      /** 乱数の種をずらして蓄積をやり直す。 */
+      cine2SetSeed: (n: number) => void;
+      cine2FrameCount: () => number;
       /** 3D シーンの各物体の描き方（store とアクターから読んだ値）・色・不透明度・可視。 */
       getScene3dState: typeof readSceneActorStates;
       setViewer3dPluginView: typeof setViewer3dPluginView;
@@ -1211,6 +1260,23 @@ export function installDebugApi(): void {
     getPixelStats,
     getRender3dStats,
     getViewer3dState,
+    cine2Stats: () => cinematicTex?.stats() ?? null,
+    cine2SetBudget: (bytes) => {
+      cinematicBudgetOverride = { ...cinematicBudgetOverride, bytes };
+    },
+    cine2ForceFull: (on) => {
+      cinematicBudgetOverride = { ...cinematicBudgetOverride, forceFull: on };
+    },
+    cine2LoseContext: () => cinematicTex?.loseContext() ?? false,
+    cine2ReadTexLayer: (z) => {
+      const l = cinematicTex?.readTexLayer(z);
+      return l ? Array.from(l) : null;
+    },
+    cine2SetSeed: (n) => {
+      cinematicTex?.setSeedOffset(n);
+      cinematicTex?.reset();
+    },
+    cine2FrameCount: () => cinematicTex?.frameCount() ?? 0,
     getScene3dState: readSceneActorStates,
     setViewer3dPluginView,
     renderViewer3d,

@@ -552,6 +552,15 @@ export const SETTINGS_REGISTRY: CategoryDef[] = [
               { value: "full", labelKey: "settings.opt.viewer3dRenderQuality.full" },
             ],
           },
+          {
+            key: "viewer3d.gpuMemoryMb",
+            labelKey: "settings.field.viewer3dGpuMemoryMb",
+            type: "number",
+            default: 0,
+            min: 0,
+            max: 1048576,
+            helpKey: "settings.field.viewer3dGpuMemoryMb.help",
+          },
         ],
       },
       {

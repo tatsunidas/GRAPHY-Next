@@ -148,6 +148,7 @@ export function Viewer3DScreen({ status }: { status: AppStatus | null }) {
   const [renderKind, setRenderKind] = useState<RenderKind | null>(null);
   // 設定「3D の画質」（シネマティックの操作中の縮小にも効く。full は常に全解像度）。
   const [renderQuality, setRenderQuality] = useState<RenderQuality>("auto");
+  const [gpuMemoryMb, setGpuMemoryMb] = useState<number | null>(null);
   useEffect(() => {
     let alive = true;
     void loadRenderEnvSummary().then((v) => {
@@ -490,6 +491,8 @@ export function Viewer3DScreen({ status }: { status: AppStatus | null }) {
         .then((m) => {
           if (viewRef.current !== view) return;
           view.setBackground(hexToRgb01(m["viewer3d.background"]));
+          const gpuMb = Number(m["viewer3d.gpuMemoryMb"]);
+          setGpuMemoryMb(Number.isFinite(gpuMb) && gpuMb > 0 ? gpuMb : null);
           const quality = parseRenderQuality(m["viewer3d.renderQuality"]);
           view.setRenderQuality(quality);
           setRenderQuality(quality);
@@ -945,6 +948,7 @@ export function Viewer3DScreen({ status }: { status: AppStatus | null }) {
               active={pathTraceOn}
               renderKind={renderKind}
               quality={renderQuality}
+              gpuMemoryMb={gpuMemoryMb}
               onCancel={() => setPathTraceOn(false)}
             />
           )}

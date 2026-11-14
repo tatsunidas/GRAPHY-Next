@@ -23,6 +23,18 @@ import {
   type CinematicEngine,
 } from "../viewer/cinematicPathTracer";
 import {
+  gpuBudget,
+  isSharedMemoryGpu,
+  parseGpuRecords,
+  planCinematicGrid,
+  TEXEL_BYTES,
+  updateGpuRecord,
+  type BudgetSource,
+  type GridReason,
+  type Vec3,
+} from "../viewer/cinematicBudget";
+import { getAppliedVolumeMaxMb, getMax3dTextureSize, volumeCopyCount, volumeMaxBytes } from "../viewer/volumeMemory";
+import {
   cinematicScaleForQuality,
   estimateFrameSeconds,
   fitCostModel,
@@ -32,8 +44,14 @@ import {
   type CinematicStats,
   type CostSample,
 } from "../viewer/cinematicScale";
-import { publishCinematicBench, publishCinematicForce, publishCinematicStats } from "../viewer/debugApi";
-import type { RenderKind, RenderQuality } from "../viewer/renderEnv";
+import {
+  getCinematicBudgetOverride,
+  publishCinematicBench,
+  publishCinematicForce,
+  publishCinematicStats,
+  publishCinematicTexture,
+} from "../viewer/debugApi";
+import { probeRenderEnv, type RenderKind, type RenderQuality } from "../viewer/renderEnv";
 
 const MAX_FRAMES = 400; // 収束目安（これ以上は蓄積を止めて GPU を休める）
 /** 画面の更新間隔を測る rAF の数（中央値を取る。数を倍にしても値は変わらない）。 */
@@ -55,11 +73,53 @@ const PROBE_SCALE = 2;
 
 type Phase = CinematicStats["phase"];
 
+/** この PC・この GPU で描けた／失敗した 3D テクスチャの大きさの記録（localStorage。GPU ごと。設定 KV には載せない＝機械固有）。 */
+const GPU_RECORD_KEY = "graphy.cinematic.gpuRecord";
+const MIB = 1024 * 1024;
+
+function readGpuRecords() {
+  try {
+    return parseGpuRecords(localStorage.getItem(GPU_RECORD_KEY));
+  } catch {
+    return {};
+  }
+}
+function saveGpuRecord(name: string, ev: { ok?: number; fail?: number }): void {
+  try {
+    localStorage.setItem(GPU_RECORD_KEY, JSON.stringify(updateGpuRecord(readGpuRecords(), name, ev)));
+  } catch {
+    /* 保存できなくても描画は続ける */
+  }
+}
+
+/** 画面に出す 3D テクスチャの状態。 */
+interface TexView {
+  texDims: Vec3;
+  srcDims: Vec3;
+  srcSpacingMm: Vec3;
+  spacingMm: Vec3;
+  textureBytes: number;
+  gpuBytes: number;
+  budgetBytes: number | null;
+  source: BudgetSource;
+  reason: GridReason;
+}
+interface Failure {
+  kind: "create" | "lost";
+  needBytes: number;
+  budgetBytes: number | null;
+}
+const reducedAxes = (v: TexView): number[] => {
+  const idx = [0, 1, 2].filter((i) => v.texDims[i] < v.srcDims[i]);
+  return idx.length > 0 ? idx : [0, 1, 2];
+};
+const dimStr = (d: Vec3) => `${d[0]}×${d[1]}×${d[2]}`;
 export function Viewer3DCinematicOverlay({
   view,
   active,
   renderKind,
   quality,
+  gpuMemoryMb,
   onCancel,
 }: {
   view: VtkVolumeView;
@@ -68,6 +128,8 @@ export function Viewer3DCinematicOverlay({
   renderKind: RenderKind | null;
   /** 設定「3D の画質」。full は操作中も全解像度。 */
   quality: RenderQuality;
+  /** 設定「GPU メモリ（MB）」。0・未設定は null（不明）。 */
+  gpuMemoryMb: number | null;
   /** 確認で［やめる］が押された。 */
   onCancel: () => void;
 }) {
@@ -78,12 +140,23 @@ export function Viewer3DCinematicOverlay({
   const [phase, setPhase] = useState<Phase>("measuring");
   const [scale, setScale] = useState(1);
   const [estimate, setEstimate] = useState<number | null>(null);
+  const [texView, setTexView] = useState<TexView | null>(null);
+  const [failure, setFailure] = useState<Failure | null>(null);
+  const [attempt, setAttempt] = useState(0);
+  /** ［間引いて再開］で下げた予算（バイト）。次の開始だけに効く。 */
+  const retryBytesRef = useRef<number | null>(null);
+  const gpuMemoryMbRef = useRef(gpuMemoryMb);
+  gpuMemoryMbRef.current = gpuMemoryMb;
   // effect を作り直さずに最新値を読む。
   const qualityRef = useRef(quality);
   qualityRef.current = quality;
   const onCancelRef = useRef(onCancel);
   onCancelRef.current = onCancel;
   const decisionRef = useRef<"start" | "cancel" | null>(null);
+
+  useEffect(() => {
+    if (!active) retryBytesRef.current = null;
+  }, [active]);
 
   useEffect(() => {
     if (!active || renderKind === null) return;
@@ -105,16 +178,97 @@ export function Viewer3DCinematicOverlay({
       setError(t("cine2.error"));
       return;
     }
-    const engine: CinematicEngine | null = createCinematicPathTracer(
-      canvas,
-      parts.imageData,
-      geom,
-      defaultPathTraceParams(),
-    );
-    if (!engine) {
-      setError(t("cine2.unsupported"));
+
+    // ── 3D テクスチャの大きさ: 予算（分かる量だけから）→ 格子（mm で決めて箱平均で間引く）──
+    const rendererName = probeRenderEnv().defaultCtx?.renderer ?? "";
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const scalarData: any = parts.imageData.getPointData().getScalars().getData();
+    const srcBytes: number = scalarData?.byteLength ?? geom.dims[0] * geom.dims[1] * geom.dims[2] * 4;
+    const internalBytes = 2 * w * h * 16 + 1024; // 蓄積（RGBA32F の ping-pong）＋ LUT
+    const override = getCinematicBudgetOverride();
+    const b = gpuBudget({
+      userMb: gpuMemoryMbRef.current,
+      shared: isSharedMemoryGpu(rendererName),
+      appliedVolumeMaxBytes: volumeMaxBytes(getAppliedVolumeMaxMb()),
+      srcBytes,
+      srcCopies: volumeCopyCount("viewer3d", "CT") + 1, // CT は 2 本＋vtk 用 1 本＋image キャッシュ 1（保守側）
+      vtkBytes: srcBytes, // vtk が持つ 3D テクスチャ（元と同じ型）の見積もり
+      internalBytes,
+      record: readGpuRecords()[rendererName] ?? null,
+    });
+    let budgetBytes: number | null = b.textureBytes;
+    let source: BudgetSource = b.source;
+    if (override.bytes !== null) {
+      budgetBytes = override.bytes;
+      source = "user";
+    }
+    if (retryBytesRef.current !== null) {
+      budgetBytes = budgetBytes === null ? retryBytesRef.current : Math.min(budgetBytes, retryBytesRef.current);
+      source = "record";
+    }
+    if (override.forceFull) budgetBytes = null; // 検査用: 予算を無視して元の解像度（3D テクスチャの上限だけ守る）
+    const grid = planCinematicGrid({
+      dims: [geom.dims[0], geom.dims[1], geom.dims[2]],
+      spacingMm: [geom.spacing[0], geom.spacing[1], geom.spacing[2]],
+      budgetTexels: budgetBytes === null ? null : Math.floor(budgetBytes / TEXEL_BYTES),
+      max3d: getMax3dTextureSize(),
+    });
+    const created = createCinematicPathTracer(canvas, parts.imageData, geom, defaultPathTraceParams(), grid.dims);
+    if (!created.ok) {
+      if (created.reason === "unsupported" || created.reason === "shader") {
+        setError(t("cine2.unsupported"));
+      } else {
+        // テクスチャの確保に失敗（GPU のメモリ不足など）。その大きさを記録し、再開は下げた予算で。
+        saveGpuRecord(rendererName, { fail: grid.bytes });
+        setTexView(null);
+        setFailure({ kind: "create", needBytes: grid.bytes, budgetBytes });
+      }
       return;
     }
+    const engine: CinematicEngine = created.engine;
+    const info = engine.getTexInfo();
+    const view0: TexView = {
+      texDims: info.texDims,
+      srcDims: info.srcDims,
+      srcSpacingMm: [geom.spacing[0], geom.spacing[1], geom.spacing[2]],
+      spacingMm: info.spacingMm,
+      textureBytes: info.textureBytes,
+      gpuBytes: info.textureBytes + 2 * w * h * 16,
+      budgetBytes,
+      source,
+      reason: grid.reason,
+    };
+    setTexView(view0);
+    setFailure(null);
+    let okRecorded = false;
+    let failedNow: Failure | null = null;
+    publishCinematicTexture({
+      stats: () => ({
+        texDims: info.texDims,
+        srcDims: info.srcDims,
+        spacingMm: info.spacingMm,
+        gpuBytes: view0.gpuBytes,
+        textureBytes: info.textureBytes,
+        budgetBytes,
+        budgetSource: source,
+        reason: grid.reason,
+        lost: engine.isLost(),
+        failure: failedNow ? failedNow.kind : null,
+      }),
+      loseContext: () => {
+        try {
+          const g = canvas.getContext("webgl2") as WebGL2RenderingContext | null;
+          g?.getExtension("WEBGL_lose_context")?.loseContext();
+          return !!g;
+        } catch {
+          return false;
+        }
+      },
+      readTexLayer: (z) => engine.readTexLayer(z),
+      setSeedOffset: (n) => engine.setSeedOffset(n),
+      reset: () => engine.reset(),
+      frameCount: () => engine.getFrameCount(),
+    });
     setError("");
     setScale(1);
     setEstimate(null);
@@ -203,6 +357,17 @@ export function Viewer3DCinematicOverlay({
     };
 
     // 待たずに測っている最中のフレーム（出した時刻と縮小率）。フェンスが終わったら実測として覚える
+    /** パストレーサのコンテキストが失われた（GPU のメモリ不足など）。その大きさを記録し、案内を出す。vtk の 3D は止めない。 */
+    const handleLost = () => {
+      if (failedNow) return;
+      cancelAnimationFrame(raf);
+      failedNow = { kind: "lost", needBytes: info.textureBytes, budgetBytes };
+      saveGpuRecord(rendererName, { fail: info.textureBytes });
+      setTexView(null); // 古い解像度の行を残さない
+      setFailure(failedNow);
+    };
+    const offLost = engine.onLost(handleLost);
+
     let pending: { k: number; t0: number } | null = null;
     // 直前の全解像度フレームが終わった時刻とかかった時間（遅い機械で GPU を空けるために使う）
     let doneAt = 0;
@@ -235,6 +400,10 @@ export function Viewer3DCinematicOverlay({
     });
 
     const tick = (now: number) => {
+      if (engine.isLost()) {
+        handleLost();
+        return;
+      }
       // リサイズ追従（縮小率は保たれる）。
       const r = parent?.getBoundingClientRect();
       const cw = Math.max(1, Math.floor(r?.width ?? lastW));
@@ -334,6 +503,10 @@ export function Viewer3DCinematicOverlay({
           if (wantTime) pending = { k, t0 };
         }
         setFrames(engine.getFrameCount());
+        if (!okRecorded && engine.getFrameCount() >= 3) {
+          okRecorded = true; // 描けた大きさを記録（次の自動の予算の上限の目安）
+          saveGpuRecord(rendererName, { ok: info.textureBytes });
+        }
       }
       raf = requestAnimationFrame(tick);
     };
@@ -341,19 +514,22 @@ export function Viewer3DCinematicOverlay({
 
     return () => {
       cancelAnimationFrame(raf);
+      offLost();
+      publishCinematicTexture(null);
       publishCinematicStats(null);
       publishCinematicBench(null);
       publishCinematicForce(null);
       engine.dispose();
     };
-  }, [active, view, renderKind, t]);
+  }, [active, view, renderKind, t, attempt]);
 
   if (!active) return null;
 
   const running = phase === "running";
   return (
     <div style={root}>
-      <canvas ref={canvasRef} style={{ ...canvasEl, visibility: running ? "visible" : "hidden" }} />
+      {/* 失われた（または解放した）WebGL コンテキストは同じ canvas では作り直せない。再開のたびに canvas を作り直す。 */}
+      <canvas key={attempt} ref={canvasRef} style={{ ...canvasEl, visibility: running ? "visible" : "hidden" }} />
       {phase === "confirm" ? (
         <div style={confirmCard} data-testid="cine2-confirm">
           <div style={{ fontWeight: 600, marginBottom: 6 }}>{t("cine2.confirm.title")}</div>
@@ -370,6 +546,61 @@ export function Viewer3DCinematicOverlay({
           </div>
         </div>
       ) : null}
+      {failure ? (
+        <div style={lostCard} data-testid="cine2-lost" data-kind={failure.kind}>
+          <div style={{ fontWeight: 600, marginBottom: 6 }}>{t("cine2.lost.title")}</div>
+          <div style={{ marginBottom: 10 }} data-testid="cine2-lost-body">
+            {t("cine2.lost.body", {
+              need: String(Math.ceil(failure.needBytes / MIB)),
+              budget: failure.budgetBytes === null ? t("cine2.lost.budgetUnknown") : `${Math.floor(failure.budgetBytes / MIB)} MB`,
+            })}
+          </div>
+          <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+            <button style={confirmBtn} onClick={() => onCancelRef.current()} data-testid="cine2-lost-close">
+              {t("cine2.lost.close")}
+            </button>
+            <button
+              style={confirmBtn}
+              onClick={() => {
+                retryBytesRef.current = Math.floor(failure.needBytes / 2);
+                setFailure(null);
+                setPhase("measuring");
+                setAttempt((a) => a + 1);
+              }}
+              data-testid="cine2-retry-downsampled"
+            >
+              {t("cine2.lost.retry")}
+            </button>
+          </div>
+        </div>
+      ) : null}
+      <div style={badgeBox}>
+      {texView && !failure ? (
+        <div
+          style={{ ...badge, ...(texView.reason !== "full" ? badgeWarn : null), marginBottom: 4 }}
+          data-testid="cine2-resolution"
+          data-tex-dims={texView.texDims.join(",")}
+          data-src-dims={texView.srcDims.join(",")}
+          data-spacing-mm={texView.spacingMm.map((x) => x.toFixed(4)).join(",")}
+          data-gpu-bytes={String(texView.gpuBytes)}
+          data-budget-source={texView.source}
+          data-reason={texView.reason}
+        >
+          {texView.reason === "full"
+            ? t("cine2.resolution.full", { dims: dimStr(texView.texDims), mb: String(Math.ceil(texView.gpuBytes / MIB)) })
+            : t("cine2.resolution.reduced", {
+                src: dimStr(texView.srcDims),
+                dims: dimStr(texView.texDims),
+                // 間引いた軸だけの間隔（間引かない軸の間隔を混ぜない）
+                from: Math.min(...reducedAxes(texView).map((i) => texView.srcSpacingMm[i])).toFixed(2),
+                to: Math.max(...reducedAxes(texView).map((i) => texView.spacingMm[i])).toFixed(2),
+                why:
+                  texView.reason === "max3d"
+                    ? t("cine2.reason.max3d")
+                    : t("cine2.reason.budget", { source: t(`cine2.source.${texView.source}`) }),
+              })}
+        </div>
+      ) : null}
       <div style={badge} data-testid="cine2-badge">
         {error
           ? error
@@ -380,16 +611,29 @@ export function Viewer3DCinematicOverlay({
               ? ""
               : t("cine2.probing")}
       </div>
+      </div>
     </div>
   );
 }
 
 const root: React.CSSProperties = { position: "absolute", inset: 0, zIndex: 12, pointerEvents: "none" };
 const canvasEl: React.CSSProperties = { position: "absolute", inset: 0, width: "100%", height: "100%", background: "#000" };
-const badge: React.CSSProperties = {
+const badgeBox: React.CSSProperties = { position: "absolute", bottom: 10, left: 10, display: "flex", flexDirection: "column", alignItems: "flex-start" };
+const badgeWarn: React.CSSProperties = { borderColor: "#c88010", color: "#f0b050" };
+const lostCard: React.CSSProperties = {
   position: "absolute",
-  bottom: 10,
   left: 10,
+  bottom: 70,
+  maxWidth: 440,
+  padding: "12px 14px",
+  background: "rgba(20,24,28,0.95)",
+  border: "1px solid #c88010",
+  borderRadius: 8,
+  fontSize: 13,
+  color: "#e3e9ee",
+  pointerEvents: "auto",
+};
+const badge: React.CSSProperties = {
   padding: "3px 8px",
   background: "rgba(20,24,28,0.8)",
   border: "1px solid #2c343b",
