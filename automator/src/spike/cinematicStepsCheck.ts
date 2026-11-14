@@ -253,26 +253,31 @@ async function main(): Promise<number> {
       }
 
       if (!BASELINE && phase.id === "smooth") {
-        const measure = async (tag: string, seed: number) => {
-          if (seed) await evalDbg<void>(v3d, `d.cine2SetSeed(${seed})`);
-          const sec = await waitFrames(v3d, N_FRAMES);
-          await v3d.waitForTimeout(400);
-          const a = await analyze(v3d, path.join(OUT_DIR, `smooth-${tag}.png`), null);
-          return { mean: a.mean, sec };
+        // 半透明の媒質（HU −120〜120）。1 実現が数秒なので、フレーム数を増やし、各条件を 4 つの種で測って平均する。
+        const N7 = Number(process.env.CINE_FRAMES_B7 ?? 120);
+        const SEEDS = [0, 100003, 200003, 300007];
+        const measure = async (tag: string): Promise<{ means: number[]; sec: number }> => {
+          const means: number[] = [];
+          let sec = 0;
+          for (const seed of SEEDS) {
+            await evalDbg<void>(v3d, `d.cine2SetSeed(${seed})`);
+            const t = await waitFrames(v3d, N7);
+            if (seed === 0) sec = t;
+            await v3d.waitForTimeout(300);
+            means.push((await analyze(v3d, path.join(OUT_DIR, `smooth-${tag}-${seed}.png`), null)).mean);
+          }
+          return { means, sec };
         };
+        const fmt = (a: number[]) => a.map((x) => x.toFixed(5)).join(" / ");
+        const range = (a: number[]) => Math.max(...a) - Math.min(...a);
         await v3d.getByTestId("cine2-resolution").waitFor({ timeout: 60_000 });
-        const full: number[] = [];
-        let fullSec = 0;
-        for (const seed of [0, 100003, 200003, 300007]) {
-          const r = await measure(`full-${seed}`, seed);
-          full.push(r.mean);
-          if (seed === 0) fullSec = r.sec;
-        }
-        const floor = Math.max(...full) - Math.min(...full);
-        console.log(`  元の解像度 ${N_FRAMES} フレームの平均輝度 ${full.map((x) => x.toFixed(5)).join(" / ")}（雑音の床 = 幅 ${floor.toExponential(2)}）。0 → ${N_FRAMES} フレームの時間 ${fullSec.toFixed(1)} 秒`);
+        const full = await measure("full");
         const stFull = (await stats(v3d))!;
         const stepsFull = await evalDbg<number | null>(v3d, "d.cine2PrimarySteps()");
         check(stFull.reason === "full" && stepsFull === stFull.texDims[2], "（前提）元の解像度で描いている（歩数 = z のテクセル数）", { reason: stFull.reason, stepsFull });
+        await evalDbg<void>(v3d, "d.cine2OpacityCorrection(false)");
+        const fullOff = await measure("full-nocorr");
+        await evalDbg<void>(v3d, "d.cine2OpacityCorrection(true)");
         await stopCine(v3d);
 
         const fullBytes = phase.dims[0] * phase.dims[1] * phase.dims[2] * 2;
@@ -281,27 +286,22 @@ async function main(): Promise<number> {
         await v3d.getByTestId("cine2-resolution").waitFor({ timeout: 60_000 });
         const stHalf = (await stats(v3d))!;
         check(stHalf.reason === "budget" && stHalf.texDims.every((d, i) => d * 1.5 <= phase.dims[i]), "（前提）予算 1/8 で、すべての軸が 1.5 倍以上粗く間引かれる", stHalf.texDims);
-        const half = await measure("half-0", 0);
-        const diff = Math.abs(half.mean - meanOf(full));
-        console.log(`  半分の解像度（補正あり）の平均輝度 ${half.mean.toFixed(5)}（元の解像度の平均 ${meanOf(full).toFixed(5)}・差 ${diff.toExponential(2)}・${N_FRAMES} フレームの時間 ${half.sec.toFixed(1)} 秒）`);
-
-        // 負例: 補正を切ると、同じ比較で差が床を超える
+        const half = await measure("half");
         await evalDbg<void>(v3d, "d.cine2OpacityCorrection(false)");
-        const halfOff = await measure("half-nocorr", 0);
-        await stopCine(v3d);
-        await evalDbg<void>(v3d, "d.cine2SetBudget(null)");
-        await startCine(v3d);
-        await v3d.getByTestId("cine2-resolution").waitFor({ timeout: 60_000 });
-        await evalDbg<void>(v3d, "d.cine2OpacityCorrection(false)");
-        const fullOff = await measure("full-nocorr", 0);
-        const diffOff = Math.abs(halfOff.mean - fullOff.mean);
-        console.log(`  補正なし: 元 ${fullOff.mean.toFixed(5)} / 半分 ${halfOff.mean.toFixed(5)}（差 ${diffOff.toExponential(2)}）`);
-        // 受け入れ: 補正ありの差が、補正なしの差の 1/3 以下で、平均輝度の 1% 以内。雑音の床との比較は記録する（箱平均で球の縁がぼけるぶんの差が残り、床よりは大きい）。
-        const meanFull = meanOf(full);
-        console.log(`  補正あり: 差 ${diff.toExponential(2)}（平均の ${((diff / meanFull) * 100).toFixed(2)}%・雑音の床の ${(diff / floor).toFixed(1)} 倍）／補正なし: 差 ${diffOff.toExponential(2)}（平均の ${((diffOff / fullOff.mean) * 100).toFixed(2)}%）`);
-        check(diff * 3 <= diffOff && diff / meanFull <= 0.01, "B7: 解像度を半分にしたときの平均輝度の差が、補正ありは補正なしの 1/3 以下で、平均輝度の 1% 以内", { diff, diffOff, meanFull });
-        check(diffOff > floor, `B7（負例）: 補正を切ると、解像度を変えたときの平均輝度の差（${diffOff.toExponential(2)}）が雑音の床（${floor.toExponential(2)}）を超える`, { diffOff, floor });
+        const halfOff = await measure("half-nocorr");
         await evalDbg<void>(v3d, "d.cine2OpacityCorrection(true)");
+        await evalDbg<void>(v3d, "d.cine2SetBudget(null)");
+
+        const m = { full: meanOf(full.means), fullOff: meanOf(fullOff.means), half: meanOf(half.means), halfOff: meanOf(halfOff.means) };
+        const diffOn = Math.abs(m.half - m.full), diffOff = Math.abs(m.halfOff - m.fullOff);
+        const floor = Math.max(range(full.means), range(half.means));
+        console.log(`  ${N7} フレーム・種 4 つ（元の解像度 ${full.sec.toFixed(1)} 秒・半分 ${half.sec.toFixed(1)} 秒）`);
+        console.log(`  補正あり: 元 ${fmt(full.means)} / 半分 ${fmt(half.means)}`);
+        console.log(`  補正なし: 元 ${fmt(fullOff.means)} / 半分 ${fmt(halfOff.means)}`);
+        console.log(`  平均の差: 補正あり ${diffOn.toExponential(2)}（平均の ${((diffOn / m.full) * 100).toFixed(2)}%）／補正なし ${diffOff.toExponential(2)}（平均の ${((diffOff / m.fullOff) * 100).toFixed(2)}%）・雑音の床（種違いの幅の大きいほう）${floor.toExponential(2)}`);
+        check(diffOn * 3 <= diffOff && diffOn / m.full <= 0.01, "B7: 解像度を半分にしたときの平均輝度の差が、補正ありは補正なしの 1/3 以下で、平均輝度の 1% 以内", { diffOn, diffOff, floor });
+        check(diffOff > floor, `B7（負例）: 補正を切ると、解像度を変えたときの平均輝度の差（${diffOff.toExponential(2)}）が雑音の床（${floor.toExponential(2)}）を超える`, { diffOff, floor });
+        console.log(`  （記録）補正の有無で元の解像度の平均輝度が ${m.full.toFixed(5)} と ${m.fullOff.toFixed(5)} に変わる（意図した見た目の変更。d_ref=1 mm・歩幅 ≈0.8〜1 mm）`);
       }
 
       if (phase.id === "stripes" || phase.id === "stripes0") {
