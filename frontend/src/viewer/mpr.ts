@@ -101,6 +101,29 @@ export function setMprTouchTool(toolGroupId: string, tool: MprTouchTool): void {
   applyMprTouchTool(tg, tool);
 }
 
+/**
+ * 3D ROI の作図ツールの ON/OFF（デスクトップ）。ON の間は主ボタンのドラッグを作図が受けるので、
+ * Crosshairs を Passive にして取り合わないようにする（参照線は Passive でも描画される）。OFF で戻す。
+ */
+export function setMprRoiTool(toolGroupId: string, on: boolean): void {
+  const tg = ToolGroupManager.getToolGroup(toolGroupId);
+  if (!tg) return;
+  if (on) tg.setToolPassive(CrosshairsTool.toolName, { removeAllBindings: true });
+  else tg.setToolActive(CrosshairsTool.toolName, { bindings: [{ mouseButton: MouseBindings.Primary }] });
+}
+
+/** ボリュームの世界座標の境界 [xmin,xmax,ymin,ymax,zmin,zmax]（mm, LPS）。取れなければ null。 */
+export function mprVolumeBounds(engine: RenderingEngine, viewportId: string): [number, number, number, number, number, number] | null {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const vp = engine.getViewport(viewportId) as any;
+    const b = vp.getImageData?.()?.imageData?.getBounds?.() as number[] | undefined;
+    return b && b.length === 6 && b.every(Number.isFinite) ? (b as [number, number, number, number, number, number]) : null;
+  } catch {
+    return null;
+  }
+}
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type AnyObj = Record<string, any>;
 
