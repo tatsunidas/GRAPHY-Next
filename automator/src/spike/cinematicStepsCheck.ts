@@ -6,7 +6,7 @@
  *
  * 合成の CT を使う（期待値・位置は mm/ボクセルの式で決め、描画側と独立）:
  *   step    128×128×100（市松つきの傾斜）          B8
- *   smooth  288×288×272（市松なしの傾斜＋球）       B7
+ *   smooth  288×288×272（市松なし・球なし。HU −120〜120 の傾斜＝窓の中の半透明の媒質）  B7（全体が半透明なので、歩数と不透明度の補正が見た目に効く）
  *   stripes 512×512×64・0.5 mm（1 ボクセル幅の縞）  B6
  *
  *   B8 中央の画素の一次レイの歩数（シェーダが決めた値を読み戻す）が、z 方向から見るとき ceil(z のテクセル数) に一致（元の解像度・間引いた格子の両方）
@@ -196,13 +196,14 @@ async function main(): Promise<number> {
     console.log(`【未達】numpy / pydicom が使えません（CINE_PY=${PY}）。合格にしません。\n${probe.stderr}`);
     return 2;
   }
-  const phases = BASELINE ? ALL.filter((p) => p.id === "stripes" || p.id === "stripes0") : ALL;
+  const only = process.env.CINE_ONLY; // 例 smooth（切り分け用）
+  const phases = BASELINE ? ALL.filter((p) => p.id === "stripes" || p.id === "stripes0") : only ? ALL.filter((p) => p.id === only) : ALL;
   const work = fs.mkdtempSync(path.join(os.tmpdir(), "cine-steps-"));
   const dirs: Record<string, string> = {};
   for (const p of phases) {
     dirs[p.id] = path.join(work, p.id);
     const args = p.id === "step" ? [RAMP, dirs[p.id], "--dims", p.dims.join(","), "--spacing", p.spacing.join(",")]
-      : p.id === "smooth" ? [RAMP, dirs[p.id], "--dims", p.dims.join(","), "--spacing", p.spacing.join(","), "--smooth"]
+      : p.id === "smooth" ? [RAMP, dirs[p.id], "--dims", p.dims.join(","), "--spacing", p.spacing.join(","), "--smooth", "--hu-range=-120,120", "--no-sphere"]
       : [STRIPES, dirs[p.id], "--dims", p.dims.join(","), "--spacing", p.spacing.join(","), "--phase", p.id === "stripes" ? "1" : "0"];
     const r = spawnSync(PY, ["-I", ...args], { encoding: "utf8" });
     if (r.status !== 0) throw new Error(`ファントムを作れませんでした: ${r.stderr}`);
