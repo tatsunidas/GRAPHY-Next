@@ -1,0 +1,12 @@
+{
+  "id": "roi-roundtrip-check",
+  "name": "ROI Roundtrip Check",
+  "version": "0.1.0",
+  "engines": { "graphy": ">=0.1.9", "os": ["win32", "darwin", "linux"] },
+  "description": "Verification only: exposes getRois / createRoi / removeCreatedRoi to window.__rtHost for the automator.",
+  "author": "automator",
+  "license": "MIT",
+  "contributes": ["viewer2d.menu"],
+  "ui": "ui.js",
+  "permissions": ["read-pixels"]
+}
