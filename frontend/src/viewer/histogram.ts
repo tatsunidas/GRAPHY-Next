@@ -172,6 +172,7 @@ export function analyzeValues(
     }
   }
 
+  // 母分散（÷N）。Cornerstone の注釈統計・マスク統計・IBSI の一次統計と定義を揃える（ImageJ の ÷(N−1) とは異なる）。
   const variance = sumSq / count;
   const stdDev = Math.sqrt(variance);
   const skewness = stdDev > 0 ? sumCube / count / Math.pow(stdDev, 3) : 0;
