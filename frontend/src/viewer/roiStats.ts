@@ -598,6 +598,11 @@ export interface RoiStatsInput {
   spacingY: number | null | undefined;
   /** world ↔ 画素の基準間隔（円の形に使う）。省略は等方。校正値（spacingX/Y）とは別。 */
   worldBasis?: WorldBasis;
+  /**
+   * 縦横比だけの画像（PixelAspectRatio。mm の寸法は無い）の比（垂直 ÷ 水平）。未校正のとき、px の値（面積・周長）を
+   * 「水平方向の画素」単位で比を反映して出す。校正済みの mm の計算は変えない。
+   */
+  pixelAspect?: number;
   /** 開 ROI の線プロファイルも作るか（詳細表示のときだけ true）。 */
   withProfile?: boolean;
   /** ヒストグラムも作るか（詳細表示のときだけ true）。要約統計と**同じ母集団**から作る。 */
@@ -643,14 +648,16 @@ export function computeRoiStatsFrom(input: RoiStatsInput): RoiStatsResult {
   const bbox = meshBBoxPx(mesh);
   if (bbox) geometry.bboxPx = bbox;
 
+  // 縦横比だけの画像（mm の寸法は無い）: px の値は「水平方向の画素」単位で、縦に比を掛ける。
+  const aspect = !calibrated && typeof input.pixelAspect === "number" && input.pixelAspect > 0 ? input.pixelAspect : 1;
   if (kind === "area") {
     const aPx = meshAreaPx2(mesh);
-    if (aPx !== null) geometry.areaPx2 = aPx;
+    if (aPx !== null) geometry.areaPx2 = aPx * aspect;
     const aMm = meshAreaMm2(mesh, spacingX, spacingY);
     if (aMm !== null) geometry.areaMm2 = aMm;
   }
   if (kind !== "point") {
-    geometry.perimeterPx = meshLength(mesh);
+    geometry.perimeterPx = aspect === 1 ? meshLength(mesh) : (meshLengthMm(mesh, 1, aspect) ?? meshLength(mesh));
     const lMm = meshLengthMm(mesh, spacingX, spacingY);
     if (lMm !== null) geometry.perimeterMm = lMm;
     // 長径・短径は `roiRead.computeCalipers()` と同じ定義（凸包上の最遠 2 点と直交幅）だが、

@@ -2,6 +2,7 @@
  * Copyright (c) Visionary Imaging Services, Inc. All rights reserved.
  * Author: Tatsuaki Kobayashi
  */
+import { calibratedSpacingOf, isAspectOnly, aspectOf } from "./pixelAspect";
 import { metaData, imageLoader, utilities as csUtils, type Types } from "@cornerstonejs/core";
 import dicomImageLoader from "@cornerstonejs/dicom-image-loader";
 import { suvForImageId } from "./suvStore";
@@ -18,6 +19,8 @@ export interface ImageInfo {
   columns?: number;
   /** 行間隔(縦/Y, mm) = PixelSpacing[0] */
   rowPixelSpacing?: number;
+  /** 縦横比だけの画像（PixelAspectRatio。mm の寸法は無い）の比（垂直 ÷ 水平）。表示・world の縦横にだけ使う。 */
+  pixelAspect?: number;
   /** 列間隔(横/X, mm) = PixelSpacing[1] */
   columnPixelSpacing?: number;
   sliceThickness?: number;
@@ -86,8 +89,11 @@ export function readImageInfo(imageId: string): ImageInfo {
 
   const rows: number | undefined = plane.rows ?? pixel.rows;
   const columns: number | undefined = plane.columns ?? pixel.columns;
-  const rowPixelSpacing: number | undefined = plane.rowPixelSpacing ?? undefined;
-  const columnPixelSpacing: number | undefined = plane.columnPixelSpacing ?? undefined;
+  // mm の寸法は校正済みのときだけ。縦横比だけの間隔（PixelAspectRatio）は mm として読まない（pixelAspect に分ける）。
+  const cal = calibratedSpacingOf(plane);
+  const rowPixelSpacing: number | undefined = cal ? cal.row : plane.rowPixelSpacing && !isAspectOnly(plane) ? plane.rowPixelSpacing : undefined;
+  const columnPixelSpacing: number | undefined = cal ? cal.col : plane.columnPixelSpacing && !isAspectOnly(plane) ? plane.columnPixelSpacing : undefined;
+  const pixelAspect = aspectOf(plane) ?? undefined;
   const ipp = toNums(plane.imagePositionPatient);
   const suv = suvForImageId(imageId);
 
@@ -100,6 +106,7 @@ export function readImageInfo(imageId: string): ImageInfo {
     columns,
     rowPixelSpacing,
     columnPixelSpacing,
+    pixelAspect,
     sliceThickness: plane.sliceThickness ?? undefined,
     fovWidthMm: columns && columnPixelSpacing ? columns * columnPixelSpacing : undefined,
     fovHeightMm: rows && rowPixelSpacing ? rows * rowPixelSpacing : undefined,
