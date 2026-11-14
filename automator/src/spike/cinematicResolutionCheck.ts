@@ -85,15 +85,16 @@ const halfUlp = (v: number): number => {
   return e < -14 ? 2 ** -24 : 2 ** (e - 10);
 };
 
-async function waitRunning(page: Page, timeoutMs = 240_000): Promise<void> {
-  await page.waitForFunction(() => /\d+\s*\/\s*400/.test(document.body.innerText), undefined, { timeout: timeoutMs });
-}
+/** バッジ（cine2-badge）の「n / 400」から蓄積フレーム数を読む。🔴 画面全体の文字では読まない（Info の「W/L 40 / 400」に当たる）。 */
+const FRAMES_IN_BADGE = `(function(){ var b = document.querySelector('[data-testid="cine2-badge"]'); var m = b && b.innerText.match(/(\\d+)\\s*\\/\\s*400/); return m ? Number(m[1]) : -1; })()`;
 
 /** オーバーレイの canvas を撮り、平均輝度（0〜1）を返す。 */
 async function meanLuma(page: Page, png: string): Promise<number> {
   const box = await page.evaluate(`(function(){
     var b = document.querySelector('[data-testid="cine2-badge"]');
-    var c = b && b.parentElement && b.parentElement.parentElement && b.parentElement.parentElement.querySelector('canvas');
+    // オーバーレイの根（z-index 12）の中の canvas。DOM の入れ子が旧新で違っても同じ canvas を撮る（vtk の canvas を撮らない）
+    var el = b; while (el && !(el.style && el.style.zIndex === '12')) el = el.parentElement;
+    var c = el && el.querySelector('canvas');
     if (!c) return null; var r = c.getBoundingClientRect(); return {x: r.left, y: r.top, width: r.width, height: r.height};
   })()`) as { x: number; y: number; width: number; height: number } | null;
   if (!box) return Number.NaN;
@@ -117,10 +118,19 @@ async function meanLuma(page: Page, png: string): Promise<number> {
 const N_FRAMES = Number(process.env.CINE_FRAMES ?? 60);
 
 async function waitFrames(page: Page, n: number, timeoutMs = 600_000): Promise<void> {
-  await page.waitForFunction((target) => {
-    const t = document.body.innerText.match(/(\d+)\s*\/\s*400/);
-    return !!t && Number(t[1]) >= target;
-  }, n, { timeout: timeoutMs });
+  const t0 = Date.now();
+  const timer = setInterval(() => {
+    void page.evaluate(FRAMES_IN_BADGE).then((c) => console.log(`    …${Math.round((Date.now() - t0) / 1000)} 秒: ${c} フレーム`)).catch(() => undefined);
+  }, 60_000);
+  try {
+    await waitFramesInner(page, n, timeoutMs);
+  } finally {
+    clearInterval(timer);
+  }
+}
+
+async function waitFramesInner(page: Page, n: number, timeoutMs: number): Promise<void> {
+  await page.waitForFunction(`(${FRAMES_IN_BADGE}) >= ${n}`, undefined, { timeout: timeoutMs });
 }
 
 async function open3d(driver: DesktopDriver, phase: Phase, fixture: string): Promise<Page> {
@@ -159,7 +169,8 @@ async function main(): Promise<number> {
     return 2;
   }
   const work = fs.mkdtempSync(path.join(os.tmpdir(), "cine-res-"));
-  const phases = BASELINE ? PHASES.filter((p) => p.id === "small") : PHASES;
+  const only = process.env.CINE_ONLY; // 例 small（検査の切り分け用）
+  const phases = BASELINE ? PHASES.filter((p) => p.id === "small") : only ? PHASES.filter((p) => p.id === only) : PHASES;
   const dirs: Record<string, string> = {};
   const expected: Record<string, { min: number; max: number; layers: Record<string, number[]> }> = {};
   for (const p of phases) {
@@ -176,8 +187,9 @@ async function main(): Promise<number> {
       const gl = document.createElement("canvas").getContext("webgl2");
       const dbg = gl?.getExtension("WEBGL_debug_renderer_info");
       const r = gl && dbg ? String(gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL)) : null;
+      const fl = !!gl?.getExtension("OES_texture_float_linear");
       gl?.getExtension("WEBGL_lose_context")?.loseContext();
-      return r;
+      return `${r}（OES_texture_float_linear: ${fl ? "あり" : "なし"}）`;
     });
     console.log(`label=${LABEL} baseline=${BASELINE} GPU 名: ${gpuName}`);
     if (gpuName && /llvmpipe|swiftshader/i.test(gpuName)) {
@@ -208,7 +220,7 @@ async function main(): Promise<number> {
       const row = v3d.getByTestId("cine2-resolution");
       const attr = async (n: string) => (await row.getAttribute(n)) ?? "";
       const texDims = (await attr("data-tex-dims")).split(",").map(Number);
-      const canvasWH = (await v3d.evaluate(`(function(){ var b = document.querySelector('[data-testid="cine2-badge"]'); var c = b.parentElement.parentElement.querySelector('canvas'); return [c.width, c.height]; })()`)) as number[];
+      const canvasWH = (await v3d.evaluate(`(function(){ var b = document.querySelector('[data-testid="cine2-badge"]'); var el = b; while (el && !(el.style && el.style.zIndex === '12')) el = el.parentElement; var c = el.querySelector('canvas'); return [c.width, c.height]; })()`)) as number[];
       console.log(`  解像度の行: tex=${texDims.join("×")} reason=${await attr("data-reason")} source=${await attr("data-budget-source")} gpuBytes=${await attr("data-gpu-bytes")}（canvas ${canvasWH.join("×")}）`);
 
       if (phase.id === "big") {
@@ -334,19 +346,24 @@ async function main(): Promise<number> {
         await v3d.waitForTimeout(500);
         const meanA = await meanLuma(v3d, path.join(OUT_DIR, `${LABEL}-small.png`));
         check(Number.isFinite(meanA) && meanA > 0.02, `（前提）${N_FRAMES} フレーム蓄積後の画が真っ黒でない（平均輝度）`, meanA);
-        // 雑音の床: 同じコードで乱数の種だけ変えて、もう一度 400 フレーム蓄積する
-        await evalDbg<void>(v3d, "d.cine2SetSeed(100003)");
-        await waitFrames(v3d, N_FRAMES);
-        await v3d.waitForTimeout(500);
-        const meanB = await meanLuma(v3d, path.join(OUT_DIR, `${LABEL}-small-seed.png`));
-        const floor = Math.abs(meanA - meanB);
-        console.log(`  収束後の平均輝度 A=${meanA.toFixed(5)} B(種違い)=${meanB.toFixed(5)} 雑音の床=${floor.toExponential(2)}`);
-        fs.writeFileSync(path.join(OUT_DIR, `mean-${LABEL}.json`), JSON.stringify({ label: LABEL, mean: meanA, floor }));
+        // 雑音の床: 同じコードで乱数の種だけ変えて、同じフレーム数を蓄積した実現を 3 つ足す（計 5 つ）。
+        // 1 回あたりの雑音が大きいので（20 フレームでは 2 枚の差が旧新の差と同じ大きさだった）、2 枚の差ではなく 5 つの幅を床にする。
+        const samples = [meanA];
+        for (const seed of [100003, 200003, 300007, 400009]) {
+          await evalDbg<void>(v3d, `d.cine2SetSeed(${seed})`);
+          await waitFrames(v3d, N_FRAMES);
+          await v3d.waitForTimeout(500);
+          samples.push(await meanLuma(v3d, path.join(OUT_DIR, `${LABEL}-small-seed${seed}.png`)));
+        }
+        const floor = Math.max(...samples) - Math.min(...samples);
+        const meanNew = samples.reduce((x, y) => x + y, 0) / samples.length;
+        console.log(`  ${N_FRAMES} フレーム蓄積後の平均輝度 ${samples.map((x) => x.toFixed(5)).join(" / ")}（種違い 5 つ。平均 ${meanNew.toFixed(5)}・雑音の床 = 幅 ${floor.toExponential(2)}）`);
+        fs.writeFileSync(path.join(OUT_DIR, `mean-${LABEL}.json`), JSON.stringify({ label: LABEL, mean: meanNew, floor, samples }));
         const oldPath = path.join(OUT_DIR, "mean-old.json");
         if (fs.existsSync(oldPath)) {
           const old = JSON.parse(fs.readFileSync(oldPath, "utf8")) as { mean: number };
-          const diff = Math.abs(meanA - old.mean);
-          check(diff <= floor, `B5: 旧コードと新コードの ${N_FRAMES} フレーム蓄積後の平均輝度の差（${diff.toExponential(2)}）が、乱数の種だけ変えた差（雑音の床 ${floor.toExponential(2)}）以下`, { diff, floor, old: old.mean, new: meanA });
+          const diff = Math.abs(meanNew - old.mean);
+          check(diff <= floor, `B5: 旧コードと新コードの ${N_FRAMES} フレーム蓄積後の平均輝度の差（${diff.toExponential(2)}）が、乱数の種だけ変えた 5 つの実現の幅（雑音の床 ${floor.toExponential(2)}）以下`, { diff, floor, old: old.mean, new: meanNew, samples });
         } else notReached("B5: 旧コードとの平均輝度の比較", "mean-old.json が無い（先に --baseline を origin/main のコードで実行する）");
         // 開閉を 20 回繰り返しても 3D が開く（作ったコンテキストを残さない）
         await stopCine(v3d);
