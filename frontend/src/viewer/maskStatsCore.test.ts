@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { analyzeValues } from "./histogram";
 import { accumulateMaskStats, meanTimesVolumeLabelKey, meanTimesVolumeUnit } from "./maskStatsCore";
 
 const close = (a: number, b: number) => expect(Math.abs(a - b) <= 1e-6 * Math.max(1, Math.abs(b))).toBe(true);
@@ -96,5 +97,17 @@ describe("meanTimesVolumeLabelKey", () => {
     expect(meanTimesVolumeUnit("SUVbw")).toBe("SUVbw·mL");
     // 比（SUVR）や未知の SUV… は TLG ではない
     for (const u of ["SUVR", "SUVx", "HU", "Bq/ml", "raw", "", undefined]) expect(meanTimesVolumeLabelKey(u)).toBeNull();
+  });
+});
+
+describe("SD の定義は母標準偏差（÷N）", () => {
+  // Cornerstone の BasicStatsCalculator（画面上の注釈）も m2 / count の ÷N（ソースで確認）。
+  it("[1,2,3,4]: histogram と maskStatsCore が √1.25 で一致し、標本 SD √(5/3) ではない", () => {
+    const v = [1, 2, 3, 4];
+    const mask = accumulateMaskStats([{ labels: [1, 1, 1, 1], values: v }]);
+    const hist = analyzeValues([v], "HU", { mode: "count", value: 4 });
+    expect(mask.sd).toBeCloseTo(Math.sqrt(1.25), 9);
+    expect(hist.stdDev).toBeCloseTo(Math.sqrt(1.25), 9);
+    expect(Math.abs(mask.sd! - Math.sqrt(5 / 3))).toBeGreaterThan(0.1);
   });
 });
