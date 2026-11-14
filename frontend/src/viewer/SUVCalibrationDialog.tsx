@@ -100,7 +100,7 @@ export function SUVCalibrationDialog({
   const [type, setType] = useState<DialogType>(locked ? "suvr" : (applied?.type ?? "bw"));
   const [weight, setWeight] = useState(fmt2(base.patientWeight));
   const [height, setHeight] = useState(fmt2(base.patientHeight));
-  const [sex, setSex] = useState<"M" | "F">(base.patientSex);
+  const [sex, setSex] = useState<"M" | "F" | "">(base.patientSex ?? "");
   const [dose, setDose] = useState(fmt2(base.totalDoseBq ? base.totalDoseBq / 1e6 : undefined)); // MBq
   const [halfLife, setHalfLife] = useState(fmt2(base.halfLifeSec ? base.halfLifeSec / 60 : undefined)); // min
   const [injTime, setInjTime] = useState(fmtHms(base.injectionTimeMs));
@@ -180,7 +180,7 @@ export function SUVCalibrationDialog({
       ...base,
       patientWeight: weight.trim() === "" ? undefined : w,
       patientHeight: h > 0 ? h : undefined,
-      patientSex: sex,
+      patientSex: sex === "" ? undefined : sex,
       totalDoseBq: doseMBq * 1e6,
       halfLifeSec: hlMin * 60,
       injectionTimeMs,
@@ -255,7 +255,8 @@ export function SUVCalibrationDialog({
           <input data-testid="suv-height" value={height} onChange={(e) => setHeight(e.target.value)} disabled={fieldsOff || isPid} inputMode="decimal" style={input} />
         </Field>
         <Field label={t("suv.field.sex")}>
-          <select value={sex} onChange={(e) => setSex(e.target.value as "M" | "F")} disabled={fieldsOff || isPid} style={input}>
+          <select data-testid="suv-sex" value={sex} onChange={(e) => setSex(e.target.value as "M" | "F" | "")} disabled={fieldsOff || isPid} style={input}>
+            <option value="">{t("suv.sex.unknown")}</option>
             <option value="M">{t("suv.sex.male")}</option>
             <option value="F">{t("suv.sex.female")}</option>
           </select>

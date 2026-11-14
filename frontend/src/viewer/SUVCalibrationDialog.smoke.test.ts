@@ -132,6 +132,28 @@ describe("SUVCalibrationDialog（煙テスト）", () => {
     expect(Math.abs(cal.scale / (100 / decayed) - 1)).toBeLessThan(1e-9);
   });
 
+  it("性別が不明の PET: 欄は「不明」、SUL は適用できずエラー。女性を選ぶと適用できる。SUVbw は性別不明でも適用できる", async () => {
+    (globalThis as { __fakeSuv?: Partial<SuvParams> }).__fakeSuv = { patientWeight: 70, patientHeight: 1.75, patientSex: undefined, totalDoseBq: 370e6 };
+    try {
+      await open();
+      expect((q("suv-sex") as HTMLSelectElement).value).toBe("");
+      await setInput("suv-type", "sul-james");
+      await apply();
+      expect(getSuv(UID)).toBeUndefined();
+      expect(host.textContent).toContain("性別（男性・女性）が必要");
+      await setInput("suv-sex", "F");
+      await apply();
+      expect(getSuv(UID)?.type).toBe("sul-james");
+      setSuv(UID, null);
+      await setInput("suv-sex", "");
+      await setInput("suv-type", "bw");
+      await apply();
+      expect(getSuv(UID)?.type).toBe("bw");
+    } finally {
+      delete (globalThis as { __fakeSuv?: Partial<SuvParams> }).__fakeSuv;
+    }
+  });
+
   it("投与量の範囲: %ID/cc は 0.005 MBq を拒否・0.05 MBq を受理。SUVbw は 0.05 MBq を拒否", async () => {
     await open();
     await setInput("suv-type", "pid");
