@@ -293,3 +293,37 @@ export function updateGpuRecord(
   if (event.fail !== undefined && event.fail > 0) next.failMinBytes = Math.min(cur.failMinBytes ?? Infinity, event.fail);
   return { ...records, [gpuName]: next };
 }
+
+// ── 歩数・不透明度の補正（シェーダの式の CPU 側の基準）─────────────────────────────────────
+// シェーダ（cinematicPathTracer.ts）は同じ式を GLSL で持つ。ここは性質（歩数に依らない・端の扱い）を単体で確かめるための基準。
+
+/** tex 空間のレイ（単位方向 dirTex・区間の長さ distTex）の、テクセル単位の弦長。 */
+export function chordTexels(dirTex: Vec3, distTex: number, texDims: Vec3): number {
+  return Math.hypot(dirTex[0] * distTex * texDims[0], dirTex[1] * distTex * texDims[1], dirTex[2] * distTex * texDims[2]);
+}
+
+/** 1 歩が 1 テクセル以下になる歩数（弦長の切り上げ）。1 以上 maxSteps 以下。 */
+export function stepsForChord(chord: number, maxSteps: number): number {
+  if (!Number.isFinite(chord) || chord <= 0) return 1;
+  return Math.max(1, Math.min(Math.max(1, Math.floor(maxSteps)), Math.ceil(chord - 1e-9)));
+}
+
+/** レイの長さの上限（歩数の上限）: 箱の対角のテクセル数の切り上げ。 */
+export function maxStepsFor(texDims: Vec3): number {
+  return Math.max(1, Math.ceil(Math.hypot(texDims[0], texDims[1], texDims[2]) - 1e-9));
+}
+
+/** 1 歩の長さ（mm）。stepTex は tex 空間の歩幅、boxMm は箱の各軸の長さ（mm）。 */
+export function stepMm(dirTex: Vec3, stepTex: number, boxMm: Vec3): number {
+  return Math.hypot(dirTex[0] * stepTex * boxMm[0], dirTex[1] * stepTex * boxMm[1], dirTex[2] * stepTex * boxMm[2]);
+}
+
+/**
+ * 不透明度カーブの α（「単位長さ unitMm を通り抜けたときの不透明度」）を、歩幅 stepMm の 1 歩の不透明度に直す。
+ * `1 − (1 − α)^(stepMm/unitMm)`。n 歩で合成した透過率 Π(1−α') は、歩数に依らず (1−α)^(全長/unitMm) になる。
+ */
+export function correctedAlpha(alpha: number, stepMmValue: number, unitMm: number): number {
+  const a = Math.min(1, Math.max(0, alpha));
+  if (!(unitMm > 0) || !(stepMmValue > 0)) return a;
+  return 1 - Math.pow(1 - a, stepMmValue / unitMm);
+}

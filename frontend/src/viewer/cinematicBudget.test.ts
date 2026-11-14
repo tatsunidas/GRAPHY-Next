@@ -5,6 +5,11 @@
 import { describe, expect, it } from "vitest";
 import {
   axisWeights,
+  chordTexels,
+  correctedAlpha,
+  maxStepsFor,
+  stepMm,
+  stepsForChord,
   gpuBudget,
   halfRound,
   halfUlp,
@@ -209,5 +214,58 @@ describe("resampleSlabs（箱平均）", () => {
     for (const ws of w.weights) expect(ws.reduce((x, y) => x + y, 0)).toBeCloseTo(1, 9);
     expect(w.start[0]).toBe(0);
     expect(w.start[2] + w.weights[2].length).toBe(7);
+  });
+});
+
+describe("歩数（テクセルから決める）", () => {
+  const dims: Vec3 = [128, 128, 100];
+  it("軸に沿った視線の弦長は、その軸のテクセル数（箱を端から端まで通る）", () => {
+    expect(chordTexels([0, 0, 1], 1, dims)).toBeCloseTo(100, 9);
+    expect(chordTexels([1, 0, 0], 1, dims)).toBeCloseTo(128, 9);
+    expect(stepsForChord(chordTexels([0, 0, 1], 1, dims), maxStepsFor(dims))).toBe(100);
+  });
+  it("斜めの視線は軸方向より長い弦（対角に近いほど増える）で、上限（対角のテクセル数）を超えない", () => {
+    const d = 1 / Math.sqrt(3);
+    const diagChord = chordTexels([d, d, d], Math.sqrt(3), dims); // 単位立方体の対角（長さ √3）を端から端まで
+    expect(diagChord).toBeCloseTo(Math.hypot(128, 128, 100), 9);
+    expect(diagChord).toBeGreaterThan(128);
+    expect(stepsForChord(diagChord * 10, maxStepsFor(dims))).toBe(maxStepsFor(dims));
+    expect(maxStepsFor(dims)).toBe(Math.ceil(Math.hypot(128, 128, 100)));
+  });
+  it("端: 弦長 0 や不正値は 1 歩、切り上げ（100.0000001 は 101 にしない＝許容 1e-9）", () => {
+    expect(stepsForChord(0, 50)).toBe(1);
+    expect(stepsForChord(Number.NaN, 50)).toBe(1);
+    expect(stepsForChord(100 + 1e-12, 500)).toBe(100);
+    expect(stepsForChord(100.5, 500)).toBe(101);
+  });
+  it("テクスチャが 2 倍細かいと、同じ視線の歩数も 2 倍（解像度が歩数に効く）", () => {
+    const fine: Vec3 = [256, 256, 200];
+    expect(stepsForChord(chordTexels([0, 0, 1], 1, fine), maxStepsFor(fine))).toBe(2 * stepsForChord(chordTexels([0, 0, 1], 1, dims), maxStepsFor(dims)));
+  });
+});
+
+describe("不透明度の補正（歩数に依らない）", () => {
+  it("歩幅 = 単位長さなら α のまま。α=0 は 0、α=1 は 1", () => {
+    expect(correctedAlpha(0.3, 1, 1)).toBeCloseTo(0.3, 12);
+    expect(correctedAlpha(0, 0.5, 1)).toBe(0);
+    expect(correctedAlpha(1, 0.5, 1)).toBe(1);
+  });
+  it("同じ全長を n 歩で通ったときの透過率が、n に依らず (1−α)^(全長/単位) になる", () => {
+    const alpha = 0.2;
+    const lengthMm = 90;
+    const unit = 1;
+    for (const n of [10, 45, 90, 180, 500]) {
+      const a2 = correctedAlpha(alpha, lengthMm / n, unit);
+      expect(Math.pow(1 - a2, n)).toBeCloseTo(Math.pow(1 - alpha, lengthMm / unit), 9);
+    }
+  });
+  it("負例（補正なし＝1 歩あたり α のまま）は n で透過率が変わる＝補正を外すと性質が崩れる", () => {
+    const t = (n: number) => Math.pow(1 - 0.2, n);
+    expect(Math.abs(t(5) - t(20))).toBeGreaterThan(0.1);
+  });
+  it("歩幅が短いほど 1 歩の不透明度は小さい（単調）。stepMm は mm の長さ", () => {
+    expect(correctedAlpha(0.5, 0.25, 1)).toBeLessThan(correctedAlpha(0.5, 0.5, 1));
+    expect(stepMm([0, 0, 1], 0.01, [100, 100, 80])).toBeCloseTo(0.8, 12);
+    expect(stepMm([1, 0, 0], 0.01, [100, 100, 80])).toBeCloseTo(1.0, 12);
   });
 });

@@ -22,11 +22,13 @@ from pydicom.dataset import FileDataset, FileMetaDataset
 from pydicom.uid import ExplicitVRLittleEndian, generate_uid
 
 
-def hu_slab(nx, ny, nz, k, radius):
+def hu_slab(nx, ny, nz, k, radius, smooth=False):
     i = np.arange(nx)[None, :]
     j = np.arange(ny)[:, None]
     r = 0.5 * i / max(nx - 1, 1) + 0.3 * j / max(ny - 1, 1) + 0.2 * k / max(nz - 1, 1)
-    hu = np.floor(-950.0 + 1900.0 * r + 0.5) + 40.0 * np.where((i + j + k) % 2 == 0, 1.0, -1.0)
+    hu = np.floor(-950.0 + 1900.0 * r + 0.5)
+    if not smooth:
+        hu = hu + 40.0 * np.where((i + j + k) % 2 == 0, 1.0, -1.0)
     cx, cy, cz = (nx - 1) / 2.0, (ny - 1) / 2.0, (nz - 1) / 2.0
     d2 = (i - cx) ** 2 + (j - cy) ** 2 + (k - cz) ** 2
     hu = np.where(d2 <= radius**2, 1000.0, hu)
@@ -40,6 +42,7 @@ def main():
     ap.add_argument("--spacing", required=True)
     ap.add_argument("--patient-id", default="PH-RAMP")
     ap.add_argument("--layers", default="")
+    ap.add_argument("--smooth", action="store_true", help="市松の細かい成分を足さない（間引いても内容が変わらない。解像度に依らない見た目の検査用）")
     a = ap.parse_args()
     nx, ny, nz = (int(x) for x in a.dims.split(","))
     sx, sy, sz = (float(x) for x in a.spacing.split(","))
@@ -48,12 +51,12 @@ def main():
     study, series, frame = generate_uid(), generate_uid(), generate_uid()
     lo, hi = float("inf"), float("-inf")
     for k in range(nz):
-        s = hu_slab(nx, ny, nz, k, radius)
+        s = hu_slab(nx, ny, nz, k, radius, a.smooth)
         lo, hi = min(lo, float(s.min())), max(hi, float(s.max()))
     layers = [int(x) for x in a.layers.split(",") if x] or [0, nz // 2, nz - 1]
     expected = {}
     for k in range(nz):
-        hu = hu_slab(nx, ny, nz, k, radius)
+        hu = hu_slab(nx, ny, nz, k, radius, a.smooth)
         if k in layers:
             expected[str(k)] = ((hu - lo) / (hi - lo)).astype(np.float32).ravel().tolist()
         meta = FileMetaDataset()

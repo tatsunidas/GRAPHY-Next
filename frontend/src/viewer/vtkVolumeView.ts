@@ -223,6 +223,11 @@ export interface VtkVolumeView {
    * Cinematic v2 パストレーサ（`viewer/cinematicPathTracer.ts`）の LUT テクスチャ用。
    */
   getLut256(): Uint8Array;
+  /**
+   * 不透明度の単位長さ（mm。vtk の `scalarOpacityUnitDistance`）。「この長さを通り抜けたときの不透明度が不透明度カーブの値」。
+   * パストレーサの歩幅の補正の基準。読めなければ 1.0（vtk の既定）。
+   */
+  getOpacityUnitDistance(): number;
   resetView(): void;
   resize(): void;
   render(): void;
@@ -1413,6 +1418,14 @@ export function createVtkVolumeView(
         render();
       } catch {
         /* ignore */
+      }
+    },
+    getOpacityUnitDistance() {
+      try {
+        const d = Number(prop.getScalarOpacityUnitDistance(0));
+        return Number.isFinite(d) && d > 0 ? d : 1.0;
+      } catch {
+        return 1.0;
       }
     },
     getLut256() {
