@@ -53,9 +53,10 @@ final class VolumeAssembler implements AnonymizeService.Sink {
 
     /** 整数の画像は {@code raw}、Parametric Map は実際の量の {@code values}（どちらか一方）。 */
     record Slice(byte[] raw, float[] values, int frame, double[] ipp, int instanceNumber, double slope,
-            double intercept, Integer temporalPosition, Double acquisitionSeconds) {
+            double intercept, Integer temporalPosition, Double acquisitionSeconds, Double frameReferenceTimeMs,
+            Double triggerTimeMs) {
         Slice(byte[] raw, float[] values, int frame, double[] ipp, int instanceNumber, double slope, double intercept) {
-            this(raw, values, frame, ipp, instanceNumber, slope, intercept, null, null);
+            this(raw, values, frame, ipp, instanceNumber, slope, intercept, null, null, null, null);
         }
     }
 
@@ -168,6 +169,9 @@ final class VolumeAssembler implements AnonymizeService.Sink {
         }
         Integer temporal = firstInt(ds, Tag.TemporalPositionIdentifier, Tag.TemporalPositionIndex);
         Double acqSeconds = acquisitionSeconds(ds);
+        // 動態 PET のフレーム時刻（ms）と心位相の TriggerTime（ms）。時相の鍵と時間間隔に使う
+        Double frameRefMs = finiteOrNull(ds, Tag.FrameReferenceTime);
+        Double triggerMs = finiteOrNull(ds, Tag.TriggerTime);
         byte[] all = PixelCodec.isUncompressed(tsuid) ? ds.getBytes(Tag.PixelData) : codec.decompress(ds, tsuid);
         int frameBytes = rows * cols * (ba / 8);
         if (all == null || all.length < (long) frameBytes * frames) {
@@ -184,7 +188,7 @@ final class VolumeAssembler implements AnonymizeService.Sink {
         for (int f = 0; f < frames; f++) {
             byte[] one = frames == 1 && all.length == frameBytes ? all
                     : java.util.Arrays.copyOfRange(all, f * frameBytes, (f + 1) * frameBytes);
-            slices.add(new Slice(one, null, f, frames == 1 ? ipp : null, in, slope, intercept, temporal, acqSeconds));
+            slices.add(new Slice(one, null, f, frames == 1 ? ipp : null, in, slope, intercept, temporal, acqSeconds, frameRefMs, triggerMs));
         }
     }
 
@@ -340,6 +344,15 @@ final class VolumeAssembler implements AnonymizeService.Sink {
         return null;
     }
 
+    /** 数値の欄の値。無い・読めないときは null（0 や NaN で埋めない）。 */
+    private static Double finiteOrNull(Attributes ds, int tag) {
+        if (!ds.containsValue(tag)) {
+            return null;
+        }
+        double v = ds.getDouble(tag, Double.NaN);
+        return Double.isFinite(v) ? v : null;
+    }
+
     /** AcquisitionTime（HHMMSS.FFFFFF）の秒。無い・読めないときは null（日付は見ない。時相の間隔は同じ日の中だけ）。 */
     private static Double acquisitionSeconds(Attributes ds) {
         String t = ds.getString(Tag.AcquisitionTime);
@@ -354,11 +367,16 @@ final class VolumeAssembler implements AnonymizeService.Sink {
         }
     }
 
+    /** 時相の鍵の名前（{@code assemble4d} の鍵の順と同じ）。 */
+    private static final String[] PHASE_KEY_NAMES = {"TemporalPosition", "FrameReferenceTime", "TriggerTime", "AcquisitionTime"};
+    /** 時相 t の鍵の値が位置の間で「同じ」とみなす差（ms の浮動小数の丸め）。 */
+    private static final double PHASE_KEY_TOLERANCE = 1e-6;
+
     /**
      * NIfTI 用の並べ方。3D は {@link #assemble()} と同じ。同じ位置に同じ枚数ずつ（T &gt; 1）あれば、時相として並べる。
      *
-     * <p>時相の鍵は、全インスタンスが持つ最初のもの（TemporalPosition → AcquisitionTime → InstanceNumber）で、位置の中で
-     * 昇順・重複なしになるものを使う。**モザイク（1 枚に多数のスライス）は、位置が 1 つ・時相が多数に見えて黙って誤った幾何になる**ので
+     * <p>時相の鍵は、全インスタンスが持つ最初のもの（TemporalPosition → FrameReferenceTime → TriggerTime → AcquisitionTime）で、
+     * 位置の中で昇順・重複なしになるものを使う。InstanceNumber だけでは決めない（{@code nifti-ambiguous-phases}）。**モザイク（1 枚に多数のスライス）は、位置が 1 つ・時相が多数に見えて黙って誤った幾何になる**ので
      * 3D・4D とも断る。
      *
      * @throws UnsupportedLayout {@code nifti-mosaic}・{@code nifti-uneven-phases}・{@code nifti-ambiguous-phases} ほか
@@ -411,13 +429,19 @@ final class VolumeAssembler implements AnonymizeService.Sink {
                 }
             }
         }
-        // 時相の鍵: 全インスタンスが持ち、各位置の中で重ならないもの
+        // 時相の鍵: 全インスタンスが持ち、各位置の中で昇順・重複なしになる最初のもの。
+        // 順は TemporalPosition → FrameReferenceTime → TriggerTime → AcquisitionTime。
+        //   FrameReferenceTime は動態のフレーム時刻そのもの、TriggerTime は心位相、AcquisitionTime は実時間
+        //   （スライスごとにずれる・セグメント化した撮像では位置の中で単調にならないことがある）なので最後。
+        // 🔴 InstanceNumber は鍵にしない。撮影順の番号に過ぎず、どれが時相 0 かの根拠が無い
+        //    （手がかりの無い 2 回分の撮影が各位置に 2 枚ずつ混ざったシリーズを、黙って 4D にしてしまう）。
         String key = null;
+        int keyIndex = -1;
         List<java.util.function.Function<Slice, Double>> keys = List.of(
                 s -> s.temporalPosition() == null ? null : (double) s.temporalPosition(),
-                Slice::acquisitionSeconds,
-                s -> (double) s.instanceNumber());
-        String[] names = {"TemporalPosition", "AcquisitionTime", "InstanceNumber"};
+                Slice::frameReferenceTimeMs,
+                Slice::triggerTimeMs,
+                Slice::acquisitionSeconds);
         for (int ki = 0; ki < keys.size() && key == null; ki++) {
             var f = keys.get(ki);
             boolean usable = slices.stream().allMatch(s -> f.apply(s) != null);
@@ -429,16 +453,17 @@ final class VolumeAssembler implements AnonymizeService.Sink {
                     }
                 }
             }
-            // 時相番号は、どの位置でも同じ並びでなければ（ずれていれば）時相を決められない
-            if (usable && ki == 0) {
+            // 時相 t の値は、どの位置でも同じでなければ時相を決められない（AcquisitionTime はスライスごとにずれるので対象外）
+            if (usable && ki <= 2) {
                 for (List<Slice> g : groups) {
                     for (int i = 0; i < t && usable; i++) {
-                        usable = f.apply(g.get(i)).equals(f.apply(groups.get(0).get(i)));
+                        usable = Math.abs(f.apply(g.get(i)) - f.apply(groups.get(0).get(i))) <= PHASE_KEY_TOLERANCE;
                     }
                 }
             }
             if (usable) {
-                key = names[ki];
+                key = PHASE_KEY_NAMES[ki];
+                keyIndex = ki;
             }
         }
         if (key == null) {
@@ -450,22 +475,36 @@ final class VolumeAssembler implements AnonymizeService.Sink {
                 sorted.add(g.get(ti));
             }
         }
-        // 時相の間隔（秒）: AcquisitionTime が全部にあり、先頭の位置の時相ごとの差が均等（中央値の 1% 以内）のときだけ
+        // 時相の間隔（秒）: 時刻の鍵（FrameReferenceTime・TriggerTime・AcquisitionTime）が全部にあり、先頭の位置の時相ごとの差が
+        // 均等（中央値の 1% 以内）のときだけ。時相の順を決めたのが時刻の鍵ならそれを、TemporalPosition が鍵のときは
+        // FrameReferenceTime → TriggerTime → AcquisitionTime の最初に全部が持つものを使う。決まらなければ NaN（推測で埋めない）
         double dt = Double.NaN;
-        if (slices.stream().allMatch(s -> s.acquisitionSeconds() != null) && t > 1) {
-            double[] diffs = new double[t - 1];
-            for (int i = 1; i < t; i++) {
-                diffs[i - 1] = groups.get(0).get(i).acquisitionSeconds() - groups.get(0).get(i - 1).acquisitionSeconds();
-            }
-            double[] sd = diffs.clone();
-            java.util.Arrays.sort(sd);
-            double med = sd[sd.length / 2];
-            boolean even = med > 0;
-            for (double d : diffs) {
-                even = even && Math.abs(d - med) <= 0.01 * med;
-            }
-            if (even) {
-                dt = med;
+        if (t > 1) {
+            List<java.util.function.Function<Slice, Double>> seconds = List.of(
+                    s -> s.frameReferenceTimeMs() == null ? null : s.frameReferenceTimeMs() / 1000.0,
+                    s -> s.triggerTimeMs() == null ? null : s.triggerTimeMs() / 1000.0,
+                    Slice::acquisitionSeconds);
+            int from = keyIndex >= 1 ? keyIndex - 1 : 0;
+            int to = keyIndex >= 1 ? keyIndex : seconds.size() - 1;
+            for (int si = from; si <= to && Double.isNaN(dt); si++) {
+                var f = seconds.get(si);
+                if (!slices.stream().allMatch(s -> f.apply(s) != null)) {
+                    continue;
+                }
+                double[] diffs = new double[t - 1];
+                for (int i = 1; i < t; i++) {
+                    diffs[i - 1] = f.apply(groups.get(0).get(i)) - f.apply(groups.get(0).get(i - 1));
+                }
+                double[] sd = diffs.clone();
+                java.util.Arrays.sort(sd);
+                double med = sd[sd.length / 2];
+                boolean even = med > 0;
+                for (double d : diffs) {
+                    even = even && Math.abs(d - med) <= 0.01 * med;
+                }
+                if (even) {
+                    dt = med;
+                }
             }
         }
         double dy = pixelSpacing != null && pixelSpacing.length == 2 ? pixelSpacing[0] : Double.NaN;

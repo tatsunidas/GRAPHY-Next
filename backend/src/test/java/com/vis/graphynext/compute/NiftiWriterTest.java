@@ -542,7 +542,7 @@ class NiftiWriterTest {
     }
 
     @Test
-    void thePhaseKeyIsTemporalPositionThenAcquisitionTimeThenInstanceNumber() throws Exception {
+    void theFirstPhaseKeyIsTemporalPosition() throws Exception {
         double[] axial = orients().get(0).iop();
         // ① TemporalPosition あり。保管は時相を逆順にして InstanceNumber の順と矛盾させる → 鍵が TemporalPosition なら時相どおりに並ぶ
         byte[] a = gunzip(write(series(Spec.basic(axial).withPhases(Phases.of(3).with(true, null).reversedStorage()), "CT")).file());
@@ -560,11 +560,12 @@ class NiftiWriterTest {
     }
 
     @Test
-    void instanceNumberIsTheLastResort() throws Exception {
+    void instanceNumberAloneIsNotAPhaseKey() throws Exception {
+        // 手がかり（TemporalPosition・FrameReferenceTime・TriggerTime・AcquisitionTime）が無いと、InstanceNumber の順だけでは
+        // 時相を決められない（2 回分の撮影が各位置に混ざったシリーズに、黙って時相のラベルを付けない）
         double[] axial = orients().get(0).iop();
-        byte[] c = gunzip(write(series(Spec.basic(axial).withPhases(Phases.of(3).with(false, null)), "CT")).file());
-        assertPhaseValues(c, 3);
-        assertEquals(0f, le(c).getFloat(92), 0f);
+        assertEquals("nifti-ambiguous-phases", reason(series(Spec.basic(axial).withPhases(Phases.of(3).with(false, null)), "CT")));
+        assertEquals("nifti-ambiguous-phases", reason(series(Spec.basic(axial).withPhases(Phases.of(2).with(false, null)), "CT")));
     }
 
     @Test

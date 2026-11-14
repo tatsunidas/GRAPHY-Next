@@ -64,11 +64,13 @@ async function main(): Promise<number> {
   try {
     await resetDb(d.ports.http);
     const base = `http://127.0.0.1:${d.ports.http}`;
+    const CAP = path.join(path.dirname(REAL), "C-A-P"); // 撮影が 2 回ぶん混ざった実シリーズ（66 枚・位置 38 か所のうち 28 か所が 2 枚。時相の手がかりなし）
     const a = await importPaths(d.ports.http, [REAL]);
+    const cap = fs.existsSync(CAP) ? await importPaths(d.ports.http, [CAP]) : null;
     const s = await importPaths(d.ports.http, [sag]);
     check(a.failed === 0 && s.failed === 0, "（前提）実 CT と、そこから作った矢状断を取り込めた", { a: a.imported, s: s.imported });
     const all = await listSeries(base);
-    const axial = all.find((x) => x.patient !== "DERIVED-SAGITTAL")!;
+    const axial = all.find((x) => x.patient !== "DERIVED-SAGITTAL" && x.n === 43)!;
     const sagittal = all.find((x) => x.patient === "DERIVED-SAGITTAL")!;
     const p = d.page;
     await p.reload();
@@ -106,6 +108,24 @@ async function main(): Promise<number> {
         "c = Image.new('RGB', (a.width + b.width + 20, h), 'white'); c.paste(a, (0, 0)); c.paste(b, (a.width + 20, 0)); c.save(sys.argv[3])",
       ].join("\n"), view, png, path.join(OUT, `${plane}-side-by-side.png`)]);
       check(both.status === 0, `${plane}: GRAPHY の 2D 表示（左）と nibabel（右）を並べた画像を出力`, both.out.slice(0, 200));
+    }
+    if (cap) {
+      console.log("\n[実データの負例] C-A-P（撮影が 2 回ぶん混ざった実シリーズ）は 4D にせず、位置ごとの枚数が揃わない（nifti-uneven-phases）ので断る");
+      const capSeries = all.find((x) => x.n === 66)!;
+      await selectSeries(p, capSeries.study, capSeries.series);
+      await p.getByRole("button", { name: /^(ファイル|File)$/ }).first().click();
+      let downloaded = false;
+      const onDl = () => { downloaded = true; };
+      p.on("download", onDl);
+      await p.getByTestId("menu-item-nifti-export").click();
+      const msg = p.getByTestId("nifti-export-msg");
+      await msg.filter({ hasText: /書き出せませんでした/ }).waitFor({ state: "visible", timeout: 30_000 });
+      await p.waitForTimeout(1500);
+      p.off("download", onDl);
+      const t = await msg.innerText();
+      console.log(`  帯: ${t}`);
+      check(/枚数が揃っていない/.test(t), "C-A-P: 「枚数が揃っていない」で断られる（時相の手がかりが無い重複を黙って 4D にしない）", t);
+      check(!downloaded, "C-A-P: ファイルは保存されない", null);
     }
     console.log(`\n出力: ${OUT}`);
     return summary();
