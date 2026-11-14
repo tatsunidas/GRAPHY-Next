@@ -12,6 +12,7 @@ nav:
   - はじめに: index.md
   - インストールと起動: install.md
   - データベースウィンドウ: main-screen.md
+  - 操作の手順（やりたいことから探す）: howto.md
   - 2D ビューア: viewer2d.md
   - MPR / Slicer / Curved MPR: reformat.md
   - 3D ビューア: viewer3d.md
