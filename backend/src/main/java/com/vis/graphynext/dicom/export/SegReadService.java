@@ -158,11 +158,9 @@ public class SegReadService {
         Map<Integer, List<SegImportResult.Frame>> framesBySeg = new LinkedHashMap<>();
         for (int i = 0; i < nf; i++) {
             Attributes fr = (pf != null && i < pf.size()) ? pf.get(i) : null;
-            int segNum = 0;
+            int segNum = SegFrameExpander.referencedSegmentNumber(ds, i);
             String refSop = null;
             if (fr != null) {
-                Attributes segId = fr.getNestedDataset(Tag.SegmentIdentificationSequence);
-                if (segId != null) segNum = segId.getInt(Tag.ReferencedSegmentNumber, 0);
                 Attributes deriv = fr.getNestedDataset(Tag.DerivationImageSequence);
                 if (deriv != null) {
                     Attributes src = deriv.getNestedDataset(Tag.SourceImageSequence);
