@@ -23,7 +23,7 @@
 type Any = any;
 type V3 = [number, number, number];
 
-import { resampleSlabs, TEXEL_BYTES, type Vec3 as BudgetVec3 } from "./cinematicBudget";
+import { maxStepsFor, resampleSlabs, TEXEL_BYTES, type Vec3 as BudgetVec3 } from "./cinematicBudget";
 
 // ── フルスクリーン三角形 頂点シェーダ ──
 const VERT = `#version 300 es
@@ -72,7 +72,13 @@ uniform float uClearcoat;
 uniform float uClearcoatRoughness;
 uniform float uSurfaceGradientThreshold;
 
-const int PRIMARY_STEPS = 128;
+uniform vec3 uTexDims;         // 3D テクスチャの寸法（テクセル）
+uniform vec3 uBoxMm;           // ボリュームの箱の各軸の長さ（mm）。tex 空間の長さ → mm
+uniform float uOpacityUnitMm;  // 不透明度カーブの単位長さ（mm。vtk の scalarOpacityUnitDistance）
+uniform int uMaxSteps;         // 一次レイの歩数の上限（箱の対角のテクセル数）
+uniform int uCorrect;          // 1: 歩幅に応じた不透明度の補正（検査用に 0 にできる）
+uniform int uDebugSteps;       // 1: 中央の一次レイの歩数を色で返す（検査用）
+
 const int SHADOW_STEPS = 48;
 const int MAX_BOUNCES = 4;
 const float PI = 3.14159265359;
@@ -97,6 +103,18 @@ float sampleAlpha(vec3 texCoord, out vec3 albedo) {
   return src.a;
 }
 
+// 不透明度カーブの α は「単位長さ uOpacityUnitMm を通り抜けたときの不透明度」。歩幅 stepMm の 1 歩の不透明度に直す。
+float stepAlpha(float alpha, float stepMm) {
+  if (uCorrect == 0) return alpha;
+  return 1.0 - pow(1.0 - alpha, stepMm / uOpacityUnitMm);
+}
+
+// 一次レイの歩数: 箱の中の区間をテクセル単位で測った弦長の切り上げ（1 歩 ≤ 1 テクセル）。float の誤差で 100.0 が 101 にならないよう 1e-3 を引く。
+int primaryStepsFor(float dist, vec3 dir) {
+  float chord = length(dir * dist * uTexDims);
+  return clamp(int(ceil(chord - 1e-3)), 1, uMaxSteps);
+}
+
 float sampleAlphaOnly(vec3 texCoord) {
   float rawVal = texture(volumeTex, texCoord).r;
   float winMin = uWinCenter - (uWinWidth * 0.5);
@@ -105,10 +123,11 @@ float sampleAlphaOnly(vec3 texCoord) {
 }
 
 vec3 computeGradient(vec3 pos) {
-  const float eps = 0.005;
-  float dx = sampleAlphaOnly(pos + vec3(eps, 0.0, 0.0)) - sampleAlphaOnly(pos - vec3(eps, 0.0, 0.0));
-  float dy = sampleAlphaOnly(pos + vec3(0.0, eps, 0.0)) - sampleAlphaOnly(pos - vec3(0.0, eps, 0.0));
-  float dz = sampleAlphaOnly(pos + vec3(0.0, 0.0, eps)) - sampleAlphaOnly(pos - vec3(0.0, 0.0, eps));
+  // 中心差分の幅は各軸 1 テクセル（テクスチャの解像度に合わせる）。
+  vec3 e = 1.0 / uTexDims;
+  float dx = sampleAlphaOnly(pos + vec3(e.x, 0.0, 0.0)) - sampleAlphaOnly(pos - vec3(e.x, 0.0, 0.0));
+  float dy = sampleAlphaOnly(pos + vec3(0.0, e.y, 0.0)) - sampleAlphaOnly(pos - vec3(0.0, e.y, 0.0));
+  float dz = sampleAlphaOnly(pos + vec3(0.0, 0.0, e.z)) - sampleAlphaOnly(pos - vec3(0.0, 0.0, e.z));
   return vec3(dx, dy, dz);
 }
 
@@ -165,12 +184,14 @@ float shadowTransmittance(vec3 origin) {
   float dist = tFar - tNear;
   if (dist <= 0.0001) return 1.0;
   float stepSize = dist / float(SHADOW_STEPS);
+  // 光学的厚みは歩幅（mm）に比例させる（補正あり）。補正なしは 1 歩あたり α のまま。
+  float depthScale = uCorrect == 0 ? 1.0 : length(lightDir * stepSize * uBoxMm) / uOpacityUnitMm;
   vec3 pos = origin + lightDir * tNear;
   float opticalDepth = 0.0;
   for (int i = 0; i < SHADOW_STEPS; i++) {
     vec3 albedo;
     float alpha = sampleAlpha(pos, albedo);
-    opticalDepth += -log(max(1.0 - alpha, 1e-4));
+    opticalDepth += -log(max(1.0 - alpha, 1e-4)) * depthScale;
     pos += lightDir * stepSize;
   }
   return exp(-opticalDepth);
@@ -225,13 +246,15 @@ vec3 tracePath(vec3 rayOrigin, vec3 rayDir) {
     tNear = max(tNear, 0.0);
     float dist = tFar - tNear;
     if (dist <= 0.0001) break;
-    float stepSize = dist / float(PRIMARY_STEPS);
+    int nSteps = primaryStepsFor(dist, rayDir);
+    float stepSize = dist / float(nSteps);
+    float stepMm = length(rayDir * stepSize * uBoxMm);
     vec3 pos = rayOrigin + rayDir * (tNear + rand() * stepSize);
     bool hit = false;
     vec3 hitAlbedo = vec3(0.0);
-    for (int i = 0; i < PRIMARY_STEPS; i++) {
+    for (int i = 0; i < nSteps; i++) {
       vec3 albedo;
-      float alpha = sampleAlpha(pos, albedo);
+      float alpha = stepAlpha(sampleAlpha(pos, albedo), stepMm);
       if (rand() < alpha) { hit = true; hitAlbedo = albedo; break; }
       pos += rayDir * stepSize;
     }
@@ -292,6 +315,15 @@ void main() {
   vec3 oTex = (uWorldToTex * vec4(uCameraPos, 1.0)).xyz;
   vec3 fTex = (uWorldToTex * vec4(farW, 1.0)).xyz;
   vec3 primaryDir = normalize(fTex - oTex);
+
+  if (uDebugSteps == 1) {
+    // 検査用: 一次レイの歩数をそのまま返す（RGBA32F の蓄積に書き、1 画素読み戻す）。
+    float dn, df;
+    int ns = 0;
+    if (intersectBox(oTex, primaryDir, dn, df)) ns = primaryStepsFor(df - max(dn, 0.0), primaryDir);
+    FragColor = vec4(float(ns) / 4096.0, 0.0, 0.0, 1.0);
+    return;
+  }
 
   uvec2 px = uvec2(gl_FragCoord.xy);
   uint pixelSeed = px.x * 1973u + px.y * 9277u + uFrameSeed * 26699u;
@@ -381,6 +413,12 @@ export type CinematicCreateResult =
 export interface CinematicEngine {
   /** 3D テクスチャの実際の大きさ。 */
   getTexInfo(): CinematicTexInfo;
+  /** 不透明度カーブの単位長さ（mm。vtk の scalarOpacityUnitDistance）。歩幅に応じた不透明度の補正の基準。蓄積はやり直す。 */
+  setOpacityUnitMm(mm: number): void;
+  /** 開発・検査用: 歩幅に応じた不透明度の補正を入／切（既定は入）。蓄積はやり直す。 */
+  setOpacityCorrection(on: boolean): void;
+  /** 開発・検査用: 中央の画素の一次レイの歩数（シェーダが決めた値）を読み戻す。蓄積は壊れる。読めなければ null。 */
+  debugPrimarySteps(): number | null;
   /** このコンテキストが失われたか（GPU のメモリ不足・ドライバのリセットなど）。失われたら描画は止まる。 */
   isLost(): boolean;
   /** コンテキストが失われたときに呼ばれる。戻り値で解除。 */
@@ -572,6 +610,8 @@ export function createCinematicPathTracer(
     uRoughness: uT("uRoughness"), uSpecular: uT("uSpecular"), uMetallic: uT("uMetallic"),
     uClearcoat: uT("uClearcoat"), uClearcoatRoughness: uT("uClearcoatRoughness"),
     uSurfaceGradientThreshold: uT("uSurfaceGradientThreshold"),
+    uTexDims: uT("uTexDims"), uBoxMm: uT("uBoxMm"), uOpacityUnitMm: uT("uOpacityUnitMm"),
+    uMaxSteps: uT("uMaxSteps"), uCorrect: uT("uCorrect"), uDebugSteps: uT("uDebugSteps"),
   };
   const uP = (n: string) => gl.getUniformLocation(presentProg, n);
   const ploc = { uAccumTex: uP("uAccumTex"), uFrameCount: uP("uFrameCount"), uExposure: uP("uExposure") };
@@ -585,6 +625,10 @@ export function createCinematicPathTracer(
   let p = { ...params };
   let frameCount = 0;
   let seedOffset = 0; // 検査用（乱数の種だけ変えて雑音の床を測る）
+  let opacityUnitMm = 1.0; // vtk の scalarOpacityUnitDistance（呼び出し側が渡す）
+  let opacityCorrection = true; // 検査用に切れる
+  const boxMm: V3 = [geom.dims[0] * (geom.spacing[0] || 1), geom.dims[1] * (geom.spacing[1] || 1), geom.dims[2] * (geom.spacing[2] || 1)];
+  const maxSteps = maxStepsFor(texInfo.texDims);
   let fence: WebGLSync | null = null; // 直前のフレームの完了を見る（isIdle）
   let src = 0; // 現在の「前フレーム蓄積」= accum[src]、書込先 = accum[1-src]
 
@@ -606,9 +650,79 @@ export function createCinematicPathTracer(
     gl.bindVertexArray(null);
   };
 
+  /** trace プログラムの uniform を現在の状態で設定する（renderFrame と検査用の読み戻しで共有）。 */
+  const applyTraceUniforms = (debugSteps: boolean): void => {
+  gl.uniformMatrix4fv(loc.uInvViewProj, false, new Float32Array(invViewProj));
+  gl.uniformMatrix4fv(loc.uWorldToTex, false, new Float32Array(worldToTex));
+  gl.uniform3fv(loc.uCameraPos, cameraPos);
+  gl.uniform1f(loc.uWinCenter, 0.5);
+  gl.uniform1f(loc.uWinWidth, 1.0);
+  gl.uniform3fv(loc.uLightDir, lightTex());
+  gl.uniform1f(loc.uLightIntensity, p.lightIntensity);
+  gl.uniform1f(loc.uAmbientIntensity, p.ambientIntensity);
+  gl.uniform1f(loc.uAnisotropy, p.anisotropy);
+  gl.uniform1f(loc.uLightAngularRadius, p.lightAngularRadius);
+  gl.uniform1i(loc.uSamplesPerFrame, Math.max(1, Math.round(p.samplesPerFrame)));
+  gl.uniform1ui(loc.uFrameSeed, (frameCount + 1 + seedOffset) >>> 0);
+  gl.uniform3fv(loc.uClipMin, clipMin);
+  gl.uniform3fv(loc.uClipMax, clipMax);
+  gl.uniform1f(loc.uRoughness, p.roughness);
+  gl.uniform1f(loc.uSpecular, p.specular);
+  gl.uniform1f(loc.uMetallic, p.metallic);
+  gl.uniform1f(loc.uClearcoat, p.clearcoat);
+  gl.uniform1f(loc.uClearcoatRoughness, p.clearcoatRoughness);
+  gl.uniform1f(loc.uSurfaceGradientThreshold, p.surfaceGradientThreshold);
+    gl.uniform3f(loc.uTexDims, texInfo.texDims[0], texInfo.texDims[1], texInfo.texDims[2]);
+    gl.uniform3fv(loc.uBoxMm, boxMm);
+    gl.uniform1f(loc.uOpacityUnitMm, opacityUnitMm);
+    gl.uniform1i(loc.uMaxSteps, maxSteps);
+    gl.uniform1i(loc.uCorrect, opacityCorrection ? 1 : 0);
+    gl.uniform1i(loc.uDebugSteps, debugSteps ? 1 : 0);
+  };
+
   const engine: CinematicEngine = {
     getTexInfo() {
       return texInfo;
+    },
+    setOpacityUnitMm(mm) {
+      if (Number.isFinite(mm) && mm > 0 && mm !== opacityUnitMm) {
+        opacityUnitMm = mm;
+        frameCount = 0;
+      }
+    },
+    setOpacityCorrection(on) {
+      if (on !== opacityCorrection) {
+        opacityCorrection = on;
+        frameCount = 0;
+      }
+    },
+    debugPrimarySteps() {
+      try {
+        // 中央の画素の一次レイの歩数をシェーダに出力させ、1 画素読み戻す。蓄積は壊れるので 0 からやり直す。
+        const dst = 1 - src;
+        gl.bindFramebuffer(gl.FRAMEBUFFER, accum[dst].fbo);
+        gl.viewport(0, 0, IW, IH);
+        gl.disable(gl.BLEND);
+        gl.useProgram(traceProg);
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_3D, volTex);
+        gl.uniform1i(loc.volumeTex, 0);
+        gl.activeTexture(gl.TEXTURE1);
+        gl.bindTexture(gl.TEXTURE_2D, lutTex);
+        gl.uniform1i(loc.uLutTex, 1);
+        gl.activeTexture(gl.TEXTURE2);
+        gl.bindTexture(gl.TEXTURE_2D, accum[src].tex);
+        gl.uniform1i(loc.uPrevAccum, 2);
+        applyTraceUniforms(true);
+        drawFullscreen();
+        const px = new Float32Array(4);
+        gl.readPixels(Math.floor(IW / 2), Math.floor(IH / 2), 1, 1, gl.RGBA, gl.FLOAT, px);
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+        frameCount = 0;
+        return Math.round(px[0] * 4096);
+      } catch {
+        return null;
+      }
     },
     setSeedOffset(n) {
       seedOffset = Math.max(0, Math.floor(n)) >>> 0;
@@ -685,26 +799,7 @@ export function createCinematicPathTracer(
         gl.clearColor(0, 0, 0, 0);
         gl.clear(gl.COLOR_BUFFER_BIT);
       }
-      gl.uniformMatrix4fv(loc.uInvViewProj, false, new Float32Array(invViewProj));
-      gl.uniformMatrix4fv(loc.uWorldToTex, false, new Float32Array(worldToTex));
-      gl.uniform3fv(loc.uCameraPos, cameraPos);
-      gl.uniform1f(loc.uWinCenter, 0.5);
-      gl.uniform1f(loc.uWinWidth, 1.0);
-      gl.uniform3fv(loc.uLightDir, lightTex());
-      gl.uniform1f(loc.uLightIntensity, p.lightIntensity);
-      gl.uniform1f(loc.uAmbientIntensity, p.ambientIntensity);
-      gl.uniform1f(loc.uAnisotropy, p.anisotropy);
-      gl.uniform1f(loc.uLightAngularRadius, p.lightAngularRadius);
-      gl.uniform1i(loc.uSamplesPerFrame, Math.max(1, Math.round(p.samplesPerFrame)));
-      gl.uniform1ui(loc.uFrameSeed, (frameCount + 1 + seedOffset) >>> 0);
-      gl.uniform3fv(loc.uClipMin, clipMin);
-      gl.uniform3fv(loc.uClipMax, clipMax);
-      gl.uniform1f(loc.uRoughness, p.roughness);
-      gl.uniform1f(loc.uSpecular, p.specular);
-      gl.uniform1f(loc.uMetallic, p.metallic);
-      gl.uniform1f(loc.uClearcoat, p.clearcoat);
-      gl.uniform1f(loc.uClearcoatRoughness, p.clearcoatRoughness);
-      gl.uniform1f(loc.uSurfaceGradientThreshold, p.surfaceGradientThreshold);
+      applyTraceUniforms(false);
       drawFullscreen();
       frameCount++;
       src = dst; // 次回の prev = 今書いた dst

@@ -33,8 +33,10 @@ vi.mock("../viewer/renderEnv", async (orig) => ({
 import { Viewer3DCinematicOverlay } from "./Viewer3DCinematicOverlay";
 
 const MIB = 1024 * 1024;
+const unitSpy = vi.fn();
 const DIMS: [number, number, number] = [64, 64, 40];
 
+let opacityUnit = 1;
 function fakeView(): VtkVolumeView {
   const scalars = { getData: () => new Int16Array(DIMS[0] * DIMS[1] * DIMS[2]) };
   const imageData = {
@@ -48,6 +50,7 @@ function fakeView(): VtkVolumeView {
   return {
     getSceneParts: () => ({ renderer: { getActiveCamera: () => cam }, render: () => undefined, imageData }),
     getLut256: () => new Uint8Array(1024),
+    getOpacityUnitDistance: () => opacityUnit,
   } as unknown as VtkVolumeView;
 }
 
@@ -55,6 +58,9 @@ function fakeView(): VtkVolumeView {
 function fakeEngine(texDims: [number, number, number], over: { lost?: () => boolean } = {}) {
   const lostCbs = new Set<() => void>();
   return {
+    setOpacityUnitMm: unitSpy,
+    setOpacityCorrection: () => undefined,
+    debugPrimarySteps: () => null,
     getTexInfo: () => ({
       texDims,
       srcDims: DIMS,
@@ -105,6 +111,8 @@ beforeEach(() => {
   localStorage.clear();
   localStorage.setItem("graphy.locale", "ja");
   rendererName = "Test GPU";
+  opacityUnit = 1;
+  unitSpy.mockReset();
   create.mockReset();
   host = document.createElement("div");
   document.body.appendChild(host);
@@ -188,6 +196,18 @@ describe("Viewer3DCinematicOverlay（煙テスト）", () => {
     const card = q("cine2-lost")!;
     expect(card.getAttribute("data-kind")).toBe("lost");
     expect(q("cine2-resolution")).toBeNull();
+  });
+
+  it("vtk の不透明度の単位長さ（mm）をエンジンへ渡す（既定の 1.0 とそれ以外）", async () => {
+    create.mockImplementation((_c, _i, _g, _p, dims) => ({ ok: true, engine: fakeEngine(dims) }));
+    await mount({ gpuMemoryMb: null });
+    expect(unitSpy).toHaveBeenCalledWith(1);
+    act(() => root.unmount());
+    root = createRoot(host);
+    unitSpy.mockReset();
+    opacityUnit = 2.5;
+    await mount({ gpuMemoryMb: null });
+    expect(unitSpy).toHaveBeenCalledWith(2.5);
   });
 
   it("WebGL2 が使えない（unsupported）: 従来の案内だけで、失敗の案内は出ない", async () => {

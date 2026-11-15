@@ -666,6 +666,8 @@ export interface CinematicTexControl {
   /** 乱数の種を変えたあと、蓄積をやり直す。 */
   reset(): void;
   frameCount(): number;
+  setOpacityCorrection(on: boolean): void;
+  primarySteps(): number | null;
 }
 export interface CinematicTexStats {
   texDims: [number, number, number];
@@ -1076,6 +1078,10 @@ declare global {
       /** 乱数の種をずらして蓄積をやり直す。 */
       cine2SetSeed: (n: number) => void;
       cine2FrameCount: () => number;
+      /** 歩幅に応じた不透明度の補正を入／切（検査用）。 */
+      cine2OpacityCorrection: (on: boolean) => void;
+      /** 中央の画素の一次レイの歩数（シェーダが決めた値）。蓄積は壊れる。 */
+      cine2PrimarySteps: () => number | null;
       /** 3D シーンの各物体の描き方（store とアクターから読んだ値）・色・不透明度・可視。 */
       getScene3dState: typeof readSceneActorStates;
       setViewer3dPluginView: typeof setViewer3dPluginView;
@@ -1277,6 +1283,8 @@ export function installDebugApi(): void {
       cinematicTex?.reset();
     },
     cine2FrameCount: () => cinematicTex?.frameCount() ?? 0,
+    cine2OpacityCorrection: (on) => cinematicTex?.setOpacityCorrection(on),
+    cine2PrimarySteps: () => cinematicTex?.primarySteps() ?? null,
     getScene3dState: readSceneActorStates,
     setViewer3dPluginView,
     renderViewer3d,

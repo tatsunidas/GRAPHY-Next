@@ -226,6 +226,7 @@ export function Viewer3DCinematicOverlay({
       return;
     }
     const engine: CinematicEngine = created.engine;
+    engine.setOpacityUnitMm(view.getOpacityUnitDistance());
     const info = engine.getTexInfo();
     const view0: TexView = {
       texDims: info.texDims,
@@ -268,6 +269,8 @@ export function Viewer3DCinematicOverlay({
       setSeedOffset: (n) => engine.setSeedOffset(n),
       reset: () => engine.reset(),
       frameCount: () => engine.getFrameCount(),
+      setOpacityCorrection: (on) => engine.setOpacityCorrection(on),
+      primarySteps: () => engine.debugPrimarySteps(),
     });
     setError("");
     setScale(1);
@@ -351,6 +354,7 @@ export function Viewer3DCinematicOverlay({
       if (ivp) {
         engine.setCamera(ivp, cam.getPosition() as [number, number, number]);
         engine.setLut(view.getLut256()); // W/L 変更に追従
+        engine.setOpacityUnitMm(view.getOpacityUnitDistance()); // 不透明度の単位長さの変更に追従（変わったときだけ蓄積をやり直す）
         engine.reset();
       }
       return true;
