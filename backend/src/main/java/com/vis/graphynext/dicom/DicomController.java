@@ -4,7 +4,10 @@
  */
 package com.vis.graphynext.dicom;
 
+import com.vis.graphynext.dicom.qr.DimseOutcome;
 import com.vis.graphynext.dicom.qr.DimseQrService;
+import com.vis.graphynext.dicom.qr.QrFindException;
+import com.vis.graphynext.dicom.qr.QrProbeService;
 import com.vis.graphynext.dicom.qr.QrRetrieveService;
 import com.vis.graphynext.dicom.qr.QrSeriesRow;
 import com.vis.graphynext.dicom.qr.QrStudyRow;
@@ -49,13 +52,14 @@ public class DicomController {
     private final DicomScpLifecycle scp; // scp.enabled=false のとき null
     private final DicomRemoteAeService remoteAeService;
     private final DicomQrAccess qrAccess;
+    private final QrProbeService qrProbe;
 
     public DicomController(DicomEchoScu echoScu, DicomProperties props, DicomLocalAeService localAe,
                            DicomTlsService tlsService, DimseQrService qr,
                            QrRetrieveService qrRetrieve, DicomSendService send, DicomStorageService storage,
                            org.springframework.beans.factory.ObjectProvider<WebDicomDataService> webProvider,
                            org.springframework.beans.factory.ObjectProvider<DicomScpLifecycle> scpProvider,
-                           DicomRemoteAeService remoteAeService, DicomQrAccess qrAccess) {
+                           DicomRemoteAeService remoteAeService, DicomQrAccess qrAccess, QrProbeService qrProbe) {
         this.echoScu = echoScu;
         this.props = props;
         this.localAe = localAe;
@@ -68,6 +72,25 @@ public class DicomController {
         this.scp = scpProvider.getIfAvailable();
         this.remoteAeService = remoteAeService;
         this.qrAccess = qrAccess;
+        this.qrProbe = qrProbe;
+    }
+
+    /**
+     * 相手が検索を断った・エラーを返した・応答せず切った、を画面が区別できる形で返す
+     * （{@code kind}・{@code status}・{@code errorComment}・{@code reason}。患者の値は含まない）。
+     */
+    @org.springframework.web.bind.annotation.ExceptionHandler(QrFindException.class)
+    public org.springframework.http.ResponseEntity<Map<String, Object>> onQrFailure(QrFindException e) {
+        DimseOutcome o = e.outcome();
+        Map<String, Object> body = new java.util.LinkedHashMap<>();
+        body.put("error", "qr-find-failed");
+        body.put("kind", o.kind().name());
+        body.put("status", o.status() == null ? null : String.format("%04XH", o.status()));
+        body.put("errorComment", o.errorComment());
+        body.put("reason", o.reason());
+        body.put("message", e.getMessage());
+        return org.springframework.http.ResponseEntity.status(org.springframework.http.HttpStatus.BAD_GATEWAY)
+                .body(body);
     }
 
     /** リモート AE へ C-ECHO（callingAet 省略時は自局 AE。tls=true で TLS 接続）。 */
@@ -138,6 +161,19 @@ public class DicomController {
     public List<QrStudyRow> qrFindStudies(@RequestBody QrFindRequest req) throws IOException {
         return qr.findStudiesForQr(req.host(), req.port(), req.calledAet(),
                 req.matchKeys() == null ? Map.of() : req.matchKeys(), req.tls());
+    }
+
+    /** 通信テスト: 試す段の一覧（実行順）。 */
+    @GetMapping("/qr/probe/plan")
+    public List<QrProbeService.Step> qrProbePlan() {
+        return qrProbe.plan();
+    }
+
+    /** 通信テスト: 1 段を実行する（疎通・検索のパターン・GET の許可・MOVE の許可）。 */
+    @PostMapping("/qr/probe/run")
+    public QrProbeService.Result qrProbeRun(@RequestBody ProbeRunRequest req) {
+        return qrProbe.run(req.stepId(), new QrProbeService.Request(req.host(), req.port(), req.calledAet(),
+                req.tls(), req.patientId(), req.studyDate(), req.studyUid()));
     }
 
     /** QR: SERIES レベル C-FIND（指定スタディ内のシリーズ）。 */
@@ -236,7 +272,14 @@ public class DicomController {
     public record EchoRequest(String host, int port, String calledAet, String callingAet, boolean tls) {
     }
 
-    public record RemoteAeDto(String aeTitle, String host, int port, boolean tls) {
+    /**
+     * @param find この通信先の検索（C-FIND）の方式。null なら従来どおり（{@link FindProfile#DEFAULT}）。
+     */
+    public record RemoteAeDto(String aeTitle, String host, int port, boolean tls,
+                              com.vis.graphynext.dicom.qr.FindProfile find) {
+        public RemoteAeDto(String aeTitle, String host, int port, boolean tls) {
+            this(aeTitle, host, port, tls, null);
+        }
     }
 
     public record SendSelection(String studyUid, List<String> seriesUids) {
@@ -245,6 +288,10 @@ public class DicomController {
     public record SendRequest(List<SendSelection> selections, String host, int port, String calledAet,
                               String callingAet, boolean tls, String transferSyntax, boolean keyImagesOnly,
                               Boolean includeKeyObject) {
+    }
+
+    public record ProbeRunRequest(String stepId, String host, int port, String calledAet, boolean tls,
+                                  String patientId, String studyDate, String studyUid) {
     }
 
     public record QrFindRequest(String host, int port, String calledAet, Map<String, String> matchKeys, boolean tls) {

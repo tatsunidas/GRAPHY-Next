@@ -1,0 +1,663 @@
+exit=2
+11:23:03.042 INFO  - Initiate connection from 0.0.0.0/0.0.0.0:0 to 127.0.0.1:39337
+11:23:03.053 INFO  - Established connection Socket[addr=/127.0.0.1,port=39337,localport=58065]
+11:23:03.067 DEBUG - /127.0.0.1:58065->/127.0.0.1:39337(1): enter state: Sta4 - Awaiting transport connection opening to complete
+11:23:03.068 INFO  - GN->PEER(1) << A-ASSOCIATE-RQ
+11:23:03.068 DEBUG - A-ASSOCIATE-RQ[
+  calledAET: PEER
+  callingAET: GN
+  applicationContext: 1.2.840.10008.3.1.1.1 - DICOM Application Context Name
+  implClassUID: 1.2.40.0.13.1.3
+  implVersionName: dcm4che-5.34.3
+  maxPDULength: 16378
+  maxOpsInvoked/maxOpsPerformed: 0/0
+  PresentationContext[id: 1
+    as: 1.2.840.10008.5.1.4.1.2.2.3 - Study Root Query/Retrieve Information Model - GET
+    ts: 1.2.840.10008.1.2 - Implicit VR Little Endian
+    ts: 1.2.840.10008.1.2.1 - Explicit VR Little Endian
+    ts: 1.2.840.10008.1.2.2 - Explicit VR Big Endian (Retired)
+  ]
+  PresentationContext[id: 3
+    as: 1.2.840.10008.5.1.4.1.1.88.22 - Enhanced SR Storage
+    ts: 1.2.840.10008.1.2 - Implicit VR Little Endian
+  ]
+  PresentationContext[id: 5
+    as: 1.2.840.10008.5.1.4.1.1.88.22 - Enhanced SR Storage
+    ts: 1.2.840.10008.1.2.1 - Explicit VR Little Endian
+  ]
+  PresentationContext[id: 7
+    as: 1.2.840.10008.5.1.4.1.1.77.1.4 - VL Photographic Image Storage
+    ts: 1.2.840.10008.1.2 - Implicit VR Little Endian
+  ]
+  PresentationContext[id: 9
+    as: 1.2.840.10008.5.1.4.1.1.77.1.4 - VL Photographic Image Storage
+    ts: 1.2.840.10008.1.2.1 - Explicit VR Little Endian
+  ]
+  PresentationContext[id: 11
+    as: 1.2.840.10008.5.1.4.1.1.77.1.4 - VL Photographic Image Storage
+    ts: 1.2.840.10008.1.2.4.50 - JPEG Baseline (Process 1)
+  ]
+  PresentationContext[id: 13
+    as: 1.2.840.10008.5.1.4.1.1.1.2 - Digital Mammography X-Ray Image Storage - For Presentation
+    ts: 1.2.840.10008.1.2 - Implicit VR Little Endian
+  ]
+  PresentationContext[id: 15
+    as: 1.2.840.10008.5.1.4.1.1.1.2 - Digital Mammography X-Ray Image Storage - For Presentation
+    ts: 1.2.840.10008.1.2.1 - Explicit VR Little Endian
+  ]
+  PresentationContext[id: 17
+    as: 1.2.840.10008.5.1.4.1.1.11.1 - Grayscale Softcopy Presentation State Storage
+    ts: 1.2.840.10008.1.2 - Implicit VR Little Endian
+  ]
+  PresentationContext[id: 19
+    as: 1.2.840.10008.5.1.4.1.1.11.1 - Grayscale Softcopy Presentation State Storage
+    ts: 1.2.840.10008.1.2.1 - Explicit VR Little Endian
+  ]
+  PresentationContext[id: 21
+    as: 1.2.840.10008.5.1.4.1.1.104.1 - Encapsulated PDF Storage
+    ts: 1.2.840.10008.1.2 - Implicit VR Little Endian
+  ]
+  PresentationContext[id: 23
+    as: 1.2.840.10008.5.1.4.1.1.104.1 - Encapsulated PDF Storage
+    ts: 1.2.840.10008.1.2.1 - Explicit VR Little Endian
+  ]
+  PresentationContext[id: 25
+    as: 1.2.840.10008.5.1.4.1.1.7 - Secondary Capture Image Storage
+    ts: 1.2.840.10008.1.2 - Implicit VR Little Endian
+  ]
+  PresentationContext[id: 27
+    as: 1.2.840.10008.5.1.4.1.1.7 - Secondary Capture Image Storage
+    ts: 1.2.840.10008.1.2.1 - Explicit VR Little Endian
+  ]
+  PresentationContext[id: 29
+    as: 1.2.840.10008.5.1.4.1.1.88.11 - Basic Text SR Storage
+    ts: 1.2.840.10008.1.2 - Implicit VR Little Endian
+  ]
+  PresentationContext[id: 31
+    as: 1.2.840.10008.5.1.4.1.1.88.11 - Basic Text SR Storage
+    ts: 1.2.840.10008.1.2.1 - Explicit VR Little Endian
+  ]
+  PresentationContext[id: 33
+    as: 1.2.840.10008.5.1.4.1.1.128 - Positron Emission Tomography Image Storage
+    ts: 1.2.840.10008.1.2 - Implicit VR Little Endian
+  ]
+  PresentationContext[id: 35
+    as: 1.2.840.10008.5.1.4.1.1.128 - Positron Emission Tomography Image Storage
+    ts: 1.2.840.10008.1.2.1 - Explicit VR Little Endian
+  ]
+  PresentationContext[id: 37
+    as: 1.2.840.10008.5.1.4.1.1.20 - Nuclear Medicine Image Storage
+    ts: 1.2.840.10008.1.2 - Implicit VR Little Endian
+  ]
+  PresentationContext[id: 39
+    as: 1.2.840.10008.5.1.4.1.1.20 - Nuclear Medicine Image Storage
+    ts: 1.2.840.10008.1.2.1 - Explicit VR Little Endian
+  ]
+  PresentationContext[id: 41
+    as: 1.2.840.10008.5.1.4.1.1.1 - Computed Radiography Image Storage
+    ts: 1.2.840.10008.1.2 - Implicit VR Little Endian
+  ]
+  PresentationContext[id: 43
+    as: 1.2.840.10008.5.1.4.1.1.1 - Computed Radiography Image Storage
+    ts: 1.2.840.10008.1.2.1 - Explicit VR Little Endian
+  ]
+  PresentationContext[id: 45
+    as: 1.2.840.10008.5.1.4.1.1.88.67 - X-Ray Radiation Dose SR Storage
+    ts: 1.2.840.10008.1.2 - Implicit VR Little Endian
+  ]
+  PresentationContext[id: 47
+    as: 1.2.840.10008.5.1.4.1.1.88.67 - X-Ray Radiation Dose SR Storage
+    ts: 1.2.840.10008.1.2.1 - Explicit VR Little Endian
+  ]
+  PresentationContext[id: 49
+    as: 1.2.840.10008.5.1.4.1.1.77.1.4.1 - Video Photographic Image Storage
+    ts: 1.2.840.10008.1.2.4.50 - JPEG Baseline (Process 1)
+  ]
+  PresentationContext[id: 51
+    as: 1.2.840.10008.5.1.4.1.1.77.1.4.1 - Video Photographic Image Storage
+    ts: 1.2.840.10008.1.2.4.100 - MPEG2 Main Profile / Main Level
+  ]
+  PresentationContext[id: 53
+    as: 1.2.840.10008.5.1.4.1.1.3.1 - Ultrasound Multi-frame Image Storage
+    ts: 1.2.840.10008.1.2 - Implicit VR Little Endian
+  ]
+  PresentationContext[id: 55
+    as: 1.2.840.10008.5.1.4.1.1.3.1 - Ultrasound Multi-frame Image Storage
+    ts: 1.2.840.10008.1.2.1 - Explicit VR Little Endian
+  ]
+  PresentationContext[id: 57
+    as: 1.2.840.10008.5.1.4.1.1.12.2 - X-Ray Radiofluoroscopic Image Storage
+    ts: 1.2.840.10008.1.2 - Implicit VR Little Endian
+  ]
+  PresentationContext[id: 59
+    as: 1.2.840.10008.5.1.4.1.1.12.2 - X-Ray Radiofluoroscopic Image Storage
+    ts: 1.2.840.10008.1.2.1 - Explicit VR Little Endian
+  ]
+  PresentationContext[id: 61
+    as: 1.2.840.10008.5.1.4.1.1.1.2.1 - Digital Mammography X-Ray Image Storage - For Processing
+    ts: 1.2.840.10008.1.2 - Implicit VR Little Endian
+  ]
+  PresentationContext[id: 63
+    as: 1.2.840.10008.5.1.4.1.1.1.2.1 - Digital Mammography X-Ray Image Storage - For Processing
+    ts: 1.2.840.10008.1.2.1 - Explicit VR Little Endian
+  ]
+  PresentationContext[id: 65
+    as: 1.2.840.10008.5.1.4.1.1.4 - MR Image Storage
+    ts: 1.2.840.10008.1.2 - Implicit VR Little Endian
+  ]
+  PresentationContext[id: 67
+    as: 1.2.840.10008.5.1.4.1.1.4 - MR Image Storage
+    ts: 1.2.840.10008.1.2.1 - Explicit VR Little Endian
+  ]
+  PresentationContext[id: 69
+    as: 1.2.840.10008.5.1.4.1.1.88.59 - Key Object Selection Document Storage
+    ts: 1.2.840.10008.1.2 - Implicit VR Little Endian
+  ]
+  PresentationContext[id: 71
+    as: 1.2.840.10008.5.1.4.1.1.88.59 - Key Object Selection Document Storage
+    ts: 1.2.840.10008.1.2.1 - Explicit VR Little Endian
+  ]
+  PresentationContext[id: 73
+    as: 1.2.840.10008.5.1.4.1.1.1.1 - Digital X-Ray Image Storage - For Presentation
+    ts: 1.2.840.10008.1.2 - Implicit VR Little Endian
+  ]
+  PresentationContext[id: 75
+    as: 1.2.840.10008.5.1.4.1.1.1.1 - Digital X-Ray Image Storage - For Presentation
+    ts: 1.2.840.10008.1.2.1 - Explicit VR Little Endian
+  ]
+  PresentationContext[id: 77
+    as: 1.2.840.10008.5.1.4.1.1.1.1.1 - Digital X-Ray Image Storage - For Processing
+    ts: 1.2.840.10008.1.2 - Implicit VR Little Endian
+  ]
+  PresentationContext[id: 79
+    as: 1.2.840.10008.5.1.4.1.1.1.1.1 - Digital X-Ray Image Storage - For Processing
+    ts: 1.2.840.10008.1.2.1 - Explicit VR Little Endian
+  ]
+  PresentationContext[id: 81
+    as: 1.2.840.10008.5.1.4.1.1.77.1.6 - VL Whole Slide Microscopy Image Storage
+    ts: 1.2.840.10008.1.2.4.50 - JPEG Baseline (Process 1)
+  ]
+  PresentationContext[id: 83
+    as: 1.2.840.10008.5.1.4.1.1.77.1.6 - VL Whole Slide Microscopy Image Storage
+    ts: 1.2.840.10008.1.2.4.90 - JPEG 2000 Image Compression (Lossless Only)
+  ]
+  PresentationContext[id: 85
+    as: 1.2.840.10008.5.1.4.1.1.77.1.6 - VL Whole Slide Microscopy Image Storage
+    ts: 1.2.840.10008.1.2.4.91 - JPEG 2000 Image Compression
+  ]
+  PresentationContext[id: 87
+    as: 1.2.840.10008.5.1.4.1.1.6.1 - Ultrasound Image Storage
+    ts: 1.2.840.10008.1.2 - Implicit VR Little Endian
+  ]
+  PresentationContext[id: 89
+    as: 1.2.840.10008.5.1.4.1.1.6.1 - Ultrasound Image Storage
+    ts: 1.2.840.10008.1.2.1 - Explicit VR Little Endian
+  ]
+  PresentationContext[id: 91
+    as: 1.2.840.10008.5.1.4.1.1.12.1 - X-Ray Angiographic Image Storage
+    ts: 1.2.840.10008.1.2 - Implicit VR Little Endian
+  ]
+  PresentationContext[id: 93
+    as: 1.2.840.10008.5.1.4.1.1.12.1 - X-Ray Angiographic Image Storage
+    ts: 1.2.840.10008.1.2.1 - Explicit VR Little Endian
+  ]
+  PresentationContext[id: 95
+    as: 1.2.840.10008.5.1.4.1.1.2 - CT Image Storage
+    ts: 1.2.840.10008.1.2 - Implicit VR Little Endian
+  ]
+  PresentationContext[id: 97
+    as: 1.2.840.10008.5.1.4.1.1.2 - CT Image Storage
+    ts: 1.2.840.10008.1.2.1 - Explicit VR Little Endian
+  ]
+  RoleSelection[
+    sopClass: 1.2.840.10008.5.1.4.1.1.88.22 - Enhanced SR Storage
+    scu: false
+    scp: true
+  ]
+  RoleSelection[
+    sopClass: 1.2.840.10008.5.1.4.1.1.77.1.4 - VL Photographic Image Storage
+    scu: false
+    scp: true
+  ]
+  RoleSelection[
+    sopClass: 1.2.840.10008.5.1.4.1.1.1.2 - Digital Mammography X-Ray Image Storage - For Presentation
+    scu: false
+    scp: true
+  ]
+  RoleSelection[
+    sopClass: 1.2.840.10008.5.1.4.1.1.11.1 - Grayscale Softcopy Presentation State Storage
+    scu: false
+    scp: true
+  ]
+  RoleSelection[
+    sopClass: 1.2.840.10008.5.1.4.1.1.104.1 - Encapsulated PDF Storage
+    scu: false
+    scp: true
+  ]
+  RoleSelection[
+    sopClass: 1.2.840.10008.5.1.4.1.1.7 - Secondary Capture Image Storage
+    scu: false
+    scp: true
+  ]
+  RoleSelection[
+    sopClass: 1.2.840.10008.5.1.4.1.1.88.11 - Basic Text SR Storage
+    scu: false
+    scp: true
+  ]
+  RoleSelection[
+    sopClass: 1.2.840.10008.5.1.4.1.1.128 - Positron Emission Tomography Image Storage
+    scu: false
+    scp: true
+  ]
+  RoleSelection[
+    sopClass: 1.2.840.10008.5.1.4.1.1.20 - Nuclear Medicine Image Storage
+    scu: false
+    scp: true
+  ]
+  RoleSelection[
+    sopClass: 1.2.840.10008.5.1.4.1.1.1 - Computed Radiography Image Storage
+    scu: false
+    scp: true
+  ]
+  RoleSelection[
+    sopClass: 1.2.840.10008.5.1.4.1.1.88.67 - X-Ray Radiation Dose SR Storage
+    scu: false
+    scp: true
+  ]
+  RoleSelection[
+    sopClass: 1.2.840.10008.5.1.4.1.1.77.1.4.1 - Video Photographic Image Storage
+    scu: false
+    scp: true
+  ]
+  RoleSelection[
+    sopClass: 1.2.840.10008.5.1.4.1.1.3.1 - Ultrasound Multi-frame Image Storage
+    scu: false
+    scp: true
+  ]
+  RoleSelection[
+    sopClass: 1.2.840.10008.5.1.4.1.1.12.2 - X-Ray Radiofluoroscopic Image Storage
+    scu: false
+    scp: true
+  ]
+  RoleSelection[
+    sopClass: 1.2.840.10008.5.1.4.1.1.1.2.1 - Digital Mammography X-Ray Image Storage - For Processing
+    scu: false
+    scp: true
+  ]
+  RoleSelection[
+    sopClass: 1.2.840.10008.5.1.4.1.1.4 - MR Image Storage
+    scu: false
+    scp: true
+  ]
+  RoleSelection[
+    sopClass: 1.2.840.10008.5.1.4.1.1.88.59 - Key Object Selection Document Storage
+    scu: false
+    scp: true
+  ]
+  RoleSelection[
+    sopClass: 1.2.840.10008.5.1.4.1.1.1.1 - Digital X-Ray Image Storage - For Presentation
+    scu: false
+    scp: true
+  ]
+  RoleSelection[
+    sopClass: 1.2.840.10008.5.1.4.1.1.1.1.1 - Digital X-Ray Image Storage - For Processing
+    scu: false
+    scp: true
+  ]
+  RoleSelection[
+    sopClass: 1.2.840.10008.5.1.4.1.1.77.1.6 - VL Whole Slide Microscopy Image Storage
+    scu: false
+    scp: true
+  ]
+  RoleSelection[
+    sopClass: 1.2.840.10008.5.1.4.1.1.6.1 - Ultrasound Image Storage
+    scu: false
+    scp: true
+  ]
+  RoleSelection[
+    sopClass: 1.2.840.10008.5.1.4.1.1.12.1 - X-Ray Angiographic Image Storage
+    scu: false
+    scp: true
+  ]
+  RoleSelection[
+    sopClass: 1.2.840.10008.5.1.4.1.1.2 - CT Image Storage
+    scu: false
+    scp: true
+  ]
+]
+11:23:03.071 DEBUG - GN->PEER(1): enter state: Sta5 - Awaiting A-ASSOCIATE-AC or A-ASSOCIATE-RJ PDU
+11:23:03.075 INFO  - GN->PEER(1) >> A-ASSOCIATE-AC
+11:23:03.076 DEBUG - A-ASSOCIATE-AC[
+  calledAET: PEER
+  callingAET: GN
+  applicationContext: 1.2.840.10008.3.1.1.1 - DICOM Application Context Name
+  implClassUID: 1.2.40.0.13.1.3
+  implVersionName: dcm4che-5.34.3
+  maxPDULength: 16378
+  maxOpsInvoked/maxOpsPerformed: 1/1
+  PresentationContext[id: 1
+    result: 3 - abstract-syntax-not-supported (provider rejection)
+    ts: 1.2.840.10008.1.2 - Implicit VR Little Endian
+  ]
+  PresentationContext[id: 3
+    result: 3 - abstract-syntax-not-supported (provider rejection)
+    ts: 1.2.840.10008.1.2 - Implicit VR Little Endian
+  ]
+  PresentationContext[id: 5
+    result: 3 - abstract-syntax-not-supported (provider rejection)
+    ts: 1.2.840.10008.1.2.1 - Explicit VR Little Endian
+  ]
+  PresentationContext[id: 7
+    result: 3 - abstract-syntax-not-supported (provider rejection)
+    ts: 1.2.840.10008.1.2 - Implicit VR Little Endian
+  ]
+  PresentationContext[id: 9
+    result: 3 - abstract-syntax-not-supported (provider rejection)
+    ts: 1.2.840.10008.1.2.1 - Explicit VR Little Endian
+  ]
+  PresentationContext[id: 11
+    result: 3 - abstract-syntax-not-supported (provider rejection)
+    ts: 1.2.840.10008.1.2.4.50 - JPEG Baseline (Process 1)
+  ]
+  PresentationContext[id: 13
+    result: 3 - abstract-syntax-not-supported (provider rejection)
+    ts: 1.2.840.10008.1.2 - Implicit VR Little Endian
+  ]
+  PresentationContext[id: 15
+    result: 3 - abstract-syntax-not-supported (provider rejection)
+    ts: 1.2.840.10008.1.2.1 - Explicit VR Little Endian
+  ]
+  PresentationContext[id: 17
+    result: 3 - abstract-syntax-not-supported (provider rejection)
+    ts: 1.2.840.10008.1.2 - Implicit VR Little Endian
+  ]
+  PresentationContext[id: 19
+    result: 3 - abstract-syntax-not-supported (provider rejection)
+    ts: 1.2.840.10008.1.2.1 - Explicit VR Little Endian
+  ]
+  PresentationContext[id: 21
+    result: 3 - abstract-syntax-not-supported (provider rejection)
+    ts: 1.2.840.10008.1.2 - Implicit VR Little Endian
+  ]
+  PresentationContext[id: 23
+    result: 3 - abstract-syntax-not-supported (provider rejection)
+    ts: 1.2.840.10008.1.2.1 - Explicit VR Little Endian
+  ]
+  PresentationContext[id: 25
+    result: 3 - abstract-syntax-not-supported (provider rejection)
+    ts: 1.2.840.10008.1.2 - Implicit VR Little Endian
+  ]
+  PresentationContext[id: 27
+    result: 3 - abstract-syntax-not-supported (provider rejection)
+    ts: 1.2.840.10008.1.2.1 - Explicit VR Little Endian
+  ]
+  PresentationContext[id: 29
+    result: 3 - abstract-syntax-not-supported (provider rejection)
+    ts: 1.2.840.10008.1.2 - Implicit VR Little Endian
+  ]
+  PresentationContext[id: 31
+    result: 3 - abstract-syntax-not-supported (provider rejection)
+    ts: 1.2.840.10008.1.2.1 - Explicit VR Little Endian
+  ]
+  PresentationContext[id: 33
+    result: 3 - abstract-syntax-not-supported (provider rejection)
+    ts: 1.2.840.10008.1.2 - Implicit VR Little Endian
+  ]
+  PresentationContext[id: 35
+    result: 3 - abstract-syntax-not-supported (provider rejection)
+    ts: 1.2.840.10008.1.2.1 - Explicit VR Little Endian
+  ]
+  PresentationContext[id: 37
+    result: 3 - abstract-syntax-not-supported (provider rejection)
+    ts: 1.2.840.10008.1.2 - Implicit VR Little Endian
+  ]
+  PresentationContext[id: 39
+    result: 3 - abstract-syntax-not-supported (provider rejection)
+    ts: 1.2.840.10008.1.2.1 - Explicit VR Little Endian
+  ]
+  PresentationContext[id: 41
+    result: 3 - abstract-syntax-not-supported (provider rejection)
+    ts: 1.2.840.10008.1.2 - Implicit VR Little Endian
+  ]
+  PresentationContext[id: 43
+    result: 3 - abstract-syntax-not-supported (provider rejection)
+    ts: 1.2.840.10008.1.2.1 - Explicit VR Little Endian
+  ]
+  PresentationContext[id: 45
+    result: 3 - abstract-syntax-not-supported (provider rejection)
+    ts: 1.2.840.10008.1.2 - Implicit VR Little Endian
+  ]
+  PresentationContext[id: 47
+    result: 3 - abstract-syntax-not-supported (provider rejection)
+    ts: 1.2.840.10008.1.2.1 - Explicit VR Little Endian
+  ]
+  PresentationContext[id: 49
+    result: 3 - abstract-syntax-not-supported (provider rejection)
+    ts: 1.2.840.10008.1.2.4.50 - JPEG Baseline (Process 1)
+  ]
+  PresentationContext[id: 51
+    result: 3 - abstract-syntax-not-supported (provider rejection)
+    ts: 1.2.840.10008.1.2.4.100 - MPEG2 Main Profile / Main Level
+  ]
+  PresentationContext[id: 53
+    result: 3 - abstract-syntax-not-supported (provider rejection)
+    ts: 1.2.840.10008.1.2 - Implicit VR Little Endian
+  ]
+  PresentationContext[id: 55
+    result: 3 - abstract-syntax-not-supported (provider rejection)
+    ts: 1.2.840.10008.1.2.1 - Explicit VR Little Endian
+  ]
+  PresentationContext[id: 57
+    result: 3 - abstract-syntax-not-supported (provider rejection)
+    ts: 1.2.840.10008.1.2 - Implicit VR Little Endian
+  ]
+  PresentationContext[id: 59
+    result: 3 - abstract-syntax-not-supported (provider rejection)
+    ts: 1.2.840.10008.1.2.1 - Explicit VR Little Endian
+  ]
+  PresentationContext[id: 61
+    result: 3 - abstract-syntax-not-supported (provider rejection)
+    ts: 1.2.840.10008.1.2 - Implicit VR Little Endian
+  ]
+  PresentationContext[id: 63
+    result: 3 - abstract-syntax-not-supported (provider rejection)
+    ts: 1.2.840.10008.1.2.1 - Explicit VR Little Endian
+  ]
+  PresentationContext[id: 65
+    result: 3 - abstract-syntax-not-supported (provider rejection)
+    ts: 1.2.840.10008.1.2 - Implicit VR Little Endian
+  ]
+  PresentationContext[id: 67
+    result: 3 - abstract-syntax-not-supported (provider rejection)
+    ts: 1.2.840.10008.1.2.1 - Explicit VR Little Endian
+  ]
+  PresentationContext[id: 69
+    result: 3 - abstract-syntax-not-supported (provider rejection)
+    ts: 1.2.840.10008.1.2 - Implicit VR Little Endian
+  ]
+  PresentationContext[id: 71
+    result: 3 - abstract-syntax-not-supported (provider rejection)
+    ts: 1.2.840.10008.1.2.1 - Explicit VR Little Endian
+  ]
+  PresentationContext[id: 73
+    result: 3 - abstract-syntax-not-supported (provider rejection)
+    ts: 1.2.840.10008.1.2 - Implicit VR Little Endian
+  ]
+  PresentationContext[id: 75
+    result: 3 - abstract-syntax-not-supported (provider rejection)
+    ts: 1.2.840.10008.1.2.1 - Explicit VR Little Endian
+  ]
+  PresentationContext[id: 77
+    result: 3 - abstract-syntax-not-supported (provider rejection)
+    ts: 1.2.840.10008.1.2 - Implicit VR Little Endian
+  ]
+  PresentationContext[id: 79
+    result: 3 - abstract-syntax-not-supported (provider rejection)
+    ts: 1.2.840.10008.1.2.1 - Explicit VR Little Endian
+  ]
+  PresentationContext[id: 81
+    result: 3 - abstract-syntax-not-supported (provider rejection)
+    ts: 1.2.840.10008.1.2.4.50 - JPEG Baseline (Process 1)
+  ]
+  PresentationContext[id: 83
+    result: 3 - abstract-syntax-not-supported (provider rejection)
+    ts: 1.2.840.10008.1.2.4.90 - JPEG 2000 Image Compression (Lossless Only)
+  ]
+  PresentationContext[id: 85
+    result: 3 - abstract-syntax-not-supported (provider rejection)
+    ts: 1.2.840.10008.1.2.4.91 - JPEG 2000 Image Compression
+  ]
+  PresentationContext[id: 87
+    result: 3 - abstract-syntax-not-supported (provider rejection)
+    ts: 1.2.840.10008.1.2 - Implicit VR Little Endian
+  ]
+  PresentationContext[id: 89
+    result: 3 - abstract-syntax-not-supported (provider rejection)
+    ts: 1.2.840.10008.1.2.1 - Explicit VR Little Endian
+  ]
+  PresentationContext[id: 91
+    result: 3 - abstract-syntax-not-supported (provider rejection)
+    ts: 1.2.840.10008.1.2 - Implicit VR Little Endian
+  ]
+  PresentationContext[id: 93
+    result: 3 - abstract-syntax-not-supported (provider rejection)
+    ts: 1.2.840.10008.1.2.1 - Explicit VR Little Endian
+  ]
+  PresentationContext[id: 95
+    result: 3 - abstract-syntax-not-supported (provider rejection)
+    ts: 1.2.840.10008.1.2 - Implicit VR Little Endian
+  ]
+  PresentationContext[id: 97
+    result: 3 - abstract-syntax-not-supported (provider rejection)
+    ts: 1.2.840.10008.1.2.1 - Explicit VR Little Endian
+  ]
+  RoleSelection[
+    sopClass: 1.2.840.10008.5.1.4.1.1.88.22 - Enhanced SR Storage
+    scu: false
+    scp: false
+  ]
+  RoleSelection[
+    sopClass: 1.2.840.10008.5.1.4.1.1.77.1.4 - VL Photographic Image Storage
+    scu: false
+    scp: false
+  ]
+  RoleSelection[
+    sopClass: 1.2.840.10008.5.1.4.1.1.1.2 - Digital Mammography X-Ray Image Storage - For Presentation
+    scu: false
+    scp: false
+  ]
+  RoleSelection[
+    sopClass: 1.2.840.10008.5.1.4.1.1.11.1 - Grayscale Softcopy Presentation State Storage
+    scu: false
+    scp: false
+  ]
+  RoleSelection[
+    sopClass: 1.2.840.10008.5.1.4.1.1.104.1 - Encapsulated PDF Storage
+    scu: false
+    scp: false
+  ]
+  RoleSelection[
+    sopClass: 1.2.840.10008.5.1.4.1.1.7 - Secondary Capture Image Storage
+    scu: false
+    scp: false
+  ]
+  RoleSelection[
+    sopClass: 1.2.840.10008.5.1.4.1.1.88.11 - Basic Text SR Storage
+    scu: false
+    scp: false
+  ]
+  RoleSelection[
+    sopClass: 1.2.840.10008.5.1.4.1.1.128 - Positron Emission Tomography Image Storage
+    scu: false
+    scp: false
+  ]
+  RoleSelection[
+    sopClass: 1.2.840.10008.5.1.4.1.1.20 - Nuclear Medicine Image Storage
+    scu: false
+    scp: false
+  ]
+  RoleSelection[
+    sopClass: 1.2.840.10008.5.1.4.1.1.1 - Computed Radiography Image Storage
+    scu: false
+    scp: false
+  ]
+  RoleSelection[
+    sopClass: 1.2.840.10008.5.1.4.1.1.88.67 - X-Ray Radiation Dose SR Storage
+    scu: false
+    scp: false
+  ]
+  RoleSelection[
+    sopClass: 1.2.840.10008.5.1.4.1.1.77.1.4.1 - Video Photographic Image Storage
+    scu: false
+    scp: false
+  ]
+  RoleSelection[
+    sopClass: 1.2.840.10008.5.1.4.1.1.3.1 - Ultrasound Multi-frame Image Storage
+    scu: false
+    scp: false
+  ]
+  RoleSelection[
+    sopClass: 1.2.840.10008.5.1.4.1.1.12.2 - X-Ray Radiofluoroscopic Image Storage
+    scu: false
+    scp: false
+  ]
+  RoleSelection[
+    sopClass: 1.2.840.10008.5.1.4.1.1.1.2.1 - Digital Mammography X-Ray Image Storage - For Processing
+    scu: false
+    scp: false
+  ]
+  RoleSelection[
+    sopClass: 1.2.840.10008.5.1.4.1.1.4 - MR Image Storage
+    scu: false
+    scp: false
+  ]
+  RoleSelection[
+    sopClass: 1.2.840.10008.5.1.4.1.1.88.59 - Key Object Selection Document Storage
+    scu: false
+    scp: false
+  ]
+  RoleSelection[
+    sopClass: 1.2.840.10008.5.1.4.1.1.1.1 - Digital X-Ray Image Storage - For Presentation
+    scu: false
+    scp: false
+  ]
+  RoleSelection[
+    sopClass: 1.2.840.10008.5.1.4.1.1.1.1.1 - Digital X-Ray Image Storage - For Processing
+    scu: false
+    scp: false
+  ]
+  RoleSelection[
+    sopClass: 1.2.840.10008.5.1.4.1.1.77.1.6 - VL Whole Slide Microscopy Image Storage
+    scu: false
+    scp: false
+  ]
+  RoleSelection[
+    sopClass: 1.2.840.10008.5.1.4.1.1.6.1 - Ultrasound Image Storage
+    scu: false
+    scp: false
+  ]
+  RoleSelection[
+    sopClass: 1.2.840.10008.5.1.4.1.1.12.1 - X-Ray Angiographic Image Storage
+    scu: false
+    scp: false
+  ]
+  RoleSelection[
+    sopClass: 1.2.840.10008.5.1.4.1.1.2 - CT Image Storage
+    scu: false
+    scp: false
+  ]
+]
+11:23:03.076 DEBUG - GN->PEER(1): enter state: Sta6 - Association established and ready for data transfer
+11:23:03.076 INFO  - GN->PEER(1) << A-RELEASE-RQ
+11:23:03.076 DEBUG - GN->PEER(1): enter state: Sta7 - Awaiting A-RELEASE-RP PDU
+getscu: No Presentation Context for Abstract Syntax: 1.2.840.10008.5.1.4.1.2.2.3 - Study Root Query/Retrieve Information Model - GET negotiated
+11:23:03.077 INFO  - GN->PEER(1) >> A-RELEASE-RP
+11:23:03.077 INFO  - GN->PEER(1): close Socket[addr=/127.0.0.1,port=39337,localport=58065]
+org.dcm4che3.net.NoPresentationContextException: No Presentation Context for Abstract Syntax: 1.2.840.10008.5.1.4.1.2.2.3 - Study Root Query/Retrieve Information Model - GET negotiated
+11:23:03.078 DEBUG - GN->PEER(1): enter state: Sta1 - Idle
+	at org.dcm4che3.net.Association.pcFor(Association.java:907)
+	at org.dcm4che3.net.Association.cget(Association.java:1019)
+	at org.dcm4che3.tool.getscu.GetSCU.retrieve(GetSCU.java:487)
+	at org.dcm4che3.tool.getscu.GetSCU.retrieve(GetSCU.java:465)
+	at org.dcm4che3.tool.getscu.GetSCU.retrieve(GetSCU.java:452)
+	at org.dcm4che3.tool.getscu.GetSCU.main(GetSCU.java:344)

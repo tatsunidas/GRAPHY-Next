@@ -112,6 +112,16 @@ public class DicomProperties {
         private int port;
         /** このノードへの接続を TLS にするか（鍵材料はグローバル {@link Tls} を共用）。 */
         private boolean tls = false;
+        /** このノードへの検索（C-FIND）の方式。未指定なら従来どおり。 */
+        private com.vis.graphynext.dicom.qr.FindProfile find;
+
+        public com.vis.graphynext.dicom.qr.FindProfile getFind() {
+            return find;
+        }
+
+        public void setFind(com.vis.graphynext.dicom.qr.FindProfile find) {
+            this.find = find;
+        }
 
         public String getAeTitle() {
             return aeTitle;

@@ -202,6 +202,24 @@ class PrefetchServiceTest {
     }
 
     @Test
+    void 相手が検索をエラー_status_で返したら_0件の完了ではなく中断になる() throws Exception {
+        // 変更前は a900H を 0 件と読み、何も取得しないまま「完了」に見えた
+        Files.writeString(csvDir.resolve("list.csv"), "予約日,患者ID\n2026/11/10,PX1\n", Charset.forName("windows-31j"));
+        try (var peer = com.vis.graphynext.dicom.qr.FakeQrScp.start("DCMQRSCP",
+                com.vis.graphynext.dicom.qr.FakeQrScp.Behavior.ERROR_STATUS, false, true, 0xA900,
+                java.util.Set.of(), false, null)) {
+            remotes(peer.port, null);
+            Map<String, String> m = base("csv");
+            csvConfig(m, "Shift_JIS");
+            settings.putAll(m);
+            PrefetchRun r = service().run(PrefetchService.MANUAL_TRIGGER, PrefetchService.MANUAL);
+            assertEquals(0, r.getRetrieved());
+            assertTrue(String.valueOf(r.getError()).contains("pacs-find-failed"),
+                    "検索の失敗として止まるはず: status=" + r.getStatus() + " error=" + r.getError());
+        }
+    }
+
+    @Test
     void MWL経路_ステーションで絞ると該当患者だけ_絞らなければ両方() throws Exception {
         String tag = "m";
         var studies = List.of(
