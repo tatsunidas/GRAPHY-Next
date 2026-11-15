@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>GRAPHY-Next v0.6.3 操作ガイド — v0.6.1 からの変更</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;900&family=IBM+Plex+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="../guide.css">
+<style>
+  /* この版のための部品（共通の guide.css は変えない） */
+  .duo { display: grid; grid-template-columns: 1fr 1fr; gap: 56px; align-items: start; }
+  .tri { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 40px; align-items: start; }
+  .col { display: flex; flex-direction: column; gap: 18px; }
+  .col .explain { gap: 10px; }
+  .col .explain li p { font-size: 23px; line-height: 1.42; }
+  .col .explain li .num { margin-top: 2px; }
+  .tri .explain li p { font-size: 21px; }
+  .tri .shot, .duo .shot { width: 100%; }
+  .small { font-size: 22px; }
+  .cover .steps li { padding: 14px 0; }
+  .others { display: grid; grid-template-columns: 1fr 1fr; gap: 20px 72px; list-style: none; }
+  .others li { font-size: 25px; line-height: 1.5; padding-left: 28px; position: relative; }
+  .others li::before { content: ""; position: absolute; left: 0; top: 14px; width: 10px; height: 10px; border-radius: 50%; background: var(--accent); }
+  .others b { color: var(--text); display: block; }
+  code { font-family: "IBM Plex Mono", monospace; font-size: 0.88em; color: var(--text); }
+  .others span { color: var(--sub); }
+</style>
+</head>
+<body>
+
+<section class="page cover">
+  <div class="left">
+    <p class="eyebrow">GRAPHY-NEXT v0.6.3 / 操作ガイド</p>
+    <h1>v0.6.1 からの<br>変更</h1>
+    <p class="lead">相手の PACS とつながらないときに原因を探せる「通信テスト」、予約から過去検査を先に取り込んでおく「事前取得」、画像を NIfTI で書き出す機能を中心に、v0.6.2・v0.6.3 の変更をまとめます。</p>
+    <div class="chips">
+      <span class="chip on">通信テスト</span>
+      <span class="chip">事前取得</span>
+      <span class="chip">NIfTI</span>
+    </div>
+  </div>
+  <div class="panel">
+    <h3>この版の内容</h3>
+    <ol class="steps">
+      <li><span class="n">01</span><p>DICOM 通信先の「通信テスト」<small>疎通確認は通るのに検索できない相手で、通る探し方を見つける</small></p></li>
+      <li><span class="n">02</span><p>予約から過去検査を取り込む「事前取得」<small>診察の前に、PACS から取り込んでおく</small></p></li>
+      <li><span class="n">03</span><p>NIfTI で書き出し<small>［ファイル］メニューから、選んだシリーズを .nii.gz で保存</small></p></li>
+      <li><span class="n">04</span><p>そのほかの変更<small>PET・3D・ROI・SEG・プラグイン</small></p></li>
+    </ol>
+  </div>
+  <div class="footer"><span>研究用です。診断には使わないでください。データ: TCIA HCC-TACE-Seg（Moawad et al., 2021）CC BY 4.0</span><span>1 / 5</span></div>
+</section>
+
+<section class="page">
+  <div>
+    <p class="eyebrow">01 / 環境設定 ＞ DICOM 通信先</p>
+    <h2>疎通確認は通るのに検索できない相手で、通る探し方を見つける</h2>
+  </div>
+  <div class="tri">
+    <div class="col">
+      <figure class="shot" data-shot="qr-error"><img src="shots/qr-error.png" alt="Query/Retrieve の画面。相手が返事をせずに接続を切ったことが、理由つきで出ている"></figure>
+      <ol class="explain">
+        <li><span class="num">1</span><p>相手が検索を断った・エラーを返した・返事をせずに接続を切った、のとき、「0 件」ではなく<b>理由</b>が出ます</p></li>
+      </ol>
+    </div>
+    <div class="col">
+      <figure class="shot" data-shot="probe-result"><img src="shots/probe-result.png" alt="通信テストの結果。つながる・検査を探せる・GET・MOVE の順に、✓ と ✕、次にすることが出ている"></figure>
+      <ol class="explain">
+        <li><span class="num">1</span><p>通信先の行の<b>［通信テスト］</b>を押すと、<b>つながる</b>か</p></li>
+        <li><span class="num">2</span><p><b>検査を探せる</b>か（探し方を 8 通り試します）</p></li>
+        <li><span class="num">3</span><p><b>GET</b>・<b>MOVE</b> を許されているか、を上から順に確かめます。✕ の行には<b>次にすること</b>が出ます</p></li>
+        <li><span class="num">4</span><p>通る探し方が見つかったら、<b>［この探し方を採用］</b>→［保存］で、その通信先の検索方式にできます</p></li>
+      </ol>
+    </div>
+    <div class="col">
+      <figure class="shot" data-shot="find-editor"><img src="shots/find-editor.png" alt="検索の詳細。情報モデル、返してほしい項目、一致、転送構文、文字コード"></figure>
+      <ol class="explain">
+        <li><span class="num">1</span><p><b>検索の詳細</b>: 情報モデル（Study Root／Patient Root）、返してほしい項目、患者 ID・名前の一致、転送構文、文字コードを、通信先ごとに変えられます</p></li>
+        <li><span class="num">2</span><p>変えた通信先には「標準と異なる」と出ます。通常は触らず、［通信テスト］で見つけた組み合わせを採用してください</p></li>
+      </ol>
+    </div>
+  </div>
+  <p class="note">GET・MOVE の確認は、<b>存在しない検査番号</b>で問い合わせるだけで、画像は動きません。相手が受け付けても、存在しない番号なのでエラーを返すことがあり、その場合は △ で出ます。結果は［詳しく見る］の［報告用にコピー］で、相手の管理者に伝える文面にできます（件数・項目名・相手の status だけで、患者の氏名・ID は含みません）。</p>
+  <div class="footer"><span>研究用です。診断には使わないでください。通信先は、患者情報を持たない試験用の相手です</span><span>2 / 5</span></div>
+</section>
+
+<section class="page">
+  <div>
+    <p class="eyebrow">02 / 環境設定 ＞ 事前取得</p>
+    <h2>診察の前に、予約の患者の過去検査を PACS から取り込んでおく</h2>
+  </div>
+  <div class="duo">
+    <div class="col">
+      <figure class="shot" data-shot="prefetch-panel"><img src="shots/prefetch-panel.png" alt="事前取得の設定。予約一覧の元（RIS の CSV）、フォルダ、文字コード、列名"></figure>
+      <ol class="explain">
+        <li><span class="num">1</span><p>「予約一覧から過去検査を事前取得する」をオンにします。既定値はありません（施設の運用で決まるため）</p></li>
+        <li><span class="num">2</span><p><b>予約一覧の元</b>: DICOM MWL か、RIS が書き出す CSV ファイルを選びます</p></li>
+        <li><span class="num">3</span><p>CSV のときは、フォルダ・文字コード・患者 ID と予約日の列名を指定します。フォルダの中で最後に更新された .csv を読みます</p></li>
+      </ol>
+    </div>
+    <div class="col">
+      <figure class="shot" data-shot="prefetch-when"><img src="shots/prefetch-when.png" alt="事前取得の設定。対象の日、実行する時刻、取得元 PACS、取得の方式"></figure>
+      <ol class="explain">
+        <li><span class="num">1</span><p><b>対象の日</b>: 当日・翌日・両方から選びます</p></li>
+        <li><span class="num">2</span><p><b>実行する時刻</b>: 07:00, 18:00 のように指定します</p></li>
+        <li><span class="num">3</span><p><b>取得元 PACS</b>: 「DICOM 通信先」に登録した相手から選びます</p></li>
+        <li><span class="num">4</span><p><b>取得の方式</b>: C-MOVE か C-GET。C-MOVE は、PACS 側にこのアプリの AE（受信口）を移動先として登録しておきます</p></li>
+      </ol>
+    </div>
+  </div>
+  <div class="footer"><span>研究用です。診断には使わないでください。画面は設定の例です（実在しないフォルダを指しています）</span><span>3 / 5</span></div>
+</section>
+
+<section class="page">
+  <div>
+    <p class="eyebrow">03 / メイン画面 ＞ ファイル ＞ NIfTI で書き出し</p>
+    <h2>選んだシリーズを、NIfTI（.nii.gz）で書き出す</h2>
+  </div>
+  <div class="duo">
+    <div class="col">
+      <figure class="shot" data-shot="nifti-menu"><img src="shots/nifti-menu.png" alt="ファイルメニューの NIfTI で書き出し…"></figure>
+      <ol class="explain">
+        <li><span class="num">1</span><p>シリーズを 1 本選び、<b>［ファイル］＞［NIfTI で書き出し…］</b>を押します。float32 の .nii.gz で保存し、<b>患者情報は書きません</b></p></li>
+      </ol>
+    </div>
+    <div class="col">
+      <figure class="shot" data-shot="nifti-done"><img src="shots/nifti-done.png" alt="書き出しの完了の表示。ファイル名と枚数"></figure>
+      <ol class="explain">
+        <li><span class="num">1</span><p>終わると、<b>ファイル名と枚数</b>が出ます。複数の時相があるシリーズは、4D として書き出します</p></li>
+      </ol>
+    </div>
+  </div>
+  <p class="callout">書き出せないときは、理由が画面に出ます。位置の情報が無い・ガントリーチルトがある・向きや大きさの違う画像が混ざっている・カラー画像・位置ごとの枚数が揃わない、などです。デスクトップ版でだけ使えます。</p>
+  <div class="footer"><span>研究用です。診断には使わないでください。データ: TCIA HCC-TACE-Seg（Moawad et al., 2021）CC BY 4.0</span><span>4 / 5</span></div>
+</section>
+
+<section class="page">
+  <div>
+    <p class="eyebrow">04 / そのほか</p>
+    <h2>そのほかの変更</h2>
+  </div>
+  <ul class="others">
+    <li><b>PET の SUV 較正</b><span>%ID/cc（体重不要）と SUVR（基準領域との比）を追加。較正した値を、派生の Parametric Map として保存できます。画素が投与時刻に補正済みのときは崩壊補正せず、PatientSex が不明のときは SUL を計算不可にします。</span></li>
+    <li><b>3D の表示</b><span>オブジェクトごとに、表面・ワイヤーフレーム・点を選べます。CT の血管モデルは、弧長と径のプロファイルを帯で表示します。シネマティックの 3D テクスチャは、GPU の予算に応じた大きさにします。</span></li>
+    <li><b>ROI・放射線特徴量</b><span>円 ROI は、画素が正方でない画像でも mm で円になります。傾き・欠けたスライス・不規則な格子の画像でも、特徴量と GLAM を計算できます（直交・等間隔でない格子は断ります）。</span></li>
+    <li><b>SEG</b><span>表示中のシリーズと位置が合わないフレームは取り込まず、その旨を表示します。書き出す SEG の SliceThickness と SpacingBetweenSlices は、意味どおりの値にします。</span></li>
+    <li><b>画像の表示</b><span>画素間隔が無い画像でも、PixelAspectRatio を反映します。MPR の表示が、セルの寸法の変化に追従します。</span></li>
+    <li><b>一覧の自動反映</b><span>受信・事前取得・削除の結果を、メイン一覧に反映します。待機中は自動で、操作中は通知（［一覧を更新］）で知らせます。</span></li>
+    <li><b>プラグイン開発者向け</b><span><code>host.nifti.*</code>（NIfTI を作る・取り込む）、<code>openViewer3d</code>（視点と切断面を指定して 3D ビューアを開く）を追加。<code>loadVolume</code> は、等間隔でないシリーズを断ります。</span></li>
+    <li><b>そのほか</b><span>パノラマ（PX）・口内（IO）の画像は、外部の計算機へ送りません。描画プロセスが落ちたときは、画面を読み直します。</span></li>
+  </ul>
+  <p class="callout">詳しい変更の一覧は、リリースノート（GitHub の Releases）を参照してください。</p>
+  <div class="footer"><span>研究用です。診断には使わないでください。© Visionary Imaging Services, Inc.</span><span>5 / 5</span></div>
+</section>
+
+<script src="shots/marks.js"></script>
+<script src="../guide.js"></script>
+</body>
+</html>
