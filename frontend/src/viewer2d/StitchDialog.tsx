@@ -11,7 +11,7 @@ import { metaData } from "@cornerstonejs/core";
 import { useI18n } from "../i18n/i18n";
 import type { Study, Series, Instance } from "../api";
 import type { ViewerMode } from "../viewer/imageId";
-import { loadRegVolume, type LoadedRegVolume } from "../viewer/regVolumeLoader";
+import { loadRegVolume, regLoadErrorText, type LoadedRegVolume } from "../viewer/regVolumeLoader";
 import { estimateGridBytes } from "../viewer/gridResample";
 import { saveDerivedVolume } from "../viewer/derivedVolumeSave";
 import { runRigidInWorker } from "../viewer/regWorkerClient";
@@ -178,7 +178,7 @@ export function StitchDialog({
           });
           setChecked((p) => ({ ...p, [cand.id]: true }));
         } catch (e) {
-          set({ state: "failed", error: String(e) });
+          set({ state: "failed", error: regLoadErrorText(e, t) });
         }
         await tick();
       }
