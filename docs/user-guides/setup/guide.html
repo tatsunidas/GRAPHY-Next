@@ -1,0 +1,967 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>GRAPHY-Next 導入ガイド — インストールと DICOM 接続</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;900&family=IBM+Plex+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="../guide.css">
+<style>
+  /* この冊子のための部品（共通の guide.css は変えない） */
+  .page { gap: 20px; padding-top: 64px; padding-bottom: 104px; }
+  h2 { font-size: 44px; }
+  h3 { font-size: 28px; color: var(--accent); }
+  p, li { font-size: 24px; line-height: 1.55; }
+  .lead { font-size: 26px; }
+  .note { font-size: 21px; line-height: 1.5; }
+  .callout { font-size: 23px; line-height: 1.5; }
+  .warn { font-size: 23px; line-height: 1.5; border-left: 6px solid #e0b000; padding: 4px 0 4px 24px; }
+  code, .mono { font-family: "IBM Plex Mono", monospace; font-size: 0.9em; color: var(--accent); }
+  pre.code { font-family: "IBM Plex Mono", monospace; font-size: 19px; line-height: 1.5; background: #0a0f14; border: 1px solid var(--line); border-radius: 8px; padding: 18px 22px; color: #d5dee5; white-space: pre; overflow: hidden; }
+  pre.code b { color: var(--accent); font-weight: 600; }
+  pre.code i { color: #7d8f9c; font-style: normal; }
+  pre.code .ok { color: #6fd08c; }
+  pre.code .ng { color: #ff7a6b; }
+  .panel { padding: 26px 30px; }
+  .panel .steps li { padding: 10px 0; }
+  .panel .steps li p { font-size: 23px; }
+  .panel .steps small { font-size: 20px; }
+  .duo { display: grid; grid-template-columns: 1fr 1fr; gap: 36px; align-items: start; }
+  .tri { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 26px; align-items: stretch; }
+  .col { display: flex; flex-direction: column; gap: 18px; }
+  .shot-row { gap: 40px; grid-template-columns: 1080px 1fr; }
+  .explain { gap: 13px; }
+  .explain li p { font-size: 23px; line-height: 1.5; }
+  table.ops th, table.ops td { font-size: 21px; padding: 7px 12px; vertical-align: top; line-height: 1.45; }
+  table.ops td code { font-size: 19px; }
+  .imgs { display: grid; gap: 22px; align-items: start; }
+  .imgs figure { display: flex; flex-direction: column; gap: 8px; }
+  .imgs img { width: 100%; border: 1px solid var(--line); border-radius: 6px; display: block; }
+  .imgs figcaption { font-size: 20px; line-height: 1.45; color: var(--sub); }
+  .imgs figcaption b { color: var(--accent); }
+  /* 構成図 */
+  .net { display: grid; gap: 18px; align-items: stretch; }
+  .node { background: var(--panel); border: 2px solid var(--line); border-radius: 10px; padding: 20px 24px; display: flex; flex-direction: column; gap: 6px; }
+  .node.me { border-color: var(--accent); }
+  .node b { font-size: 26px; }
+  .node span { font-size: 21px; color: var(--sub); line-height: 1.45; }
+  .node .ae { font-family: "IBM Plex Mono", monospace; color: var(--accent); font-size: 22px; }
+  .wire { display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 4px; color: var(--sub); font-size: 20px; text-align: center; line-height: 1.4; }
+  .wire .ar { font-size: 34px; color: var(--accent); line-height: 1; }
+  .layers { list-style: none; display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }
+  .layers li { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 20px; display: flex; flex-direction: column; gap: 8px; }
+  .layers .n { font-family: "IBM Plex Mono", monospace; color: var(--accent); font-size: 22px; }
+  .layers b { font-size: 25px; }
+  .layers span { font-size: 20px; color: var(--sub); line-height: 1.45; }
+  .mark-num.right { top: 50%; left: auto; right: -50px; transform: translateY(-50%); }
+  .mark-num.bottom { top: auto; bottom: -48px; }
+  .mark-num.nonum { display: none; }
+  .shot.w960 { width: 960px; } .shot.w700 { width: 700px; } .shot.w600 { width: 600px; } .shot.w1300 { width: 1300px; } .shot.w1400 { width: 1400px; }
+  .shot-row.dlg { grid-template-columns: 960px 1fr; }
+  .explain.two { display: grid; grid-template-columns: 1fr 1fr; column-gap: 40px; }
+  table.dense th, table.dense td { font-size: 19.5px; padding: 5px 12px; line-height: 1.4; }
+  table.dense td code { font-size: 18px; }
+</style>
+</head>
+<body>
+
+<!-- 表紙 -->
+<section class="page cover">
+  <div class="left">
+    <p class="eyebrow">GRAPHY-NEXT / SETUP GUIDE（v0.6.2）</p>
+    <h1>導入ガイド</h1>
+    <p class="lead">インストールから、DICOM サーバー（PACS）との接続までを、実際の画面と一緒に順に説明します。接続の例には、無料で使える PACS「dcm4chee」を使います。うまくつながらないときの調べ方も載せています。</p>
+    <div class="chips">
+      <span class="chip on">インストール</span>
+      <span class="chip">スタンドアロン</span>
+      <span class="chip">Web モード</span>
+      <span class="chip">トラブル対応</span>
+    </div>
+  </div>
+  <div class="panel">
+    <h3>この冊子の内容</h3>
+    <ol class="steps">
+      <li><span class="n">01</span><p>2 つの使い方と、インストール<small>Windows ／ macOS ／ Linux</small></p></li>
+      <li><span class="n">02</span><p>DICOM 接続の基本<small>AE タイトル・IP アドレス・ポート</small></p></li>
+      <li><span class="n">03</span><p>スタンドアロンで、外部の PACS につなぐ<small>登録 → 疎通確認 → 検索・取得 → 送信</small></p></li>
+      <li><span class="n">04</span><p>Web モードを立てて、外部の PACS につなぐ<small>自分サーバー（dcm4chee）＋ 外部サーバー</small></p></li>
+      <li><span class="n">05</span><p>つながらないとき<small>症状別の表、「エコーは通るが検索できない」の調べ方</small></p></li>
+    </ol>
+  </div>
+  <div class="footer"><span>研究用です。診断には使わないでください。画面のデータ: TCIA HCC-TACE-Seg（Moawad et al., 2021）CC BY 4.0</span><span class="pg"></span></div>
+</section>
+
+<!-- 2 つの使い方 -->
+<section class="page">
+  <div>
+    <p class="eyebrow">01 / はじめに</p>
+    <h2>使い方は 2 通り。まずはスタンドアロンがおすすめです</h2>
+  </div>
+  <div class="duo">
+    <div class="panel col">
+      <h3>スタンドアロン（デスクトップ版）</h3>
+      <p>パソコンにインストールして使います。画像は<b>このパソコンの中</b>に保管します。</p>
+      <ul class="steps">
+        <li><p>インストーラを実行するだけ<small>Java・データベースなどはすべて同梱</small></p></li>
+        <li><p>ネットワークが無くても使えます<small>フォルダや ZIP からの取り込み、全ビューア機能</small></p></li>
+        <li><p>PACS とは DICOM 通信（DIMSE）でやり取り<small>検索・取得（Q/R）、送信、受信</small></p></li>
+      </ul>
+      <p class="note">向いている場面: 個人の解析用、研究室の 1 台、PACS から必要な検査だけ取り出して使う。</p>
+    </div>
+    <div class="panel col">
+      <h3>Web モード（サーバー版）</h3>
+      <p>サーバーで動かし、<b>ブラウザから</b>使います。画像は GRAPHY-Next 自身では持たず、<b>組になる PACS（自分サーバー）</b>に保管します。</p>
+      <ul class="steps">
+        <li><p>サーバーに Java 21 と dcm4chee が要ります<small>利用者のパソコンにはインストール不要</small></p></li>
+        <li><p>自分サーバーとは DICOMweb でやり取り<small>QIDO-RS ／ WADO-RS ／ STOW-RS</small></p></li>
+        <li><p>外部の PACS からは、自分サーバーへ取り寄せます<small>Q/R の取得先が自分サーバーになります</small></p></li>
+      </ul>
+      <p class="note">向いている場面: 複数人でブラウザから見る、端末にソフトを入れられない。</p>
+    </div>
+  </div>
+  <p class="callout">一部の機能（フォルダからの取り込み、DICOM 送信、プラグインの導入など）はスタンドアロン専用です。Web モードでは、メニューに出ないか「スタンドアロン専用」と表示されます。</p>
+  <div class="footer"><span>GRAPHY-Next 導入ガイド（v0.6.2）</span><span class="pg"></span></div>
+</section>
+
+<!-- ダウンロード -->
+<section class="page">
+  <div>
+    <p class="eyebrow">01 / インストール ＞ ダウンロード</p>
+    <h2>お使いの OS に合ったインストーラを入手します</h2>
+  </div>
+  <p>入手先: <code>https://github.com/tatsunidas/GRAPHY-Next/releases</code>（最新版の「Assets」から選びます）</p>
+  <table class="ops">
+    <tr><th style="width:330px">OS</th><th style="width:560px">ファイル</th><th>入れ方</th></tr>
+    <tr><td>Windows</td><td><code>GRAPHY-Next.Setup.&lt;版&gt;.exe</code></td><td>実行してインストール。初回は警告が出ます（次のページ）</td></tr>
+    <tr><td>macOS（Apple Silicon: M1 以降）</td><td><code>GRAPHY-Next-&lt;版&gt;-arm64.dmg</code></td><td>開いて Applications へ。初回は警告が出ます</td></tr>
+    <tr><td>macOS（Intel）</td><td><code>GRAPHY-Next-&lt;版&gt;-x64.dmg</code></td><td>同上。「この Mac について」のチップが Intel ならこちら</td></tr>
+    <tr><td>Linux（Ubuntu / Debian）</td><td><code>graphy-next-desktop_&lt;版&gt;_amd64.deb</code></td><td><code>sudo apt install ./graphy-next-desktop_&lt;版&gt;_amd64.deb</code>（おすすめ）</td></tr>
+    <tr><td>Linux（その他）</td><td><code>GRAPHY-Next-&lt;版&gt;.AppImage</code></td><td><code>chmod +x</code> して実行。libfuse2 が要ります</td></tr>
+    <tr><td>Web モード用</td><td><code>graphy-next-backend.jar</code></td><td>サーバーで <code>java -jar</code>（04 章）</td></tr>
+  </table>
+  <div class="duo">
+    <div class="panel col">
+      <h3>同梱されているもの（デスクトップ版）</h3>
+      <p>Java ランタイム、データベース（H2）、動画変換（ffmpeg）、DICOM 通信ツール（dcm4che）。追加のインストールは要りません。</p>
+    </div>
+    <div class="panel col">
+      <h3>初回の警告について</h3>
+      <p>GRAPHY-Next は、Microsoft・Apple の有料の署名をまだ受けていません。そのため Windows と macOS では、<b>初回だけ</b>警告が出ます。次のページの手順で開けます。</p>
+    </div>
+  </div>
+  <div class="footer"><span>GRAPHY-Next 導入ガイド（v0.6.2）</span><span class="pg"></span></div>
+</section>
+
+<!-- Windows -->
+<section class="page">
+  <div>
+    <p class="eyebrow">01 / インストール ＞ Windows</p>
+    <h2>Windows: 「PC が保護されました」は、詳細情報 → 実行</h2>
+  </div>
+  <div class="imgs" style="grid-template-columns: 1fr 1fr 0.92fr 0.92fr;">
+    <figure><img src="../../images/install/win-1-smartscreen.png" alt="SmartScreen の警告"><figcaption><b>1</b>　インストーラを開くと青い警告が出ます。<b>詳細情報</b>（More info）を押します。</figcaption></figure>
+    <figure><img src="../../images/install/win-2-smartscreen-more.png" alt="詳細情報を押した後"><figcaption><b>2</b>　<b>実行</b>（Run anyway）を押します。</figcaption></figure>
+    <figure><img src="../../images/install/win-3-options.png" alt="インストールの範囲"><figcaption><b>3</b>　使う人の範囲（自分だけ／すべてのユーザー）を選んで <b>次へ</b>。</figcaption></figure>
+    <figure><img src="../../images/install/win-4-folder.png" alt="インストール先"><figcaption><b>4</b>　インストール先を確かめて <b>インストール</b>。終わったら <b>完了</b> で起動します。</figcaption></figure>
+  </div>
+  <p class="callout">起動すると、最初に「利用条件の確認」が出ます。内容を読み、同意すると使い始められます。</p>
+  <p class="note">画面は英語版の Windows で撮っています。日本語版では括弧の外の表記になります。更新するときは、新しいインストーラをそのまま実行します（上書き。データは残ります）。</p>
+  <div class="footer"><span>GRAPHY-Next 導入ガイド（v0.6.2）</span><span class="pg"></span></div>
+</section>
+
+<!-- macOS -->
+<section class="page">
+  <div>
+    <p class="eyebrow">01 / インストール ＞ macOS</p>
+    <h2>macOS: 「開いていません」は、システム設定から「このまま開く」</h2>
+  </div>
+  <div class="imgs" style="grid-template-columns: repeat(4, 1fr);">
+    <figure><img src="../../images/install/mac-1-dmg.png" alt="dmg の窓"><figcaption><b>1</b>　dmg を開き、GRAPHY-Next を Applications へドラッグします。</figcaption></figure>
+    <figure><img src="../../images/install/mac-2-blocked.png" alt="開いていません"><figcaption><b>2</b>　開くと「開いていません」と出ます。<b>完了</b> で閉じます（<b>ゴミ箱に入れる</b>は押さない）。</figcaption></figure>
+    <figure><img src="../../images/install/mac-3-settings.png" alt="このまま開く"><figcaption><b>3</b>　<b>システム設定 ＞ プライバシーとセキュリティ</b> の一番下にある <b>このまま開く</b> を押します。</figcaption></figure>
+    <figure><img src="../../images/install/mac-4-confirm.png" alt="確認"><figcaption><b>4</b>　確認でもう一度 <b>このまま開く</b>。管理者のパスワードを入れると、次回からは普通に開けます。</figcaption></figure>
+  </div>
+  <p class="callout">Apple Silicon（M1 以降）は <code>arm64</code>、Intel の Mac は <code>x64</code> の dmg を使います。違う方を入れると起動しません。</p>
+  <div class="footer"><span>GRAPHY-Next 導入ガイド（v0.6.2）</span><span class="pg"></span></div>
+</section>
+
+<!-- Linux・保存場所 -->
+<section class="page">
+  <div>
+    <p class="eyebrow">01 / インストール ＞ Linux・データの場所</p>
+    <h2>Linux は .deb がおすすめ。データはユーザー領域に保存されます</h2>
+  </div>
+  <div class="duo">
+    <div class="col">
+      <pre class="code"><i># Ubuntu / Debian</i>
+sudo apt install ./graphy-next-desktop_<b>&lt;版&gt;</b>_amd64.deb
+graphy-next-desktop        <i># アプリの一覧からも起動できます</i></pre>
+      <p class="note">AppImage は Ubuntu 22.04 以降で止まることがあります。<code>libfuse.so.2</code> が無いと出たら <code>sudo apt install libfuse2t64</code>（22.04 は <code>libfuse2</code>）。「SUID sandbox helper…」と出る環境では .deb を使ってください。</p>
+      <div class="panel col">
+        <h3>保存データの場所（インストール先とは別です）</h3>
+        <table class="ops">
+          <tr><th>OS</th><th>場所</th></tr>
+          <tr><td>Windows</td><td><code>%APPDATA%\GRAPHY-Next</code></td></tr>
+          <tr><td>macOS</td><td><code>~/Library/Application Support/GRAPHY-Next</code></td></tr>
+          <tr><td>Linux</td><td><code>~/.config/GRAPHY-Next</code></td></tr>
+        </table>
+        <p class="note">画像の保管庫・データベース・設定・プラグインが入ります。アンインストールしても既定では消えません（手順は Help ＞ アンインストール）。</p>
+      </div>
+    </div>
+    <figure class="imgs"><img src="../../images/install/linux-1-launched-deb.png" alt="Linux で起動した画面"><figcaption>起動した画面（メイン画面）。左上のツールバーから取り込み・検索・ビューアを開きます。</figcaption></figure>
+  </div>
+  <div class="footer"><span>GRAPHY-Next 導入ガイド（v0.6.2）</span><span class="pg"></span></div>
+</section>
+
+<!-- DICOM 接続の基本 -->
+<section class="page">
+  <div>
+    <p class="eyebrow">02 / DICOM 接続の基本</p>
+    <h2>つなぐのに要るのは 3 つ。そして「お互いに」登録します</h2>
+  </div>
+  <div class="tri">
+    <div class="panel col"><h3>AE タイトル</h3><p>DICOM の世界での機器の名前です。半角 16 文字まで。<b>大文字・小文字も区別</b>され、1 文字違うとつながりません。</p></div>
+    <div class="panel col"><h3>IP アドレス（ホスト名）</h3><p>相手の機器のネットワーク上の住所です。例: <code>192.168.10.20</code></p></div>
+    <div class="panel col"><h3>ポート番号</h3><p>相手が DICOM 通信を待ち受けている番号です。<code>11112</code> や <code>104</code> がよく使われます。</p></div>
+  </div>
+  <div class="duo">
+    <div class="panel col">
+      <h3>登録は双方向です</h3>
+      <ul class="steps">
+        <li><p><b>GRAPHY-Next に、相手の 3 つを登録</b><small>検索・取得・送信の相手として使います</small></p></li>
+        <li><p><b>相手（PACS）に、GRAPHY-Next の 3 つを登録</b><small>取得（C-MOVE）では、相手の方から画像を送ってくるため</small></p></li>
+      </ul>
+    </div>
+    <div class="panel col">
+      <h3>よく使う操作と DICOM の言葉</h3>
+      <table class="ops">
+        <tr><td>疎通確認</td><td>C-ECHO</td><td>つながるかだけを確かめる</td></tr>
+        <tr><td>検索（Query）</td><td>C-FIND</td><td>相手にある検査の一覧をもらう</td></tr>
+        <tr><td>取得（Retrieve）</td><td>C-MOVE</td><td>相手に「ここへ送って」と頼む</td></tr>
+        <tr><td>送信・受信</td><td>C-STORE</td><td>画像そのものを送る・受ける</td></tr>
+      </table>
+    </div>
+  </div>
+  <p class="warn">病院の PACS につなぐときは、PACS の管理者（またはメーカー）に、GRAPHY-Next の AE タイトル・IP アドレス・ポートの登録と、<b>検索・取得を許可する設定</b>を依頼してください。疎通確認だけ通って検索できない、の多くはここが原因です（05 章）。</p>
+  <div class="footer"><span>GRAPHY-Next 導入ガイド（v0.6.2）</span><span class="pg"></span></div>
+</section>
+
+<!-- スタンドアロン: 構成 -->
+<section class="page">
+  <div>
+    <p class="eyebrow">03 / スタンドアロン ＞ この章の例</p>
+    <h2>スタンドアロンの GRAPHY-Next を、外部の PACS（dcm4chee）につなぐ</h2>
+  </div>
+  <div class="net" style="grid-template-columns: 1fr 360px 1fr;">
+    <div class="node me">
+      <b>GRAPHY-Next（スタンドアロン）</b>
+      <span class="ae">AE: GRAPHYNEXT</span>
+      <span>IP アドレス: 192.168.10.1<br>受信ポート（SCP）: 11112</span>
+      <span>AE タイトルとポートは既定値です（変えられます）。</span>
+    </div>
+    <div class="wire">
+      <span>検索・取得の依頼、送信</span><span class="ar">→</span>
+      <span class="ar">←</span><span>取得した画像が届く</span>
+    </div>
+    <div class="node">
+      <b>外部の PACS（dcm4chee）</b>
+      <span class="ae">AE: DCM4CHEE</span>
+      <span>IP アドレス: 192.168.10.20<br>DICOM ポート: 11112<br>管理画面: http://192.168.10.20:8080/dcm4chee-arc/ui2/</span>
+    </div>
+  </div>
+  <div class="panel">
+    <h3>手順</h3>
+    <ol class="steps" style="display:grid;grid-template-columns:1fr 1fr;column-gap:40px">
+      <li><span class="n">1</span><p>自分の AE タイトルとポートを確かめる<small>環境設定 ＞ DICOM通信 ＞ 自局</small></p></li>
+      <li><span class="n">2</span><p>相手（DCM4CHEE）を登録し、疎通確認する<small>環境設定 ＞ DICOM 通信先</small></p></li>
+      <li><span class="n">3</span><p>相手の側に、GRAPHYNEXT を登録する<small>dcm4chee の管理画面</small></p></li>
+      <li><span class="n">4</span><p>検索して取得する／送信する<small>Query/Retrieve の窓、送信</small></p></li>
+    </ol>
+  </div>
+  <p class="note">この冊子の IP アドレスは例です。ご自分の環境の値に読み替えてください。dcm4chee を手元で試したいときは、04 章の docker compose で立てられます（AE タイトルを変える 1 行を足さなければ <code>DCM4CHEE</code> になります）。</p>
+  <div class="footer"><span>GRAPHY-Next 導入ガイド（v0.6.2）</span><span class="pg"></span></div>
+</section>
+
+<!-- 自局 -->
+<section class="page">
+  <div>
+    <p class="eyebrow">03 / スタンドアロン ＞ 手順 1　環境設定 ＞ DICOM通信</p>
+    <h2>自分の AE タイトルと受信ポートを確かめる</h2>
+  </div>
+  <div class="shot-row dlg">
+    <figure class="shot" data-shot="sa-local-ae"><img src="figs/sa-local-ae.png" alt="環境設定の DICOM通信。自局の AE タイトルと SCP 待受ポート"></figure>
+    <div class="col">
+      <ol class="explain">
+        <li><span class="num">1</span><p>環境設定を開き、左の <b>DICOM通信</b> を選びます</p></li>
+        <li><span class="num">2</span><p><b>自局 AE タイトル</b>。既定は <code>GRAPHYNEXT</code>。相手の PACS に登録する名前です</p></li>
+        <li><span class="num">3</span><p><b>SCP 待受ポート</b>。既定は <code>11112</code>。相手から画像が届く番号です</p></li>
+      </ol>
+      <p class="callout">受信ポートを変えたときは、<b>アプリを再起動</b>すると反映されます。AE タイトルは、こちらから発信する分にはすぐ反映されます。</p>
+      <p class="note">同じパソコンで dcm4chee なども動かしていて <code>11112</code> が重なるときは、どちらかを別の番号にしてください。Windows のファイアウォールで受信ポートが閉じていると、取得した画像が届きません（05 章）。</p>
+    </div>
+  </div>
+  <div class="footer"><span>GRAPHY-Next 導入ガイド（v0.6.2）</span><span class="pg"></span></div>
+</section>
+
+<!-- 通信先 -->
+<section class="page">
+  <div>
+    <p class="eyebrow">03 / スタンドアロン ＞ 手順 2　環境設定 ＞ DICOM 通信先</p>
+    <h2>相手の PACS を登録して、疎通確認する</h2>
+  </div>
+  <div class="shot-row dlg">
+    <figure class="shot" data-shot="sa-remote"><img src="figs/sa-remote.png" alt="環境設定の DICOM 通信先。DCM4CHEE の行と疎通確認の結果"></figure>
+    <div class="col">
+      <ol class="explain">
+        <li><span class="num">1</span><p><b>＋追加</b> で行を足します</p></li>
+        <li><span class="num">2</span><p>相手の <b>AE タイトル</b>・<b>ホスト</b>・<b>ポート</b>を入れます。例: <code>DCM4CHEE</code> / <code>192.168.10.20</code> / <code>11112</code></p></li>
+        <li><span class="num">3</span><p><b>疎通確認</b>を押します。緑の <b>✓</b> なら、つながっています</p></li>
+        <li><span class="num">4</span><p><b>保存</b>を押します。押すまで登録されません</p></li>
+      </ol>
+      <p class="callout">赤い <b>✕</b> のときは、AE タイトル・IP アドレス・ポートのどれかが違うか、相手が止まっています。画面には理由が出ないので、05 章の表で切り分けます。</p>
+      <p class="note">図の AE タイトルは、欄の幅のため末尾が隠れています（入力は <code>DCM4CHEE</code>）。ここで登録した相手は、送信と Query/Retrieve の両方で使われます。同じ LAN の機器は「ネットワークで探す」でも見つけられます（相手が対応している場合）。</p>
+    </div>
+  </div>
+  <div class="footer"><span>GRAPHY-Next 導入ガイド（v0.6.2）</span><span class="pg"></span></div>
+</section>
+
+<!-- dcm4chee 側の登録 -->
+<section class="page">
+  <div>
+    <p class="eyebrow">03 / スタンドアロン ＞ 手順 3　dcm4chee の管理画面（相手側の作業）</p>
+    <h2>相手の PACS に、GRAPHY-Next を登録する</h2>
+  </div>
+  <p class="note" style="margin-top:-8px">ブラウザで <code>http://192.168.10.20:8080/dcm4chee-arc/ui2/</code> を開き、左上の ≡ ＞ <b>Configuration</b> ＞ タブ <b>AE list</b> ＞ <b>New AET</b> で「Register new application entity」の窓が出ます。</p>
+  <div class="duo">
+    <div class="col">
+      <figure class="shot w700" data-shot="ui2-newaet-graphynext-b"><img src="figs/ui2-newaet-graphynext-b.png" alt="dcm4chee の Register new application entity。Hostname・Port・AE Title を入力した状態"></figure>
+      <ol class="explain">
+        <li><span class="num">1</span><p><b>Hostname</b>: GRAPHY-Next のパソコンの IP アドレス（例 <code>192.168.10.1</code>）</p></li>
+        <li><span class="num">2</span><p><b>Port</b>: GRAPHY-Next の SCP 待受ポート（<code>11112</code>）</p></li>
+        <li><span class="num">3</span><p><b>AE Title</b>: <code>GRAPHYNEXT</code>（自局 AE タイトルと 1 文字も違わないように）</p></li>
+        <li><span class="num">4</span><p>入力がそろったら <b>APPLY</b>。「Device with the AET created successfully!」と出れば完了</p></li>
+      </ol>
+    </div>
+    <div class="col">
+      <figure class="shot" data-shot="ui2-newaet-graphynext-a"><img src="figs/ui2-newaet-graphynext-a.png" alt="同じ窓の New Device の欄。Device name を入力した状態"></figure>
+      <ol class="explain">
+        <li><span class="num">1</span><p>同じ窓の「New Device」を開き、<b>Device name</b>（任意の名前）を入れ、その下の <b>Installed</b> を True にします。<b>どちらも必須</b>で、APPLY の前に入れます</p></li>
+      </ol>
+      <p class="warn"><b>この登録をしないと、取得（C-MOVE）だけが失敗します。</b>疎通確認と検索は通るので、気づきにくい所です。</p>
+      <p class="note">市販の PACS でも考え方は同じです。「GRAPHYNEXT は、この IP アドレスのこのポートにいる」と相手に教えます。メーカーや管理者に登録を依頼します。</p>
+    </div>
+  </div>
+  <div class="footer"><span>GRAPHY-Next 導入ガイド（v0.6.2）　dcm4chee-arc-light 5.33.1 の画面です</span><span class="pg"></span></div>
+</section>
+
+<!-- AE list 確認 -->
+<section class="page">
+  <div>
+    <p class="eyebrow">03 / スタンドアロン ＞ 手順 3　登録できたかを確かめる</p>
+    <h2>AE list に GRAPHYNEXT が出ていれば、相手側の準備は完了です</h2>
+  </div>
+  <div class="shot-row">
+    <figure class="shot" data-shot="ui2-aelist"><img src="figs/ui2-aelist.png" alt="dcm4chee の AE list。GRAPHYNEXT が登録されている"></figure>
+    <div class="col">
+      <ol class="explain">
+        <li><span class="num">1</span><p>Configuration の <b>AE list</b> タブ</p></li>
+        <li><span class="num">2</span><p>新しく登録するときは <b>New AET</b></p></li>
+        <li><span class="num">3</span><p><b>GRAPHYNEXT</b> の行。Hostname と Port が、GRAPHY-Next のパソコンの値になっているか見ます</p></li>
+      </ol>
+      <p class="callout">GRAPHY-Next のパソコンの IP アドレスが変わったら（DHCP など）、ここの Hostname も直します。固定の IP アドレスにしておくと安心です。</p>
+    </div>
+  </div>
+  <div class="footer"><span>GRAPHY-Next 導入ガイド（v0.6.2）　dcm4chee-arc-light 5.33.1 の画面です</span><span class="pg"></span></div>
+</section>
+
+<!-- QR -->
+<section class="page">
+  <div>
+    <p class="eyebrow">03 / スタンドアロン ＞ 手順 4　Query/Retrieve</p>
+    <h2>PACS の検査を検索して、取得する</h2>
+  </div>
+  <p class="note" style="margin-top:-8px">メイン画面のツールバーの <b>Query/Retrieve</b> を押すと、別の窓で開きます。図は、その窓の上の部分です。</p>
+  <figure class="shot" data-shot="sa-qr-query" style="margin-top:34px"><img src="figs/sa-qr-query.png" alt="Query/Retrieve の窓。DCM4CHEE のタブに検索結果が出ている"></figure>
+  <ol class="explain two" style="margin-top:30px">
+    <li><span class="num">1</span><p>登録した相手ごとにタブが出ます。<b>疎通確認が通らない相手はタブに出ません</b></p></li>
+    <li><span class="num">2</span><p>検査日の既定は<b>今日</b>です。過去の検査を探すときは <b>全期間</b> や日付の範囲を選びます</p></li>
+    <li><span class="num">3</span><p><b>Query</b> で検索します。患者 ID・患者名・モダリティでも絞れます</p></li>
+    <li><span class="num">4</span><p>行の <b>取得</b> で、その検査をこのパソコンへ取り寄せます。行を開くと、シリーズ単位でも取得できます</p></li>
+  </ol>
+  <p class="callout">件数の多い PACS では、条件を付けずに検索しないでください。相手に負荷がかかり、PACS によっては拒否されます。</p>
+  <div class="footer"><span>GRAPHY-Next 導入ガイド（v0.6.2）</span><span class="pg"></span></div>
+</section>
+
+<!-- QR saved / main -->
+<section class="page">
+  <div>
+    <p class="eyebrow">03 / スタンドアロン ＞ 手順 4　取得できたかを確かめる</p>
+    <h2>「保存済」になり、メイン画面に出れば成功です</h2>
+  </div>
+  <div class="shot-row" style="grid-template-columns:1300px 1fr;align-items:center">
+    <figure class="shot" data-shot="sa-qr-saved"><img src="figs/sa-qr-saved.png" alt="Query/Retrieve の窓。取得が終わり保存済になっている"></figure>
+    <ol class="explain"><li><span class="num">1</span><p>取得が終わると、行が <b>保存済</b> になります。「未保存」のまま変わらないときは、相手側の登録（手順 3）を確かめます</p></li></ol>
+  </div>
+  <div class="shot-row" style="grid-template-columns:1300px 1fr;align-items:center;margin-top:36px">
+    <figure class="shot" data-shot="sa-main-after"><img src="figs/sa-main-after.png" alt="メイン画面。取得した検査が一覧に出ている"></figure>
+    <ol class="explain"><li><span class="num">1</span><p>メイン画面で検索すると、取得した検査が出ます（検査日の既定は今日なので、<b>全期間</b> などを選びます）。行を選んで 2D Viewer などで開けます</p></li></ol>
+  </div>
+  <div class="footer"><span>GRAPHY-Next 導入ガイド（v0.6.2）</span><span class="pg"></span></div>
+</section>
+
+<!-- 送信 -->
+<section class="page">
+  <div>
+    <p class="eyebrow">03 / スタンドアロン ＞ 手順 4　DICOM 送信</p>
+    <h2>このパソコンの検査を、PACS へ送る</h2>
+  </div>
+  <div class="duo">
+    <div class="col">
+      <figure class="shot w700" data-shot="sa-send"><img src="figs/sa-send.png" alt="DICOM 送信のダイアログ。送信先に DCM4CHEE を選んでいる"></figure>
+      <ol class="explain">
+        <li><span class="num">1</span><p>メイン画面で検査の行を選び、ツールバーの <b>送信</b> を押します。<b>送信先</b>に、登録した相手を選びます</p></li>
+        <li><span class="num">2</span><p><b>送信</b> を押します</p></li>
+      </ol>
+    </div>
+    <div class="col">
+      <figure class="shot w700" data-shot="sa-send-done"><img src="figs/sa-send-done.png" alt="送信完了の表示"></figure>
+      <ol class="explain"><li><span class="num">1</span><p>「送信完了」と件数が出れば、相手に届いています</p></li></ol>
+      <p class="callout">相手から GRAPHY-Next へ送ってもらう（受信する）こともできます。相手の送信先に、GRAPHYNEXT・IP アドレス・11112 を登録してもらいます。受信した検査は、そのままメイン画面に出ます。</p>
+    </div>
+  </div>
+  <div class="footer"><span>GRAPHY-Next 導入ガイド（v0.6.2）</span><span class="pg"></span></div>
+</section>
+
+<!-- Web: 構成 -->
+<section class="page">
+  <div>
+    <p class="eyebrow">04 / Web モード ＞ この章の例</p>
+    <h2>Web モードは、自分サーバー（dcm4chee）と組で動きます</h2>
+  </div>
+  <div class="net" style="grid-template-columns: 300px 150px 1fr 190px 1fr 190px 1fr;">
+    <div class="node"><b>利用者</b><span>ブラウザで<br>http://192.168.10.1:8090/</span></div>
+    <div class="wire"><span class="ar">⇄</span><span>HTTP</span></div>
+    <div class="node me"><b>GRAPHY-Next（Web）</b><span class="ae">AE: GRAPHYNEXT</span><span>192.168.10.1<br>ポート 8090</span><span>画像は持ちません</span></div>
+    <div class="wire"><span class="ar">⇄</span><span>DICOMweb<br>（表示・保存）</span></div>
+    <div class="node me"><b>自分サーバー（dcm4chee）</b><span class="ae">AE: GRAPHYPACS</span><span>192.168.10.10<br>Web 8080 ／ DICOM 11112</span><span>画像の保管場所</span></div>
+    <div class="wire"><span class="ar">←</span><span>取得した画像<br>（C-STORE）</span></div>
+    <div class="node"><b>外部の PACS（dcm4chee）</b><span class="ae">AE: DCM4CHEE</span><span>192.168.10.20<br>DICOM 11112</span></div>
+  </div>
+  <div class="duo">
+    <div class="panel col">
+      <h3>外部の PACS から取得するときの流れ</h3>
+      <ul class="steps">
+        <li><p>GRAPHY-Next が、外部の PACS に検索（C-FIND）と取得の依頼（C-MOVE）を出します</p></li>
+        <li><p>外部の PACS は、画像を<b>自分サーバーへ</b>送ります<small>GRAPHY-Next ではなく GRAPHYPACS が宛先</small></p></li>
+        <li><p>GRAPHY-Next は、自分サーバーから DICOMweb で読んで表示します</p></li>
+      </ul>
+    </div>
+    <div class="panel col">
+      <h3>自分サーバーの AE タイトルを変える理由</h3>
+      <p>dcm4chee の AE タイトルは、何もしないと <code>DCM4CHEE</code> です。外部の PACS も dcm4chee だと<b>名前が重なり</b>、外部の PACS が「DCM4CHEE へ送って」を自分自身のことだと受け取ってしまいます。そこで、自分サーバーを <code>GRAPHYPACS</code> にします。</p>
+    </div>
+  </div>
+  <p class="note">サーバーに要るもの: Docker（dcm4chee 用）、Java 21（GRAPHY-Next 用）、dcm4che のコマンド一式（Q/R を使う場合。配布元: <code>https://sourceforge.net/projects/dcm4che/files/dcm4che3/</code> の <code>dcm4che-5.x.x-bin.zip</code>）。</p>
+  <div class="footer"><span>GRAPHY-Next 導入ガイド（v0.6.2）</span><span class="pg"></span></div>
+</section>
+
+<!-- Web: 自分サーバー -->
+<section class="page">
+  <div>
+    <p class="eyebrow">04 / Web モード ＞ 手順 1　自分サーバーを立てる</p>
+    <h2>dcm4chee を、AE タイトル GRAPHYPACS で起動する</h2>
+  </div>
+  <div class="duo" style="grid-template-columns: 1.05fr 0.95fr;">
+    <div class="col">
+      <p>GRAPHY-Next のリポジトリにある <code>deploy/dcm4chee/docker-compose.yml</code> を使います。<b>ldap の environment に 1 行足す</b>だけです。</p>
+      <pre class="code">services:
+  ldap:
+    image: dcm4che/slapd-dcm4chee:2.6.7-33.1
+    environment:
+      STORAGE_DIR: /storage/fs1
+      <b>AE_TITLE: GRAPHYPACS</b>        <i># ← この 1 行を足す</i>
+  <i># db・arc はそのまま</i></pre>
+      <pre class="code">docker compose -f deploy/dcm4chee/docker-compose.yml up -d
+
+<i># 起動したかを確かめる（数十秒〜数分かかります）</i>
+curl -i http://192.168.10.10:8080/dcm4chee-arc/aets/<b>GRAPHYPACS</b>/rs/studies
+<i># → HTTP 204（まだ画像が無い）か 200 が返れば準備完了</i></pre>
+    </div>
+    <div class="col">
+      <p class="warn"><b>AE_TITLE は、最初の起動のときだけ効きます。</b>一度 <code>DCM4CHEE</code> のまま起動してしまったら、<code>docker compose down</code> のあと <code>deploy/dcm4chee/data</code> を消してから起動し直します（中の画像も消えます）。</p>
+      <div class="panel col">
+        <h3>確かめるところ</h3>
+        <ul class="steps">
+          <li><p>URL の <code>aets/</code> の次が AE タイトルです<small>違う名前で開くと 404「No such Application Entity」</small></p></li>
+          <li><p>起動の途中は、つながりません<small>curl が失敗するあいだは、まだ初期化中です</small></p></li>
+          <li><p>管理画面<small>http://192.168.10.10:8080/dcm4chee-arc/ui2/</small></p></li>
+        </ul>
+      </div>
+      <p class="note">この compose は試用向け（認証なし）です。院内で常用するときは、dcm4chee の公式の手引きに沿って、認証付きの構成にしてください。</p>
+    </div>
+  </div>
+  <div class="footer"><span>GRAPHY-Next 導入ガイド（v0.6.2）　dcm4chee-arc-light 5.33.1 で確かめました</span><span class="pg"></span></div>
+</section>
+
+<!-- Web: 起動 -->
+<section class="page">
+  <div>
+    <p class="eyebrow">04 / Web モード ＞ 手順 2　GRAPHY-Next を起動する</p>
+    <h2>jar を web プロファイルで起動し、ブラウザで開く</h2>
+  </div>
+  <div class="duo" style="grid-template-columns: 0.95fr 1.05fr;">
+    <div class="col">
+      <pre class="code">java -jar graphy-next-backend.jar \
+  --spring.profiles.active=<b>web</b> \
+  --server.port=<b>8090</b> \
+  --graphy.dicom.dicomweb.base-url=\
+<b>http://192.168.10.10:8080/dcm4chee-arc/aets/GRAPHYPACS/rs</b> \
+  --graphy.dicom.dcm4che-home=<b>/opt/dcm4che-5.33.1</b></pre>
+      <table class="ops">
+        <tr><td style="width:250px"><code>server.port</code></td><td>ブラウザで開くポート。dcm4chee の 8080 と重ならない番号にします</td></tr>
+        <tr><td><code>dicomweb.base-url</code></td><td>自分サーバーの DICOMweb の URL。<b>AE タイトルまで含めます</b></td></tr>
+        <tr><td><code>dcm4che-home</code></td><td>dcm4che を展開したフォルダ（<code>bin/findscu</code> がある所）。Q/R に使います</td></tr>
+      </table>
+      <p class="note">ブラウザで <code>http://192.168.10.1:8090/</code> を開きます。<code>http://192.168.10.1:8090/api/status</code> の <code>mode</code> が <code>web</code> なら、Web モードで動いています。</p>
+      <p class="warn"><b>Web モードにはログインがありません。</b>サーバーに届く人は誰でも開けます。閉じたネットワークの中だけで使い、外部に公開しないでください。</p>
+      <p class="note">自分サーバーが Bearer トークンを求める構成のときだけ、<code>--graphy.dicom.dicomweb.bearer-token=</code> を足します。</p>
+    </div>
+    <div class="col">
+      <figure class="shot" data-shot="web-main-empty"><img src="figs/web-main-empty.png" alt="Web モードのメイン画面。自分サーバーが空なので 0 件"></figure>
+      <ol class="explain">
+        <li><span class="num">1</span><p><b>Query/Retrieve</b>。外部の PACS から取り寄せるときに使います（別のタブで開きます）</p></li>
+        <li><span class="num">2</span><p>環境設定。次のページで、通信先と取得先を設定します</p></li>
+      </ol>
+      <p class="note">最初は、自分サーバーに画像が無いので一覧は空です。</p>
+    </div>
+  </div>
+  <div class="footer"><span>GRAPHY-Next 導入ガイド（v0.6.2）</span><span class="pg"></span></div>
+</section>
+
+<!-- Web: 通信先と宛先 -->
+<section class="page">
+  <div>
+    <p class="eyebrow">04 / Web モード ＞ 手順 3　環境設定</p>
+    <h2>外部の PACS を登録し、取得先に自分サーバーを指定する</h2>
+  </div>
+  <div class="duo">
+    <div class="col">
+      <figure class="shot w700" data-shot="web-remote"><img src="figs/web-remote.png" alt="Web モードの環境設定。DICOM 通信先に DCM4CHEE を登録"></figure>
+      <p><b>環境設定 ＞ DICOM 通信先</b>（スタンドアロンと同じ画面です）</p>
+      <ol class="explain">
+        <li><span class="num">1</span><p><b>＋追加</b></p></li>
+        <li><span class="num">2</span><p>外部の PACS: <code>DCM4CHEE</code> / <code>192.168.10.20</code> / <code>11112</code></p></li>
+        <li><span class="num">3</span><p><b>疎通確認</b>で ✓　　<span class="num" style="margin-left:14px">4</span>　<b>保存</b></p></li>
+      </ol>
+    </div>
+    <div class="col">
+      <figure class="shot w700" data-shot="web-movedest"><img src="figs/web-movedest.png" alt="Web モードの環境設定。Query/Retrieve の C-MOVE 宛先 AE に GRAPHYPACS"></figure>
+      <p><b>環境設定 ＞ Query/Retrieve</b></p>
+      <ol class="explain">
+        <li><span class="num">1</span><p>左の <b>Query/Retrieve</b> を選びます</p></li>
+        <li><span class="num">2</span><p><b>Web取得の C-MOVE 宛先 AE（dcm4chee）</b>に、自分サーバーの AE タイトル <code>GRAPHYPACS</code> を入れます</p></li>
+      </ol>
+      <p class="callout">ここが空か、名前が違うと、取得した画像が自分サーバーに届きません。</p>
+    </div>
+  </div>
+  <div class="footer"><span>GRAPHY-Next 導入ガイド（v0.6.2）</span><span class="pg"></span></div>
+</section>
+
+<!-- Web: 外部 PACS 側 -->
+<section class="page">
+  <div>
+    <p class="eyebrow">04 / Web モード ＞ 手順 4　外部の PACS の管理画面（相手側の作業）</p>
+    <h2>外部の PACS に、自分サーバー（GRAPHYPACS）を登録する</h2>
+  </div>
+  <p class="note" style="margin-top:-8px">外部の PACS の管理画面（<code>http://192.168.10.20:8080/dcm4chee-arc/ui2/</code>）で、≡ ＞ <b>Configuration</b> ＞ <b>AE list</b> ＞ <b>New AET</b>。03 章の手順 3 と同じ窓です。</p>
+  <div class="duo">
+    <div class="col">
+      <figure class="shot w700" data-shot="ui2-newaet-graphypacs-b"><img src="figs/ui2-newaet-graphypacs-b.png" alt="外部の dcm4chee の Register new application entity。GRAPHYPACS を入力した状態"></figure>
+      <ol class="explain">
+        <li><span class="num">1</span><p><b>Hostname</b>: <b>自分サーバー</b>の IP アドレス（<code>192.168.10.10</code>）。GRAPHY-Next のサーバーではありません</p></li>
+        <li><span class="num">2</span><p><b>Port</b>: 自分サーバーの DICOM ポート（<code>11112</code>）</p></li>
+        <li><span class="num">3</span><p><b>AE Title</b>: <code>GRAPHYPACS</code></p></li>
+        <li><span class="num">4</span><p><b>APPLY</b></p></li>
+      </ol>
+    </div>
+    <div class="col">
+      <figure class="shot" data-shot="ui2-newaet-graphypacs-a"><img src="figs/ui2-newaet-graphypacs-a.png" alt="同じ窓の New Device の欄"></figure>
+      <ol class="explain">
+        <li><span class="num">1</span><p>「New Device」の <b>Device name</b> と、その下の <b>Installed</b>（True）も入れます</p></li>
+      </ol>
+      <p class="callout">スタンドアロンでは相手に <code>GRAPHYNEXT</code> を登録しました。Web モードで画像を受けるのは<b>自分サーバー</b>なので、登録するのは <code>GRAPHYPACS</code> です。</p>
+      <p class="note">相手が「検索を依頼してくる機器」も登録制にしている場合は、<code>GRAPHYNEXT</code>（GRAPHY-Next のサーバーの IP アドレス）の登録も依頼します。</p>
+    </div>
+  </div>
+  <div class="footer"><span>GRAPHY-Next 導入ガイド（v0.6.2）　dcm4chee-arc-light 5.33.1 の画面です</span><span class="pg"></span></div>
+</section>
+
+<!-- Web: QR -->
+<section class="page">
+  <div>
+    <p class="eyebrow">04 / Web モード ＞ 手順 5　Query/Retrieve</p>
+    <h2>外部の PACS を検索して、自分サーバーへ取り寄せる</h2>
+  </div>
+  <div class="shot-row" style="grid-template-columns:1300px 1fr;align-items:center;margin-top:30px">
+    <figure class="shot" data-shot="web-qr-query"><img src="figs/web-qr-query.png" alt="Web モードの Query/Retrieve。DCM4CHEE のタブに検索結果"></figure>
+    <ol class="explain">
+      <li><span class="num">1</span><p>外部の PACS のタブ</p></li>
+      <li><span class="num">2</span><p><b>全期間</b> など、検査日の条件（既定は今日）</p></li>
+      <li><span class="num">3</span><p><b>Query</b></p></li>
+      <li><span class="num">4</span><p>行の <b>取得</b></p></li>
+    </ol>
+  </div>
+  <div class="shot-row" style="grid-template-columns:1300px 1fr;align-items:center;margin-top:30px">
+    <figure class="shot" data-shot="web-qr-saved"><img src="figs/web-qr-saved.png" alt="Web モードの Query/Retrieve。保存済になっている"></figure>
+    <ol class="explain"><li><span class="num">1</span><p><b>保存済</b> になれば、自分サーバーに入っています。件数は、自分サーバーに問い合わせて数えています</p></li></ol>
+  </div>
+  <p class="callout">「未保存」のまま変わらないときは、手順 3 の宛先 AE と、手順 4 の相手側の登録を確かめます（05 章）。</p>
+  <div class="footer"><span>GRAPHY-Next 導入ガイド（v0.6.2）</span><span class="pg"></span></div>
+</section>
+
+<!-- Web: 表示 -->
+<section class="page">
+  <div>
+    <p class="eyebrow">04 / Web モード ＞ 手順 5　表示して確かめる</p>
+    <h2>メイン画面に出て、ビューアで開ければ完了です</h2>
+  </div>
+  <div class="duo">
+    <div class="col">
+      <figure class="shot" data-shot="web-main-after"><img src="figs/web-main-after.png" alt="Web モードのメイン画面。取得した検査が出ている"></figure>
+      <ol class="explain"><li><span class="num">1</span><p>メイン画面で検索すると、自分サーバーに入った検査が出ます。行を選んで、ツールバーからビューアを開きます</p></li></ol>
+    </div>
+    <div class="col">
+      <figure class="shot" data-shot="web-viewer"><img src="figs/web-viewer.png" alt="Web モードの 2D ビューアで CT を表示"></figure>
+      <p>2D ビューアで開いた所です。画像は、自分サーバーから DICOMweb で読み込んでいます。</p>
+      <p class="note">ビューアで作ったリスライスや SEG などを保存すると、自分サーバーに書き戻されます（STOW-RS）。</p>
+    </div>
+  </div>
+  <div class="footer"><span>GRAPHY-Next 導入ガイド（v0.6.2）</span><span class="pg"></span></div>
+</section>
+
+<!-- トラブル: 順番 -->
+<section class="page">
+  <div>
+    <p class="eyebrow">05 / つながらないとき ＞ 切り分けの順番</p>
+    <h2>下の段から順に確かめます。どこまで通るかで、原因が絞れます</h2>
+  </div>
+  <ol class="layers">
+    <li><span class="n">1 ネットワーク</span><b>相手に届くか</b><span>IP アドレス・ポートが正しいか、相手が動いているか、途中のファイアウォールが通すか。</span><span>確かめ方: <code>ping</code>、疎通確認</span></li>
+    <li><span class="n">2 接続（アソシエーション）</span><b>名前を受け入れるか</b><span>相手の AE タイトルが正しいか。こちらの AE タイトルが相手に登録されているか。</span><span>確かめ方: 疎通確認（C-ECHO）</span></li>
+    <li><span class="n">3 検索（C-FIND）</span><b>検索を許しているか</b><span>相手が検索サービスをこちらに許可しているか。検索条件を相手が受け付けるか。</span><span>確かめ方: Query、findscu</span></li>
+    <li><span class="n">4 取得（C-MOVE）</span><b>逆向きに届くか</b><span>相手に宛先 AE が登録されているか。相手からこちらの受信ポートへ届くか。</span><span>確かめ方: 取得、相手のログ</span></li>
+  </ol>
+  <div class="duo">
+    <div class="col">
+      <figure class="shot w600" data-shot="tr-echo-ng"><img src="figs/tr-echo-ng.png" alt="DICOM 通信先。疎通確認が通った行と失敗した行"></figure>
+    </div>
+    <div class="col">
+      <ol class="explain">
+        <li><span class="num">1</span><p>緑の <b>✓</b>: 段 1・2 は通っています</p></li>
+        <li><span class="num">2</span><p>赤い <b>✕</b>: 段 1 か 2 で止まっています（この図は、ポート番号を違えた行）</p></li>
+      </ol>
+      <p class="warn"><b>疎通確認の ✓ は、検索と取得ができる証拠ではありません。</b>確かめているのは段 2 までです。段 3・4 は、相手側の別の設定で決まります。</p>
+      <p class="note">✕ の理由は画面に出ません。理由はログに出ます（見方は「調べ方 1」のページ）。</p>
+    </div>
+  </div>
+  <div class="footer"><span>GRAPHY-Next 導入ガイド（v0.6.2）</span><span class="pg"></span></div>
+</section>
+
+<!-- トラブル: 表 1 -->
+<section class="page">
+  <div>
+    <p class="eyebrow">05 / つながらないとき ＞ 症状別の表（1）接続・検索・取得</p>
+    <h2>症状から、原因と直し方を引く</h2>
+  </div>
+  <table class="ops dense">
+    <tr><th style="width:400px">症状</th><th style="width:560px">ログ・相手側に出るもの</th><th>原因と直し方</th></tr>
+    <tr><td>疎通確認が ✕（すぐ出る）</td><td><code>ConnectException: Connection refused</code></td><td>ポート番号が違う、または相手の DICOM サービスが止まっている。相手の待受ポートを確かめる</td></tr>
+    <tr><td>疎通確認が ✕（数秒〜かかる）</td><td><code>NoRouteToHostException</code>、タイムアウト</td><td>IP アドレスが違う、相手の電源・LAN、途中のファイアウォール。<code>ping</code> で届くか確かめる</td></tr>
+    <tr><td>疎通確認が ✕（相手は動いている）</td><td><code>A-ASSOCIATE-RJ … called-AE-title-not-recognized</code></td><td>相手の AE タイトルが違う（大文字・小文字、空白）。相手の設定画面の表記どおりに入れる</td></tr>
+    <tr><td>同上</td><td><code>A-ASSOCIATE-RJ … calling-AE-title-not-recognized</code></td><td>こちらの AE タイトルが相手に登録されていない。相手に GRAPHYNEXT の登録を依頼する</td></tr>
+    <tr><td>Q/R の窓に、相手のタブが出ない</td><td>（疎通確認が通っていない）</td><td>Q/R は、疎通確認が通った相手だけをタブにする。上の 4 行で直す</td></tr>
+    <tr><td>Q/R で 0 件（「該当するスタディがありません」）</td><td>—</td><td>検査日の既定が<b>今日</b>。<b>全期間</b>や日付の範囲を選んで Query し直す</td></tr>
+    <tr><td>Q/R のタブに赤いエラー<br>「findscu(STUDY) 失敗 … No Presentation Context …」</td><td><code>result: 3 - abstract-syntax-not-supported</code></td><td>相手が、こちらに検索サービスを許可していない。<b>疎通確認は ✓ のまま</b>。次のページ以降の調べ方へ</td></tr>
+    <tr><td>条件を変えても、ずっと 0 件</td><td><code>C-FIND-RSP[status=c000H]</code>・<code>a900H</code> など</td><td>相手が検索を<b>エラーで返している</b>のに、画面は 0 件に見える。次のページ以降の調べ方へ</td></tr>
+    <tr><td>［取得］しても「未保存」のまま（エラーなし）</td><td>相手側: <code>C-MOVE-RSP[status=a801H, Unknown AE: GRAPHYNEXT]</code></td><td>相手に、宛先 AE が登録されていない。03 章 手順 3（Web モードは 04 章 手順 3・4）</td></tr>
+    <tr><td>［取得］しても「未保存」のまま（登録はある）</td><td>相手側: 送信の失敗（接続できない）</td><td>相手に登録した IP アドレス・ポートが違う、こちらの受信ポートがファイアウォールで閉じている、IP アドレスが変わった</td></tr>
+  </table>
+  <p class="note">v0.6.2 では、取得の失敗と、相手がエラーで返した検索は、画面にエラーとして出ません。「未保存のまま」「ずっと 0 件」は、下の 3 行を疑ってください。</p>
+  <div class="footer"><span>GRAPHY-Next 導入ガイド（v0.6.2）　ログの文言は dcm4che 5.33〜5.34 での実測です</span><span class="pg"></span></div>
+</section>
+
+<!-- トラブル: 表 2 -->
+<section class="page">
+  <div>
+    <p class="eyebrow">05 / つながらないとき ＞ 症状別の表（2）起動・Web モード</p>
+    <h2>起動しない、Web モードで一覧が出ない</h2>
+  </div>
+  <div class="duo" style="grid-template-columns: 1.25fr 0.75fr;">
+    <table class="ops dense">
+      <tr><th style="width:420px">症状</th><th>原因と直し方</th></tr>
+      <tr><td>起動時に「Port 8080 is already in use…」と出て止まる（デスクトップ版）</td><td>内部で使う 8080 番を、ほかのソフト（dcm4chee など）が使っている。そのソフトを止めるか、環境変数 <code>GRAPHY_BACKEND_PORT</code> に別の番号（例 <code>18080</code>）を設定して起動する</td></tr>
+      <tr><td>起動に失敗する。ログに「DICOM SCP のバインドに失敗しました (0.0.0.0:11112)」</td><td>受信ポート 11112 を、ほかのソフトが使っている。そのソフトを止めて起動し、環境設定 ＞ DICOM通信 の SCP 待受ポートを別の番号に変える（相手側の登録も同じ番号に直す）</td></tr>
+      <tr><td>Web モードのメイン画面に「取得に失敗しました: … 404 … No such Application Entity: DCM4CHEE」</td><td><code>base-url</code> の AE タイトルが、自分サーバーの実際の名前と違う。<code>…/aets/GRAPHYPACS/rs</code> のように直して起動し直す</td></tr>
+      <tr><td>Web モードのメイン画面が「読み込み中…」のまま、または取得に失敗</td><td>自分サーバーが止まっている・起動の途中・IP アドレス違い。<code>curl -i &lt;base-url&gt;/studies</code> が 200 か 204 を返すか確かめる</td></tr>
+      <tr><td>Web モードの Q/R に「dcm4che ツール 'findscu' が見つかりません」</td><td>サーバーに dcm4che のコマンドが無い。入手して展開し、<code>--graphy.dicom.dcm4che-home=</code> に指定して起動し直す（04 章 手順 2）</td></tr>
+      <tr><td>Web モードで［取得］しても「未保存」のまま</td><td>①環境設定 ＞ Query/Retrieve の宛先 AE が空・違う　②外部の PACS に GRAPHYPACS が未登録　③登録した IP アドレスが GRAPHY-Next のサーバーになっている（正しくは自分サーバー）</td></tr>
+      <tr><td>dcm4chee を起動した直後につながらない</td><td>初期化に数十秒〜数分かかる。管理画面か <code>curl</code> が応えるまで待つ</td></tr>
+      <tr><td>自分サーバーの AE タイトルが DCM4CHEE のまま</td><td><code>AE_TITLE</code> は最初の起動のときだけ効く。データを消して起動し直す（04 章 手順 1）</td></tr>
+    </table>
+    <div class="col">
+      <figure class="imgs" style="width:440px"><img src="figs/tr-port8080.png" alt="起動時のダイアログ。Port 8080 is already in use"><figcaption>8080 番が使われているときの表示（デスクトップ版）</figcaption></figure>
+      <figure class="shot" data-shot="tr-web-baseurl"><img src="figs/tr-web-baseurl.png" alt="Web モードのメイン画面。base-url の AE タイトルが違うときのエラー"></figure>
+      <p class="note"><code>base-url</code> の AE タイトルが違うときの表示（Web モードのメイン画面）</p>
+    </div>
+  </div>
+  <div class="footer"><span>GRAPHY-Next 導入ガイド（v0.6.2）</span><span class="pg"></span></div>
+</section>
+
+<!-- エコー可・検索不可: 概要 -->
+<section class="page">
+  <div>
+    <p class="eyebrow">05 / つながらないとき ＞ 「疎通確認は通るのに、検索できない」</p>
+    <h2>見え方は 2 通り。どちらも、原因は相手側の検索の受け付け方にあります</h2>
+  </div>
+  <div class="shot-row" style="grid-template-columns:1080px 1fr">
+    <div class="col" style="gap:14px">
+      <figure class="shot" data-shot="tr-qr-nopc" style="margin-top:30px"><img src="figs/tr-qr-nopc.png" alt="Query/Retrieve の窓。No Presentation Context の赤いエラー"></figure>
+      <p><b>A　赤いエラーが出る。</b>「No Presentation Context for Abstract Syntax … Study Root … FIND」＝接続はできたが、<b>検索サービスを断られた</b></p>
+      <figure class="shot" data-shot="tr-qr-zero" style="margin-top:40px"><img src="figs/tr-qr-zero.png" alt="Query/Retrieve の窓。該当するスタディがありません"></figure>
+      <p><b>B　エラーは出ず、0 件。</b>相手が検索を受け付けたあと、<b>エラーの応答</b>を返している場合があります（この図は、相手がエラー 0xC000 を返した例）</p>
+    </div>
+    <div class="col">
+      <div class="panel col">
+        <h3>なぜ疎通確認だけ通るのか</h3>
+        <p>DICOM の接続では、使うサービス（疎通確認、検索、取得、保存…）ごとに、相手が受けるかどうかを決めます。</p>
+        <p>疎通確認（Verification）は、ほとんどの機器が誰にでも許します。一方、<b>検索・取得は、登録した相手にだけ許す</b>設定の PACS が多くあります。</p>
+        <p>また、検索の条件の書き方（部分一致、使える項目）は PACS ごとに違います。</p>
+      </div>
+      <p class="callout">次のページから、何を送っているかを知り、ログを取り、同じ検索を手で実行して、相手の返事を読みます。</p>
+    </div>
+  </div>
+  <div class="footer"><span>GRAPHY-Next 導入ガイド（v0.6.2）</span><span class="pg"></span></div>
+</section>
+
+<!-- GRAPHY が送る検索 -->
+<section class="page">
+  <div>
+    <p class="eyebrow">05 / 「疎通確認は通るのに、検索できない」 ＞ GRAPHY-Next が送る検索</p>
+    <h2>まず、GRAPHY-Next がどんな検索を送っているかを知る</h2>
+  </div>
+  <div class="duo" style="grid-template-columns: 1.1fr 0.9fr;">
+    <table class="ops">
+      <tr><th style="width:300px">項目</th><th>GRAPHY-Next v0.6.2 が送る内容</th></tr>
+      <tr><td>発信元の AE タイトル</td><td>自局 AE タイトル（既定 <code>GRAPHYNEXT</code>）</td></tr>
+      <tr><td>検索の方式（情報モデル）</td><td><b>Study Root</b> Query/Retrieve – FIND（<code>1.2.840.10008.5.1.4.1.2.2.1</code>）。Patient Root は使いません</td></tr>
+      <tr><td>検索の段</td><td>STUDY（検査の一覧）→ 行を開くと SERIES</td></tr>
+      <tr><td>転送構文の提案</td><td>Implicit VR Little Endian、Explicit VR Little Endian、Explicit VR Big Endian</td></tr>
+      <tr><td>返してほしい項目</td><td>StudyInstanceUID、PatientID、PatientName、PatientBirthDate、PatientSex、StudyDate、StudyDescription、AccessionNumber、<b>ModalitiesInStudy、NumberOfStudyRelatedSeries、NumberOfStudyRelatedInstances</b>（太字は、対応が任意の項目）</td></tr>
+      <tr><td>患者 ID・患者名で絞る</td><td><b>前後に <code>*</code> を付けた部分一致</b>で送ります（例 <code>*HCC*</code>）</td></tr>
+      <tr><td>モダリティで絞る</td><td><code>ModalitiesInStudy</code> に 1 つだけ指定</td></tr>
+      <tr><td>検査日で絞る</td><td>単日 <code>20261114</code>、または範囲 <code>20261101-20261114</code></td></tr>
+      <tr><td>文字コードの指定</td><td>付けません（SpecificCharacterSet なし）</td></tr>
+    </table>
+    <div class="col">
+      <div class="panel col">
+        <h3>PACS によって、つまずきやすい所</h3>
+        <ul class="steps">
+          <li><p>発信元の AE タイトルごとに、検索の許可が要る<small>→ 赤いエラー（断られる）</small></p></li>
+          <li><p>Study Root を受けない（Patient Root だけ）<small>→ 赤いエラー</small></p></li>
+          <li><p>条件なし・広すぎる検索を拒否する、件数に上限がある<small>→ エラーの応答、または途中で打ち切り</small></p></li>
+          <li><p>先頭の <code>*</code>（後方一致・部分一致）を受け付けない<small>→ 0 件、またはエラーの応答</small></p></li>
+          <li><p>日本語の患者名での検索<small>文字コードの指定が無いため、正しく照合されないことがあります</small></p></li>
+        </ul>
+      </div>
+      <p class="note">どれに当たるかは、相手の PACS の仕様（DICOM 適合性宣言書＝コンフォーマンス・ステートメント）と、次のページの方法で確かめます。v0.6.2 には、検索の方式や項目を画面から変える設定はありません。</p>
+    </div>
+  </div>
+  <div class="footer"><span>GRAPHY-Next 導入ガイド（v0.6.2）　内容は、プログラムと実際の通信の記録で確かめたものです</span><span class="pg"></span></div>
+</section>
+
+<!-- 調べ方 1: ログ -->
+<section class="page">
+  <div>
+    <p class="eyebrow">05 / 「疎通確認は通るのに、検索できない」 ＞ 調べ方 1</p>
+    <h2>デバッグモードにして、実際に送ったコマンドをログで見る</h2>
+  </div>
+  <div class="duo">
+    <div class="col">
+      <figure class="shot w700" data-shot="tr-debug"><img src="figs/tr-debug.png" alt="環境設定の一般。デバッグモード"></figure>
+      <ol class="explain"><li><span class="num">1</span><p><b>環境設定 ＞ 一般 ＞ デバッグモード</b> をオンにします。調べ終わったらオフに戻します</p></li></ol>
+    </div>
+    <div class="col">
+      <p>デスクトップ版のログは、<b>端末（ターミナル）から起動したとき</b>に、その端末に出ます。</p>
+      <pre class="code"><i># Linux（.deb）</i>
+graphy-next-desktop 2&gt;&amp;1 | tee graphy.log
+<i># Windows（コマンドプロンプト。インストール先で）</i>
+GRAPHY-Next.exe
+<i># macOS（ターミナル）</i>
+/Applications/GRAPHY-Next.app/Contents/MacOS/GRAPHY-Next</pre>
+      <p>Query を押すと、ログに次の 1 行が出ます。これが、実際に実行した検索コマンドです。</p>
+      <pre class="code">DEBUG … Dcm4cheTools : <b>exec:</b> …/dcm4che/bin/findscu -b GRAPHYNEXT
+  -c DCM4CHEE@192.168.10.20:11112 -L STUDY -r StudyInstanceUID
+  -r PatientID … -m StudyDate=20261114 --out-dir … </pre>
+      <p>疎通確認の結果と理由も、同じログに出ます。</p>
+      <pre class="code"><span class="ok">INFO  … DicomEchoScu : C-ECHO ok: DCM4CHEE@192.168.10.20:11112 (4 ms)</span>
+<span class="ng">WARN  … DicomEchoScu : C-ECHO failed to …: A-ASSOCIATE-RJ[… ]</span></pre>
+      <p class="note">インストール版は、ログをファイルに残しません。Web モードは、環境変数 <code>LOGGING_LEVEL_COM_VIS_GRAPHYNEXT=DEBUG</code> を付けて起動すると、端末に同じ行が出ます。</p>
+    </div>
+  </div>
+  <div class="footer"><span>GRAPHY-Next 導入ガイド（v0.6.2）</span><span class="pg"></span></div>
+</section>
+
+<!-- 調べ方 2: 手で findscu -->
+<section class="page">
+  <div>
+    <p class="eyebrow">05 / 「疎通確認は通るのに、検索できない」 ＞ 調べ方 2</p>
+    <h2>同じ検索を手で実行して、相手の返事を読む</h2>
+  </div>
+  <div class="duo" style="grid-template-columns: 1fr 1fr;">
+    <div class="col">
+      <p>GRAPHY-Next に同梱の <code>findscu</code>（dcm4che）を、端末から直接実行します。ログの <code>exec:</code> の行を写すのが確実です。</p>
+      <pre class="code" id="findscu-cmd"><i># Linux の例（同梱の Java を使う）</i>
+export JAVA_HOME=<b>&lt;インストール先&gt;</b>/resources/jre
+<b>&lt;インストール先&gt;</b>/resources/dcm4che/bin/findscu \
+  -b <b>GRAPHYNEXT</b> -c <b>DCM4CHEE@192.168.10.20:11112</b> \
+  -L STUDY -m StudyDate=20261114 \
+  -r StudyInstanceUID -r PatientID -r PatientName</pre>
+      <table class="ops">
+        <tr><td style="width:150px"><code>-b</code></td><td>こちらの AE タイトル（相手に登録した名前）</td></tr>
+        <tr><td><code>-c</code></td><td>相手の AE タイトル<code>@</code>IP アドレス<code>:</code>ポート</td></tr>
+        <tr><td><code>-L</code></td><td>検索の段（STUDY / SERIES）</td></tr>
+        <tr><td><code>-m</code></td><td>絞り込みの条件（項目=値）</td></tr>
+        <tr><td><code>-r</code></td><td>返してほしい項目</td></tr>
+        <tr><td><code>-M</code></td><td>検索の方式。省くと StudyRoot。<code>-M PatientRoot</code> で切り替え</td></tr>
+      </table>
+      <p class="note">同梱の場所: インストール先の <code>resources/dcm4che/bin/</code>（Windows は <code>findscu.bat</code>）と <code>resources/jre</code>。macOS は <code>GRAPHY-Next.app/Contents/Resources/</code> の下。Linux は実機で確かめました。Windows・macOS の場所と起動方法は、配布物の構成からの記載で、実機では未確認です。</p>
+    </div>
+    <div class="col">
+      <h3>読む所は 3 つ</h3>
+      <pre class="code"><i>① 接続を受け入れたか、検索サービスを受けたか</i>
+GRAPHYNEXT-&gt;DCM4CHEE(1) &gt;&gt; A-ASSOCIATE-AC
+  PresentationContext[id: 1
+<span class="ok">    result: 0 - acceptance</span>                 <i>← 受けた</i>
+<span class="ng">    result: 3 - abstract-syntax-not-supported</span> <i>← 断られた</i>
+
+<i>② こちらが送った条件</i>
+&lt;&lt; 1:C-FIND-RQ Dataset:
+(0008,0020) DA [20261114] StudyDate
+(0008,0052) CS [STUDY] QueryRetrieveLevel
+(0010,0020) LO [] PatientID
+
+<i>③ 相手の返事（1 件ごとに 1 つ、最後に終了の 1 つ）</i>
+<span class="ok">&gt;&gt; 1:C-FIND-RSP[pcid=1, status=ff00H</span>   <i>← 1 件見つかった</i>
+<span class="ok">&gt;&gt; 1:C-FIND-RSP[pcid=1, status=0H</span>      <i>← 正常に終了</i>
+<span class="ng">&gt;&gt; 1:C-FIND-RSP[pcid=1, status=a900H,</span>
+<span class="ng">   errorComment=Missing PatientID (0010,0020)</span></pre>
+      <p class="note">接続そのものを断られたときは、① の代わりに <code>A-ASSOCIATE-RJ</code> と理由が出ます。</p>
+    </div>
+  </div>
+  <div class="footer"><span>GRAPHY-Next 導入ガイド（v0.6.2）　出力は dcm4chee-arc-light 5.33.1 を相手にした実際の記録です</span><span class="pg"></span></div>
+</section>
+
+<!-- 調べ方 3: status と切り分け -->
+<section class="page">
+  <div>
+    <p class="eyebrow">05 / 「疎通確認は通るのに、検索できない」 ＞ 調べ方 3</p>
+    <h2>返事の意味を読み、条件を 1 つずつ変えて、通る形を探す</h2>
+  </div>
+  <div class="duo" style="grid-template-columns: 0.9fr 1.1fr;">
+    <div class="col">
+      <h3>返事（status）の意味</h3>
+      <table class="ops">
+        <tr><th style="width:150px">status</th><th>意味</th></tr>
+        <tr><td><code>0H</code></td><td>正常に終了</td></tr>
+        <tr><td><code>ff00H</code> <code>ff01H</code></td><td>1 件見つかった（<code>ff01H</code> は、対応していない任意の項目があった）</td></tr>
+        <tr><td><code>a700H</code></td><td>相手の資源不足（件数が多すぎる、など）</td></tr>
+        <tr><td><code>a900H</code></td><td>検索の条件が、方式・段と合っていない（必須の項目が無い、など）</td></tr>
+        <tr><td><code>c000H</code>〜</td><td>相手が処理できなかった。<code>errorComment</code> に理由が出ることがあります</td></tr>
+        <tr><td><code>fe00H</code></td><td>中止された</td></tr>
+      </table>
+      <p class="warn">v0.6.2 は、相手がエラーの status を返しても、画面では 0 件に見えます（<code>findscu</code> が正常終了として終わるため）。<b>0 件が続くときは、手で実行して status を見てください。</b></p>
+    </div>
+    <div class="col">
+      <h3>条件を 1 つずつ変える</h3>
+      <table class="ops">
+        <tr><th style="width:330px">試すこと</th><th>通ったら分かること</th></tr>
+        <tr><td><code>-r</code> を StudyInstanceUID だけにする</td><td>任意の返却項目（件数、ModalitiesInStudy）を相手が嫌っている</td></tr>
+        <tr><td><code>-m StudyDate=</code> 単日だけにする</td><td>条件なし・広い検索を相手が拒否している</td></tr>
+        <tr><td><code>-m PatientID=</code> を <code>*</code> なしの完全一致に</td><td>部分一致（先頭の <code>*</code>）を相手が受け付けない</td></tr>
+        <tr><td><code>-m PatientID=ABC*</code>（前方一致）に</td><td>後方・部分一致だけが使えない</td></tr>
+        <tr><td><code>-M PatientRoot -L PATIENT</code> に</td><td>相手は Patient Root だけを受ける</td></tr>
+        <tr><td><code>-b</code> を、相手に登録済みの別の AE タイトルに</td><td>こちらの AE タイトルに検索の許可が無い</td></tr>
+        <tr><td><code>-m SpecificCharacterSet=…</code> を足す</td><td>日本語の検索に文字コードの指定が要る</td></tr>
+      </table>
+      <p class="note">実測の例（dcm4chee）: <code>-M PatientRoot -L STUDY</code> で患者 ID を付けないと <code>a900H / Missing PatientID</code> が返り、0 件になります。</p>
+    </div>
+  </div>
+  <p class="callout">通る形が分かったら、その条件と出力を添えて、GRAPHY-Next の開発元（GitHub の Issues）へお知らせください。相手が ① で断っている場合は、PACS の管理者・メーカーに「AE タイトル GRAPHYNEXT に Study Root の Query/Retrieve（C-FIND・C-MOVE）を許可してほしい」と依頼します。</p>
+  <div class="footer"><span>GRAPHY-Next 導入ガイド（v0.6.2）</span><span class="pg"></span></div>
+</section>
+
+<!-- 取得の調べ方・依頼時にそろえるもの -->
+<section class="page">
+  <div>
+    <p class="eyebrow">05 / つながらないとき ＞ 取得できないとき・問い合わせの前に</p>
+    <h2>検索はできるのに取得できないとき。問い合わせにそろえる情報</h2>
+  </div>
+  <div class="duo">
+    <div class="col">
+      <h3>取得（C-MOVE）の確かめ方</h3>
+      <pre class="code"><i># 手で取得を依頼する（--dest が、画像の届け先の AE タイトル）</i>
+…/dcm4che/bin/movescu -b GRAPHYNEXT \
+  -c DCM4CHEE@192.168.10.20:11112 --dest <b>GRAPHYNEXT</b> \
+  -L STUDY -m StudyInstanceUID=<b>&lt;検査の UID&gt;</b>
+
+<span class="ng">&gt;&gt; 1:C-MOVE-RSP[pcid=1, status=a801H,</span>
+<span class="ng">   errorComment=Unknown AE: GRAPHYNEXT</span>   <i>← 宛先が未登録</i></pre>
+      <table class="ops">
+        <tr><th style="width:150px">status</th><th>意味と直し方</th></tr>
+        <tr><td><code>a801H</code></td><td>宛先の AE タイトルを相手が知らない → 相手に登録する</td></tr>
+        <tr><td><code>a702H</code></td><td>相手が届け先へ送れなかった → 登録した IP アドレス・ポート、こちらのファイアウォール</td></tr>
+        <tr><td><code>b000H</code></td><td>一部だけ届いた → 相手のログで失敗した画像を確かめる</td></tr>
+        <tr><td><code>0H</code></td><td>正常に終了（届いた件数は NumberOfCompletedSuboperations）</td></tr>
+      </table>
+      <p class="note">Web モードでは <code>--dest</code> が自分サーバー（<code>GRAPHYPACS</code>）になります。</p>
+    </div>
+    <div class="col">
+      <figure class="shot" data-shot="tr-qr-unsaved"><img src="figs/tr-qr-unsaved.png" alt="取得しても未保存のままの Query/Retrieve の窓"></figure>
+      <ol class="explain"><li><span class="num">1</span><p>宛先が未登録のまま［取得］した所。エラーは出ず、<b>未保存</b>のままです</p></li></ol>
+      <div class="panel col">
+        <h3>問い合わせの前に、そろえておくもの</h3>
+        <ul class="steps">
+          <li><p>GRAPHY-Next の版、OS、スタンドアロンか Web モードか</p></li>
+          <li><p>こちらと相手の AE タイトル・IP アドレス・ポート<small>相手の PACS の製品名と版</small></p></li>
+          <li><p>どの段まで通るか<small>疎通確認 ／ 検索 ／ 取得</small></p></li>
+          <li><p>ログの <code>exec:</code> の行と、手で実行した出力<small>患者名・患者 ID は消してください</small></p></li>
+        </ul>
+      </div>
+    </div>
+  </div>
+  <div class="footer"><span>GRAPHY-Next 導入ガイド（v0.6.2）　研究用です。診断には使わないでください。</span><span class="pg"></span></div>
+</section>
+
+<script src="figs/marks.js"></script>
+<script>
+  document.querySelectorAll("[data-shot]").forEach((fig) => {
+    const shot = (window.GUIDE_MARKS || {})[fig.dataset.shot];
+    if (!shot) return;
+    shot.marks.forEach((m, i) => {
+      const box = document.createElement("div");
+      box.className = "mark-box";
+      box.style.left = `${(m.x / shot.width) * 100}%`;
+      box.style.top = `${(m.y / shot.height) * 100}%`;
+      box.style.width = `${(m.w / shot.width) * 100}%`;
+      box.style.height = `${(m.h / shot.height) * 100}%`;
+      const num = document.createElement("span");
+      num.className = `mark-num ${m.side === "top" ? "" : m.side}`;
+      num.textContent = String(i + 1);
+      box.appendChild(num);
+      fig.appendChild(box);
+    });
+  });
+  const pages = document.querySelectorAll(".page");
+  pages.forEach((p, i) => { const s = p.querySelector(".pg"); if (s) s.textContent = `${i + 1} / ${pages.length}`; });
+</script>
+</body>
+</html>
