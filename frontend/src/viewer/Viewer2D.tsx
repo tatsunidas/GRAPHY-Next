@@ -59,7 +59,9 @@ import { applyTransform, isPanned, readTransform, type ViewTransform, FIT_TRANSF
 import { fmtValue, scaleBarColors, scaleBarLabels, SCALE_BAR_WIDTH } from "./valueScaleBar";
 import { readImageInfo, sampleAtCanvas, computeSliceSpacing, calibratedUnit, type ImageInfo, type PixelSample } from "./imageInfo";
 import { dicomDateToIso, readColormapName, readInvert, resolveSliceIndex } from "./viewportRead";
-import { readModalitySlice } from "./pixelCalibration";
+import { readModalitySlice, readModalitySliceSync } from "./pixelCalibration";
+import { defaultCalibratedWindow } from "./calibratedWindow";
+import type { SuvType } from "./suv";
 import { autoWindow, rasterizeOverlay, type OverlayWindow } from "./overlayRaster";
 import { encodeFrames, framePixelsBase64, hasNonFinite } from "./derivedSeriesEncode";
 import { httpSend } from "../http";
@@ -72,6 +74,7 @@ import { computeOrientationMarkers, type OrientationMarkers } from "./orientatio
 import { computeScaleBar, type ScaleBar } from "./scaleBar";
 import { getOrCreateCameraSync, getOrCreateVoiSync, getOrCreatePresentationSync, getOrCreateSeriesVoiSync, broadcastSeriesProperties, captureVoiBaseline, clearVoiBaseline } from "./sync";
 import { registerReferenceSource, bumpReference, subscribeReference, computeReferenceSegments, type RefSegment } from "./referenceLines";
+import { srMeasurementPayload } from "./srPayload";
 import { registerViewerCommands, requestTool, type ViewerCommands, type ViewerDerivedSeriesRequest, type ViewerDerivedSeriesResult, type ViewerOverlay, type ViewerPixelData, type ViewerSrRequest, type ViewerSrResult, type ViewerPixelDataOptions, type ViewerAngioReportRequest, type ViewerPresentationStateRequest, type ViewerRoi, type ViewerSpatialCalibration, type ViewerTargetInfo, type ViewerViewState, type ViewerXaState, type ViewerXaCine, ViewerLabelVolume, ViewerLabelVolumeResult } from "./viewerCommands";
 import { buildPluginMeta, computeCalipers, hasShapeCalipers, pickPluginMeta, readRoiStats, roiPointsPx } from "./roiRead";
 import { CONTOUR_TOOL_NAMES, SPLINE_TYPE_LINEAR, cancelContourDrawing } from "./roiContourTools";
@@ -1043,7 +1046,7 @@ export function Viewer2D({
       const ps = (vp.getCamera() as { parallelScale?: number })?.parallelScale;
       if (!ps || !Number.isFinite(ps) || ps <= 0) return;
       const inf = infoRef.current;
-      const hWorld = (inf?.rows ?? 512) * (inf?.rowPixelSpacing ?? 1);
+      const hWorld = (inf?.rows ?? 512) * (inf?.rowPixelSpacing ?? inf?.pixelAspect ?? 1);
       const wWorld = (inf?.columns ?? 512) * (inf?.columnPixelSpacing ?? 1);
       const fitGuess = Math.max(hWorld, wWorld) / 2; // 概略フィット規模
       if (fitGuess > 0 && ps > fitGuess * 50) {
@@ -1501,7 +1504,7 @@ export function Viewer2D({
       setInfo(merged);
       // 校正状態が変化したときだけウィンドウを操作する（ユーザーの手動 W/L を尊重）。
       if (scale !== suvScaleRef.current) {
-        if (scale) applySuvWindow(scale);
+        if (scale) applyCalibratedWindow(suvForImageId(curId)!.type, scale, curId);
         else resetWindow();
         suvScaleRef.current = scale;
       }
@@ -2057,11 +2060,7 @@ export function Viewer2D({
             // （SOP が無いときは画像参照なしの計測グループになる）。
             seriesInstanceUid: g.seriesInstanceUid ?? ctx.seriesUid,
             sopInstanceUid: g.sopInstanceUid ?? null,
-            measurements: g.measurements.map((m) => ({
-              type: m.type,
-              value: m.value,
-              unit: m.unit ?? "mm",
-            })),
+            measurements: g.measurements.map(srMeasurementPayload),
           })),
           findings: req.findings ?? [],
           producer,
@@ -2374,16 +2373,18 @@ export function Viewer2D({
     return true;
   };
 
-  // SUV 化時に臨床標準ウィンドウ（SUV 0〜7）を適用する。voiRange はモダリティ値(Bq/mL)空間のため
-  // SUV=modalityValue×scale の逆算で modalityValue [0, 7/scale] を設定する（本家 setSUVFactor 準拠）。
-  const applySuvWindow = (scale: number) => {
+  // 校正の付与時に既定ウィンドウを適用する。voiRange はモダリティ値(Bq/mL)空間のため、
+  // 校正値 = modalityValue×scale の逆算で設定する。SUV は 0〜7（本家 setSUVFactor 準拠）、
+  // %ID/cc は表示中スライスの分布から決める（defaultCalibratedWindow）。
+  const applyCalibratedWindow = (type: SuvType | "suvr", scale: number, imageId: string) => {
     const v = vp();
-    if (!v || !(scale > 0)) return;
-    const upper = 7 / scale;
+    if (!v) return;
+    const w = defaultCalibratedWindow(type, scale, readModalitySliceSync(imageId)?.values);
+    if (!w) return;
     try {
-      v.setProperties({ voiRange: { lower: 0, upper } });
+      v.setProperties({ voiRange: { lower: w.lower, upper: w.upper } });
       v.render();
-      setVoi({ ww: upper, wc: upper / 2 });
+      setVoi({ ww: w.upper - w.lower, wc: (w.upper + w.lower) / 2 });
     } catch {
       /* ignore */
     }

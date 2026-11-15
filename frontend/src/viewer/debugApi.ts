@@ -21,6 +21,7 @@ import type { VtkRenderStats } from "./vtkVolumeView";
 import { getFusionResampleStats, resetFusionResampleStats } from "./gpuResample/fusionResampleStats";
 import { probeFusionParity, resetFusionGpuForDebug, setFusionGpuFault, setFusionResampleModeForDebug } from "./gpuResample/fusionResampler";
 import type { CinematicStats } from "./cinematicScale";
+import { readSceneActorStates } from "../viewer3d/scene3d";
 
 /**
  * automator（自律検証ツール）専用のデバッグAPI。`window.__graphyDebug` として公開し、
@@ -541,6 +542,77 @@ function getRender3dStats(): VtkRenderStats | null {
   return render3dProbe ? render3dProbe() : null;
 }
 
+/**
+ * 開いている 3D（vtk）の視点・クリップ面を読み、当てるための口（dev のみ・automator 用）。
+ * 視点は視線・上・注視点・距離（患者 LPS mm）で返す。当てる側は `VtkVolumeView.applyCamera`・`setClipPlanes` と同じ入力。
+ * 3D が開いていなければ null。
+ */
+export interface Viewer3dControl {
+  getState(): {
+    position: number[];
+    focalPoint: number[];
+    viewUp: number[];
+    parallelScale: number;
+    direction: number[];
+    clipPlanes: { origin: number[]; normal: number[] }[];
+  };
+  applyCamera(req: {
+    direction: [number, number, number];
+    up: [number, number, number];
+    focalPoint: [number, number, number];
+    distanceMm?: number;
+    projection?: "perspective" | "parallel";
+    parallelScaleMm?: number;
+  }): { ok: boolean; reason?: string; applied?: unknown };
+  setClipPlanes(planes: { origin: [number, number, number]; normal: [number, number, number] }[]): { ok: boolean; reason?: string };
+  /** 今の状態のまま 1 回描く（画素を読む直前に呼ぶ。視点は変えない）。 */
+  render(): void;
+}
+
+let viewer3dControl: Viewer3dControl | null = null;
+
+export function publishViewer3dControl(c: Viewer3dControl | null): void {
+  if (!import.meta.env.DEV) return;
+  viewer3dControl = c;
+}
+
+/**
+ * 開いている 3D 窓へ「プラグインが指定した視点・クリップ面」を書き込む（dev のみ・検査用）。
+ * 起動コンテキストの `pluginView` を書き換えて知らせる。host API（出所を host が入れる）と同じ経路で窓に届く。
+ */
+function setViewer3dPluginView(view: object, ctxPatch?: object): boolean {
+  if (!import.meta.env.DEV) return false;
+  try {
+    const raw = localStorage.getItem("graphy-viewer3d-ctx");
+    if (!raw) return false;
+    const ctx = JSON.parse(raw) as Record<string, unknown>;
+    const next = { ...ctx, ...(ctxPatch ?? {}), pluginView: view, ts: Date.now() };
+    localStorage.setItem("graphy-viewer3d-ctx", JSON.stringify(next));
+    const bc = new BroadcastChannel("graphy-viewer3d");
+    bc.postMessage({ type: "updated" });
+    bc.close();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function getViewer3dState(): ReturnType<Viewer3dControl["getState"]> | null {
+  return viewer3dControl ? viewer3dControl.getState() : null;
+}
+
+function applyViewer3dCamera(req: Parameters<Viewer3dControl["applyCamera"]>[0]): ReturnType<Viewer3dControl["applyCamera"]> | null {
+  return viewer3dControl ? viewer3dControl.applyCamera(req) : null;
+}
+
+function renderViewer3d(): void {
+  viewer3dControl?.render();
+}
+
+function setViewer3dClipPlanes(planes: Parameters<Viewer3dControl["setClipPlanes"]>[0]): ReturnType<Viewer3dControl["setClipPlanes"]> | null {
+  return viewer3dControl ? viewer3dControl.setClipPlanes(planes) : null;
+}
+
 /** シネマティック（パストレース）の描画の実測。オーバーレイが動いていないときは null。 */
 let cinematicProbe: (() => CinematicStats | null) | null = null;
 
@@ -580,6 +652,44 @@ function forceCinematicScale(k: number | null): boolean {
 
 function benchCinematicFrames(ks: number[]): { k: number; ms: number }[] | null {
   return cinematicBench ? cinematicBench(ks) : null;
+}
+
+/**
+ * シネマティックの 3D テクスチャの検査用の操作（オーバーレイが動いているときだけ）。dev ビルドのみ。
+ * 予算の上書きは次の開始（オーバーレイの作り直し）から効く。
+ */
+export interface CinematicTexControl {
+  stats(): CinematicTexStats | null;
+  loseContext(): boolean;
+  readTexLayer(z: number): Float32Array | null;
+  setSeedOffset(n: number): void;
+  /** 乱数の種を変えたあと、蓄積をやり直す。 */
+  reset(): void;
+  frameCount(): number;
+  setOpacityCorrection(on: boolean): void;
+  primarySteps(): number | null;
+}
+export interface CinematicTexStats {
+  texDims: [number, number, number];
+  srcDims: [number, number, number];
+  spacingMm: [number, number, number];
+  gpuBytes: number;
+  textureBytes: number;
+  budgetBytes: number | null;
+  budgetSource: string;
+  reason: string;
+  lost: boolean;
+  failure: string | null;
+}
+let cinematicTex: CinematicTexControl | null = null;
+export function publishCinematicTexture(c: CinematicTexControl | null): void {
+  if (!import.meta.env.DEV) return;
+  cinematicTex = c;
+}
+/** 予算の上書き（検査用）。bytes=null で上書きなし。forceFull は予算を無視して元の解像度（3D テクスチャの上限だけ守る）。 */
+let cinematicBudgetOverride: { bytes: number | null; forceFull: boolean } = { bytes: null, forceFull: false };
+export function getCinematicBudgetOverride(): { bytes: number | null; forceFull: boolean } {
+  return import.meta.env.DEV ? cinematicBudgetOverride : { bytes: null, forceFull: false };
 }
 
 function getGeometry3dStats(): Geometry3DPixelStats | null {
@@ -954,6 +1064,30 @@ declare global {
       getImagePixelRange: typeof getImagePixelRange;
       getPixelStats: typeof getPixelStats;
       getRender3dStats: typeof getRender3dStats;
+      getViewer3dState: typeof getViewer3dState;
+      /** シネマティックの 3D テクスチャの状態（大きさ・予算・失敗）。動いていなければ null。 */
+      cine2Stats: () => CinematicTexStats | null;
+      /** 次のシネマティック開始の予算（テクスチャのバイト数）を上書き。null で解除。 */
+      cine2SetBudget: (bytes: number | null) => void;
+      /** 予算を無視して元の解像度で開始する（3D テクスチャの上限だけ守る）。 */
+      cine2ForceFull: (on: boolean) => void;
+      /** パストレーサのコンテキストだけを失わせる（vtk は残る）。 */
+      cine2LoseContext: () => boolean;
+      /** 3D テクスチャの z 層を読み戻す（[0,1] に正規化した値）。 */
+      cine2ReadTexLayer: (z: number) => number[] | null;
+      /** 乱数の種をずらして蓄積をやり直す。 */
+      cine2SetSeed: (n: number) => void;
+      cine2FrameCount: () => number;
+      /** 歩幅に応じた不透明度の補正を入／切（検査用）。 */
+      cine2OpacityCorrection: (on: boolean) => void;
+      /** 中央の画素の一次レイの歩数（シェーダが決めた値）。蓄積は壊れる。 */
+      cine2PrimarySteps: () => number | null;
+      /** 3D シーンの各物体の描き方（store とアクターから読んだ値）・色・不透明度・可視。 */
+      getScene3dState: typeof readSceneActorStates;
+      setViewer3dPluginView: typeof setViewer3dPluginView;
+      renderViewer3d: typeof renderViewer3d;
+      applyViewer3dCamera: typeof applyViewer3dCamera;
+      setViewer3dClipPlanes: typeof setViewer3dClipPlanes;
       getFusionResampleStats: typeof getFusionResampleStats;
       resetFusionResampleStats: typeof resetFusionResampleStats;
       probeFusionParity: typeof probeFusionParity;
@@ -1131,6 +1265,31 @@ export function installDebugApi(): void {
     getImagePixelRange,
     getPixelStats,
     getRender3dStats,
+    getViewer3dState,
+    cine2Stats: () => cinematicTex?.stats() ?? null,
+    cine2SetBudget: (bytes) => {
+      cinematicBudgetOverride = { ...cinematicBudgetOverride, bytes };
+    },
+    cine2ForceFull: (on) => {
+      cinematicBudgetOverride = { ...cinematicBudgetOverride, forceFull: on };
+    },
+    cine2LoseContext: () => cinematicTex?.loseContext() ?? false,
+    cine2ReadTexLayer: (z) => {
+      const l = cinematicTex?.readTexLayer(z);
+      return l ? Array.from(l) : null;
+    },
+    cine2SetSeed: (n) => {
+      cinematicTex?.setSeedOffset(n);
+      cinematicTex?.reset();
+    },
+    cine2FrameCount: () => cinematicTex?.frameCount() ?? 0,
+    cine2OpacityCorrection: (on) => cinematicTex?.setOpacityCorrection(on),
+    cine2PrimarySteps: () => cinematicTex?.primarySteps() ?? null,
+    getScene3dState: readSceneActorStates,
+    setViewer3dPluginView,
+    renderViewer3d,
+    applyViewer3dCamera,
+    setViewer3dClipPlanes,
     getFusionResampleStats,
     resetFusionResampleStats,
     probeFusionParity,

@@ -34,8 +34,12 @@
 
 import { useSyncExternalStore } from "react";
 
-/** 径を何で測ったか。数値と輪郭が別方式なので、必ず結果に持ち回る。 */
-export type QcaDiameterMethod = "half-max" | "densitometric";
+/**
+ * 径を何で測ったか。数値と輪郭が別方式なので、必ず結果に持ち回る。
+ * XA: `half-max`（半値法）・`densitometric`（密度計測）。CT（マスクの幾何）: `mask-equivalent-area`（直交断面の面積から等価径）・
+ * `mask-min-width`（断面の最小幅）。
+ */
+export type QcaDiameterMethod = "half-max" | "densitometric" | "mask-equivalent-area" | "mask-min-width";
 
 /** 血管ツリーの 1 区間。分岐部は `parentId` で近位に繋がる。 */
 export interface XaVesselSegment {
@@ -53,6 +57,8 @@ export interface XaVesselSegment {
   diameterMm: (number | null)[];
   /** 近位側の区間 id。根なら null。 */
   parentId: string | null;
+  /** 表示名（"LAD" など。プラグインが決める。本体は解釈しない）。無ければ `id` を出す。 */
+  name?: string;
 }
 
 /** 径をどう測ったか。系統誤差が方式で変わるので、値と一緒に必ず運ぶ（§16.4 / §16.5）。 */
@@ -141,6 +147,37 @@ export interface XaVesselModel {
   at: number;
 }
 
+/**
+ * CT 由来のモデルの出自（`ct-vessel`）。XA の出自（角度・再投影誤差など）は CT には無いので別の形にする。
+ * 受け取った側が「どの画像のどのマスクから、どの解像度で作ったか」を言えるだけの材料を渡す。
+ */
+export interface CtVesselProvenance {
+  studyUid: string;
+  seriesUid: string;
+  /** 元ボリュームの FrameOfReferenceUID。無ければ null（同じ `seriesUid` の中だけで重ねられる）。 */
+  frameOfReferenceUid: string | null;
+  /** 参照したインスタンス（任意）。 */
+  sopUids?: string[];
+  /**
+   * 元ボリュームの間隔 [mm]。**径の解像限界を読み手が判断するための材料**（本体は閾値を持たない）。
+   * ボクセル間隔より細い血管の径は測れない。
+   */
+  voxelSpacingMm: [number, number, number];
+  /** 中心線・径の元になったマスクの出所。 */
+  maskOrigin: { type: "plugin" } | { type: "roi"; roiUids: string[] } | { type: "seg"; sopInstanceUid: string };
+  /** 多位相 CT の位相。 */
+  phase?: { c?: number; t?: number };
+}
+
+/** CT 由来のモデル。`XaVesselModel` と同じ形で、`kind` と `provenance` だけが違う。 */
+export type CtVesselModel = Omit<XaVesselModel, "kind" | "provenance"> & {
+  kind: "ct-vessel";
+  provenance: CtVesselProvenance;
+};
+
+/** 登録簿に載るモデル（XA または CT）。 */
+export type VesselModel = XaVesselModel | CtVesselModel;
+
 /** 中心線点ごとの解析値（H12 で外部モジュールが返してくるもの）。 */
 export interface XaVesselAnalysisPoint {
   segmentId: string;
@@ -167,7 +204,7 @@ export interface XaVesselAnalysis {
   at: number;
 }
 
-let models: XaVesselModel[] = [];
+let models: VesselModel[] = [];
 let analyses: XaVesselAnalysis[] = [];
 const listeners = new Set<() => void>();
 
@@ -190,10 +227,10 @@ function notify(): void {
 
 const CHANNEL = "graphy-xa-vessel-model";
 type Msg =
-  | { type: "model"; model: XaVesselModel }
+  | { type: "model"; model: VesselModel }
   | { type: "analysis"; analysis: XaVesselAnalysis }
   | { type: "request" }
-  | { type: "sync"; models: XaVesselModel[]; analyses: XaVesselAnalysis[] };
+  | { type: "sync"; models: VesselModel[]; analyses: XaVesselAnalysis[] };
 
 let channel: BroadcastChannel | null = null;
 
@@ -206,7 +243,7 @@ function post(msg: Msg): void {
 }
 
 /** 受け取ったモデルを取り込む（**通知はするが再送しない**＝無限ループを避ける）。 */
-function mergeModels(incoming: readonly XaVesselModel[]): boolean {
+function mergeModels(incoming: readonly VesselModel[]): boolean {
   let changed = false;
   let next = models;
   for (const m of incoming) {
@@ -287,7 +324,7 @@ export function closeVesselModelChannel(): void {
 }
 
 /** 再構成結果を登録する。同じ `runId` は置き換える（解析し直したら新しいほうが正しい）。 */
-export function registerVesselModel(model: XaVesselModel): void {
+export function registerVesselModel(model: VesselModel): void {
   ensureChannel();
   models = [...models.filter((m) => m.runId !== model.runId), model].slice(-MAX_MODELS);
   // 🔴 モデルを差し替えたら、その runId の解析値は捨てる。
@@ -305,11 +342,11 @@ export function putVesselAnalysis(analysis: XaVesselAnalysis): void {
   post({ type: "analysis", analysis });
 }
 
-export function listVesselModels(): XaVesselModel[] {
+export function listVesselModels(): VesselModel[] {
   return models;
 }
 
-export function getVesselModel(runId: string): XaVesselModel | null {
+export function getVesselModel(runId: string): VesselModel | null {
   return models.find((m) => m.runId === runId) ?? null;
 }
 
@@ -323,7 +360,7 @@ function subscribe(cb: () => void): () => void {
   return () => listeners.delete(cb);
 }
 
-export function useVesselModels(): XaVesselModel[] {
+export function useVesselModels(): VesselModel[] {
   return useSyncExternalStore(subscribe, listVesselModels, listVesselModels);
 }
 
@@ -340,7 +377,7 @@ export function useVesselAnalysis(runId: string | null): XaVesselAnalysis | null
  * 再構成の鍵。**方向 A・B と解析区間から作る**ので、同じ 2 方向を解析し直せば同じ鍵になり、
  * 別の区間なら別の鍵になる（`qcaRunKey` と同じ考え方）。
  */
-export function vesselRunId(kind: XaVesselModel["kind"], runKeys: readonly string[]): string {
+export function vesselRunId(kind: VesselModel["kind"], runKeys: readonly string[]): string {
   return `${kind}:${[...runKeys].sort().join("|")}`;
 }
 
@@ -349,7 +386,7 @@ export function vesselRunId(kind: XaVesselModel["kind"], runKeys: readonly strin
  * 材料が `stableQcaRunKey` に替わるだけ。1 つでも null（SOP が取れない）なら null。
  */
 export function vesselStableKey(
-  kind: XaVesselModel["kind"],
+  kind: VesselModel["kind"],
   stableRunKeys: readonly (string | null)[],
 ): string | null {
   if (stableRunKeys.some((k) => k == null)) return null;

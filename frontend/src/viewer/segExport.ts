@@ -8,6 +8,7 @@
  * SOPInstanceUID・IPP・幾何を metadata から解決して backend `/api/dicom/seg` へ送る。
  * 設計 `fw/dicom-seg-rtstruct-design.md` S1。
  */
+import { segSliceMeasures } from "./segSliceMeasures";
 import { cache, metaData } from "@cornerstonejs/core";
 import { segmentation as csSeg } from "@cornerstonejs/tools";
 import { getRoiMaskMeta, setRoiMaskMeta, getMaskSegments } from "./roiMaskStore";
@@ -38,10 +39,6 @@ function sopOf(imageId: string): string | null {
 
 function planeMeta(imageId: string): AnyObj {
   return (metaData.get("imagePlaneModule", imageId) as AnyObj) ?? {};
-}
-
-function dist(a: V3, b: V3): number {
-  return Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
 }
 
 /** {@link exportMaskAsSeg} の失敗理由。UI 側で分かりやすいメッセージを出し分けるのに使う。 */
@@ -102,14 +99,13 @@ export async function exportMaskAsSeg(
   }
   if (!rows || !cols || !iop || iop.length < 6 || !ps) return { ok: false, reason: "geometry" };
 
-  // スライス厚 = 隣接 source IPP 間距離（無ければ metadata の sliceThickness）。
-  let thickness = 1;
-  const zs = ippByZ.map((p, z) => ({ p, z })).filter((e) => e.p) as { p: V3; z: number }[];
-  if (zs.length >= 2) thickness = dist(zs[0].p, zs[1].p) || 1;
-  else {
-    const anySrc = srcIds.find(Boolean);
-    if (anySrc) thickness = Number(planeMeta(anySrc).sliceThickness ?? 1) || 1;
-  }
+  // 厚み = source の公称スライス厚。間隔 = 一様なときだけ中心間距離（不等間隔・欠損では書かない）。
+  const anySrcForThickness = srcIds.find(Boolean);
+  const { sliceThickness: thickness, spacingBetweenSlices } = segSliceMeasures(
+    ippByZ,
+    iop,
+    anySrcForThickness ? Number(planeMeta(anySrcForThickness).sliceThickness) : null,
+  );
 
   // study/series は作成時 scope から（fallback: metadata）。
   const meta = getRoiMaskMeta(segmentationId);
@@ -191,6 +187,7 @@ export async function exportMaskAsSeg(
     imageOrientationPatient: iop,
     pixelSpacing: ps,
     sliceThickness: thickness,
+    spacingBetweenSlices,
     frameOfReferenceUID: forUid ?? null,
     seriesDescription: meta?.label ? `SEG: ${meta.label}` : "Segmentation",
     segments,

@@ -48,7 +48,7 @@ class RemoteBurnPolicyTest {
 
     @Test
     void riskyModalitiesWithoutMaskAreRefused() {
-        for (String m : List.of("US", "XA", "RF", "ES", "SC", "OT", "DX", "CR", "MG", "XC")) {
+        for (String m : List.of("US", "XA", "RF", "ES", "SC", "OT", "DX", "CR", "MG", "PX", "IO", "XC")) {
             RemoteBurnPolicy.Decision d = decide(facts(0, 0, 3, 0, m, CT));
             assertFalse(d.allowed(), m);
             assertEquals("burnin-risky-modality", d.reason(), m);
@@ -88,7 +88,7 @@ class RemoteBurnPolicyTest {
 
     @Test
     void localDestinationPassesPlainRadiographyWithoutMaskAndMarksItLocalOnly() {
-        for (String m : List.of("CR", "DX", "MG")) {
+        for (String m : List.of("CR", "DX", "MG", "PX", "IO")) {
             RemoteBurnPolicy.Decision d = RemoteBurnPolicy.decide(facts(0, 0, 1, 0, m, CT), true);
             assertTrue(d.allowed(), m);
             assertTrue(d.localOnly(), m);
@@ -98,7 +98,7 @@ class RemoteBurnPolicyTest {
 
     @Test
     void externalDestinationStillRefusesPlainRadiography() {
-        for (String m : List.of("CR", "DX", "MG")) {
+        for (String m : List.of("CR", "DX", "MG", "PX", "IO")) {
             assertEquals("burnin-risky-modality", RemoteBurnPolicy.decide(facts(0, 0, 1, 0, m, CT), false).reason(), m);
             assertEquals("burnin-risky-modality", decide(facts(0, 0, 1, 0, m, CT)).reason(), m);
         }

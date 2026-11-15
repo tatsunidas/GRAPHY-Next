@@ -93,6 +93,25 @@ public final class SegFrameExpander {
     }
 
     /**
+     * フレームが属するセグメント番号（ReferencedSegmentNumber）。フレームごとの項目を先に見て、無ければ共通の項目
+     * （Shared Functional Groups）を見る。どちらにも無ければ 0。単一セグメントの SEG は共通側にだけ持つ実装が多い
+     * （TCIA の ePAD・3D Slicer 製など）ため、フレームごとだけを読むと番号が 0 になり、SegmentSequence の番号と合わない。
+     */
+    public static int referencedSegmentNumber(Attributes ds, int frame) {
+        Sequence pf = ds.getSequence(Tag.PerFrameFunctionalGroupsSequence);
+        if (pf != null && frame >= 0 && frame < pf.size()) {
+            Attributes segId = pf.get(frame).getNestedDataset(Tag.SegmentIdentificationSequence);
+            if (segId != null) return segId.getInt(Tag.ReferencedSegmentNumber, 0);
+        }
+        Sequence sh = ds.getSequence(Tag.SharedFunctionalGroupsSequence);
+        if (sh != null && !sh.isEmpty()) {
+            Attributes segId = sh.get(0).getNestedDataset(Tag.SegmentIdentificationSequence);
+            if (segId != null) return segId.getInt(Tag.ReferencedSegmentNumber, 0);
+        }
+        return 0;
+    }
+
+    /**
      * SEG ヘッダ群（{@link #isSegDataset} が true の Attributes。各々 NumberOfFrames/
      * PerFrameFunctionalGroupsSequence を保持していること）を per-frame 解析し、各セグメント=C・
      * 各スライス=Z の {@link SeriesLayout} に展開する。SEG でなければ（空/Rows・Columns 欠落なら）null。
@@ -131,12 +150,10 @@ public final class SegFrameExpander {
             int nf = ds.getInt(Tag.NumberOfFrames, 1);
             Sequence pf = ds.getSequence(Tag.PerFrameFunctionalGroupsSequence);
             for (int i = 0; i < nf; i++) {
-                int segNum = 0;
+                int segNum = referencedSegmentNumber(ds, i);
                 double[] ipp = null;
                 if (pf != null && i < pf.size()) {
                     Attributes fr = pf.get(i);
-                    Attributes segId = fr.getNestedDataset(Tag.SegmentIdentificationSequence);
-                    if (segId != null) segNum = segId.getInt(Tag.ReferencedSegmentNumber, 0);
                     Attributes pp = fr.getNestedDataset(Tag.PlanePositionSequence);
                     if (pp != null) {
                         double[] v = pp.getDoubles(Tag.ImagePositionPatient);

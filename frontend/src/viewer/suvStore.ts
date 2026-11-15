@@ -22,7 +22,9 @@ export interface SuvCalibration {
   scale: number;
   /** 表示単位（"SUVbw" 等）。 */
   unit: string;
-  type: SuvType;
+  type: SuvType | "suvr";
+  /** SUVR のとき、適用時に測った参照領域（後で ROI を動かしても値は変わらない）。 */
+  ref?: { label: string; mean: number; unit: string; n: number };
 }
 
 const store = new Map<string, SuvCalibration>();

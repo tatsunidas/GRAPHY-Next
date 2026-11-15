@@ -42,7 +42,7 @@ import { SliceDuplicatesError, sopGridIndexMap, volumeDepthNote, type VolumeDept
 import { VolumeDepthChip } from "../viewer/VolumeDepthChip";
 import { loadRenderEnvSummary } from "../viewer/renderEnvReport";
 import { parseRenderQuality, type RenderKind, type RenderQuality } from "../viewer/renderEnv";
-import { installDebugApi, publishRender3dStats } from "../viewer/debugApi";
+import { installDebugApi, publishRender3dStats, publishViewer3dControl } from "../viewer/debugApi";
 import { requestOpenSettings } from "../settings/settingsOpenEvents";
 import {
   createVtkVolumeView,
@@ -65,18 +65,21 @@ import { Viewer3DCinematicOverlay } from "./Viewer3DCinematicOverlay";
 import { CenterlineDialog } from "./CenterlineDialog";
 import { MeshRepairDialog } from "./MeshRepairDialog";
 import { ColorLegend } from "./ColorLegend";
+import { legendUnit } from "./legendUnit";
+import { resolveValueUnit } from "../viewer/pixelCalibration";
 import { Viewer3DMenuBar } from "./Viewer3DMenuBar";
 import { CinematicSettingsDialog } from "./CinematicSettingsDialog";
 import { SlabPanel } from "./SlabPanel";
 import { RepresentationStateDialog } from "./RepresentationStateDialog";
 import { ViewInfoOverlay } from "./ViewInfoOverlay";
 import { fetchLutData } from "../api";
-import { attachSceneRenderer, resetScene, setClipContext, updateClip, setOrthoSlice, setVolumeDepth } from "./scene3d";
+import { attachSceneRenderer, resetScene, setClipContext, updateClip, setOrthoSlice, setVolumeDepth, setPluginClipPlanes } from "./scene3d";
 import { geomFromImageData, type VolumeGeom } from "../viewer/labelVolume";
 import { useI18n } from "../i18n/i18n";
 import { fetchSettings } from "../settings/settingsApi";
 import { hexToRgb01 } from "../viewer/hexColor";
-import { VIEWER3D_CTX_KEY, parseViewer3dCtx, viewer3dCtxChanged } from "./viewer3dCtx";
+import { VIEWER3D_CTX_KEY, parseViewer3dCtx, shouldApplyPluginView, subscribeViewer3dContext, viewer3dCtxChanged, type Viewer3DPluginView } from "./viewer3dCtx";
+import { cameraFromView, validateClipPlanes } from "../viewer/viewer3dCamera";
 import { concatFailureMessage, resolveConcatStack } from "../viewer/concatVolume";
 import { buildConcatResampledVolume, ConcatResampleError, concatResampleErrorMessage, confirmConcatResampleMemory } from "../viewer/concatResample";
 import { concatTileId, type ConcatOpened } from "../viewer/virtualLayout";
@@ -92,6 +95,8 @@ interface Viewer3DContext {
   range?: ZRange;
   /** 連結して開いたタイルから起動したとき。選んだシリーズから連結を作り直してボリュームにする。 */
   concat?: { parts: ConcatOpened["parts"]; labels: string[] };
+  /** プラグインが指定する視点・クリップ面。読み直し（再読込）の判定には使わない。 */
+  pluginView?: Viewer3DPluginView;
   ts: number;
 }
 
@@ -143,6 +148,7 @@ export function Viewer3DScreen({ status }: { status: AppStatus | null }) {
   const [renderKind, setRenderKind] = useState<RenderKind | null>(null);
   // 設定「3D の画質」（シネマティックの操作中の縮小にも効く。full は常に全解像度）。
   const [renderQuality, setRenderQuality] = useState<RenderQuality>("auto");
+  const [gpuMemoryMb, setGpuMemoryMb] = useState<number | null>(null);
   useEffect(() => {
     let alive = true;
     void loadRenderEnvSummary().then((v) => {
@@ -156,7 +162,37 @@ export function Viewer3DScreen({ status }: { status: AppStatus | null }) {
   useEffect(() => {
     installDebugApi();
     publishRender3dStats(() => viewRef.current?.getRenderStats() ?? null);
-    return () => publishRender3dStats(null);
+    // 視点・クリップ面を読み書きする口（dev のみ。視点の検査用。画面の挙動は変えない）。
+    publishViewer3dControl({
+      getState: () => {
+        const v = viewRef.current;
+        if (!v) throw new Error("3D is not ready");
+        const st = v.getState();
+        const d = [st.focalPoint[0] - st.position[0], st.focalPoint[1] - st.position[1], st.focalPoint[2] - st.position[2]];
+        const n = Math.hypot(d[0], d[1], d[2]) || 1;
+        return {
+          position: st.position,
+          focalPoint: st.focalPoint,
+          viewUp: st.viewUp,
+          parallelScale: st.parallelScale,
+          direction: [d[0] / n, d[1] / n, d[2] / n],
+          clipPlanes: v.getClipPlanes(),
+        };
+      },
+      applyCamera: (req) => {
+        const v = viewRef.current;
+        return v ? v.applyCamera(req) : { ok: false, reason: "3D is not ready" };
+      },
+      setClipPlanes: (planes) => {
+        const v = viewRef.current;
+        return v ? v.setClipPlanes(planes) : { ok: false, reason: "3D is not ready" };
+      },
+      render: () => viewRef.current?.render(),
+    });
+    return () => {
+      publishRender3dStats(null);
+      publishViewer3dControl(null);
+    };
   }, []);
   const [mode, setMode] = useState<VtkRenderMode>("VR");
   const [orthoPos, setOrthoPos] = useState<{ x: number; y: number; z: number }>({ x: 0.5, y: 0.5, z: 0.5 });
@@ -166,6 +202,23 @@ export function Viewer3DScreen({ status }: { status: AppStatus | null }) {
   const [lutOpen, setLutOpen] = useState(false);
   const [curveOpen, setCurveOpen] = useState(false);
   const [cinematicOpen, setCinematicOpen] = useState(false);
+  // プラグインが指定した視点・クリップ面（札・［指定に戻す］・クリップ面の一覧）。
+  const [pluginView, setPluginView] = useState<{
+    view: Viewer3DPluginView;
+    /** 適用のあとに利用者が視点を動かした（向きスナップ・Reset View・マウス操作）。 */
+    away: boolean;
+    /** 検証で拒否された理由（拒否したときは何も変えていない）。 */
+    error: string | null;
+    /** クリップ面ごとの ON/OFF。 */
+    clipEnabled: boolean[];
+  } | null>(null);
+  const appliedSeqRef = useRef<number | null>(null);
+  const modeRef = useRef<VtkRenderMode>("VR");
+  const phaseRef = useRef<Phase>("idle");
+  const applyingRef = useRef(false);
+  const appliedCamRef = useRef<{ position: number[]; viewUp: number[] } | null>(null);
+  const applyPluginViewRef = useRef<(pv: Viewer3DPluginView) => void>(() => undefined);
+  const pluginViewRef = useRef<typeof pluginView>(null);
   // 狭幅・タッチ端末では固定幅 240px の右パネルをドロワーに落とす（fw/mobile-ui-design.md §4.2）。
   // 判定は端末クラス。手動でデスクトップ UI を選んでいれば従来どおり常設パネルのまま。
   const { uiMode } = useDeviceClass();
@@ -196,6 +249,8 @@ export function Viewer3DScreen({ status }: { status: AppStatus | null }) {
   const [repairTarget, setRepairTarget] = useState<{ id: string; name: string } | null>(null);
   // カラーレジェンド overlay 表示。
   const [legendOn, setLegendOn] = useState(false);
+  // 凡例の単位（3D のボリュームの実際の単位）。ボリュームを作ったあとに決める。
+  const [legendUnitText, setLegendUnitText] = useState("");
   // Cinematic v2（パストレース）オーバーレイ表示。
   const [pathTraceOn, setPathTraceOn] = useState(false);
 
@@ -388,6 +443,9 @@ export function Viewer3DScreen({ status }: { status: AppStatus | null }) {
         kind: built.geometry.kind,
       });
       setVolumeId(volId);
+      // 先頭スライスのメタデータ（RescaleType）から単位を決める。imageId が無い連結の再サンプルはモダリティ既定。
+      const firstId = built.sortedImageIds?.[0];
+      setLegendUnitText(legendUnit(firstId ? resolveValueUnit(firstId) : undefined, series.modality));
 
       // Cornerstone が構築したボリュームから scalar 付き vtkImageData を組み立てて pure vtk へ渡す
       // （streaming volume の imageData は scalar を pointData に持たないため作り直す）。
@@ -433,6 +491,8 @@ export function Viewer3DScreen({ status }: { status: AppStatus | null }) {
         .then((m) => {
           if (viewRef.current !== view) return;
           view.setBackground(hexToRgb01(m["viewer3d.background"]));
+          const gpuMb = Number(m["viewer3d.gpuMemoryMb"]);
+          setGpuMemoryMb(Number.isFinite(gpuMb) && gpuMb > 0 ? gpuMb : null);
           const quality = parseRenderQuality(m["viewer3d.renderQuality"]);
           view.setRenderQuality(quality);
           setRenderQuality(quality);
@@ -486,6 +546,39 @@ export function Viewer3DScreen({ status }: { status: AppStatus | null }) {
     window.addEventListener("storage", onStorage);
     return () => window.removeEventListener("storage", onStorage);
   }, []);
+
+  // プラグインが指定した視点・クリップ面。開いた直後（ready 後）と、開いたまま更新されたとき（通知）に適用する。
+  // 同じシリーズのままなら読み直さず、視点と札だけが変わる（置いた計測・メッシュは残る）。
+  useEffect(() => {
+    if (phase !== "ready") return;
+    const pv = ctxRef.current?.pluginView;
+    if (shouldApplyPluginView(appliedSeqRef.current, pv)) applyPluginViewRef.current(pv!);
+  }, [phase]);
+
+  useEffect(() => {
+    return subscribeViewer3dContext(() => {
+      const next = parseViewer3dCtx<Viewer3DContext>(localStorage.getItem(VIEWER3D_CTX_KEY));
+      if (!next || viewer3dCtxChanged(ctxRef.current, next)) return; // シリーズが変わったなら、既存の再読込（storage）に任せる
+      ctxRef.current = next;
+      if (phaseRef.current === "ready" && shouldApplyPluginView(appliedSeqRef.current, next.pluginView)) {
+        applyPluginViewRef.current(next.pluginView!);
+      }
+    });
+  }, []);
+
+  // 適用のあとに視点が動いたら（向きスナップ・Reset View・マウス操作）札に「離れた」印を付ける。
+  useEffect(() => {
+    if (phase !== "ready") return;
+    const view = viewRef.current;
+    if (!view) return;
+    return view.onStateChanged(() => {
+      if (applyingRef.current || !appliedCamRef.current) return;
+      const st = view.getState();
+      const a = appliedCamRef.current;
+      const moved = [...st.position, ...st.viewUp].some((v, i) => Math.abs(v - [...a.position, ...a.viewUp][i]) > 1e-6);
+      if (moved) setPluginView((cur) => (cur && !cur.away ? { ...cur, away: true } : cur));
+    });
+  }, [phase]);
 
   useEffect(() => {
     if (startedRef.current || !status) return;
@@ -579,6 +672,90 @@ export function Viewer3DScreen({ status }: { status: AppStatus | null }) {
     ];
     setOrthoSlice(true, idx);
   }, [mode, orthoPos, sceneGeom]);
+
+  modeRef.current = mode;
+  phaseRef.current = phase;
+  pluginViewRef.current = pluginView;
+
+  /** 面の ON/OFF を反映してボリュームとメッシュへ渡す。 */
+  const pushClipPlanes = (planes: NonNullable<Viewer3DPluginView["clipPlanes"]>, enabled: boolean[]) => {
+    const on = planes.filter((_, i) => enabled[i] !== false).map((p) => ({ origin: p.origin, normal: p.normal }));
+    viewRef.current?.setClipPlanes(on);
+    setPluginClipPlanes(on);
+  };
+
+  /**
+   * プラグインが指定した視点・クリップ面を適用する。**先に全部検証し、拒否なら何も変えない**。
+   * 順序: モード → プリセット → 視点 → クリップ面。
+   */
+  const applyPluginView = (pv: Viewer3DPluginView) => {
+    const view = viewRef.current;
+    if (!view) return;
+    // 拒否したら今の指定（札・面）は変えず、理由だけを札に出す。最初の指定が拒否されたときだけ、その指定を札の元にする。
+    const reject = (reason: string) =>
+      setPluginView((prev) => (prev ? { ...prev, error: reason } : { view: pv, away: false, error: reason, clipEnabled: [] }));
+    // 検証（何も変えない）
+    if (pv.camera) {
+      const c = pv.camera;
+      const r = cameraFromView({ direction: c.direction, up: c.up, focalPoint: c.focalPoint ?? [0, 0, 0], distanceMm: c.distanceMm ?? 1 });
+      if (!r.ok) return reject(r.reason);
+    }
+    if (pv.clipPlanes) {
+      const r = validateClipPlanes(pv.clipPlanes);
+      if (!r.ok) return reject(r.reason);
+    }
+    appliedSeqRef.current = pv.seq;
+    applyingRef.current = true;
+    try {
+      if (pv.mode && pv.mode !== modeRef.current) onMode(pv.mode);
+      if (pv.preset !== undefined) onPreset(pv.preset);
+      if (pv.camera) {
+        const c = pv.camera;
+        let focal = c.focalPoint ?? pv.clipPlanes?.[0]?.origin;
+        if (!focal) {
+          const b = view.getSceneParts().imageData.getBounds() as number[];
+          focal = [(b[0] + b[1]) / 2, (b[2] + b[3]) / 2, (b[4] + b[5]) / 2];
+        }
+        const res = view.applyCamera({
+          direction: c.direction,
+          up: c.up,
+          focalPoint: focal,
+          distanceMm: c.distanceMm,
+          projection: c.projection,
+          parallelScaleMm: c.parallelScaleMm,
+        });
+        if (!res.ok) return reject(res.reason);
+      }
+      let clipEnabled: boolean[] = pluginViewRef.current?.clipEnabled ?? [];
+      if (pv.clipPlanes) {
+        clipEnabled = pv.clipPlanes.map(() => true);
+        pushClipPlanes(pv.clipPlanes, clipEnabled);
+      } else if (pluginViewRef.current?.view.clipPlanes) {
+        // クリップ面を省略した更新は「変えない」。前の面と ON/OFF をそのまま持ち越す。
+        pv = { ...pv, clipPlanes: pluginViewRef.current.view.clipPlanes };
+      }
+      const st = view.getState();
+      appliedCamRef.current = { position: [...st.position], viewUp: [...st.viewUp] };
+      setPluginView({ view: pv, away: false, error: null, clipEnabled });
+    } finally {
+      applyingRef.current = false;
+    }
+  };
+  applyPluginViewRef.current = applyPluginView;
+
+  const onClearPluginView = () => {
+    viewRef.current?.setClipPlanes([]);
+    setPluginClipPlanes([]);
+    setPluginView(null);
+  };
+
+  const onTogglePluginClip = (i: number, on: boolean) => {
+    const cur = pluginView;
+    if (!cur?.view.clipPlanes) return;
+    const enabled = cur.clipEnabled.map((v, k) => (k === i ? on : v));
+    pushClipPlanes(cur.view.clipPlanes, enabled);
+    setPluginView({ ...cur, clipEnabled: enabled });
+  };
 
   const onMode = (next: VtkRenderMode) => {
     setMode(next);
@@ -706,6 +883,27 @@ export function Viewer3DScreen({ status }: { status: AppStatus | null }) {
             {t("mpr.tiltCorrected", { deg: tilt.toFixed(1) })}
           </span>
         )}
+        {pluginView && (
+          <span style={pluginBadge} data-testid="viewer3d-plugin-view-badge" data-away={pluginView.away ? "1" : "0"} data-error={pluginView.error ? "1" : "0"}>
+            🧩 {t("viewer3d.pluginView.badge", { plugin: pluginView.view.provenance.pluginName, title: pluginView.view.provenance.title ?? "" })}
+            {pluginView.away && <span style={pluginBadgeWarn}> · {t("viewer3d.pluginView.away")}</span>}
+            {pluginView.error && <span style={pluginBadgeErr}> · {t("viewer3d.pluginView.rejected", { reason: pluginView.error })}</span>}
+            {cinematicOpen && (pluginView.view.clipPlanes?.length ?? 0) > 0 && (
+              <span style={pluginBadgeWarn}> · {t("viewer3d.pluginView.cinematicNote")}</span>
+            )}
+            <button
+              style={pluginBadgeBtn}
+              onClick={() => applyPluginView({ ...pluginView.view, seq: (appliedSeqRef.current ?? pluginView.view.seq) })}
+              title={t("viewer3d.pluginView.restoreHint")}
+              data-testid="viewer3d-plugin-view-restore"
+            >
+              {t("viewer3d.pluginView.restore")}
+            </button>
+            <button style={pluginBadgeBtn} onClick={onClearPluginView} title={t("viewer3d.pluginView.clearHint")} data-testid="viewer3d-plugin-view-clear">
+              ×
+            </button>
+          </span>
+        )}
         {narrow && phase === "ready" && (
           <button
             style={panelOpenBtn}
@@ -750,6 +948,7 @@ export function Viewer3DScreen({ status }: { status: AppStatus | null }) {
               active={pathTraceOn}
               renderKind={renderKind}
               quality={renderQuality}
+              gpuMemoryMb={gpuMemoryMb}
               onCancel={() => setPathTraceOn(false)}
             />
           )}
@@ -787,7 +986,7 @@ export function Viewer3DScreen({ status }: { status: AppStatus | null }) {
             <ColorLegend
               view={viewRef.current}
               lutName={lutName}
-              modality={modalityRef.current}
+              unit={legendUnitText}
               corner="tr"
               onClose={() => setLegendOn(false)}
             />
@@ -948,6 +1147,33 @@ export function Viewer3DScreen({ status }: { status: AppStatus | null }) {
               {clipOn && <div style={hint}>{t("viewer3d.clipDragHint")}</div>}
             </div>
 
+            {pluginView?.view.clipPlanes && pluginView.view.clipPlanes.length > 0 && (
+              <div style={panelSection} data-testid="viewer3d-plugin-clip">
+                <div style={panelLabel}>{t("viewer3d.pluginView.clipPlanes")}</div>
+                {pluginView.view.clipPlanes.map((pl, i) => (
+                  <label key={i} style={hint} data-testid={`viewer3d-plugin-clip-row-${i}`}>
+                    <input
+                      type="checkbox"
+                      checked={pluginView.clipEnabled[i] !== false}
+                      onChange={(e) => onTogglePluginClip(i, e.target.checked)}
+                      data-testid="viewer3d-plugin-clip-toggle"
+                    />{" "}
+                    {pl.label ?? t("viewer3d.pluginView.clipPlane", { n: String(i + 1) })} ({pl.normal.map((x) => x.toFixed(2)).join(", ")})
+                  </label>
+                ))}
+                <button
+                  style={resetBtn}
+                  onClick={() => {
+                    const off = pluginView.view.clipPlanes!.map(() => false);
+                    pushClipPlanes(pluginView.view.clipPlanes!, off);
+                    setPluginView({ ...pluginView, clipEnabled: off });
+                  }}
+                >
+                  {t("viewer3d.pluginView.allOff")}
+                </button>
+              </div>
+            )}
+
             <div style={panelSection}>
               <button style={resetBtn} onClick={onResetView}>
                 {t("viewer3d.resetView")}
@@ -1057,6 +1283,25 @@ const softwareBadge: React.CSSProperties = {
   ...tiltChip,
   marginLeft: 8,
   cursor: "pointer",
+};
+const pluginBadge: React.CSSProperties = {
+  ...tiltChip,
+  marginLeft: 8,
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 4,
+};
+const pluginBadgeWarn: React.CSSProperties = { color: "#e0b050" };
+const pluginBadgeErr: React.CSSProperties = { color: "#e07070" };
+const pluginBadgeBtn: React.CSSProperties = {
+  marginLeft: 6,
+  background: "transparent",
+  color: "inherit",
+  border: "1px solid rgba(255,255,255,.3)",
+  borderRadius: 4,
+  padding: "0 6px",
+  cursor: "pointer",
+  font: "inherit",
 };
 const bodyWrap: React.CSSProperties = { position: "relative", flex: 1, display: "flex", minHeight: 0 };
 const body: React.CSSProperties = { position: "relative", flex: 1, minWidth: 0 };

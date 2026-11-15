@@ -121,6 +121,8 @@ export async function activate(host) {
               { type: "effectiveHalfLife", value: 60 },
               { type: "volume", value: 6.822 },
               { type: "mass", value: 7.11 },
+              // 汎用の種別。単位は省略（backend の既定 %）、量の名前を付ける。
+              { type: "percent", value: 55.2, name: "Ejection fraction" },
             ],
           },
         ],

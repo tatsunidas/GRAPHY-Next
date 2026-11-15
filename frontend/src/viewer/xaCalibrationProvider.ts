@@ -19,6 +19,7 @@
  * <p>注入は「上書き」だけでなく「**取り消し**」も行う: 未校正と判定したら spacing を落として
  * px 表示に戻す。これが無いと「未校正なのに mm が出る」という一番危ない状態が残る。
  */
+import { ASPECT_ONLY_KEY, parsePixelAspect } from "./pixelAspect";
 import { Enums, cache, metaData } from "@cornerstonejs/core";
 import { dsaNativeImageId } from "./dsaLoader";
 import { readXaCineSource, xaDataSetOf } from "./xaCine";
@@ -96,6 +97,7 @@ export function setXaUserCalibration(seriesUid: string, calib: XaUserCalibration
   // calibration 種別（mm/px の別）も校正で変わるので**両方**捨てる。
   resolved.clear();
   calibrationPayloads.clear();
+  aspectMemo.clear();
   // 🔴 ROI の統計（長さ・面積）も作り直させる。画素の位置は校正で変わらない（world の基準は画像の間隔のまま）ので、
   //    頂点の署名だけでは作り直しが起きない（以前は画素の位置が誤って変わっていたので、たまたま作り直されていた）。
   for (const fn of calibrationListeners) {
@@ -116,6 +118,7 @@ export function getXaUserCalibration(seriesUid: string): XaUserCalibration | nul
 export function clearXaCalibrationCache(): void {
   resolved.clear();
   calibrationPayloads.clear();
+  aspectMemo.clear();
 }
 
 /**
@@ -261,6 +264,27 @@ export function readXaCardiacPhase(imageId: string, frameIndex: number): Cardiac
  *
  * <p>画像がまだ作られていなければ、作られるときに入る値（注入する校正値・無ければ DICOM の PixelSpacing・無ければ 1）を返す。
  */
+/**
+ * 縦横比だけで描く画像の比（垂直 ÷ 水平）。PixelSpacing・ImagerPixelSpacing が無く、校正（XA・US の領域など）も
+ * mm を与えず、PixelAspectRatio が 1:1 でないときだけ。それ以外は null。
+ */
+export function aspectOnlyFor(imageId: string): number | null {
+  const hit = aspectMemo.get(imageId);
+  if (hit !== undefined) return hit;
+  const ds = dataSetFor(imageId);
+  if (!ds) return null; // dataSet 未取得の段階では memo しない
+  let out: number | null = null;
+  if (!readPair(ds, "x00280030") && !readPair(ds, "x00181164")) {
+    const calib = calibrationForImageId(imageId);
+    if (!(calib && calib.mmPerPxRow != null && calib.mmPerPxCol != null)) out = parsePixelAspect(ds.string("x00280034"));
+  }
+  aspectMemo.set(imageId, out);
+  return out;
+}
+
+/** imageId → 縦横比だけの画像の比（null = そうでない）。校正（人の校正を含む）が変わったら破棄する。 */
+const aspectMemo = new Map<string, number | null>();
+
 export function loaderSpacingFor(imageId: string): { row: number; col: number } {
   const img = cache.getImage(imageId) as { rowPixelSpacing?: number | null; columnPixelSpacing?: number | null } | undefined;
   if (img) {
@@ -274,6 +298,8 @@ export function loaderSpacingFor(imageId: string): { row: number; col: number } 
   if (calib && calib.source !== "dicom-pixel-spacing" && calib.mmPerPxRow != null && calib.mmPerPxCol != null) {
     return { row: calib.mmPerPxRow, col: calib.mmPerPxCol };
   }
+  const aspect = aspectOnlyFor(imageId);
+  if (aspect !== null) return { row: aspect, col: 1 };
   const ps = readXaCalibTags(imageId)?.pixelSpacing;
   const row = ps && ps[0] > 0 ? ps[0] : 1;
   const col = ps && ps[1] > 0 ? ps[1] : 1;
@@ -327,6 +353,26 @@ export function registerXaCalibrationProvider(): void {
     const imageId = query[0];
     if (typeof imageId !== "string") return undefined;
     const calib = calibrationForImageId(imageId);
+    // 縦横比だけの画像（PixelSpacing 等が無く PixelAspectRatio がある）: 比を間隔として注入し、単位は px のまま。
+    const aspect = aspectOnlyFor(imageId);
+    if (aspect !== null && type !== "calibrationModule") {
+      if (type === "calibratedPixelSpacing") {
+        const hit = calibrationPayloads.get(imageId);
+        if (hit) return hit;
+        const payload = { type: Enums.CalibrationTypes.UNCALIBRATED as string, scale: 1 };
+        calibrationPayloads.set(imageId, payload);
+        return payload;
+      }
+      reentrant = true;
+      let plane: Record<string, unknown> | undefined;
+      try {
+        plane = metaData.get("imagePlaneModule", imageId) as Record<string, unknown> | undefined;
+      } finally {
+        reentrant = false;
+      }
+      if (!plane) return undefined;
+      return { ...plane, rowPixelSpacing: aspect, columnPixelSpacing: 1, pixelSpacing: [aspect, 1], [ASPECT_ONLY_KEY]: true };
+    }
     if (!calib) return undefined;
     // CR の PixelSpacing 単独はローダの既定と同じ値。注入せず、ローダの挙動（単位 "mm"）をそのまま残す。
     if (calib.source === "dicom-pixel-spacing") return undefined;

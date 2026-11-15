@@ -241,6 +241,25 @@ export const GET_STATE_TOOL = "getState";
 export const GET_MEASUREMENTS_TOOL = "getMeasurements";
 export const PROPOSE_TOOL = "propose_steps";
 
+const PROPOSE_STEPS_TOOL: ToolDef = {
+  name: PROPOSE_TOOL,
+  description:
+    "Show the user a step-by-step procedure for something you cannot do yourself (anything that creates, edits, saves, exports or deletes data, e.g. drawing an ROI or saving a report). Nothing is executed.",
+  parameters: {
+    type: "object",
+    properties: {
+      title: { type: "string", maxLength: 120, description: "Short title." },
+      steps: { type: "array", items: { type: "string", maxLength: 300 }, maxItems: 12, description: "Ordered steps for the user." },
+    },
+    required: ["title", "steps"],
+  },
+};
+
+/** 案内役（操作の手順を尋ねる質問）に渡す道具。手順カードを出す `propose_steps` だけ（道具を絞ると小さいモデルが手順を組み立てやすい）。 */
+export function buildGuideTools(): ToolDef[] {
+  return [PROPOSE_STEPS_TOOL];
+}
+
 export function buildTools(): ToolDef[] {
   return [
     {
@@ -256,19 +275,7 @@ export function buildTools(): ToolDef[] {
       parameters: { type: "object", properties: {}, required: [] },
     },
     ...ACTIONS.filter((a) => a.effect !== "write").map((a) => ({ name: a.id, description: a.description, parameters: schemaOf(a) })),
-    {
-      name: PROPOSE_TOOL,
-      description:
-        "Show the user a step-by-step procedure for something you cannot do yourself (anything that creates, edits, saves, exports or deletes data, e.g. drawing an ROI or saving a report). Nothing is executed.",
-      parameters: {
-        type: "object",
-        properties: {
-          title: { type: "string", maxLength: 120, description: "Short title." },
-          steps: { type: "array", items: { type: "string", maxLength: 300 }, maxItems: 12, description: "Ordered steps for the user." },
-        },
-        required: ["title", "steps"],
-      },
-    },
+    PROPOSE_STEPS_TOOL,
   ];
 }
 

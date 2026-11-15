@@ -143,6 +143,19 @@ public class RadiomicsMapEngine {
     public LoadedVolume load(String studyInstanceUid, String sourceSeriesUid, int channel, int timePoint,
                              String maskSeriesUid, int maskChannel, int label,
                              Map<String, String> settings) throws IOException {
+        return load(studyInstanceUid, sourceSeriesUid, channel, timePoint, maskSeriesUid, maskChannel, label,
+                settings, false);
+    }
+
+    /**
+     * @param allowRectify true: 間隔が一様でない・チルトのあるシリーズを、直交・等間隔の格子へ取り直して返す
+     *                     （{@link VolumeRectifier}）。スカラー値を返す解析（ROI 特徴量・GLAM）だけが使う。
+     *                     取り直した格子は元のスライスと対応しないので、マップ・フィルタ済みシリーズ・最大断面など、
+     *                     結果を元のスライスへ戻す解析は false（一様でなければ理由を添えて断る）。
+     */
+    public LoadedVolume load(String studyInstanceUid, String sourceSeriesUid, int channel, int timePoint,
+                             String maskSeriesUid, int maskChannel, int label,
+                             Map<String, String> settings, boolean allowRectify) throws IOException {
         SeriesLayout layout = storage.seriesLayout(studyInstanceUid, sourceSeriesUid);
         if (layout == null || layout.cells().isEmpty()) {
             throw new IllegalArgumentException("ターゲットシリーズにフレームがありません: " + sourceSeriesUid);
@@ -214,7 +227,17 @@ public class RadiomicsMapEngine {
             finalCal.setUnit("mm");
         }
         // スライス間隔。距離をボクセル格子で測る族（GLAM）は、これが無いと Z だけ 1mm 扱いになる。
-        double spacingZ = sliceSpacing(ippByZ, layout.imageOrientationPatient(), nZ);
+        // 全スライスの IPP の法線射影から決める（先頭 2 枚の距離をシリーズ全体の代表にしない）。
+        SliceLayout targetLayout = SliceLayout.of(ippList(ippByZ, nZ), layout.imageOrientationPatient());
+        boolean rectify = !targetLayout.isRegularGrid();
+        if (rectify && !allowRectify) {
+            // 不等間隔・欠損・チルトのシリーズを直交・等間隔の格子として積むと、体積・形状が黙って誤る。
+            throw new IllegalArgumentException(targetLayout.irregularityMessage());
+        }
+        if (rectify && targetLayout.kind() == SliceLayout.Kind.DUPLICATES) {
+            throw new IllegalArgumentException(targetLayout.irregularityMessage()); // 同じ位置のスライスは補間できない
+        }
+        double spacingZ = targetLayout.nominalSpacing();
         if (spacingZ > 0) {
             finalCal.pixelDepth = spacingZ;
         }
@@ -223,7 +246,42 @@ public class RadiomicsMapEngine {
         // マスク（任意）。無ければ全面マスク（LABEL で塗り）。ある場合は IOP/IPP で Z 整列。
         boolean hasMask = maskSeriesUid != null && !maskSeriesUid.isBlank();
         ImagePlus mask = buildMask(studyInstanceUid, maskSeriesUid, maskChannel, w, h, nZ, label,
-                layout.imageOrientationPatient(), ippByZ);
+                layout.imageOrientationPatient(), ippByZ, targetLayout);
+
+        if (rectify) {
+            // 不等間隔・欠損・チルト: 直交・等間隔の格子へ取り直す（画像は線形補間、マスクは最近傍）。
+            // 取り直したボリュームは元のスライスと対応しない（ippByZ / sopPerZ は元のまま）。
+            int srcSlices = nZ, srcW = w, srcH = h;
+            float[][] src = new float[nZ][];
+            byte[][] msk = new byte[nZ][];
+            for (int z = 0; z < nZ; z++) {
+                src[z] = (float[]) procs.get(z).convertToFloat().getPixels();
+                msk[z] = (byte[]) mask.getStack().getProcessor(z + 1).getPixels();
+            }
+            double dz = targetLayout.nominalSpacing();
+            VolumeRectifier.Result rr = VolumeRectifier.rectify(src, msk, w, h, finalCal.pixelWidth, finalCal.pixelHeight,
+                    layout.imageOrientationPatient(), ippList(ippByZ, nZ), dz);
+            ImageStack is2 = new ImageStack(rr.width(), rr.height());
+            ImageStack ms2 = new ImageStack(rr.width(), rr.height());
+            for (int z = 0; z < rr.nSlices(); z++) {
+                is2.addSlice(new ij.process.FloatProcessor(rr.width(), rr.height(), rr.slices()[z]));
+                ms2.addSlice(new ByteProcessor(rr.width(), rr.height(), rr.mask()[z], null));
+            }
+            ImagePlus newMask = new ImagePlus("texture-mask", ms2);
+            newMask.setProp(PROP_GEOMETRY_ALIGNED, mask.getProp(PROP_GEOMETRY_ALIGNED));
+            mask = newMask;
+            img = new ImagePlus("texture-src", is2);
+            finalCal.pixelDepth = dz;
+            img.setCalibration(finalCal);
+            w = rr.width();
+            h = rr.height();
+            nZ = rr.nSlices();
+            log.info("[texture] rectified: {} slices -> {} slices (dz={} mm, gaps {}-{} mm, tilt {} deg, in-plane {}x{} -> {}x{}), "
+                            + "linear interpolation for the image, nearest for the mask",
+                    srcSlices, nZ, String.format("%.3f", dz), String.format("%.3f", targetLayout.minGap()),
+                    String.format("%.3f", targetLayout.maxGap()), String.format("%.1f", targetLayout.tiltDeg()),
+                    srcW, srcH, w, h);
+        }
 
         // リサンプリング（環境設定 ▸ テクスチャ）。ここから先は計算格子で進み、
         // マップは最後に元の格子へ戻す（幾何は元シリーズと一致させる）。
@@ -371,14 +429,11 @@ public class RadiomicsMapEngine {
                 + "GLAM は距離をボクセル格子で測るため、等方へリサンプリングした画像を使ってください。", sx, sy, sz);
     }
 
-    /** 隣接スライスの法線投影距離＝スライス間隔。求まらなければ 0。 */
-    private static double sliceSpacing(Map<Integer, double[]> ippByZ, double[] iop, int nZ) {
-        double[] normal = normalOf(iop);
-        if (normal == null || nZ < 2) return 0;
-        double[] a = ippByZ.get(0), b = ippByZ.get(1);
-        if (a == null || b == null || a.length != 3 || b.length != 3) return 0;
-        double d = Math.abs(dot(a, normal) - dot(b, normal));
-        return d > 1e-4 ? d : 0;
+    /** スライス index 順の IPP 一覧（無いスライスは null）。 */
+    private static List<double[]> ippList(Map<Integer, double[]> ippByZ, int nZ) {
+        List<double[]> out = new ArrayList<>(nZ);
+        for (int z = 0; z < nZ; z++) out.add(ippByZ.get(z));
+        return out;
     }
 
     /** stride を踏まえて実際に特徴計算が走る窓の数（＝マスク内のサンプル点）。 */
@@ -474,7 +529,8 @@ public class RadiomicsMapEngine {
      */
     private ImagePlus buildMask(String studyInstanceUid, String maskSeriesUid, int maskChannel,
                                int w, int h, int nZ, int label,
-                               double[] targetIop, Map<Integer, double[]> targetIppByZ) throws IOException {
+                               double[] targetIop, Map<Integer, double[]> targetIppByZ,
+                               SliceLayout targetLayout) throws IOException {
         if (maskSeriesUid == null || maskSeriesUid.isBlank()) {
             log.info("[texture] mask: none specified -> full-face mask (label={})", label);
             return fullFaceMask(w, h, nZ, label);
@@ -528,10 +584,18 @@ public class RadiomicsMapEngine {
             }
             // 許容差はスライス間隔の半分（最近傍マッチ）。これにより、マスク端の外側にある
             // ターゲットスライス（≒1 スライス間隔だけ離れる）が端のマスクを拾わず空になる。
-            double tol = 0.5 * targetSliceSpacing(targetIppByZ, normal, nZ);
+            // 間隔はターゲットとマスクの**実際の間隔**の大きい方（マスクが粗い格子でも、その 1 枚が覆う範囲のターゲットを拾う）。
+            // 以前は先頭 2 枚のターゲット間隔だけで決めていたため、画像と別の格子のマスクを取りこぼした。
+            double maskSpacing = SliceLayout.of(java.util.Arrays.asList(maskIpp), targetIop).nominalSpacing();
+            double nominalTarget = targetLayout.nominalSpacing() > 0 ? targetLayout.nominalSpacing() : 1.0;
+            double tol = 0.5 * Math.max(nominalTarget, maskSpacing); // 局所間隔が不明なときの既定
             int outOfRange = 0;
             for (int z = 0; z < nZ; z++) {
                 double tPos = dot(targetIppByZ.get(z), normal);
+                // そのスライスの局所間隔（隣り合うスライスとの間隔の大きい方）の半分。ターゲットの間隔が不等でも、
+                // 間隔の狭い所でマスクの端の外側のスライスまで拾わない。
+                double localTol = 0.5 * Math.max(Math.max(targetLayout.localGap(z), nominalTarget), maskSpacing);
+                tol = localTol;
                 int best = -1;
                 double bestD = Double.MAX_VALUE;
                 for (int mz = 0; mz < mZ; mz++) {
@@ -616,18 +680,6 @@ public class RadiomicsMapEngine {
         if (ipp == null) return false;
         for (double[] p : ipp) if (p != null && p.length == 3) return true;
         return false;
-    }
-
-    /** ターゲット隣接スライスの法線投影距離（許容差の基準）。 */
-    private static double targetSliceSpacing(Map<Integer, double[]> ippByZ, double[] normal, int nZ) {
-        if (nZ >= 2) {
-            double[] a = ippByZ.get(0), b = ippByZ.get(1);
-            if (a != null && b != null) {
-                double d = Math.abs(dot(a, normal) - dot(b, normal));
-                if (d > 1e-4) return d;
-            }
-        }
-        return 1.0;
     }
 
     /** 全面マスク（各スライス label で塗りつぶした ByteProcessor）。 */

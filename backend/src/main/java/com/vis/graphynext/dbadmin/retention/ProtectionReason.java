@@ -30,7 +30,9 @@ public enum ProtectionReason {
     /** 受信日時が不明の画像を含む（日付を作らず、消さない）。 */
     UNKNOWN_RECEIVED("unknownReceived"),
     /** セグメンテーション・RT・構造化レポート等、通常の画像でない DICOM を含む（本体が作った派生物を守る）。 */
-    NON_IMAGE_DICOM("nonImageDicom");
+    NON_IMAGE_DICOM("nonImageDicom"),
+    /** 予約一覧から事前取得した検査で、予約日（の終わり）まで。過ぎたら通常の条件に従う。 */
+    PREFETCH_SCHEDULED("prefetchScheduled");
 
     private final String key;
 

@@ -66,6 +66,18 @@ describe("csvValueUnit", () => {
   });
 });
 
+describe("校正済みの単位（%ID/cc・SUVR）", () => {
+  it("ヘッダの単位と単位列が一致する（校正の単位がそのまま出る）", () => {
+    for (const unit of ["%ID/cc", "SUVR"]) {
+      const r = row({ stats: stats({ values: { ...stats().values!, unit } }) });
+      expect(csvValueUnit([r])).toBe(unit);
+      const [header, data] = parse(roiStatsToCsv([r]));
+      expect(header).toContain(`mean[${unit}]`);
+      expect(data[header.indexOf("valueUnit")]).toBe(unit);
+    }
+  });
+});
+
 describe("roiStatsToCsv", () => {
   it("単位を列名に入れる（セルは数値のまま）", () => {
     const [header, data] = parse(roiStatsToCsv([row()]));

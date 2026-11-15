@@ -3,7 +3,10 @@
  * Author: Tatsuaki Kobayashi
  */
 import { useEffect, useState } from "react";
-import { echoDicom, fetchRemoteAes, scanNetworkDevices, type RemoteAe } from "../api";
+import { echoDicom, fetchRemoteAes, scanNetworkDevices, type FindProfile, type RemoteAe } from "../api";
+import { QrProbePanel } from "./QrProbePanel";
+import { FindProfileEditor } from "./FindProfileEditor";
+import { isDefaultProfile } from "./probeView";
 import { addDiscovered, groupDiscovered, toRow, type DiscoveredItem } from "./discoveryView";
 import { fetchSettings, saveSettings } from "./settingsApi";
 import { emitRemoteAesChanged } from "../remoteAeEvents";
@@ -14,7 +17,7 @@ import { useI18n } from "../i18n/i18n";
 /** Settings(H2) にリモート DICOM ノードを JSON 配列で保存するキー。backend の REMOTE_AES_KEY と一致。 */
 const REMOTE_AES_KEY = "dicom.remoteAes";
 
-type Row = { aeTitle: string; host: string; port: string; tls: boolean };
+type Row = { aeTitle: string; host: string; port: string; tls: boolean; find?: FindProfile };
 type EchoState = "idle" | "running" | "ok" | "fail";
 
 /**
@@ -40,6 +43,8 @@ export function RemoteAePanel() {
   const [found, setFound] = useState<DiscoveredItem[] | null>(null);
   const [scanError, setScanError] = useState<string | null>(null);
   const [pickedHost, setPickedHost] = useState<Record<number, string>>({});
+  // 行ごとに開いている補助パネル（通信テスト／検索の詳細）。
+  const [panel, setPanel] = useState<Record<number, "probe" | "edit" | undefined>>({});
 
   // 初期ロード: Settings 保存分（編集対象）と、マージ済み全件から YAML 由来分を抽出（参考表示）。
   useEffect(() => {
@@ -59,6 +64,7 @@ export function RemoteAePanel() {
         const storedAets = new Set(stored.map((a) => a.aeTitle));
         setRows(stored.map((a) => ({
           aeTitle: a.aeTitle ?? "", host: a.host ?? "", port: String(a.port ?? ""), tls: !!a.tls,
+          find: a.find ?? undefined,
         })));
         // マージ結果のうち Settings に無い＝YAML 由来（読み取り専用で参考表示）。
         setYamlAes(merged.filter((a) => !storedAets.has(a.aeTitle)));
@@ -116,7 +122,14 @@ export function RemoteAePanel() {
     setSavedMsg(t("settings.remoteAe.discover.addedHint"));
   };
 
+  const setFind = (i: number, find: FindProfile | null) => {
+    setRows((rs) => rs.map((r, idx) => (idx === i ? { ...r, find: find ?? undefined } : r)));
+    setDirty(true);
+    setSavedMsg(null);
+  };
+
   const removeRow = (i: number) => {
+    setPanel({});
     setRows((rs) => rs.filter((_, idx) => idx !== i));
     setDirty(true);
     setSavedMsg(null);
@@ -128,7 +141,10 @@ export function RemoteAePanel() {
     // 有効行だけを保存（空行は捨てる）。
     const clean = rows
       .filter(rowValid)
-      .map((r) => ({ aeTitle: r.aeTitle.trim(), host: r.host.trim(), port: Number(r.port), tls: r.tls }));
+      .map((r) => ({
+        aeTitle: r.aeTitle.trim(), host: r.host.trim(), port: Number(r.port), tls: r.tls,
+        ...(isDefaultProfile(r.find) ? {} : { find: r.find }), // 検索の方式は、標準でなければ保存する（保存しないと採用が消える）
+      }));
     setSaving(true);
     setSavedMsg(null);
     try {
@@ -177,7 +193,8 @@ export function RemoteAePanel() {
       {rows.length === 0 && <div style={{ color: "#888", fontSize: 13, padding: "6px 0" }}>{t("settings.remoteAe.empty")}</div>}
 
       {rows.map((r, i) => (
-        <div key={i} style={dataRow}>
+        <div key={i}>
+        <div style={dataRow}>
           <input style={{ ...input, flex: 2 }} value={r.aeTitle} placeholder="AET" spellCheck={false}
             onChange={(e) => update(i, "aeTitle", e.target.value)} />
           <input style={{ ...input, flex: 3 }} value={r.host} placeholder="host / IP" spellCheck={false}
@@ -197,6 +214,25 @@ export function RemoteAePanel() {
               ✕
             </button>
           </div>
+        </div>
+        <div style={{ display: "flex", gap: 6, margin: "0 0 6px 2px", alignItems: "center" }}>
+          <button style={linkBtn} disabled={!rowValid(r)} title={t("qrProbe.open.tip")} data-testid={`probe-open-${i}`}
+            onClick={() => setPanel((p) => ({ ...p, [i]: p[i] === "probe" ? undefined : "probe" }))}>
+            {t("qrProbe.open")}
+          </button>
+          <button style={linkBtn} title={t("qrProbe.find.edit.tip")} data-testid={`find-open-${i}`}
+            onClick={() => setPanel((p) => ({ ...p, [i]: p[i] === "edit" ? undefined : "edit" }))}>
+            {t("qrProbe.find.edit")}
+          </button>
+          {!isDefaultProfile(r.find) && <span style={{ fontSize: 11, color: "#a15c00" }}>{t("qrProbe.find.customized")}</span>}
+        </div>
+        {panel[i] === "probe" && rowValid(r) && (
+          <QrProbePanel
+            target={{ aeTitle: r.aeTitle.trim(), host: r.host.trim(), port: Number(r.port), tls: r.tls }}
+            currentFind={r.find}
+            onAdopt={(p) => setFind(i, p ? { ...p, wildcard: r.find?.wildcard } : null)} />
+        )}
+        {panel[i] === "edit" && <FindProfileEditor value={r.find} onChange={(p) => setFind(i, p)} />}
         </div>
       ))}
 
@@ -283,6 +319,7 @@ const input: React.CSSProperties = { minWidth: 0, padding: "5px 8px", border: "1
 const smallBtn: React.CSSProperties = {
   minWidth: 34, padding: "4px 8px", border: "1px solid #cdd5de", borderRadius: 5, background: "#fff", cursor: "pointer", fontSize: 13,
 };
+const linkBtn: React.CSSProperties = { padding: "1px 4px", border: "none", background: "none", color: "#0b5cad", cursor: "pointer", fontSize: 12, textDecoration: "underline" };
 const addBtn: React.CSSProperties = {
   marginTop: 4, padding: "5px 12px", border: "1px dashed #b7c2cd", borderRadius: 6, background: "#fff", cursor: "pointer", fontSize: 13, color: "#33404d",
 };

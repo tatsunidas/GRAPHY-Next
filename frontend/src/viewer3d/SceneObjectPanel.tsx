@@ -33,6 +33,7 @@ import {
   removeObject,
   setObjectColor,
   setObjectDisplayMode,
+  setObjectRepresentation,
   setRoiSmooth,
   setObjectOpacity,
   setObjectVisible,
@@ -51,6 +52,7 @@ import {
   type SceneDisplayMode,
   type SceneObject,
   type SceneObjectSource,
+  type SceneRepresentation,
 } from "./scene3dStore";
 
 /** 取り込み候補の 2D ROI。windowId が null ならこのウィンドウ自身が持つもの。 */
@@ -521,6 +523,20 @@ export function SceneObjectPanel({
               </button>
             ))}
           </div>
+          <div style={modeRow}>
+            <span style={modeLabel}>{t("scene3d.representation")}</span>
+            {(["surface", "wireframe", "points"] as SceneRepresentation[]).map((r) => (
+              <button
+                key={r}
+                data-testid={`scene3d-repr-${r}`}
+                style={selected.representation === r ? modeBtnActive : modeBtn}
+                title={t(`scene3d.representation.${r}.hint`)}
+                onClick={() => setObjectRepresentation(selected.id, r)}
+              >
+                {t(`scene3d.representation.${r}`)}
+              </button>
+            ))}
+          </div>
           {selected.kind === "roi" && (
             <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, margin: "4px 0" }} title={t("scene3d.smoothHint")}>
               <input
@@ -694,7 +710,7 @@ function SceneRow({
           style={colorInput}
           onChange={(e) => onColor(e.target.value)}
         />
-        <span style={rowName} onClick={onSelect} title={o.name}>
+        <span style={rowName} onClick={onSelect} title={o.name} data-testid={`scene3d-row-${o.id}`}>
           <span style={kindTag}>{kindLabel}</span>
           {o.name}
         </span>

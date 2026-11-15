@@ -19,7 +19,7 @@
  * 色の決定は `vesselColorMap.ts` に閉じているので、そこから目盛りを作る。
  */
 import { useI18n } from "../i18n/i18n";
-import type { XaVesselAnalysis, XaVesselModel } from "../viewer/xaVesselModelStore";
+import type { VesselModel, XaVesselAnalysis } from "../viewer/xaVesselModelStore";
 import { cssRgb, legendStops, NO_VALUE_RGB } from "./vesselColorMap";
 
 export function VesselAnalysisLegend({
@@ -27,7 +27,7 @@ export function VesselAnalysisLegend({
   model,
 }: {
   analysis: XaVesselAnalysis;
-  model: XaVesselModel | null;
+  model: VesselModel | null;
 }) {
   const { t } = useI18n();
   const stops = legendStops(24);
@@ -74,7 +74,8 @@ export function VesselAnalysisLegend({
       {model?.calibration.diameterMethod === "mixed" ? (
         <div style={warn} data-testid="vessel-legend-mixed">{t("vessel.mixedMethod")}</div>
       ) : null}
-      {model?.provenance.angleCorrected === false ? (
+      {/* 角度補正は XA（2 方向の再構成）の概念。CT のモデルには出さない。 */}
+      {model && model.kind !== "ct-vessel" && model.provenance.angleCorrected === false ? (
         <div style={warn} data-testid="vessel-legend-notrefined">{t("xa3d.notRefined")}</div>
       ) : null}
       {/* モジュール提供元の免責文は**そのまま**出す。 */}

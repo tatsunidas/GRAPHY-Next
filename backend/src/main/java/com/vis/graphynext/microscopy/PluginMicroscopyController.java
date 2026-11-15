@@ -6,6 +6,7 @@ package com.vis.graphynext.microscopy;
 
 import com.vis.graphynext.plugin.PluginJobService;
 import com.vis.graphynext.plugin.PluginRegistry;
+import com.vis.graphynext.plugin.PluginWorkFiles;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Profile;
 import org.springframework.http.ResponseEntity;
@@ -16,7 +17,6 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.io.IOException;
 import java.nio.file.Files;
-import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.util.Map;
 
@@ -78,26 +78,7 @@ public class PluginMicroscopyController {
 
     /** そのプラグインの作業フォルダの下の、実在する通常のファイル（リンクを辿らない）。それ以外は理由つきで断る。 */
     Path allowedPath(String pluginId, String path) throws IOException {
-        if (path == null || path.isBlank()) {
-            throw new IllegalArgumentException("パスがありません");
-        }
-        if (pluginId.contains("/") || pluginId.contains("\\") || pluginId.contains("..")) {
-            throw new IllegalArgumentException("プラグイン ID が正しくありません");
-        }
-        Path p = Path.of(path);
-        if (!p.isAbsolute() || Files.isSymbolicLink(p) || !Files.isRegularFile(p, LinkOption.NOFOLLOW_LINKS)) {
-            throw new IllegalArgumentException("一時フォルダのファイルではありません: " + p.getFileName());
-        }
-        // ファイルそのものがリンクなら上で断った。途中のフォルダのリンクはたどって実際の場所で比べる
-        // （macOS の一時フォルダ /var/folders は /private/var/folders へのリンク。たどらないと正しいファイルまで断る。
-        //  プラグインのフォルダの中に外を指すリンクを置かれても、たどった先が外になるので断れる）
-        Path real = p.toRealPath();
-        Path dir = tmpRoot.resolve(WORK_DIR).resolve(pluginId);
-        Path realDir = Files.isDirectory(dir) ? dir.toRealPath() : dir.toAbsolutePath().normalize();
-        if (!real.startsWith(realDir)) {
-            throw new IllegalArgumentException("このプラグインの一時フォルダのファイルだけを取り込めます");
-        }
-        return real;
+        return PluginWorkFiles.allowedPath(tmpRoot, WORK_DIR, pluginId, path);
     }
 
     private static MicroscopyImportService.ImportRequest withPath(MicroscopyImportService.ImportRequest r, String path) {

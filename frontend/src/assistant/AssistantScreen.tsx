@@ -2,8 +2,8 @@
  * Copyright (c) Visionary Imaging Services, Inc. All rights reserved.
  * Author: Tatsuaki Kobayashi
  */
-// アシスタント窓（#assistant）。S1 は「答える・案内する」だけで、アプリは操作しない（tools は送らない）。
-// 会話の口 aiChat は main が #assistant の窓にしか許さない（desktop/assistantSender.js）。
+// アシスタント窓（#assistant）。会話の口 aiChat は main が #assistant の窓にしか許さない（desktop/assistantSender.js）。
+// 2D ビューアの表示操作の道具は、操作できる状態（canOperate）のときだけ渡す。
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState, type ClipboardEvent, type DragEvent } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -11,7 +11,8 @@ import { desktop, type AiChatMessage, type AiResolveResult } from "../desktopBri
 import { useI18n } from "../i18n/i18n";
 import { MarkdownPreviewBoundary } from "../report/MarkdownEditor";
 import { chatReducer, initialChatState, type UiAction, type UiImage, type UiMessage } from "./chatState";
-import { buildTools } from "./actions/registry";
+import { buildGuideTools, buildTools } from "./actions/registry";
+import { pickProfile } from "./intent";
 import { runToolLoop } from "./toolLoop";
 import { RobotPanel, type RobotPlan } from "./robot/RobotPanel";
 import { buildRobotTools } from "./robot/planModel";
@@ -29,7 +30,7 @@ import { runEval } from "./eval/runEval";
 import { planEligible, toToolDef, type PluginToolEntry, type PluginToolResult } from "./pluginTools";
 import { candidatesFromActions } from "./macros/macroModel";
 import { DOC_CHUNKS } from "./docsBundle";
-import { searchDocs } from "./docsIndex";
+import { DOCS_K, DOCS_MAX_CHARS, DOCS_MIN_SCORE, searchDocs } from "./docsIndex";
 import { buildSystemPrompt } from "./systemPrompt";
 import { AttachError, MAX_ATTACHMENTS, classify } from "./attachments/limits";
 import { composeUserText, ingest, type Attachment, type IngestDeps } from "./attachments";
@@ -44,10 +45,6 @@ const INGEST_DEPS: IngestDeps = { loadPdfjs, extractVideo: extractVideoFrames };
 const MAX_IMAGE_B64 = 8 * 1024 * 1024;
 /** 1 メッセージの画像枚数。main の本文上限（20 MiB）に収めるための目安。 */
 const MAX_IMAGES = 3;
-/** 1 質問で添える資料の数と長さ。実測（assistantDocs.test.ts の質問例）で当たりが取れた最小に近い値。 */
-const DOCS_K = 3;
-const DOCS_MAX_CHARS = 1500;
-const DOCS_MIN_SCORE = 2;
 /** ストリーム表示の更新間隔。1 トークンごとに Markdown を組み直さない。 */
 const FLUSH_MS = 80;
 
@@ -244,8 +241,10 @@ export function AssistantScreen() {
     const canOperate = !!bridge.assistantViewerCmd && !!resolved?.ok && resolved.toolMode !== "none";
     // モデルへ見せるスキル: 検証に通ったものだけ（チャットモードで操作ツールが使えるとき）。
     const offered = promptSkills(mergeSkills(userSkills, pluginSkills).map((e) => e.skill), enabledPluginTools);
+    // 操作の手順を尋ねる質問だけ案内役に回す（画像・添付があるとき、ロボットのときは回さない）。迷えば現行の操作役。
+    const guide = canOperate && !robot && allImages.length === 0 && attachments.length === 0 && pickProfile(text) === "guide";
     const req: AiChatMessage[] = [
-      { role: "system", text: buildSystemPrompt(locale, hits, { canOperate, robot, skills: canOperate && !robot ? offered : undefined, pluginTools: canOperate && !robot && enabledPluginTools.length > 0, robotPluginTools: canOperate && robot && planEligible(enabledPluginTools).length > 0 }) },
+      { role: "system", text: buildSystemPrompt(locale, hits, { guide, canOperate, robot, skills: canOperate && !robot ? offered : undefined, pluginTools: canOperate && !robot && enabledPluginTools.length > 0, robotPluginTools: canOperate && robot && planEligible(enabledPluginTools).length > 0 }) },
       ...history,
       { role: "user", text: composed.text, images: allImages.length ? allImages.map((i) => ({ base64: i.base64, mimeType: i.mimeType })) : undefined },
     ];
@@ -260,8 +259,11 @@ export function AssistantScreen() {
     const viewer = (cmd: { kind: "action" | "getState" | "getMeasurements"; id?: string; params?: unknown }) =>
       bridge.assistantViewerCmd!(sessionId, cmd);
     if (robot) setPlan(null);
-    const result = await runToolLoop(req, canOperate ? (robot ? buildRobotTools(enabledPluginTools) : [...buildTools(), ...buildSkillTools(), ...enabledPluginTools.map(toToolDef)]) : [], {
-      skills: canOperate && !robot ? offered : undefined,
+    const tools = guide
+      ? buildGuideTools()
+      : canOperate ? (robot ? buildRobotTools(enabledPluginTools) : [...buildTools(), ...buildSkillTools(), ...enabledPluginTools.map(toToolDef)]) : [];
+    const result = await runToolLoop(req, tools, {
+      skills: canOperate && !robot && !guide ? offered : undefined,
       skillIds: userSkills.map((s) => s.id),
       onSkillStart: (p) => {
         setSkillSuggest({ nonce: Date.now(), skillId: p.skillId, inputs: p.inputs });

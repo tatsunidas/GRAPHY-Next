@@ -104,6 +104,7 @@ describe("retentionView", () => {
     expect(reasonKey("days")).toBe("retention.reason.days");
     expect(reasonKey("zzz")).toBe("retention.reason.unknown");
     expect(protectionKey("inUse")).toBe("retention.protect.inUse");
+    expect(protectionKey("prefetchScheduled")).toBe("retention.protect.prefetchScheduled");
     expect(protectionKey("new")).toBe("retention.protect.unknown");
     expect(resultKey("partial")).toBe("retention.result.partial");
     expect(resultKey("???")).toBe("retention.result.unknown");

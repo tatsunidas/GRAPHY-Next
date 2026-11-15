@@ -4,7 +4,7 @@
  */
 package com.vis.graphynext.dicom.qr;
 
-import com.vis.graphynext.dicom.DicomProperties;
+import com.vis.graphynext.dicom.DicomController;
 import com.vis.graphynext.dicom.store.DicomStorageService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -51,24 +51,31 @@ public class DimseQrService {
             "StudyDate", "StudyDescription", "AccessionNumber", "ModalitiesInStudy",
             "NumberOfStudyRelatedSeries", "NumberOfStudyRelatedInstances");
 
+    /** PATIENT レベル C-FIND（Patient Root）の返却キー。 */
+    private static final List<String> PATIENT_RETURN_KEYS = List.of(
+            "PatientID", "PatientName", "PatientBirthDate", "PatientSex");
+
     /** SERIES レベル C-FIND の返却キー。 */
     private static final List<String> SERIES_RETURN_KEYS = List.of(
             "SeriesInstanceUID", "Modality", "SeriesNumber", "SeriesDescription",
             "ProtocolName", "NumberOfSeriesRelatedInstances");
 
     private final Dcm4cheTools tools;
+    private final com.vis.graphynext.dicom.DicomRemoteAeService remoteAes;
     private final DicomStorageService storage;
     private final com.vis.graphynext.dicom.DicomLocalAeService localAe;
     private final com.vis.graphynext.dicom.DicomTlsService tlsService;
     private final org.springframework.beans.factory.ObjectProvider<com.vis.graphynext.anonymize.ReceiveAnonymizer> anonymizer;
     private final org.springframework.beans.factory.ObjectProvider<com.vis.graphynext.dicom.store.ReceiveCompressor> compressor;
 
-    public DimseQrService(Dcm4cheTools tools, DicomStorageService storage,
+    public DimseQrService(Dcm4cheTools tools, com.vis.graphynext.dicom.DicomRemoteAeService remoteAes,
+                          DicomStorageService storage,
                           com.vis.graphynext.dicom.DicomLocalAeService localAe,
                           com.vis.graphynext.dicom.DicomTlsService tlsService,
                           org.springframework.beans.factory.ObjectProvider<com.vis.graphynext.anonymize.ReceiveAnonymizer> anonymizer,
                           org.springframework.beans.factory.ObjectProvider<com.vis.graphynext.dicom.store.ReceiveCompressor> compressor) {
         this.tools = tools;
+        this.remoteAes = remoteAes;
         this.storage = storage;
         this.localAe = localAe;
         this.tlsService = tlsService;
@@ -83,33 +90,9 @@ public class DimseQrService {
      */
     public List<StudyDto> findStudies(String host, int port, String calledAet, Map<String, String> matchKeys,
                                       boolean tls) throws IOException {
-        Path tool = tools.require("findscu");
-        Path outDir = Files.createTempDirectory("graphy-findscu-");
-        List<String> cmd = new ArrayList<>(List.of(
-                tool.toString(),
-                "-b", localAe.aeTitle(),
-                "-c", calledAet + "@" + host + ":" + port,
-                "-L", "STUDY"));
-        for (String key : STUDY_RETURN_KEYS) {
-            cmd.add("-r");
-            cmd.add(key);
-        }
-        if (matchKeys != null) {
-            matchKeys.forEach((k, v) -> {
-                cmd.add("-m");
-                cmd.add(k + "=" + v);
-            });
-        }
-        cmd.add("--out-dir");
-        cmd.add(outDir.toString());
-        cmd.add("--out-file");
-        cmd.add("rsp-0000.dcm");
-        cmd.addAll(tlsArgs(tls));
-
-        Dcm4cheTools.Result r = tools.run(cmd, TOOL_TIMEOUT_MS);
-        if (!r.ok()) {
-            throw new IOException("findscu 失敗 (exit=" + r.exitCode() + "): " + tail(r.output()));
-        }
+        FindProfile profile = profileFor(calledAet, host, port);
+        Path outDir = execFind("findscu", "STUDY", host, port, calledAet, profile, null,
+                profile.studyKeysOr(STUDY_RETURN_KEYS), matchKeys, tls, "graphy-findscu-");
         List<StudyDto> studies = new ArrayList<>();
         try (Stream<Path> walk = Files.walk(outDir)) {
             List<Path> files = walk.filter(Files::isRegularFile)
@@ -142,6 +125,12 @@ public class DimseQrService {
      * @return 取り込んだインスタンス数
      */
     public int getStudy(String host, int port, String calledAet, String studyUid, boolean tls) throws IOException {
+        return getStudy(host, port, calledAet, studyUid, tls, TOOL_TIMEOUT_MS);
+    }
+
+    /** {@link #getStudy(String, int, String, String, boolean)} のタイムアウト指定版（事前取得は大きな検査を扱う）。 */
+    public int getStudy(String host, int port, String calledAet, String studyUid, boolean tls, long timeoutMs)
+            throws IOException {
         Path tool = tools.require("getscu");
         Path outDir = Files.createTempDirectory("graphy-getscu-");
         List<String> cmd = new ArrayList<>(List.of(
@@ -152,7 +141,7 @@ public class DimseQrService {
                 "-m", "StudyInstanceUID=" + studyUid,
                 "--directory", outDir.toString()));
         cmd.addAll(tlsArgs(tls));
-        Dcm4cheTools.Result r = tools.run(cmd, TOOL_TIMEOUT_MS);
+        Dcm4cheTools.Result r = tools.run(cmd, timeoutMs);
         if (!r.ok()) {
             throw new IOException("getscu 失敗 (exit=" + r.exitCode() + "): " + tail(r.output()));
         }
@@ -188,6 +177,12 @@ public class DimseQrService {
      */
     public int moveStudy(String host, int port, String calledAet, String studyUid, String destAet, boolean tls)
             throws IOException {
+        return moveStudy(host, port, calledAet, studyUid, destAet, tls, TOOL_TIMEOUT_MS);
+    }
+
+    /** {@link #moveStudy(String, int, String, String, String, boolean)} のタイムアウト指定版。 */
+    public int moveStudy(String host, int port, String calledAet, String studyUid, String destAet, boolean tls,
+                         long timeoutMs) throws IOException {
         Path tool = tools.require("movescu");
         List<String> cmd = new ArrayList<>(List.of(
                 tool.toString(),
@@ -197,7 +192,7 @@ public class DimseQrService {
                 "-L", "STUDY",
                 "-m", "StudyInstanceUID=" + studyUid));
         cmd.addAll(tlsArgs(tls));
-        Dcm4cheTools.Result r = tools.run(cmd, TOOL_TIMEOUT_MS);
+        Dcm4cheTools.Result r = tools.run(cmd, timeoutMs);
         if (!r.ok()) {
             throw new IOException("movescu 失敗 (exit=" + r.exitCode() + "): " + tail(r.output()));
         }
@@ -211,34 +206,66 @@ public class DimseQrService {
      */
     public List<QrStudyRow> findStudiesForQr(String host, int port, String calledAet, Map<String, String> matchKeys,
                                              boolean tls) throws IOException {
-        Path tool = tools.require("findscu");
-        Path outDir = Files.createTempDirectory("graphy-qr-find-");
-        List<String> cmd = new ArrayList<>(List.of(
-                tool.toString(),
-                "-b", localAe.aeTitle(),
-                "-c", calledAet + "@" + host + ":" + port,
-                "-L", "STUDY"));
-        for (String key : QR_STUDY_RETURN_KEYS) {
-            cmd.add("-r");
-            cmd.add(key);
-        }
-        if (matchKeys != null) {
-            matchKeys.forEach((k, v) -> {
-                cmd.add("-m");
-                cmd.add(k + "=" + v);
-            });
-        }
-        cmd.add("--out-dir");
-        cmd.add(outDir.toString());
-        cmd.add("--out-file");
-        cmd.add("rsp-0000.dcm");
-        cmd.addAll(tlsArgs(tls));
+        return findStudiesForQr(host, port, calledAet, matchKeys, tls, profileFor(calledAet, host, port));
+    }
 
-        Dcm4cheTools.Result r = tools.run(cmd, TOOL_TIMEOUT_MS);
-        if (!r.ok()) {
-            deleteQuietly(outDir);
-            throw new IOException("findscu(STUDY) 失敗 (exit=" + r.exitCode() + "): " + tail(r.output()));
+    /**
+     * 通信先の検索方式（{@link FindProfile}）を明示した版。Patient Root の通信先では、患者 ID が無いとき
+     * 先に PATIENT 段で患者を引き、患者ごとに STUDY 段を引く（Patient Root は PATIENT 段から入る方式）。
+     */
+    public List<QrStudyRow> findStudiesForQr(String host, int port, String calledAet, Map<String, String> matchKeys,
+                                             boolean tls, FindProfile profile) throws IOException {
+        FindProfile p = FindProfile.orDefault(profile);
+        Map<String, String> mk = matchKeys == null ? Map.of() : matchKeys;
+        if (p.patientRoot() && !mk.containsKey("PatientID")) {
+            Map<String, String> patientMatch = new java.util.LinkedHashMap<>();
+            mk.forEach((k, v) -> {
+                if ("PatientName".equals(k)) {
+                    patientMatch.put(k, v);
+                }
+            });
+            List<String> ids = findPatientIds(host, port, calledAet, patientMatch, tls, p);
+            List<QrStudyRow> all = new ArrayList<>();
+            for (String id : ids) {
+                Map<String, String> m = new java.util.LinkedHashMap<>(mk);
+                m.put("PatientID", id);
+                all.addAll(queryStudyRows(host, port, calledAet, m, tls, p));
+            }
+            log.info("QR C-FIND(PATIENT→STUDY) 完了: 患者 {} 人・{} 件 ({}@{}:{})",
+                    ids.size(), all.size(), calledAet, host, port);
+            return all;
         }
+        return queryStudyRows(host, port, calledAet, mk, tls, p);
+    }
+
+    /** PATIENT 段の C-FIND（Patient Root）。患者 ID の一覧を返す。 */
+    private List<String> findPatientIds(String host, int port, String calledAet, Map<String, String> matchKeys,
+                                        boolean tls, FindProfile p) throws IOException {
+        Path outDir = execFind("findscu(PATIENT)", "PATIENT", host, port, calledAet, p, null,
+                p.patientKeysOr(PATIENT_RETURN_KEYS), matchKeys, tls, "graphy-qr-findpt-");
+        List<String> ids = new ArrayList<>();
+        try (Stream<Path> walk = Files.walk(outDir)) {
+            for (Path f : walk.filter(Files::isRegularFile)
+                    .filter(x -> x.getFileName().toString().endsWith(".dcm")).toList()) {
+                try (DicomInputStream in = new DicomInputStream(f.toFile())) {
+                    String id = in.readDataset().getString(Tag.PatientID);
+                    if (id != null && !id.isBlank() && !ids.contains(id)) {
+                        ids.add(id);
+                    }
+                } catch (Exception e) {
+                    log.warn("C-FIND(PATIENT) 応答のパースに失敗: {} ({})", f, e.toString());
+                }
+            }
+        } finally {
+            deleteQuietly(outDir);
+        }
+        return ids;
+    }
+
+    private List<QrStudyRow> queryStudyRows(String host, int port, String calledAet, Map<String, String> matchKeys,
+                                            boolean tls, FindProfile profile) throws IOException {
+        Path outDir = execFind("findscu(STUDY)", "STUDY", host, port, calledAet, profile, null,
+                profile.studyKeysOr(QR_STUDY_RETURN_KEYS), matchKeys, tls, "graphy-qr-find-");
         List<QrStudyRow> rows = new ArrayList<>();
         try (Stream<Path> walk = Files.walk(outDir)) {
             List<Path> files = walk.filter(Files::isRegularFile)
@@ -269,38 +296,80 @@ public class DimseQrService {
         return rows;
     }
 
-    /** SERIES レベル C-FIND。指定スタディ内のシリーズ一覧を返す。 */
-    public List<QrSeriesRow> findSeries(String host, int port, String calledAet, String studyUid,
-                                        Map<String, String> matchKeys, boolean tls) throws IOException {
+    /** 予約（Modality Worklist）1 件。必要な属性だけ。 */
+    public record WorklistEntry(String patientId, String scheduledDate, String modality, String stationAet) {
+    }
+
+    /**
+     * Modality Worklist の C-FIND（findscu -M MWL）。指定日（YYYYMMDD）に予約された項目を返す。
+     * {@code stationAet}・{@code modality} が null か空なら絞らない。
+     */
+    public List<WorklistEntry> findWorklist(String host, int port, String calledAet, String day, String stationAet,
+                                            String modality, boolean tls) throws IOException {
         Path tool = tools.require("findscu");
-        Path outDir = Files.createTempDirectory("graphy-qr-findse-");
+        Path outDir = Files.createTempDirectory("graphy-mwl-");
         List<String> cmd = new ArrayList<>(List.of(
                 tool.toString(),
                 "-b", localAe.aeTitle(),
                 "-c", calledAet + "@" + host + ":" + port,
-                "-L", "SERIES",
-                "-m", "StudyInstanceUID=" + studyUid));
-        for (String key : SERIES_RETURN_KEYS) {
-            cmd.add("-r");
-            cmd.add(key);
+                "-M", "MWL",
+                "-r", "00100020",
+                "-m", "00400100.00400002=" + day,
+                "-r", "00400100.00080060",
+                "-r", "00400100.00400001"));
+        if (stationAet != null && !stationAet.isBlank()) {
+            cmd.add("-m");
+            cmd.add("00400100.00400001=" + stationAet.trim());
         }
-        if (matchKeys != null) {
-            matchKeys.forEach((k, v) -> {
-                cmd.add("-m");
-                cmd.add(k + "=" + v);
-            });
+        if (modality != null && !modality.isBlank()) {
+            cmd.add("-m");
+            cmd.add("00400100.00080060=" + modality.trim());
         }
         cmd.add("--out-dir");
         cmd.add(outDir.toString());
         cmd.add("--out-file");
         cmd.add("rsp-0000.dcm");
         cmd.addAll(tlsArgs(tls));
-
-        Dcm4cheTools.Result r = tools.run(cmd, TOOL_TIMEOUT_MS);
+        Dcm4cheTools.Result r;
+        try {
+            r = tools.run(cmd, TOOL_TIMEOUT_MS);
+        } catch (IOException e) {
+            deleteQuietly(outDir);
+            throw e;
+        }
         if (!r.ok()) {
             deleteQuietly(outDir);
-            throw new IOException("findscu(SERIES) 失敗 (exit=" + r.exitCode() + "): " + tail(r.output()));
+            throw new IOException("findscu(MWL) 失敗 (exit=" + r.exitCode() + "): " + tail(r.output()));
         }
+        List<WorklistEntry> out = new ArrayList<>();
+        try (Stream<Path> walk = Files.walk(outDir)) {
+            for (Path f : walk.filter(Files::isRegularFile).filter(p -> p.getFileName().toString().endsWith(".dcm")).toList()) {
+                try (DicomInputStream in = new DicomInputStream(f.toFile())) {
+                    Attributes a = in.readDataset();
+                    Attributes sps = a.getNestedDataset(Tag.ScheduledProcedureStepSequence);
+                    out.add(new WorklistEntry(
+                            a.getString(Tag.PatientID),
+                            sps == null ? null : sps.getString(Tag.ScheduledProcedureStepStartDate),
+                            sps == null ? null : sps.getString(Tag.Modality),
+                            sps == null ? null : sps.getString(Tag.ScheduledStationAETitle)));
+                } catch (Exception e) {
+                    log.warn("C-FIND(MWL) 応答のパースに失敗: {} ({})", f, e.getClass().getSimpleName());
+                }
+            }
+        } finally {
+            deleteQuietly(outDir);
+        }
+        log.info("MWL C-FIND 完了: {} 件 ({}@{}:{})", out.size(), calledAet, host, port);
+        return out;
+    }
+
+    /** SERIES レベル C-FIND。指定スタディ内のシリーズ一覧を返す。 */
+    public List<QrSeriesRow> findSeries(String host, int port, String calledAet, String studyUid,
+                                        Map<String, String> matchKeys, boolean tls) throws IOException {
+        FindProfile profile = profileFor(calledAet, host, port);
+        Path outDir = execFind("findscu(SERIES)", "SERIES", host, port, calledAet, profile,
+                Map.of("StudyInstanceUID", studyUid), profile.seriesKeysOr(SERIES_RETURN_KEYS), matchKeys, tls,
+                "graphy-qr-findse-");
         List<QrSeriesRow> rows = new ArrayList<>();
         try (Stream<Path> walk = Files.walk(outDir)) {
             List<Path> files = walk.filter(Files::isRegularFile)
@@ -353,11 +422,49 @@ public class DimseQrService {
         return r.exitCode();
     }
 
+    /** 通信先（AE タイトル・ホスト・ポートが一致する登録）の検索方式。登録が無い・未指定なら既定。 */
+    FindProfile profileFor(String calledAet, String host, int port) {
+        return remoteAes.list().stream()
+                .filter(a -> a.aeTitle().equals(calledAet) && a.port() == port
+                        && java.util.Objects.equals(a.host(), host))
+                .map(DicomController.RemoteAeDto::find).filter(java.util.Objects::nonNull)
+                .findFirst().orElse(FindProfile.DEFAULT);
+    }
+
+    /**
+     * findscu を実行し、相手の返事を読んで成功のときだけ出力ディレクトリを返す。
+     * 🔴 終了コード 0 でも、相手がエラーの status を返していれば失敗にする（0 件と取り違えない）。
+     */
+    private Path execFind(String what, String level, String host, int port, String calledAet, FindProfile profile,
+                          Map<String, String> leadingMatch, List<String> returnKeys, Map<String, String> matchKeys,
+                          boolean tls, String tmpPrefix) throws IOException {
+        Path tool = tools.require("findscu");
+        Path outDir = Files.createTempDirectory(tmpPrefix);
+        List<String> cmd = FindArgs.build(tool.toString(), localAe.aeTitle(), calledAet, host, port, level,
+                profile, leadingMatch, returnKeys, matchKeys, outDir.toString(), tlsArgs(tls));
+        Dcm4cheTools.Result r;
+        try {
+            r = tools.run(cmd, TOOL_TIMEOUT_MS);
+        } catch (IOException e) {
+            deleteQuietly(outDir);
+            if (e.getMessage() != null && e.getMessage().contains("タイムアウト")) {
+                throw new QrFindException(what, new DimseOutcome(DimseOutcome.Kind.TIMEOUT, null, null, null), null);
+            }
+            throw e;
+        }
+        DimseOutcome outcome = DimseOutcome.parse(r.exitCode(), r.output());
+        if (!outcome.ok()) {
+            deleteQuietly(outDir);
+            throw new QrFindException(what, outcome, DimseOutcome.evidence(r.output()));
+        }
+        return outDir;
+    }
+
     /**
      * ノードが TLS 指定かつ自局のグローバル TLS 設定が揃っているとき、findscu/getscu/movescu 用の
      * TLS 引数（鍵/信頼ストア + cipher/protocol）を返す。{@code useTls=false} や設定不備なら空。
      */
-    private List<String> tlsArgs(boolean useTls) {
+    List<String> tlsArgs(boolean useTls) {
         DicomProperties.Tls tls = tlsService.effective();
         if (!useTls || !tls.isUsable()) {
             return List.of();

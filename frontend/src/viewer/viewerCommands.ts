@@ -230,9 +230,24 @@ export interface ViewerSrMeasurementGroup {
       // H66 の定量（fw/ct-quant-design.md §6）。meanValue・stdDev は unit 必須（HU / SUV を取り違えない）。meanValue は負も可
       | "area"
       | "meanValue"
-      | "stdDev";
+      | "stdDev"
+      // 汎用の種別。どの量かは `name` で書く。percent・ratio・score は `name` 必須。標準コードは確認できていないので私用スキーム
+      | "percent"
+      | "ratio"
+      | "score"
+      | "perimeter"
+      | "diameter"
+      | "distance"
+      | "angle";
     value: number;
     unit?: string;
+    /**
+     * 量の名前（例 "Ejection fraction"）。SR の NUM の修飾として書かれる。
+     * `percent`・`ratio`・`score` は必須（無いと何の値か決まらないので拒否される）。
+     * 既定の単位: percent `%` ／ ratio `1` ／ score `{score}` ／ perimeter・diameter・distance `mm` ／ angle `deg`。
+     * 負値は percent・distance だけ受ける。
+     */
+    name?: string;
   }[];
 }
 
@@ -441,10 +456,9 @@ export interface ViewerRoiMeasurements {
 /**
  * ROI（計測・幾何注釈）1 件（プラグイン host API の H5）。
  *
- * <p>⚠ **`roiUid` はセッション内でのみ安定**である。本体に ROI の永続化が無く
- * （`fw/roi-manager-design.md` の M5 が未完）、アプリを再起動すると別 UID の別 ROI になる。
- * 時系列で同じ病変を追う（RECIST 等）プラグインは、`roiUid` ではなく
- * **`sopInstanceUid` ＋ `points`（画素座標）＋プラグイン自身が付けた ID** で記録すること。
+ * <p>`roiUid` は ROI の永続化（`roiPersistence`）で**同じ UID のまま読み戻される**。ただし ROI を消して
+ * 作り直せば別 UID になる。時系列で同じ病変を追う（RECIST 等）プラグインは、念のため
+ * **`sopInstanceUid` ＋ `points`（画素座標）＋プラグイン自身が付けた ID** でも記録すること。
  */
 export interface ViewerRoi {
   /** Cornerstone annotation UID。**セッション内でのみ安定**（上記の注意を参照）。 */
@@ -477,7 +491,14 @@ export interface ViewerRoi {
   /** ZCT モデルのチャンネル / 時相。 */
   c: number;
   t: number;
-  /** 頂点（画像画素座標。x=列, y=行, 0 始まり・サブピクセル可）。 */
+  /**
+   * 頂点（画像画素座標。x=列, y=行。サブピクセル可）。
+   *
+   * <p>**原点は画素の左上隅**（連続座標）。画素 (i, j) は [i, i+1]×[j, j+1] を占め、中心は (i+0.5, j+0.5)。
+   * 幾何（IPP/IOP）の有無によらず同じ。画素値は `getPixelData().data[floor(y)*cols + floor(x)]`
+   * （`data` の添字 (x, y) は画素の中心が整数）。長さ・面積・距離だけなら原点には依存しない。
+   * 例外: `getViewState().visibleRegion.corners` は画素の**中心**が整数（-0.5〜cols-0.5）。
+   */
   points: Array<[number, number]>;
   /** 面内画素間隔 [列方向(x), 行方向(y)] mm。不明な軸は null。 */
   spacing: [number | null, number | null];

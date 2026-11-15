@@ -5,10 +5,10 @@
 /**
  * H12 の送信で 3D 画面を開く入口の検査。守りたいのは 3 つ:
  * 開くときは**モデルの点列と runId** を渡すこと（色が前後逆に乗らない）、
- * モデルが無い・分岐部・失敗した送信では**開かない**こと（黙って別のものを見せない）。
+ * モデルが無い・点が足りない・失敗した送信では**開かない**こと（木は区間ごとに開く）（黙って別のものを見せない）。
  */
 import { describe, expect, it } from "vitest";
-import type { XaVesselModel } from "../viewer/xaVesselModelStore";
+import type { VesselModel, XaVesselModel } from "../viewer/xaVesselModelStore";
 import { openAfterAnalysisPut, openVesselModel3d, openVesselModel3dFromPlugin, type OpenVesselModel3dDeps } from "./openVesselModel3d";
 
 function model(over: Partial<XaVesselModel> = {}): XaVesselModel {
@@ -29,7 +29,7 @@ function model(over: Partial<XaVesselModel> = {}): XaVesselModel {
   } as XaVesselModel;
 }
 
-function harness(models: XaVesselModel[]) {
+function harness(models: VesselModel[]) {
   const calls = { ctx: [] as unknown[], opened: 0 };
   const deps: OpenVesselModel3dDeps = {
     getModel: (id) => models.find((m) => m.runId === id) ?? null,
@@ -55,10 +55,47 @@ describe("openVesselModel3d", () => {
     expect(calls).toEqual({ ctx: [], opened: 0 });
   });
 
-  it("負例: 分岐部のモデルでは開かない（先頭区間だけに色が乗って他の枝が値なしに見えるため）", () => {
-    const { calls, deps } = harness([model({ kind: "xa-bifurcation3d" })]);
+  const TREE = [
+    { id: "trunk", name: "RCA prox", points: [[0, 0, 0], [0, 0, 10], [0, 0, 20]] as [number, number, number][], diameterMm: [4, 4, 4], parentId: null },
+    { id: "b1", points: [[0, 0, 20], [5, 0, 30]] as [number, number, number][], diameterMm: [3, 3], parentId: "trunk" },
+    { id: "b2", name: "PDA", points: [[0, 0, 20], [-5, 0, 30]] as [number, number, number][], diameterMm: [3, 3], parentId: "trunk" },
+  ];
+
+  it("分岐部の XA は区間ごとの点列を segments に書いて開く（先頭区間のコピーを centerlineLps に残す）", () => {
+    const { calls, deps } = harness([model({ kind: "xa-bifurcation3d", segments: TREE })]);
+    expect(openVesselModel3d("run-1", deps)).toBe(true);
+    expect(calls.opened).toBe(1);
+    const ctx = calls.ctx[0] as { kind: string; centerlineLps: number[][]; segments: { id: string; name?: string; points: number[][] }[] };
+    expect(ctx.kind).toBe("xa-bifurcation3d");
+    expect(ctx.segments.map((x) => x.id)).toEqual(["trunk", "b1", "b2"]);
+    expect(ctx.segments.map((x) => x.name)).toEqual(["RCA prox", undefined, "PDA"]);
+    expect(ctx.segments[2].points).toEqual([[0, 0, 20], [-5, 0, 30]]);
+    expect(ctx.centerlineLps).toEqual([[0, 0, 0], [0, 0, 10], [0, 0, 20]]);
+  });
+
+  it("CT 由来のモデル（ct-vessel）も木として開く", () => {
+    const m = { ...model({ segments: TREE }), kind: "ct-vessel" } as unknown as VesselModel;
+    const { calls, deps } = harness([m]);
+    expect(openVesselModel3d("run-1", deps)).toBe(true);
+    expect((calls.ctx[0] as { kind: string }).kind).toBe("ct-vessel");
+    expect((calls.ctx[0] as { segments: unknown[] }).segments).toHaveLength(3);
+  });
+
+  it("木の渡す点列も元の配列のコピー（開いた後にモデルが変わっても動かない）", () => {
+    const m = model({ kind: "xa-bifurcation3d", segments: TREE.map((x) => ({ ...x, points: x.points.map((q) => [...q] as [number, number, number]) })) });
+    const { calls, deps } = harness([m]);
+    openVesselModel3d("run-1", deps);
+    m.segments[1].points[0][0] = 99;
+    expect((calls.ctx[0] as { segments: { points: number[][] }[] }).segments[1].points[0][0]).toBe(0);
+  });
+
+  it("負例: どれか 1 区間でも 2 点未満なら開かない（他の区間が十分でも）", () => {
+    const bad = TREE.map((x, i) => (i === 2 ? { ...x, points: [[0, 0, 0]] as [number, number, number][], diameterMm: [3] } : x));
+    const { calls, deps } = harness([model({ kind: "xa-bifurcation3d", segments: bad })]);
     expect(openVesselModel3d("run-1", deps)).toBe(false);
     expect(calls).toEqual({ ctx: [], opened: 0 });
+    const r = openVesselModel3dFromPlugin("run-1", deps);
+    expect(r.ok === false && r.error).toMatch(/segment b2 has fewer than 2/);
   });
 
   it("負例: 中心線が 2 点未満なら開かない", () => {
@@ -105,13 +142,6 @@ describe("openVesselModel3dFromPlugin（H74）", () => {
     const r = openVesselModel3dFromPlugin("no-such-run", deps);
     expect(r.ok).toBe(false);
     expect(r.ok === false && r.error).toMatch(/no vessel model/);
-    expect(calls).toEqual({ ctx: [], opened: 0 });
-  });
-
-  it("負例: 分岐部のモデルは、開かず・理由つき（理由が他と区別できる）", () => {
-    const { calls, deps } = harness([model({ kind: "xa-bifurcation3d" })]);
-    const r = openVesselModel3dFromPlugin("run-1", deps);
-    expect(r.ok === false && r.error).toMatch(/bifurcation/);
     expect(calls).toEqual({ ctx: [], opened: 0 });
   });
 

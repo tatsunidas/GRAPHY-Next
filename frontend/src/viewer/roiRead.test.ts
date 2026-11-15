@@ -337,13 +337,14 @@ describe("roiPointsPx", () => {
     ]);
   });
 
-  it("🚨 幾何が無いスタック（XA）で 1 点も変換できないとき、world/画素間隔 で復元する", () => {
-    // これが無いと計測が丸ごと落ちる（2026-08-25 の実機事象）。
+  it("🚨 幾何が無いスタック（XA）で 1 点も変換できないとき、world/画素間隔 + 0.5 で復元する（左上隅が 0）", () => {
+    // これが無いと計測が丸ごと落ちる（2026-08-25 の実機事象）。world の原点は画素 (0,0) の中心なので、
+    // 幾何ありと同じ「画素の左上隅が 0」にするため 0.5 を足す。
     const pts = roiPointsPx(world, () => null, 0.2, 0.4);
-    expect(pts[0][0]).toBeCloseTo(50, 9);
-    expect(pts[0][1]).toBeCloseTo(50, 9);
-    expect(pts[1][0]).toBeCloseTo(150, 9);
-    expect(pts[1][1]).toBeCloseTo(100, 9);
+    expect(pts[0][0]).toBeCloseTo(50.5, 9);
+    expect(pts[0][1]).toBeCloseTo(50.5, 9);
+    expect(pts[1][0]).toBeCloseTo(150.5, 9);
+    expect(pts[1][1]).toBeCloseTo(100.5, 9);
   });
 
   it("変換器が例外を投げても落ちない（フォールバックへ）", () => {
@@ -351,15 +352,15 @@ describe("roiPointsPx", () => {
       throw new Error("no imagePlaneModule");
     }, 1, 1);
     expect(pts).toEqual([
-      [10, 20],
-      [30, 40],
+      [10.5, 20.5],
+      [30.5, 40.5],
     ]);
   });
 
-  it("画素間隔が無ければ 1 として扱う（world = 画素）", () => {
+  it("画素間隔が無ければ 1 として扱う（world = 画素。+0.5 で左上隅が 0）", () => {
     expect(roiPointsPx(world, () => null, null, undefined)).toEqual([
-      [10, 20],
-      [30, 40],
+      [10.5, 20.5],
+      [30.5, 40.5],
     ]);
   });
 
@@ -470,8 +471,8 @@ describe("worldToPixelOnPlane", () => {
     ];
     const pts = roiPointsPx(world, (w) => worldToPixelOnPlane(w, null, null, 2, 2), 2, 2);
     expect(pts).toEqual([
-      [5, 10],
-      [15, 20],
+      [5.5, 10.5],
+      [15.5, 20.5],
     ]);
   });
 });

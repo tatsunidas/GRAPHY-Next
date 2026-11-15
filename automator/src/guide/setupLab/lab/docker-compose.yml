@@ -1,0 +1,99 @@
+# GRAPHY-Next 導入ガイド検証用: dcm4chee 2 台（外部 PACS と「自分サーバー」）。
+# bridge ネットワーク 192.168.10.0/24（gateway = ホスト 192.168.10.1）。ポートは publish せずコンテナ IP へ直接つなぐ。
+#   外部 PACS      AE=DCM4CHEE  192.168.10.20  DIMSE 11112 / Web 8080
+#   自分サーバー   AE=GRAPHYPACS 192.168.10.10  DIMSE 11112 / Web 8080
+# 自分サーバーの AE タイトルは slapd-dcm4chee イメージの環境変数 AE_TITLE で決まる（LDAP 初期化時に反映。arc 側に同名の変数は不要）。
+# 消すとき: docker compose -p graphylab down -v
+name: graphylab
+
+x-log: &log
+  driver: json-file
+  options: { max-size: "10m" }
+
+networks:
+  lab:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 192.168.10.0/24
+          gateway: 192.168.10.1
+
+volumes:
+  own-ldap-data:
+  own-ldap-conf:
+  own-db:
+  own-storage:
+  ext-ldap-data:
+  ext-ldap-conf:
+  ext-db:
+  ext-storage:
+
+services:
+  # ---------- 自分サーバー（GRAPHYPACS / 192.168.10.10） ----------
+  own-ldap:
+    image: dcm4che/slapd-dcm4chee:2.6.7-33.1
+    logging: *log
+    networks: { lab: { ipv4_address: 192.168.10.11 } }
+    environment:
+      STORAGE_DIR: /storage/fs1
+      AE_TITLE: GRAPHYPACS
+    volumes:
+      - own-ldap-data:/var/lib/openldap/openldap-data
+      - own-ldap-conf:/etc/openldap/slapd.d
+  own-db:
+    image: dcm4che/postgres-dcm4chee:17.1-33
+    logging: *log
+    networks: { lab: { ipv4_address: 192.168.10.12 } }
+    environment:
+      POSTGRES_DB: pacsdb
+      POSTGRES_USER: pacs
+      POSTGRES_PASSWORD: pacs
+    volumes:
+      - own-db:/var/lib/postgresql/data
+  own-arc:
+    image: dcm4che/dcm4chee-arc-psql:5.33.1
+    logging: *log
+    networks: { lab: { ipv4_address: 192.168.10.10 } }
+    environment:
+      WILDFLY_CHOWN: /opt/wildfly/standalone /storage
+      WILDFLY_WAIT_FOR: own-ldap:389 own-db:5432
+      LDAP_URL: ldap://own-ldap:389
+      POSTGRES_HOST: own-db
+      JAVA_OPTS: -Xms256m -Xmx1024m -XX:MetaspaceSize=96M -XX:MaxMetaspaceSize=384m -Djava.net.preferIPv4Stack=true
+    depends_on: [own-ldap, own-db]
+    volumes:
+      - own-storage:/storage
+
+  # ---------- 外部 PACS（DCM4CHEE / 192.168.10.20・既定のまま） ----------
+  ext-ldap:
+    image: dcm4che/slapd-dcm4chee:2.6.7-33.1
+    logging: *log
+    networks: { lab: { ipv4_address: 192.168.10.21 } }
+    environment:
+      STORAGE_DIR: /storage/fs1
+    volumes:
+      - ext-ldap-data:/var/lib/openldap/openldap-data
+      - ext-ldap-conf:/etc/openldap/slapd.d
+  ext-db:
+    image: dcm4che/postgres-dcm4chee:17.1-33
+    logging: *log
+    networks: { lab: { ipv4_address: 192.168.10.22 } }
+    environment:
+      POSTGRES_DB: pacsdb
+      POSTGRES_USER: pacs
+      POSTGRES_PASSWORD: pacs
+    volumes:
+      - ext-db:/var/lib/postgresql/data
+  ext-arc:
+    image: dcm4che/dcm4chee-arc-psql:5.33.1
+    logging: *log
+    networks: { lab: { ipv4_address: 192.168.10.20 } }
+    environment:
+      WILDFLY_CHOWN: /opt/wildfly/standalone /storage
+      WILDFLY_WAIT_FOR: ext-ldap:389 ext-db:5432
+      LDAP_URL: ldap://ext-ldap:389
+      POSTGRES_HOST: ext-db
+      JAVA_OPTS: -Xms256m -Xmx1024m -XX:MetaspaceSize=96M -XX:MaxMetaspaceSize=384m -Djava.net.preferIPv4Stack=true
+    depends_on: [ext-ldap, ext-db]
+    volumes:
+      - ext-storage:/storage

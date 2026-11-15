@@ -14,6 +14,7 @@ export function StatusBar({
   status,
   error,
   importWatch,
+  storeChanged,
   receiveAnon,
   computeJobs,
   keepAwake,
@@ -24,6 +25,8 @@ export function StatusBar({
   error: string | null;
   /** 監視フォルダの自動取り込みの状態（有効なときだけ visible）。 */
   importWatch?: WatchBarView;
+  /** 操作中に、受信・取り込み・削除で保管庫が変わったか（一覧は自動では読み直さない）。 */
+  storeChanged?: boolean;
   /** 受信時の匿名化の状態（有効なときだけ visible）。 */
   receiveAnon?: ReceiveAnonBar;
   /** 計算ジョブの数（standalone で数えるものがあるときだけ）。 */
@@ -88,6 +91,11 @@ export function StatusBar({
               </button>
             )}
           </span>
+        )}
+        {storeChanged && onReloadList && !(importWatch?.newCount && importWatch.newCount > 0) && (
+          <button data-testid="statusbar-store-changed" style={{ ...reloadBtn, marginLeft: 12 }} onClick={onReloadList}>
+            {t("main.status.storeChanged")}
+          </button>
         )}
         {receiveAnon?.visible && (
           <span

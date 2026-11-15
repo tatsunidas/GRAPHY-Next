@@ -6,6 +6,7 @@
  * 塗り（Mask）の体積を求める文脈をメタデータから作る（`fw/slice-depth-policy.md` §4）。
  * 計算そのものは純関数 `depthVolume.maskVolumeFromLabels`。
  */
+import { calibratedSpacingOf } from "./pixelAspect";
 import { cache, imageLoader, metaData } from "@cornerstonejs/core";
 import { segmentation as csSeg } from "@cornerstonejs/tools";
 import { resolveRoiStack } from "./roiBooleanOps";
@@ -28,9 +29,11 @@ export function maskDepthContext(sourceIds: ReadonlyArray<string | undefined>): 
   const ids = stack && defined.every((d) => stack.includes(d)) ? stack : Array.from(new Set(defined));
   const geometry = sliceGeometry(sliceInfosOf(ids));
   const p: AnyObj = (metaData.get("imagePlaneModule", defined[0]) ?? {}) as AnyObj;
-  const col = Number(p.columnPixelSpacing);
-  const row = Number(p.rowPixelSpacing);
-  const spacingKnown = Number.isFinite(col) && col > 0 && Number.isFinite(row) && row > 0;
+  // mm の寸法は校正済みのときだけ（縦横比だけの間隔は mm の体積にしない）。
+  const cal = calibratedSpacingOf(p);
+  const col = cal ? cal.col : NaN;
+  const row = cal ? cal.row : NaN;
+  const spacingKnown = cal !== null;
   return {
     indexOfSource: new Map(ids.map((id, i) => [id, i])),
     geometry,

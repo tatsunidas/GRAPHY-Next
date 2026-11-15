@@ -23,8 +23,10 @@ import type {
   PluginCurveFrame,
   PluginCurveFrameOptions,
 } from "./pluginCenterlineApi";
+import type { CrossSectionOptions, CrossSectionResult, OrientResult } from "./pluginVesselMeasureApi";
 import type { Vec3 } from "../viewer/reslice";
 import type { PluginCurvedMprResult, PluginCurvedMprSpec } from "./pluginCurvedMprApi";
+import type { PluginViewer3dResult, PluginViewer3dSpec } from "./pluginViewer3dApi";
 import type { PluginSeriesPanelHandle, PluginSeriesPanelOptions } from "./pluginSeriesPanelApi";
 import type { ViewerDerivedSeriesRequest, ViewerDerivedSeriesResult, ViewerOverlay, ViewerPixelDataOptions, ViewerRoiMeasurements, ViewerTarget, ViewerAngioReportRequest, ViewerPresentationStateRequest, ViewerTilePixelData, ViewerTileSpatialCalibration, ViewerTileXaState, ViewerTileXaCine, ViewerTileXaGeometry, ViewerTileRoi, ViewerTileViewState, ViewerSrMeasurementGroup, ViewerSrRequest, ViewerSrResult, ViewerLabelVolume, ViewerLabelVolumeResult } from "../viewer/viewerCommands";
 
@@ -33,9 +35,9 @@ export type { PluginStoreDoc, PluginStoreSaveResult };
 import type {
   RegisterVesselModelResult,
   VesselAnalysisResult,
+  VesselModel,
+  VesselModelInput,
   XaVesselAnalysisInput,
-  XaVesselModelInput,
-  XaVesselModel,
   XaVesselModelSummary,
 } from "./pluginVesselApi";
 
@@ -49,6 +51,7 @@ export type {
 } from "./pluginViewportApi";
 export type { PluginMaskInput, PluginMeshMeasurement, PluginMeshOptions } from "./pluginMeshApi";
 export type { PluginLabelInput, PluginLabelMeasurement, PluginLabelSliceMeasurement, PluginLabelStatsOptions, PluginValueStats } from "./pluginLabelStatsApi";
+export type { CrossSectionFrame, CrossSectionOptions, CrossSectionResult, OrientResult, OrientedSegment } from "./pluginVesselMeasureApi";
 export type {
   PluginCenterlineBranch,
   PluginCenterlineGraph,
@@ -63,6 +66,10 @@ export type {
   XaVesselAnalysisPoint,
   XaVesselCalibration,
   XaVesselModel,
+  CtVesselModel,
+  CtVesselProvenance,
+  VesselModel,
+  VesselModelInput,
   XaVesselModelSummary,
   XaVesselProvenance,
   XaVesselSegment,
@@ -415,6 +422,29 @@ interface PluginHostBase {
   microscopy: {
     importVolume: (req: PluginMicroscopyImportRequest, opts?: PluginJobOptions) => Promise<PluginMicroscopyImportOutcome>;
   };
+  /**
+   * NIfTI の受け渡し（H78・H79〔仮〕・**0.5.0 より後の版**）。研究用の画像形式（ECAT7・Interfile・AFNI・MINC・BIDS など）の読み書きは
+   * プラグインの JAR に置き、本体は NIfTI を「作る」「取り込む」口だけを開ける（幾何〔LPS↔RAS〕は本体の 2 か所に閉じ込める）。
+   * ファイルの受け渡しは一時フォルダ `<java.io.tmpdir>/graphy-plugin-nifti/<プラグイン ID>/` の下だけ。デスクトップ専用
+   * （web では `error: "desktop-only"`）。
+   */
+  nifti: {
+    /**
+     * H78: 1 シリーズを NIfTI-1（.nii.gz・float32・患者情報なし）にして、そのプラグインの一時フォルダへ置き、パスを返す。
+     * 匿名化の出力から作るので、本体の「NIfTI で書き出し」と同じ規則で断られることがある（`error` は理由コード:
+     * `volume-sheared`〔チルト〕・`nifti-uneven-phases`・`nifti-ambiguous-phases`・`nifti-mosaic` など）。
+     * 使い終わったら {@link release}（忘れた分は 2 時間後に本体が掃除する）。確認画面は出ない。
+     */
+    exportSeries: (req: PluginNiftiExportRequest) => Promise<PluginNiftiExportOutcome>;
+    /** H78: {@link exportSeries} で渡したファイル（そのプラグインの一時フォルダの下だけ）を消す。 */
+    release: (path: string) => Promise<{ ok: boolean; error?: string }>;
+    /**
+     * H79: プラグインの JAR が作った NIfTI を、本体が DICOM にして取り込む。**毎回、本体が確認画面を出す**（消せない。
+     * 向きが NIfTI に無く本体が合成するときは、その警告も出る）。`path`・`sidecar` はそのプラグインの一時フォルダの下の
+     * ファイルだけ（本体が確かめ、取り込んだら消す）。やめたときは `cancelled`。
+     */
+    importVolume: (req: PluginNiftiImportRequest, opts?: PluginJobOptions) => Promise<PluginNiftiImportOutcome>;
+  };
   video: {
     /** H47: 諸元・指紋（SHA-256）・既に取り込み済みか。本体の ffmpeg で調べる（ffprobe 不要）。 */
     probe: (path: string) => Promise<PluginVideoProbe>;
@@ -476,7 +506,7 @@ export interface PluginVolume extends PluginVolumeGrid {
   ipp: [number, number, number];
   /** ImageOrientationPatient（6 要素）。 */
   iop: number[];
-  /** スライスが 1 進むときの移動ベクトル（法線 × 間隔ではなく実測の IPP 差）。 */
+  /** スライスが 1 進むときの移動ベクトル（法線 × 間隔ではなく実測の IPP 差）。`loadVolume` は等間隔のシリーズにしか返さないので、全スライスで同じ。 */
   sliceStep: [number, number, number];
   frameOfReferenceUid: string | null;
   modality: string;
@@ -763,7 +793,7 @@ export interface Viewer2DPluginHost extends PluginHostBase {
    * **再構成済み 3D 血管モデル**（H11）。`runId` 省略時は最も新しいもの。無ければ null。
    *
    * <p>中心線（患者 LPS mm）・点ごとの内腔径・分岐のトポロジ（`parentId`）と、
-   * **校正と出自**が入る。3D QCA（A6a）／分岐部（A6b）のダイアログで再構成すると登録される。
+   * **校正と出自**が入る。プラグインが登録する（H73）。🔴 **`kind` で見分けること**: `xa-*`（XA の 2 方向の再構成）と `ct-vessel`（CT のマスクの幾何）で `provenance` の形が違う。`runId` 省略時は最も新しいものなので、XA と CT が混ざると CT が返りうる。
    *
    * <p>🔴 **測れなかった点の径は `null`。** 0 や補間値で埋めていない——埋めた値は
    * 「そこが細い / 太い」という所見に化ける。**受け取った側が埋めるのも同じ理由でやめること。**
@@ -774,7 +804,7 @@ export interface Viewer2DPluginHost extends PluginHostBase {
    *
    * <p>⚠️ **セッション限り**。アプリを閉じると消える（結果そのものの保存は SR）。
    */
-  getVesselModel: (runId?: string) => XaVesselModel | null;
+  getVesselModel: (runId?: string) => VesselModel | null;
   /**
    * **解析結果（点ごとの値）を書き戻す**（H12）。3D ウィンドウが色マップと凡例で表示する。
    *
@@ -794,7 +824,7 @@ export interface Viewer2DPluginHost extends PluginHostBase {
    * host が凡例の脇に必ず出す。
    *
    * <p>**成功すると、本体の 3D 画面（`#geometry3d`）が開く**（開いていれば前面に出て、中身が差し替わる）。
-   * 色が見える場所はここしかない。分岐部のモデル（`xa-bifurcation3d`）では開かない（3D 画面は中心線 1 本しか描かない）。
+   * 色が見える場所はここしかない。木（分岐部の XA・CT 由来）は区間ごとに 1 物体で描かれ、色も `segmentId` で区間ごとに乗る（値の無い区間は「値なし」）。
    */
   putVesselAnalysis: (runId: string, result: XaVesselAnalysisInput) => VesselAnalysisResult;
   /**
@@ -808,11 +838,11 @@ export interface Viewer2DPluginHost extends PluginHostBase {
    * FFR の入力に入る事故を入口で止める。点は有限、セグメントは 1 つ以上・各 2 点以上、`diameterMm` は点と同数、
    * `parentId` は他のセグメントの id、総点数は 20000 以下。
    */
-  registerVesselModel: (model: XaVesselModelInput) => RegisterVesselModelResult;
+  registerVesselModel: (model: VesselModelInput) => RegisterVesselModelResult;
   /**
    * **登録した 3D 血管モデルの 3D 画面（`#geometry3d`）を開く**（H74。開いていれば前面に出て、中身が差し替わる）。
    * `runId` は `registerVesselModel` の戻り。色は乗らない（色は `putVesselAnalysis` が成功したときに、同じ画面へ乗る）。
-   * 🔴 開けないときは理由つきで `ok: false`（モデルが無い・分岐部モデル・中心線が 2 点未満）。何もせず成功を返さない。
+   * 🔴 開けないときは理由つきで `ok: false`（モデルが無い・中心線が 2 点未満の区間がある）。何もせず成功を返さない。
    */
   openVesselModel3d: (runId: string) => { ok: true } | { ok: false; error: string };
   /**
@@ -940,9 +970,8 @@ export interface Viewer2DPluginHost extends PluginHostBase {
    * （形状から本体が算出＝最遠 2 点と、それに直交する広がり）を使う。**黙って片方を代入しない**。
    * 画素間隔が不明なシリーズでは算出値は `undefined`（mm を捏造しない）。
    *
-   * <p>⚠ **`roiUid` はセッション内でのみ安定**である（本体に ROI の永続化が無い）。
-   * 時系列で同じ病変を追うなら `sopInstanceUid` ＋ `points`（画素座標）＋プラグイン自身の ID で
-   * 記録し、`roiUid` を鍵にしないこと。また `zScope === "all"`（global ROI）は
+   * <p>`roiUid` は ROI の永続化で同じ UID のまま読み戻されるが、ROI を消して作り直せば別 UID になる。
+   * 時系列で同じ病変を追うなら `sopInstanceUid` ＋ `points`（画素座標）＋プラグイン自身の ID でも記録すること。また `zScope === "all"`（global ROI）は
    * `sliceIndex` / `sopInstanceUid` が「いま見ているスライス」を指すだけなので、計測記録では弾くこと。
    *
    * <p>**呼ぶたびに現在値を読む**。ユーザーは ROI を編集し続けるので、活性化時の
@@ -965,7 +994,7 @@ export interface Viewer2DPluginHost extends PluginHostBase {
   setRoiMeta: (roiUid: string, patch: Record<string, string>) => boolean;
   /**
    * **ROI（楕円・矩形）を、表示中のスライスへ作る。** `tileId` 省略時は対象タイルの先頭。
-   * 中心は患者座標 LPS（mm）の `centerLps`、または表示中のスライスの画素座標 `[列, 行]` の `centerPx`（`getRois()` の `points` と同じ座標）の**どちらか一方**。
+   * 中心は患者座標 LPS（mm）の `centerLps`、または表示中のスライスの画素座標 `[列, 行]` の `centerPx`（`getRois()` の `points` と同じ座標。**画素の左上隅が原点**: 画素 (i, j) の中心は (i+0.5, j+0.5)。幾何の有無によらず同じ）の**どちらか一方**。
    * LPS の中心は表示中のスライスの面内であること（面外は `off-slice` で拒否。別のスライスへは作らない）。成功すると、作った ROI の中心（LPS）も返る。
    * 半径（矩形は半幅）は**表示の水平・垂直方向**の mm。作った ROI には本体が出自の印（このプラグイン）とラベルを付け、
    * ROI マネージャで見分けられる。保存は本体が予約する。AI ツール（`effect: "write"`）から呼ぶときは、その実行前に本体が利用者の確認を出す。
@@ -1000,6 +1029,10 @@ export interface Viewer2DPluginHost extends PluginHostBase {
    *
    * <p>★ **1 回 1 ボリューム。** まとめて返す API にすると呼び出し側がメモリを見積もらなくなる。
    * 大きさは {@link estimateVolume} で**先に**聞ける。`studyUid` 省略時は開いているタイルから解決。
+   *
+   * <p>🔴 **スライスが等間隔でないシリーズ（欠損・不等間隔・重複）は例外**（`name` が
+   * `NonUniformSliceSpacingError`。メッセージに種別と間隔の範囲）。この格子は z の刻みを 1 つしか持てず、
+   * 等間隔でないまま返すと位置・体積・重心が黙って誤るため。`null` は幾何が無い・読めないときだけ。
    */
   loadVolume: (
     ref: PluginSeriesRef,
@@ -1197,6 +1230,45 @@ export interface Viewer2DPluginHost extends PluginHostBase {
     opts: PluginCurveFrameOptions,
   ) => PluginCurveFrame[];
   /**
+   * **中心線に直交する断面でマスクの内腔を測る**（H76・仮番号）。面積・等価径（面積と同じ円の直径）・
+   * 最小幅（全方位の最小 Feret 径）を、弧長 `spacingMm` ごとに返す。血管モデル（`registerVesselModel`）の
+   * `diameterMm` を作る素材で、`calibration.diameterMethod` は等価径なら `"mask-equivalent-area"`、
+   * 最小幅なら `"mask-min-width"`。
+   *
+   * <p>本体は**幾何だけ**を測る（マスクは 0/1。HU・造影濃度・石灰化・どの枝がどの血管かは解釈しない）。
+   * 返るフレームは弧長 0・間隔ごと・終点（最後だけ間隔が短い）。**`positionWorld` をそのまま区間の `points`、
+   * `equivalentDiameterMm` を `diameterMm` にすれば 1 点ごとの径になる**（H41 の疎な頂点に径を載せると、
+   * 頂点の間は補間されて径の分布が崩れる）。
+   * `maxRadiusMm` に既定値は無い（血管の太さは呼び出し側が知っている）。数えるのは**中心を含む 4 連結成分だけ**
+   * （隣の血管は混ざらない）。
+   *
+   * <p>🔴 **測れない断面は null**（0 や近くの別の構造の値で埋めない）: 中心がマスクの外（`centerInMask:false`）、
+   * 成分が走査半径の縁に触れた（`touchesBoundary:true`。半径が足りない）、`excludeNear` で外した（`excluded:true`）。
+   *
+   * <p>🔴 **分岐点の近傍は信頼できない**（他枝の内腔が断面に入る。合成の Y 字〔幹 4.0・枝 3.0 mm〕で、節点をまたぐ経路の
+   * 節点付近は +0.5 mm 過大、または走査半径の縁に触れて null になった）。過大になる場合は縁に触れないので自動では検出できない。
+   * `excludeNear` に H41 の分岐節点（`degree >= 3`）を渡して外すこと。
+   *
+   * <p>精度（合成の直円柱、格子の刻み = ボクセル間隔の 1/2 での実測）: 等価径は真値の ±2% 程度
+   * （直径 2〜6 mm・ボクセル 0.25〜0.5 mm）。**最小幅は +0.1〜0.35 mm 大きく出る**（セルの角の凸包のため）。
+   * どちらもマスクの作り方に依存し、ボクセル間隔より細い血管は測れない。狭窄の評価には等価径を使うこと。
+   * 入力が壊れていれば `{ok:false, error}`（黙って空を返さない）。
+   */
+  measureMaskCrossSections: (
+    mask: PluginMaskInput,
+    polylineWorld: readonly Vec3[],
+    opts: CrossSectionOptions,
+  ) => CrossSectionResult;
+  /**
+   * **中心線グラフ（H41）を根から木に向き付ける**（H77・仮番号）。枝ごとに点列を根→先の向きにそろえ、
+   * `parentId`（根の側でつながる区間。根の区間は null）を付ける。出力の `segments` に `diameterMm` を足せば
+   * そのまま `registerVesselModel` の区間になる。
+   *
+   * <p>根は**端点（degree 1）の節点**。木でない（ループ・多重辺・非連結）・根が無い・根が端点でない場合は
+   * `{ok:false, error}`。どの端点が根（大動脈側など）かはプラグインが決める。
+   */
+  orientCenterlineGraph: (graph: PluginCenterlineGraph, rootNodeId: number) => OrientResult;
+  /**
    * **中心線を渡して、本体の Curved MPR 窓を開く**（H73）。渡すのは制御点（患者 LPS mm・2 点以上）と
    * 見え方のオプションだけで、再構成・表示・保存は本体が行う（プラグインに CPR を書かせない）。
    * 窓には「プラグイン <名前> が指定した中心線」の札が出る（出所は host が入れる）。
@@ -1208,6 +1280,22 @@ export interface Viewer2DPluginHost extends PluginHostBase {
    * `options.frameMode` の省略時は `ROTATION_MINIMIZING`（血管向け）。
    */
   openCurvedMpr: (spec: PluginCurvedMprSpec) => Promise<PluginCurvedMprResult>;
+  /**
+   * **視点とクリップ面を指定して、本体の 3D ビューアを開く**（**次の本体の版以降**）。渡すのは患者座標（LPS mm）の
+   * 視線・上・注視点とクリップ面だけで、描画・操作・計測は本体が行う（プラグインに 3D の幾何を書かせない）。
+   * 3D 窓には「プラグイン <名前> の視点: <title>」の札と［指定に戻す］が出る（出所は host が入れる）。
+   * 窓が既に開いていて同じシリーズなら、**画面を読み直さず**視点と札だけが変わる（置いた計測・メッシュは残る）。
+   * 別のシリーズなら、従来どおり読み直す。利用者はその後ドラッグで自由に回せる（視点は固定されない）。
+   *
+   * <p>規約: **画面右 = 視線 × 上**（右手系）。`up` は視線に直交でなくてよく、本体が直交化して `applied.up` に返す
+   * （視線と平行なら拒否）。クリップ面は **法線の向く側を残す**（最大 6 枚、`[]` で全部消す、省略は変えない）。
+   * `mode` は VR / MIP / MINIP（ORTHO・SLAB は視点の意味が変わるので不可）。
+   *
+   * <p>🔴 戻り値は**検証と起動要求まで**（開いていない・一時・連結のシリーズ、視線 0、上が視線と平行、法線 0、
+   * 面が 7 枚以上、不正な `mode` などは `ok:false` で窓を開かない）。窓は非同期に開くので、描けたかどうかは分からない。
+   * `applied` は検証・正規化した値。シネマティック（パストレーサ）の表示中はクリップ面を表示できない（札に出る）。
+   */
+  openViewer3d: (spec: PluginViewer3dSpec) => Promise<PluginViewer3dResult>;
   /**
    * **プラグインが計算した値の画像を、2D ビューアの普通のタイルとして開く**（**次の本体の版以降**）。
    * ADC・cDWI のような float のボリュームを、**マップを C 次元にして 1 枚のタイル**に出す。
@@ -1322,7 +1410,7 @@ type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K>
  */
 export type PluginHostSeed = DistributiveOmit<
   PluginHost,
-  "ai" | "file" | "runBackendJob" | "db" | "video" | "apiBase" | "compute" | "storage" | "microscopy" | "cache"
+  "ai" | "file" | "runBackendJob" | "db" | "video" | "apiBase" | "compute" | "storage" | "microscopy" | "cache" | "nifti"
 >;
 
 /**
@@ -1380,6 +1468,59 @@ export interface PluginMicroscopyImported {
   channelName: string;
   frames: number;
 }
+
+/** H78: 書き出す 1 シリーズ。 */
+export interface PluginNiftiExportRequest {
+  studyUid: string;
+  seriesUid: string;
+}
+
+export type PluginNiftiExportOutcome =
+  | {
+      ok: true;
+      /** 書き出した .nii.gz の絶対パス（そのプラグインの一時フォルダの下）。 */
+      path: string;
+      bytes: number;
+      /** 書き出したインスタンス数（4D は位置×時相）。 */
+      slices: number;
+      /** 時相の数（3D は 1）。 */
+      frames: number;
+      /** 時相の間隔（秒）。決まらないとき（不明・不均一）と 3D は null（推測の値は返さない）。 */
+      timeStepSec: number | null;
+    }
+  | { ok: false; error: string };
+
+/** H79: 取り込む NIfTI。 */
+export interface PluginNiftiImportRequest {
+  /** プラグインの一時フォルダの下の .nii / .nii.gz（.hdr/.img の対も可）。 */
+  path: string;
+  /** サイドカー JSON（任意。同じ一時フォルダの下）。 */
+  sidecar?: string;
+  /** 元のファイル名（確認画面に出る）。 */
+  sourceName?: string;
+  patient: { patientId: string; patientName?: string; birthDate?: string; sex?: string };
+  /** 既定は MR。 */
+  modality?: string;
+  studyDescription?: string;
+  seriesDescription?: string;
+  seriesNumber?: number;
+  /** 既存の検査に足すとき。 */
+  studyInstanceUid?: string;
+  /** 値の単位（UCUM のコード・16 文字以内。省略・"1" は単位なし）。 */
+  valueUnit?: string;
+}
+
+export type PluginNiftiImportOutcome =
+  | {
+      ok: true;
+      studyInstanceUid: string;
+      seriesInstanceUid: string;
+      slices: number;
+      phases: number;
+      /** 向きが NIfTI に無く、本体が合成した（患者座標の向きは保証されない）。 */
+      geometrySynthesized: boolean;
+    }
+  | { ok: false; error?: string; cancelled?: boolean };
 
 /** 途中で失敗しても、取り込めた分は `imported` に入る。 */
 export type PluginMicroscopyImportOutcome =

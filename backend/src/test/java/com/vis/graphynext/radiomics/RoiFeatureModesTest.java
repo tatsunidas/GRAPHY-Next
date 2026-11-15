@@ -92,6 +92,12 @@ class RoiFeatureModesTest {
                                  int maskChannel, int label, Map<String, String> settings) {
             return vol;
         }
+
+        @Override
+        public LoadedVolume load(String study, String series, int channel, int timePoint, String maskSeries,
+                                 int maskChannel, int label, Map<String, String> settings, boolean allowRectify) {
+            return vol;
+        }
     }
 
     private static RadiomicsMode standalone() {

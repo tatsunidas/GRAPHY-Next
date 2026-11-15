@@ -412,6 +412,8 @@ export interface VesselSegment {
   diameterMm: (number | null)[];
   /** 近位側の区間 id。根なら null。 */
   parentId: string | null;
+  /** 表示名（"LAD" など。プラグインが決める。本体は解釈しない）。無ければ `id` を出す。 */
+  name?: string;
 }
 
 /** 空間校正の状態。近似には近似と書くために要る。**H11**。 */
@@ -425,8 +427,9 @@ export interface VesselCalibration {
   /**
    * 径の測り方。半値法と密度計測では絶対値が 10% 以上違い、断面積はその 2 乗で効く。
    * 2 方向で違えば "mixed"（断面積はどちらの意味でもない）。分からなければ null。
+   * CT（マスクの幾何）は "mask-equivalent-area"（直交断面の面積から等価径）か "mask-min-width"（断面の最小幅）。
    */
-  diameterMethod: "half-max" | "densitometric" | "mixed" | null;
+  diameterMethod: "half-max" | "densitometric" | "mask-equivalent-area" | "mask-min-width" | "mixed" | null;
 }
 
 /** この数字がどこから来たか。注記を書くための材料。**H11**。 */
@@ -467,7 +470,7 @@ export interface VesselOrientation {
  * 🔴 **本体は FFR を計算しない。** 流体解析・学習モデルはプラグインの担当で、
  * 本体はモデルを渡し、返ってきた値を色で見せるだけ。
  */
-export interface VesselModel {
+export interface XaVesselModel {
   /** セッション内の鍵。🔴 本体の URL（ポート）を含み、**起動し直すと変わる**。保存の鍵にしない。 */
   runId: string;
   /**
@@ -488,10 +491,42 @@ export interface VesselModel {
   at: number;
 }
 
+/**
+ * CT 由来のモデルの出自（`kind: "ct-vessel"`）。どの画像のどのマスクから、どの解像度で作ったかを言えるだけの材料。
+ * 🔴 径はマスクの作り方（プラグイン）に依存し、**ボクセル間隔より細い血管の径は測れない**。本体は閾値を持たないので、
+ * `voxelSpacingMm` と `calibration.diameterMethod` を読み手が見ること。
+ */
+export interface CtVesselProvenance {
+  studyUid: string;
+  seriesUid: string;
+  /** 元ボリュームの FrameOfReferenceUID。無ければ null（同じ `seriesUid` の中だけで重ねられる）。 */
+  frameOfReferenceUid: string | null;
+  sopUids?: string[];
+  /** 元ボリュームの間隔 [mm]。正の有限値 3 つ。 */
+  voxelSpacingMm: [number, number, number];
+  /** 中心線・径の元になったマスクの出所。 */
+  maskOrigin: { type: "plugin" } | { type: "roi"; roiUids: string[] } | { type: "seg"; sopInstanceUid: string };
+  /** 多位相 CT の位相。 */
+  phase?: { c?: number; t?: number };
+}
+
+/** CT 由来の 3D 血管モデル（`kind: "ct-vessel"`）。`XaVesselModel` と同じ形で、`kind` と `provenance` だけが違う。 */
+export type CtVesselModel = Omit<XaVesselModel, "kind" | "provenance"> & {
+  kind: "ct-vessel";
+  provenance: CtVesselProvenance;
+};
+
+/**
+ * 登録簿の 3D 血管モデル（XA または CT）。`host.getVesselModel()` の戻り。**H11**。
+ * 🔴 **`kind` で見分けること。** `provenance` の形が違う（XA は角度・再投影誤差、CT は系列・間隔・マスクの出所）。
+ * `getVesselModel()`（`runId` 省略）は「最も新しいもの」なので、XA と CT が混ざると CT が返りうる。
+ */
+export type VesselModel = XaVesselModel | CtVesselModel;
+
 /** `host.listVesselModels()` の 1 件（点列を含まない要約）。**H11**。 */
 export interface VesselModelSummary {
   runId: string;
-  kind: "xa-qca3d" | "xa-bifurcation3d";
+  kind: "xa-qca3d" | "xa-bifurcation3d" | "ct-vessel";
   label: string;
   segmentCount: number;
   pointCount: number;
@@ -524,10 +559,15 @@ export interface VesselAnalysisInput {
 }
 
 /** `host.registerVesselModel()` に渡すモデル。`runId` / `at` / 出自は host が決めるので含まない。 */
-export type VesselModelInput = Omit<VesselModel, "runId" | "at" | "producer"> & {
-  /** 同じ鍵で登録し直すと置き換わる。1〜200 文字。 */
-  runKey: string;
-};
+export type VesselModelInput =
+  | (Omit<XaVesselModel, "runId" | "at" | "producer"> & {
+      /** 同じ鍵で登録し直すと置き換わる。1〜200 文字。 */
+      runKey: string;
+    })
+  | (Omit<CtVesselModel, "runId" | "at" | "producer"> & {
+      /** 同じ鍵で登録し直すと置き換わる。1〜200 文字。 */
+      runKey: string;
+    });
 
 /** `host.registerVesselModel()` の戻り。 */
 export type RegisterVesselModelResult = { ok: true; runId: string } | { ok: false; error: string };
@@ -1308,6 +1348,53 @@ export interface PluginCurvedMprResult {
   error?: string;
 }
 
+/** {@link Viewer2DPluginHost.openViewer3d} の引数（**次の本体の版以降**）。患者座標は LPS・mm。 */
+export interface PluginViewer3dSpec {
+  /** 開いているタイルのシリーズ（c/t 可）。一時シリーズ・連結タイルは不可。 */
+  source: PluginSeriesRef;
+  camera?: {
+    /** 視線方向（カメラ → 注視点）。長さは問わない（0・非有限は拒否）。 */
+    direction: [number, number, number];
+    /** 画面の上。視線に直交でなくてよい（本体が直交化して返す）。視線と平行なら拒否。画面右 = 視線 × 上。 */
+    up: [number, number, number];
+    /** 注視点。省略時は最初のクリップ面の原点、それも無ければボリューム中心。 */
+    focalPoint?: [number, number, number];
+    /** カメラから注視点までの距離（mm、> 0）。省略時は窓の今の距離。 */
+    distanceMm?: number;
+    /** 省略時は窓の現在値。 */
+    projection?: "perspective" | "parallel";
+    /** 平行投影のとき、画面の縦の半分に写る長さ（mm、> 0）。 */
+    parallelScaleMm?: number;
+  };
+  /** クリップ面。**法線の向く側を残す**。最大 6 枚。`[]` で全部消す。省略は変えない。 */
+  clipPlanes?: {
+    origin: [number, number, number];
+    normal: [number, number, number];
+    /** 右パネルの一覧に出す短い名前。 */
+    label?: string;
+  }[];
+  /** ORTHO・SLAB は視点の意味が変わるので受けない。省略は変えない。 */
+  mode?: "VR" | "MIP" | "MINIP";
+  /** VR のプリセット名（3D 窓の一覧にある名前）。省略は変えない。 */
+  preset?: string;
+  /** 札に出す短い説明。プラグイン名は host が必ず付ける。 */
+  title?: string;
+}
+
+export interface PluginViewer3dResult {
+  ok: boolean;
+  error?: string;
+  /** 本体が適用する値（正規化・直交化後）。検証の結果であり、描画の結果ではない。 */
+  applied?: {
+    direction: [number, number, number] | null;
+    up: [number, number, number] | null;
+    right: [number, number, number] | null;
+    /** 省略時は null（窓がクリップ面の原点かボリューム中心に決める）。 */
+    focalPoint: [number, number, number] | null;
+    clipPlanes: { origin: [number, number, number]; normal: [number, number, number]; label?: string }[];
+  };
+}
+
 export interface PluginCurveFrameOptions {
   /** フレームどうしの弧長間隔 mm。正の有限値。 */
   spacingMm: number;
@@ -1321,6 +1408,52 @@ export interface PluginCurveFrameOptions {
    */
   frameMode?: "FIXED_Z" | "ROTATION_MINIMIZING";
 }
+
+/** 断面計測（`measureMaskCrossSections`）のオプション。 */
+export interface CrossSectionOptions {
+  /** 断面どうしの弧長間隔 mm。正の有限値。 */
+  spacingMm: number;
+  /** 断面の走査半径 mm。正の有限値。**既定値は無い**。 */
+  maxRadiusMm: number;
+  /** 指定するとその値のセルだけを前景とする（1..255）。省略すると 0 以外すべて。 */
+  segment?: number;
+  /** 第 2 軸の規約。既定 `"ROTATION_MINIMIZING"`。 */
+  frameMode?: "FIXED_Z" | "ROTATION_MINIMIZING";
+  /** 断面格子の刻み mm。既定はマスクの最小ボクセル間隔の 1/2。 */
+  gridStepMm?: number;
+  /** この点列の近傍（半径 radiusMm 以内）の断面は測らない（全値 null）。分岐点の近傍を外すのに使う。 */
+  excludeNear?: { points: [number, number, number][]; radiusMm: number };
+}
+
+export interface CrossSectionFrame {
+  arcLengthMm: number;
+  positionWorld: [number, number, number];
+  /** 中心がマスクの外（真のとき計測値はすべて null）。 */
+  centerInMask: boolean;
+  /** 中心を含む成分が走査範囲の縁に触れた（真のとき計測値はすべて null）。 */
+  touchesBoundary: boolean;
+  /** `excludeNear` で外した（真のとき計測値はすべて null）。 */
+  excluded: boolean;
+  areaMm2: number | null;
+  /** 面積と同じ円の直径。`diameterMethod: "mask-equivalent-area"` に対応。 */
+  equivalentDiameterMm: number | null;
+  /** 全方位の最小幅。`diameterMethod: "mask-min-width"` に対応。 */
+  minWidthMm: number | null;
+}
+
+export type CrossSectionResult = { ok: true; frames: CrossSectionFrame[] } | { ok: false; error: string };
+
+export interface OrientedSegment {
+  /** `String(枝の id)`。 */
+  id: string;
+  /** 根 → 先の向き（患者 LPS mm）。 */
+  points: [number, number, number][];
+  /** 根の側でつながる区間の id。根の区間は null。 */
+  parentId: string | null;
+  lengthMm: number;
+}
+
+export type OrientResult = { ok: true; segments: OrientedSegment[] } | { ok: false; error: string };
 
 interface PluginHostBase {
   /** 自分の plugin.json の id。 */
@@ -1460,6 +1593,29 @@ interface PluginHostBase {
    */
   microscopy: {
     importVolume: (req: PluginMicroscopyImportRequest, opts?: PluginJobOptions) => Promise<PluginMicroscopyImportOutcome>;
+  };
+  /**
+   * NIfTI の受け渡し（H78・H79〔仮〕・**0.5.0 より後の版**）。研究用の画像形式（ECAT7・Interfile・AFNI・MINC・BIDS など）の読み書きは
+   * プラグインの JAR に置き、本体は NIfTI を「作る」「取り込む」口だけを開ける（幾何〔LPS↔RAS〕は本体の 2 か所に閉じ込める）。
+   * ファイルの受け渡しは一時フォルダ `<java.io.tmpdir>/graphy-plugin-nifti/<プラグイン ID>/` の下だけ。デスクトップ専用
+   * （web では `error: "desktop-only"`）。
+   */
+  nifti: {
+    /**
+     * H78: 1 シリーズを NIfTI-1（.nii.gz・float32・患者情報なし）にして、そのプラグインの一時フォルダへ置き、パスを返す。
+     * 匿名化の出力から作るので、本体の「NIfTI で書き出し」と同じ規則で断られることがある（`error` は理由コード:
+     * `volume-sheared`〔チルト〕・`nifti-uneven-phases`・`nifti-ambiguous-phases`・`nifti-mosaic` など）。
+     * 使い終わったら {@link release}（忘れた分は 2 時間後に本体が掃除する）。確認画面は出ない。
+     */
+    exportSeries: (req: PluginNiftiExportRequest) => Promise<PluginNiftiExportOutcome>;
+    /** H78: {@link exportSeries} で渡したファイル（そのプラグインの一時フォルダの下だけ）を消す。 */
+    release: (path: string) => Promise<{ ok: boolean; error?: string }>;
+    /**
+     * H79: プラグインの JAR が作った NIfTI を、本体が DICOM にして取り込む。**毎回、本体が確認画面を出す**（消せない。
+     * 向きが NIfTI に無く本体が合成するときは、その警告も出る）。`path`・`sidecar` はそのプラグインの一時フォルダの下の
+     * ファイルだけ（本体が確かめ、取り込んだら消す）。やめたときは `cancelled`。
+     */
+    importVolume: (req: PluginNiftiImportRequest, opts?: PluginJobOptions) => Promise<PluginNiftiImportOutcome>;
   };
   /** 本体の DB（H44・H46・H51・**0.3.0 以降**）。 */
   db: {
@@ -2169,7 +2325,7 @@ export interface Viewer2DPluginHost extends PluginHostBase {
    * 退化した `range`）。捨てて残りを採用すると**ずれたまま色が乗り**、誰も気付けない。
    *
    * **成功すると、本体の 3D 画面（`#geometry3d`）が開く**（開いていれば前面に出て、中身が差し替わる）。
-   * 分岐部のモデル（`xa-bifurcation3d`）では開かない（3D 画面は中心線 1 本しか描かない）。
+   * 木（分岐部の XA・CT 由来）は区間ごとに 1 物体で描かれ、色も `segmentId` で区間ごとに乗る（値の無い区間は「値なし」）。
    */
   putVesselAnalysis: (runId: string, result: VesselAnalysisInput) => VesselAnalysisResult;
   /**
@@ -2177,12 +2333,14 @@ export interface Viewer2DPluginHost extends PluginHostBase {
    * が読む登録簿へ入る。同じ `runKey` は置き換える。セッション限り。`runId` / 登録時刻 / 出自は host が入れる。
    * 🔴 壊れた入力は理由つきで拒否する。測れなかった点の径は `null`（0 で埋めない）。未校正
    * （`calibration.diameterCalibrated: false`）なら**全点 null**でなければ拒否する。
+   * CT 由来のモデルは `kind: "ct-vessel"` と `CtVesselProvenance`（系列・FoR・元の間隔・マスクの出所）を渡す。
+   * `calibration.diameterMethod` に径の測り方（"mask-equivalent-area" / "mask-min-width"）を必ず書くこと。
    */
   registerVesselModel: (model: VesselModelInput) => RegisterVesselModelResult;
   /**
    * **登録した 3D 血管モデルの 3D 画面を開く**（H74。開いていれば前面に出て、中身が差し替わる）。`runId` は
    * `registerVesselModel` の戻り。色は乗らない（`putVesselAnalysis` が成功したときに、同じ画面へ乗る）。
-   * 🔴 開けないときは理由つきで `ok: false`（モデルが無い・分岐部モデル・中心線が 2 点未満）。
+   * 🔴 開けないときは理由つきで `ok: false`（モデルが無い・中心線が 2 点未満の区間がある）。木は区間ごとに描かれる。
    */
   openVesselModel3d: (runId: string) => { ok: true } | { ok: false; error: string };
   /**
@@ -2450,6 +2608,41 @@ export interface Viewer2DPluginHost extends PluginHostBase {
     opts: PluginCurveFrameOptions,
   ) => PluginCurveFrame[];
   /**
+   * **中心線に直交する断面でマスクの内腔を測る**（H76・仮番号）。面積・等価径・最小幅を、弧長 `spacingMm` ごとに返す。
+   * 血管モデル（`registerVesselModel`）の `diameterMm` を作る素材。`diameterMethod` は等価径なら
+   * `"mask-equivalent-area"`、最小幅なら `"mask-min-width"`。
+   *
+   * <p>本体は**幾何だけ**を測る（マスクは 0/1。HU・造影濃度・石灰化・どの枝がどの血管かは解釈しない）。
+   * 返るフレームは弧長 0・間隔ごと・終点（最後だけ間隔が短い）。**`positionWorld` をそのまま区間の `points`、
+   * `equivalentDiameterMm` を `diameterMm` にすれば 1 点ごとの径になる**（H41 の疎な頂点に径を載せると、
+   * 頂点の間は補間されて径の分布が崩れる）。
+   * `maxRadiusMm` に既定値は無い。数えるのは**中心を含む 4 連結成分だけ**（隣の血管は混ざらない）。
+   *
+   * <p>🔴 **測れない断面は null**（0 や近くの別の構造の値で埋めない）: 中心がマスクの外・成分が走査半径の縁に触れた・
+   * `excludeNear` で外した。
+   *
+   * <p>🔴 **分岐点の近傍は信頼できない**（他枝の内腔が断面に入る。合成の Y 字〔幹 4.0・枝 3.0 mm〕で、節点をまたぐ経路の
+   * 節点付近は +0.5 mm 過大、または縁に触れて null になった。過大になる場合は自動では検出できない）→
+   * `excludeNear` に H41 の分岐節点（`degree >= 3`）を渡すこと。
+   *
+   * <p>精度（合成の直円柱での実測）: 等価径は真値の ±2% 程度（直径 2〜6 mm・ボクセル 0.25〜0.5 mm）、
+   * **最小幅は +0.1〜0.35 mm 大きく出る**。どちらもマスクの作り方に依存し、ボクセル間隔より細い血管は測れない。
+   * 狭窄の評価には等価径を使うこと。入力が壊れていれば `{ok:false, error}`。
+   */
+  measureMaskCrossSections: (
+    mask: PluginMaskInput,
+    polylineWorld: readonly [number, number, number][],
+    opts: CrossSectionOptions,
+  ) => CrossSectionResult;
+  /**
+   * **中心線グラフ（H41）を根から木に向き付ける**（H77・仮番号）。枝ごとに点列を根→先にそろえ、`parentId` を付ける。
+   * 出力の `segments` に `diameterMm` を足せばそのまま `registerVesselModel` の区間になる。
+   *
+   * <p>根は**端点（degree 1）の節点**。木でない（ループ・多重辺・非連結）・根が無い・根が端点でない場合は
+   * `{ok:false, error}`。どの端点が根（大動脈側など）かはプラグインが決める。
+   */
+  orientCenterlineGraph: (graph: PluginCenterlineGraph, rootNodeId: number) => OrientResult;
+  /**
    * **中心線を渡して、本体の Curved MPR 窓を開く**（H73）。渡すのは制御点（患者 LPS mm・2 点以上）と
    * 見え方のオプションだけで、再構成・表示・保存は本体が行う。窓には「プラグイン <名前> が指定した
    * 中心線」の札が出る（出所は host が入れる）。窓が既に開いていれば、その窓の中心線が置き換わる。
@@ -2459,6 +2652,20 @@ export interface Viewer2DPluginHost extends PluginHostBase {
    * `options.frameMode` の省略時は `ROTATION_MINIMIZING`（血管向け）。
    */
   openCurvedMpr: (spec: PluginCurvedMprSpec) => Promise<PluginCurvedMprResult>;
+  /**
+   * **視点とクリップ面を指定して、本体の 3D ビューアを開く**（**次の本体の版以降**）。渡すのは患者座標（LPS mm）の
+   * 視線・上・注視点とクリップ面だけで、描画・操作・計測は本体が行う。3D 窓には「プラグイン <名前> の視点: <title>」の札と
+   * ［指定に戻す］が出る（出所は host が入れる）。窓が既に開いていて同じシリーズなら、画面を読み直さず視点と札だけが変わる。
+   * 別のシリーズなら従来どおり読み直す。利用者はその後ドラッグで自由に回せる。
+   *
+   * <p>規約: **画面右 = 視線 × 上**（右手系）。`up` は本体が直交化して `applied.up` に返す（視線と平行なら拒否）。
+   * クリップ面は **法線の向く側を残す**（最大 6 枚）。`mode` は VR / MIP / MINIP。
+   *
+   * <p>🔴 戻り値は**検証と起動要求まで**（開いていない・一時・連結のシリーズ、視線 0、上が視線と平行、法線 0、
+   * 面が 7 枚以上、不正な `mode` などは `ok:false` で窓を開かない）。窓は非同期に開くので、描けたかどうかは分からない。
+   * シネマティック（パストレーサ）の表示中はクリップ面を表示できない（札に出る）。
+   */
+  openViewer3d: (spec: PluginViewer3dSpec) => Promise<PluginViewer3dResult>;
   /**
    * **プラグインが計算した値の画像を、2D ビューアの普通のタイルとして開く**（**次の本体の版以降**）。
    * ADC・cDWI のような float のボリュームを、**マップを C 次元にして 1 枚のタイル**に出す。
@@ -2652,9 +2859,24 @@ export interface SrMeasurementGroup {
       // H66 の定量（fw/ct-quant-design.md §6）。meanValue・stdDev は unit 必須（HU / SUV を取り違えない）。meanValue は負も可
       | "area"
       | "meanValue"
-      | "stdDev";
+      | "stdDev"
+      // 汎用の種別。どの量かは `name` で書く。percent・ratio・score は `name` 必須。標準コードは確認できていないので私用スキーム
+      | "percent"
+      | "ratio"
+      | "score"
+      | "perimeter"
+      | "diameter"
+      | "distance"
+      | "angle";
     value: number;
     unit?: string;
+    /**
+     * 量の名前（例 "Ejection fraction"）。SR の NUM の修飾として書かれる。
+     * `percent`・`ratio`・`score` は必須（無いと何の値か決まらないので拒否される）。
+     * 既定の単位: percent `%` ／ ratio `1` ／ score `{score}` ／ perimeter・diameter・distance `mm` ／ angle `deg`。
+     * 負値は percent・distance だけ受ける。
+     */
+    name?: string;
   }[];
 }
 
@@ -2862,3 +3084,56 @@ export interface PluginMicroscopyImported {
 export type PluginMicroscopyImportOutcome =
   | { ok: true; studyInstanceUid?: string; imported: PluginMicroscopyImported[] }
   | { ok: false; error?: string; cancelled?: boolean; studyInstanceUid?: string; imported: PluginMicroscopyImported[] };
+
+/** H78: 書き出す 1 シリーズ。 */
+export interface PluginNiftiExportRequest {
+  studyUid: string;
+  seriesUid: string;
+}
+
+export type PluginNiftiExportOutcome =
+  | {
+      ok: true;
+      /** 書き出した .nii.gz の絶対パス（そのプラグインの一時フォルダの下）。 */
+      path: string;
+      bytes: number;
+      /** 書き出したインスタンス数（4D は位置×時相）。 */
+      slices: number;
+      /** 時相の数（3D は 1）。 */
+      frames: number;
+      /** 時相の間隔（秒）。決まらないとき（不明・不均一）と 3D は null（推測の値は返さない）。 */
+      timeStepSec: number | null;
+    }
+  | { ok: false; error: string };
+
+/** H79: 取り込む NIfTI。 */
+export interface PluginNiftiImportRequest {
+  /** プラグインの一時フォルダの下の .nii / .nii.gz（.hdr/.img の対も可）。 */
+  path: string;
+  /** サイドカー JSON（任意。同じ一時フォルダの下）。 */
+  sidecar?: string;
+  /** 元のファイル名（確認画面に出る）。 */
+  sourceName?: string;
+  patient: { patientId: string; patientName?: string; birthDate?: string; sex?: string };
+  /** 既定は MR。 */
+  modality?: string;
+  studyDescription?: string;
+  seriesDescription?: string;
+  seriesNumber?: number;
+  /** 既存の検査に足すとき。 */
+  studyInstanceUid?: string;
+  /** 値の単位（UCUM のコード・16 文字以内。省略・"1" は単位なし）。 */
+  valueUnit?: string;
+}
+
+export type PluginNiftiImportOutcome =
+  | {
+      ok: true;
+      studyInstanceUid: string;
+      seriesInstanceUid: string;
+      slices: number;
+      phases: number;
+      /** 向きが NIfTI に無く、本体が合成した（患者座標の向きは保証されない）。 */
+      geometrySynthesized: boolean;
+    }
+  | { ok: false; error?: string; cancelled?: boolean };

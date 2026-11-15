@@ -278,7 +278,7 @@ public class RoiFeatureService {
         phase.accept(Phase.LOADING);
         // Next のテクスチャ設定は渡さない（Next 側のリサンプリングを掛けない。RadiomicsJ の設定に一本化）。
         RadiomicsMapEngine.LoadedVolume vol = engine.load(req.studyInstanceUid(), req.sourceSeriesUid(),
-                req.channel(), req.timePoint(), req.maskSeriesUid(), req.maskChannel(), label, new HashMap<>());
+                req.channel(), req.timePoint(), req.maskSeriesUid(), req.maskChannel(), label, new HashMap<>(), true);
 
         if (inputs == null) {
             return computeUnits(req, vol, label, settings, settings, phase, progress, cancelled);

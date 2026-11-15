@@ -1,0 +1,360 @@
+(0008,0005) CS ISO_IR 192
+(0008,0016) UI <uid>
+(0008,0018) UI <uid>
+(0008,0020) DA 20260105
+(0008,0023) DA 20260802
+(0008,0033) TM 103000
+(0008,0050) SH ACC-1
+(0008,0060) CS SR
+(0008,0070) LO GRAPHY-Next
+(0008,0110) SQ[1]
+- item 0
+  (0008,0102) SH 99GRAPHY
+  (0008,010C) UI <uid>
+  (0008,0115) ST GRAPHY-Next private measurement concepts
+  (0008,0116) ST Visionary Imaging Services, Inc.
+(0008,1030) LO golden
+(0008,103E) LO [Plugin] Golden
+(0010,0010) PN Phantom^Golden
+(0010,0020) LO PAT-1
+(0010,0030) DA 19700101
+(0010,0040) CS O
+(0018,A001) SQ[1]
+- item 0
+  (0008,0070) LO GRAPHY-Next plugin
+  (0008,1090) LO Golden
+  (0018,1020) LO 0.0.1
+  (0018,A003) ST Measurement report produced by plugin golden
+(0020,000D) UI <uid>
+(0020,000E) UI <uid>
+(0020,0011) IS 9000
+(0020,0013) IS 1
+(0040,A040) CS CONTAINER
+(0040,A043) SQ[1]
+- item 0
+  (0008,0100) SH 126000
+  (0008,0102) SH DCM
+  (0008,0104) LO Imaging Measurement Report
+(0040,A050) CS SEPARATE
+(0040,A375) SQ[1]
+- item 0
+  (0008,1115) SQ[1]
+  - item 0
+    (0008,1199) SQ[1]
+    - item 0
+      (0008,1150) UI <uid>
+      (0008,1155) UI <uid>
+    (0020,000E) UI <uid>
+  (0020,000D) UI <uid>
+(0040,A491) CS COMPLETE
+(0040,A493) CS UNVERIFIED
+(0040,A730) SQ[5]
+- item 0
+  (0040,A010) CS HAS CONCEPT MOD
+  (0040,A040) CS CODE
+  (0040,A043) SQ[1]
+  - item 0
+    (0008,0100) SH 121049
+    (0008,0102) SH DCM
+    (0008,0104) LO Language of Content Item and Descendants
+  (0040,A168) SQ[1]
+  - item 0
+    (0008,0100) SH eng
+    (0008,0102) SH RFC5646
+    (0008,0104) LO English
+- item 1
+  (0040,A010) CS HAS OBS CONTEXT
+  (0040,A040) CS PNAME
+  (0040,A043) SQ[1]
+  - item 0
+    (0008,0100) SH 121008
+    (0008,0102) SH DCM
+    (0008,0104) LO Person Observer Name
+  (0040,A123) PN Kobayashi^Tatsuaki
+- item 2
+  (0040,A010) CS CONTAINS
+  (0040,A040) CS TEXT
+  (0040,A043) SQ[1]
+  - item 0
+    (0008,0100) SH 121106
+    (0008,0102) SH DCM
+    (0008,0104) LO Comment
+  (0040,A160) UT Golden report
+- item 3
+  (0040,A010) CS CONTAINS
+  (0040,A040) CS CONTAINER
+  (0040,A043) SQ[1]
+  - item 0
+    (0008,0100) SH 111028
+    (0008,0102) SH DCM
+    (0008,0104) LO Image Library
+  (0040,A050) CS SEPARATE
+  (0040,A730) SQ[1]
+  - item 0
+    (0040,A010) CS CONTAINS
+    (0040,A040) CS CONTAINER
+    (0040,A043) SQ[1]
+    - item 0
+      (0008,0100) SH 126200
+      (0008,0102) SH DCM
+      (0008,0104) LO Image Library Group
+    (0040,A050) CS SEPARATE
+    (0040,A730) SQ[1]
+    - item 0
+      (0008,1199) SQ[1]
+      - item 0
+        (0008,1150) UI <uid>
+        (0008,1155) UI <uid>
+      (0040,A010) CS CONTAINS
+      (0040,A040) CS IMAGE
+- item 4
+  (0040,A010) CS CONTAINS
+  (0040,A040) CS CONTAINER
+  (0040,A043) SQ[1]
+  - item 0
+    (0008,0100) SH 126010
+    (0008,0102) SH DCM
+    (0008,0104) LO Imaging Measurements
+  (0040,A050) CS SEPARATE
+  (0040,A730) SQ[1]
+  - item 0
+    (0040,A010) CS CONTAINS
+    (0040,A040) CS CONTAINER
+    (0040,A043) SQ[1]
+    - item 0
+      (0008,0100) SH 125007
+      (0008,0102) SH DCM
+      (0008,0104) LO Measurement Group
+    (0040,A050) CS SEPARATE
+    (0040,A730) SQ[16]
+    - item 0
+      (0040,A010) CS HAS OBS CONTEXT
+      (0040,A040) CS TEXT
+      (0040,A043) SQ[1]
+      - item 0
+        (0008,0100) SH 112039
+        (0008,0102) SH DCM
+        (0008,0104) LO Tracking Identifier
+      (0040,A160) UT golden-1
+    - item 1
+      (0040,A010) CS HAS OBS CONTEXT
+      (0040,A040) CS UIDREF
+      (0040,A043) SQ[1]
+      - item 0
+        (0008,0100) SH 112040
+        (0008,0102) SH DCM
+        (0008,0104) LO Tracking Unique Identifier
+      (0040,A124) UI <uid>
+    - item 2
+      (0040,A010) CS CONTAINS
+      (0040,A040) CS TEXT
+      (0040,A043) SQ[1]
+      - item 0
+        (0008,0100) SH 121071
+        (0008,0102) SH DCM
+        (0008,0104) LO Finding
+      (0040,A160) UT Target lesion
+    - item 3
+      (0008,1199) SQ[1]
+      - item 0
+        (0008,1150) UI <uid>
+        (0008,1155) UI <uid>
+      (0040,A010) CS CONTAINS
+      (0040,A040) CS IMAGE
+      (0040,A043) SQ[1]
+      - item 0
+        (0008,0100) SH 121112
+        (0008,0102) SH DCM
+        (0008,0104) LO Source of Measurement
+    - item 4
+      (0040,A010) CS CONTAINS
+      (0040,A040) CS NUM
+      (0040,A043) SQ[1]
+      - item 0
+        (0008,0100) SH G-A185
+        (0008,0102) SH SRT
+        (0008,0104) LO Long Axis
+      (0040,A300) SQ[1]
+      - item 0
+        (0040,08EA) SQ[1]
+        - item 0
+          (0008,0100) SH mm
+          (0008,0102) SH UCUM
+          (0008,0104) LO mm
+        (0040,A30A) DS 76
+    - item 5
+      (0040,A010) CS CONTAINS
+      (0040,A040) CS NUM
+      (0040,A043) SQ[1]
+      - item 0
+        (0008,0100) SH G-A186
+        (0008,0102) SH SRT
+        (0008,0104) LO Short Axis
+      (0040,A300) SQ[1]
+      - item 0
+        (0040,08EA) SQ[1]
+        - item 0
+          (0008,0100) SH mm
+          (0008,0102) SH UCUM
+          (0008,0104) LO mm
+        (0040,A30A) DS 31.5
+    - item 6
+      (0040,A010) CS CONTAINS
+      (0040,A040) CS NUM
+      (0040,A043) SQ[1]
+      - item 0
+        (0008,0100) SH VOLUME
+        (0008,0102) SH 99GRAPHY
+        (0008,0104) LO Volume
+      (0040,A300) SQ[1]
+      - item 0
+        (0040,08EA) SQ[1]
+        - item 0
+          (0008,0100) SH mL
+          (0008,0102) SH UCUM
+          (0008,0104) LO mL
+        (0040,A30A) DS 6.822
+    - item 7
+      (0040,A010) CS CONTAINS
+      (0040,A040) CS NUM
+      (0040,A043) SQ[1]
+      - item 0
+        (0008,0100) SH MASS
+        (0008,0102) SH 99GRAPHY
+        (0008,0104) LO Mass
+      (0040,A300) SQ[1]
+      - item 0
+        (0040,08EA) SQ[1]
+        - item 0
+          (0008,0100) SH g
+          (0008,0102) SH UCUM
+          (0008,0104) LO g
+        (0040,A30A) DS 7.11
+    - item 8
+      (0040,A010) CS CONTAINS
+      (0040,A040) CS NUM
+      (0040,A043) SQ[1]
+      - item 0
+        (0008,0100) SH ABSORBED_DOSE
+        (0008,0102) SH 99GRAPHY
+        (0008,0104) LO Absorbed Dose
+      (0040,A300) SQ[1]
+      - item 0
+        (0040,08EA) SQ[1]
+        - item 0
+          (0008,0100) SH Gy
+          (0008,0102) SH UCUM
+          (0008,0104) LO Gy
+        (0040,A30A) DS 12.5
+    - item 9
+      (0040,A010) CS CONTAINS
+      (0040,A040) CS NUM
+      (0040,A043) SQ[1]
+      - item 0
+        (0008,0100) SH TIA
+        (0008,0102) SH 99GRAPHY
+        (0008,0104) LO Time Integrated Activity
+      (0040,A300) SQ[1]
+      - item 0
+        (0040,08EA) SQ[1]
+        - item 0
+          (0008,0100) SH Bq.s
+          (0008,0102) SH UCUM
+          (0008,0104) LO Bq.s
+        (0040,A30A) DS 439300000000
+    - item 10
+      (0040,A010) CS CONTAINS
+      (0040,A040) CS NUM
+      (0040,A043) SQ[1]
+      - item 0
+        (0008,0100) SH T_EFF
+        (0008,0102) SH 99GRAPHY
+        (0008,0104) LO Effective Half-Life
+      (0040,A300) SQ[1]
+      - item 0
+        (0040,08EA) SQ[1]
+        - item 0
+          (0008,0100) SH h
+          (0008,0102) SH UCUM
+          (0008,0104) LO h
+        (0040,A30A) DS 60
+    - item 11
+      (0040,A010) CS CONTAINS
+      (0040,A040) CS NUM
+      (0040,A043) SQ[1]
+      - item 0
+        (0008,0100) SH BED
+        (0008,0102) SH 99GRAPHY
+        (0008,0104) LO Biologically Effective Dose
+      (0040,A300) SQ[1]
+      - item 0
+        (0040,08EA) SQ[1]
+        - item 0
+          (0008,0100) SH Gy
+          (0008,0102) SH UCUM
+          (0008,0104) LO Gy
+        (0040,A30A) DS 30.2
+    - item 12
+      (0040,A010) CS CONTAINS
+      (0040,A040) CS NUM
+      (0040,A043) SQ[1]
+      - item 0
+        (0008,0100) SH EQD2
+        (0008,0102) SH 99GRAPHY
+        (0008,0104) LO Equivalent Dose in 2 Gy Fractions
+      (0040,A300) SQ[1]
+      - item 0
+        (0040,08EA) SQ[1]
+        - item 0
+          (0008,0100) SH Gy
+          (0008,0102) SH UCUM
+          (0008,0104) LO Gy
+        (0040,A30A) DS 28.1
+    - item 13
+      (0040,A010) CS CONTAINS
+      (0040,A040) CS NUM
+      (0040,A043) SQ[1]
+      - item 0
+        (0008,0100) SH AREA
+        (0008,0102) SH 99GRAPHY
+        (0008,0104) LO Area
+      (0040,A300) SQ[1]
+      - item 0
+        (0040,08EA) SQ[1]
+        - item 0
+          (0008,0100) SH cm2
+          (0008,0102) SH UCUM
+          (0008,0104) LO cm2
+        (0040,A30A) DS 14.25
+    - item 14
+      (0040,A010) CS CONTAINS
+      (0040,A040) CS NUM
+      (0040,A043) SQ[1]
+      - item 0
+        (0008,0100) SH MEAN_VALUE
+        (0008,0102) SH 99GRAPHY
+        (0008,0104) LO Mean Value
+      (0040,A300) SQ[1]
+      - item 0
+        (0040,08EA) SQ[1]
+        - item 0
+          (0008,0100) SH [hnsf'U]
+          (0008,0102) SH UCUM
+          (0008,0104) LO [hnsf'U]
+        (0040,A30A) DS -35.5
+    - item 15
+      (0040,A010) CS CONTAINS
+      (0040,A040) CS NUM
+      (0040,A043) SQ[1]
+      - item 0
+        (0008,0100) SH STD_DEV
+        (0008,0102) SH 99GRAPHY
+        (0008,0104) LO Standard Deviation
+      (0040,A300) SQ[1]
+      - item 0
+        (0040,08EA) SQ[1]
+        - item 0
+          (0008,0100) SH [hnsf'U]
+          (0008,0102) SH UCUM
+          (0008,0104) LO [hnsf'U]
+        (0040,A30A) DS 6.1

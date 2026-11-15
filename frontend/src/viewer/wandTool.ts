@@ -21,6 +21,7 @@ import { worldToImageCoords, imageToWorldCoords } from "./imageCoords";
 import { getModalityCalibration, resolveValueUnit } from "./pixelCalibration";
 import { roiPointsPx } from "./roiRead";
 import { floodRegion, offsets2D, offsets3D, acceptTolerance, acceptGe, acceptLe, acceptRange, makeValueReader } from "./wandFlood";
+import { seedPixelOf } from "./seedPixel";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type AnyObj = Record<string, any>;
@@ -181,9 +182,9 @@ async function startWand(viewport: AnyObj, world: [number, number, number], mode
     plane.rowPixelSpacing,
   )[0];
   if (!ic) return;
-  const sx = Math.round(ic[0]);
-  const sy = Math.round(ic[1]);
-  if (sx < 0 || sy < 0 || sx >= cols || sy >= rows) return;
+  const seed = seedPixelOf(ic, cols, rows);
+  if (!seed) return;
+  const [sx, sy] = seed;
   const comps = Math.max(1, Math.round(px.length / (cols * rows)));
   const read = valueReaderOf(src, refImageId);
   const seedValue = read(sy * cols + sx);

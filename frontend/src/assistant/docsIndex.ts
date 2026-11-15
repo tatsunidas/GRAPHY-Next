@@ -17,17 +17,35 @@ export interface DocHit extends DocChunk {
   score: number;
 }
 
-/** `##` までの見出しで割る。それより深い見出しは本文に残す（細かく割ると文脈が痩せるため）。 */
-export function splitDocs(files: Record<string, string>): DocChunk[] {
+/** 1 質問で添える資料の数と長さ。実測（assistantDocs.test.ts の質問例）で当たりが取れた最小に近い値。 */
+export const DOCS_K = 3;
+export const DOCS_MAX_CHARS = 1500;
+export const DOCS_MIN_SCORE = 2;
+
+/**
+ * `##` までの見出しで割る。それより深い見出しは本文に残す（細かく割ると文脈が痩せるため）。
+ * ただし 1 つの `##` 節が `longSection` 文字を超えるときは `###` でも割る。断片は `maxChars` で切って渡すので、
+ * それを超える節を 1 つにしておくと、切れた先が届かず、巨大な 1 断片が検索の枠を奪うだけになる。
+ * 本文の `{.ui}`（画面の文言の印。マニュアルの表記用）は、回答に漏れないよう取り除く。
+ */
+export function splitDocs(files: Record<string, string>, longSection = DOCS_MAX_CHARS): DocChunk[] {
   const out: DocChunk[] = [];
   for (const [path, raw] of Object.entries(files)) {
     const file = path.split("/").pop() ?? path;
     let h1 = "";
     let h2 = "";
     let buf: string[] = [];
+    const emit = (heading: string[], lines: string[]) => {
+      const text = lines.join("\n").replace(/\{\.ui\}/g, "").trim();
+      if (text) out.push({ file, heading: heading.filter(Boolean).join(" › ") || file, text });
+    };
     const flush = () => {
-      const text = buf.join("\n").trim();
-      if (text) out.push({ file, heading: [h1, h2].filter(Boolean).join(" › ") || file, text });
+      const text = buf.join("\n");
+      const idx = buf.map((l, i) => (/^###\s+\S/.test(l) ? i : -1)).filter((i) => i >= 0);
+      if (text.length > longSection && idx.length) {
+        emit([h1, h2], buf.slice(0, idx[0]));
+        idx.forEach((start, k) => emit([h1, h2, buf[start].replace(/^###\s+/, "").trim()], buf.slice(start, idx[k + 1] ?? buf.length)));
+      } else emit([h1, h2], buf);
       buf = [];
     };
     for (const line of raw.split(/\r?\n/)) {
@@ -44,7 +62,6 @@ export function splitDocs(files: Record<string, string>): DocChunk[] {
   }
   return out;
 }
-
 
 /** 英数字は語、日本語は連続部分の 2 文字組（形態素解析なしで語尾の揺れに強い）。 */
 export function tokenize(s: string): string[] {
@@ -75,7 +92,8 @@ export interface SearchOptions {
 export function searchDocs(chunks: DocChunk[], query: string, opt: SearchOptions): DocHit[] {
   const q = Array.from(new Set(tokenize(query)));
   if (!q.length || !chunks.length) return [];
-  const bodies = chunks.map((c) => new Set(tokenize(c.text)));
+  // 点を付けるのは、モデルへ実際に渡す先頭 maxChars 文字だけ（届かない後ろの語で当たると、長い節が全質問の枠を奪う）。
+  const bodies = chunks.map((c) => new Set(tokenize(c.text.slice(0, opt.maxChars))));
   const heads = chunks.map((c) => new Set(tokenize(c.heading)));
   const n = chunks.length;
   const df = (t: string) => bodies.reduce((a, b, i) => a + (b.has(t) || heads[i].has(t) ? 1 : 0), 0);

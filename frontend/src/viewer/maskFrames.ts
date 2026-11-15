@@ -15,6 +15,7 @@ import { setRoiMaskMeta, getRoiMaskMeta, getMaskSegments } from "./roiMaskStore"
 import { worldToVoxel, type LabelVolume, type VolumeGeom } from "./labelVolume";
 import { segmentRoiLabel, selectSegmentIndices } from "./maskBridgeCore";
 import { maskMeshVolumeOf } from "./maskVolume";
+import { emptyRejectCounts, ippToleranceMm, placeSegFrame, type SegRejectCounts } from "./segFramePlacement";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type AnyObj = Record<string, any>;
@@ -84,31 +85,6 @@ function buildSopIndex(imageIds: string[]): Map<string, number> {
   return map;
 }
 
-/** IPP 最近傍の z を返す（5mm 超は無関係スライスとみなし null）。 */
-function nearestZByIpp(ipp: V3, imageIds: string[]): number | null {
-  let best: number | null = null;
-  let bestDist = Infinity;
-  for (let z = 0; z < imageIds.length; z++) {
-    const p = planeMeta(imageIds[z]).imagePositionPatient as V3 | undefined;
-    if (!p) continue;
-    const d = Math.hypot(p[0] - ipp[0], p[1] - ipp[1], p[2] - ipp[2]);
-    if (d < bestDist) {
-      bestDist = d;
-      best = z;
-    }
-  }
-  return best != null && bestDist <= 5 ? best : null;
-}
-
-function resolveZ(fr: MaskFrameSource, sopToId: Map<string, number>, imageIds: string[]): number | null {
-  if (fr.referencedSopInstanceUid) {
-    const z = sopToId.get(fr.referencedSopInstanceUid);
-    if (z != null) return z;
-  }
-  if (fr.imagePositionPatient) return nearestZByIpp(fr.imagePositionPatient, imageIds);
-  return null;
-}
-
 function base64ToU8(b64: string): Uint8Array {
   const bin = atob(b64);
   const out = new Uint8Array(bin.length);
@@ -125,14 +101,26 @@ export async function importMaskFrames(
   input: MaskFramesInput,
   label: string,
   onProgress?: (frac: number) => void,
-): Promise<{ segmentationId: string; segmentCount: number } | null> {
+  /**
+   * true: DICOM SEG の取り込み（フレームの位置が表示中シリーズと合わなければ載せない。`segFramePlacement`）。
+   * false（既定）: 保存済みマスクの復元（従来どおり寛容な対応づけ）。
+   */
+  strict = false,
+): Promise<{ segmentationId: string; segmentCount: number; rejected: SegRejectCounts } | null> {
   const imageIds = vp.getImageIds() as string[];
   if (!imageIds.length || !input.segments.length) return null;
+  const rejected = emptyRejectCounts();
 
   const pm0 = planeMeta(imageIds[0]);
   if (pm0.rows && (Number(pm0.rows) !== input.rows || Number(pm0.columns) !== input.columns)) {
-    return null; // 解像度不一致（別シリーズ由来の SEG 等）
+    rejected.sizeMismatch = 1;
+    return strict ? { segmentationId: "", segmentCount: 0, rejected } : null; // 解像度不一致（別シリーズ由来の SEG 等）
   }
+  const tolMm = ippToleranceMm(pm0.rowPixelSpacing, pm0.columnPixelSpacing);
+  const ippOfZ = (z: number): V3 | null => {
+    const p = planeMeta(imageIds[z]).imagePositionPatient as V3 | undefined;
+    return p && p.length >= 3 && p.every((n) => Number.isFinite(n)) ? p : null;
+  };
 
   await Promise.all(imageIds.map((id) => imageLoader.loadAndCacheImage(id).catch(() => null)));
   const derived = imageLoader.createAndCacheDerivedLabelmapImages(imageIds);
@@ -160,8 +148,12 @@ export async function importMaskFrames(
     if (seg.description) descByIdx[String(segIndex)] = seg.description;
     if (seg.label) nameByIdx[String(segIndex)] = seg.label;
     for (const fr of seg.frames) {
-      const z = resolveZ(fr, sopToId, imageIds);
-      if (z == null) continue;
+      const placed = placeSegFrame(fr.referencedSopInstanceUid, fr.imagePositionPatient, sopToId, ippOfZ, imageIds.length, tolMm, strict);
+      if ("reject" in placed) {
+        rejected[placed.reject]++;
+        continue;
+      }
+      const z = placed.z;
       const plane = base64ToU8(fr.mask);
       if (plane.length !== frameSize) continue;
       const vm = (cache.getImage(labelmapIds[z]) as AnyObj | undefined)?.voxelManager;
@@ -194,7 +186,7 @@ export async function importMaskFrames(
     } catch {
       /* ignore */
     }
-    return null;
+    return strict ? { segmentationId: "", segmentCount: 0, rejected } : null;
   }
 
   for (const [segIndex, zs] of modifiedByZ) {
@@ -215,7 +207,7 @@ export async function importMaskFrames(
   if (Object.keys(nameByIdx).length) meta.segmentLabels = nameByIdx;
   setRoiMaskMeta(segmentationId, meta);
 
-  return { segmentationId, segmentCount: segIndices.length };
+  return { segmentationId, segmentCount: segIndices.length, rejected };
 }
 
 /** ラベルの volume（H65）。格子はプラグインが `loadVolume` で受け取ったもの。 */

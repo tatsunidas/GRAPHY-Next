@@ -15,13 +15,31 @@
 /** 患者 LPS mm の点列（[x,y,z] の配列）。 */
 export type LpsPolyline = number[][];
 
+/** 木の 1 区間（`ct-vessel`・`xa-bifurcation3d` の表示に使う）。 */
+export interface Geometry3DSegment {
+  /** モデル内で一意（H12 の色の宛先 `segmentId` と同じ）。 */
+  id: string;
+  /** 表示名。無ければ `id`。 */
+  name?: string;
+  /** 中心線（患者 LPS mm・近位→遠位）。 */
+  points: LpsPolyline;
+}
+
 export interface Geometry3DContext {
-  /** 何を出すのか（表示名の決定と、将来の分岐に使う）。 */
-  kind: "xa-qca3d";
+  /** 何を出すのか（表示名・注記の決定に使う）。 */
+  kind: "xa-qca3d" | "xa-bifurcation3d" | "ct-vessel";
   /** ウィンドウのタイトルに出す名前。 */
   name: string;
-  /** 3D 中心線（患者 LPS mm）。 */
+  /**
+   * 3D 中心線（患者 LPS mm）。単一血管（`xa-qca3d`）はこれだけを描く。
+   * 木（`segments` あり）では**先頭区間のコピー**（古い読み手・検査のため。描くのは `segments`）。
+   */
   centerlineLps: LpsPolyline;
+  /**
+   * 木の全区間。あれば**区間ごとに 1 つの物体**として描き、H12 の色も `segmentId` で区間ごとに乗せる。
+   * 無ければ（単一の XA）従来どおり `centerlineLps` を 1 本だけ描く。
+   */
+  segments?: Geometry3DSegment[];
   /**
    * 血管モデルの `runId`（`viewer/xaVesselModelStore`）。A7 の解析値（H12）を
    * 色で乗せる宛先。**モデルはこのコンテキストではなく登録簿から読む**——

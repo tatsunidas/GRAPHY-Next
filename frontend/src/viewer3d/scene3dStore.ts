@@ -19,6 +19,8 @@ export type SceneObjKind = "mesh" | "roi" | "centerline";
  * - `embedded`: ボリュームのクリップ箱と**一緒にカットされる**（埋め込み）。
  */
 export type SceneDisplayMode = "float" | "embedded";
+/** 物体の描き方（見た目だけの属性。座標・計測・ピッキングは変えない）。 */
+export type SceneRepresentation = "surface" | "wireframe" | "points";
 
 /** 取り込み元（2D ビューアの ROI / サーバの SEG・RTSTRUCT）への参照。重複取り込みの判定に使う。 */
 export interface SceneObjectSource {
@@ -55,6 +57,8 @@ export interface SceneObject {
   selected?: boolean;
   /** ボリュームのクリップ箱と一緒にカットされるか（埋め込み）/されないか（浮き立たせ）。既定 float。 */
   displayMode: SceneDisplayMode;
+  /** 面・線（辺だけ）・点。既定 surface。 */
+  representation: SceneRepresentation;
   /** 取り込み元（2D の ROI 等）。メッシュ単体などは持たない。 */
   source?: SceneObjectSource;
   // ── 計測サマリ（患者 LPS mm）──

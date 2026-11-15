@@ -9,6 +9,7 @@
  * desktop=`openViewer("mpr")` / web=`window.open("#mpr")` で本画面（`App` の #mpr ルート）を開く。
  * ボリューム構築・チルト補正・ビューポート配線は `viewer/mpr.ts`。
  */
+import { observeResize } from "./mprResize";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { MIN_SLAB_MM, finestVoxelMm, tooFineForVolumeRendering } from "../viewer/volumeScale";
 import { RenderingEngine, Enums, eventTarget } from "@cornerstonejs/core";
@@ -340,6 +341,26 @@ export function MprScreen({ status }: { status: AppStatus | null }) {
       engineRef.current = null;
     };
   }, []);
+
+  // セルのサイズが変わったら（ready で読み出し行・操作部が現れて縮む、ウィンドウのサイズ変更）、canvas を表示寸法へ合わせる。
+  // これが無いと canvas の内部サイズが作った時のまま残り、画像が縦に潰れて表示され、ホバー・十字線の座標とずれる。
+  useEffect(() => {
+    if (phase !== "ready") return;
+    // 最初の 1 回（ready で読み出し行などが現れて縮んだ直後。まだ利用者が何も操作していない）は、新しいセルの大きさへ
+    // 再フィットする。以後（ウィンドウのサイズ変更）はカメラ（スライス位置・十字線・ズーム・パン）を保つ。
+    let first = true;
+    return observeResize([axialRef.current, sagittalRef.current, coronalRef.current], () => {
+      const engine = engineRef.current;
+      if (!engine) return;
+      try {
+        engine.resize(true, !first);
+        first = false;
+      } catch {
+        /* エンジン破棄済み等は無視 */
+      }
+      refreshOverlays();
+    });
+  }, [phase, refreshOverlays]);
 
   // カメラ変更（Crosshairs ジャンプ・スライス送り・pan/zoom）でオーバーレイを追従。
   useEffect(() => {

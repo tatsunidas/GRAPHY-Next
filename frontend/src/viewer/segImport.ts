@@ -14,6 +14,16 @@
 import { fetchSeries, readDicomSeg } from "../api";
 import { getViewerContext } from "./viewerContext";
 import { firstBaseViewport, importMaskFrames } from "./maskFrames";
+import { emptyRejectCounts, totalRejected, type SegRejectCounts } from "./segFramePlacement";
+
+/** SEG 取込の結果。`rejected` は位置が合わず載せなかった分の集計、`rejectedLabels` はその SEG の名前。 */
+export interface SegImportSummary {
+  segments: number;
+  rejected: SegRejectCounts;
+  rejectedLabels: string[];
+  /** 読み込める SEG シリーズがスタディに 1 本もあったか。 */
+  hadSeg: boolean;
+}
 
 /**
  * 表示中スタディの SEG シリーズをすべて読み、表示中 source シリーズへ Mask を復元する。
@@ -21,13 +31,15 @@ import { firstBaseViewport, importMaskFrames } from "./maskFrames";
  * `onProgress`（0〜1）は SEG シリーズ数と各シリーズ内のセグメント処理数から進捗率を算出して通知する
  * （RoiManagerPanel の SEG⬆ ボタンの円形プログレス表示向け）。
  */
-export async function importSegForCurrentView(onProgress?: (frac: number) => void): Promise<number> {
+export async function importSegForCurrentView(onProgress?: (frac: number) => void): Promise<SegImportSummary> {
+  const summary: SegImportSummary = { segments: 0, rejected: emptyRejectCounts(), rejectedLabels: [], hadSeg: false };
   const vp = firstBaseViewport();
   const ctx = vp ? getViewerContext(vp.id) : null;
-  if (!vp || !ctx?.studyUid) return 0;
+  if (!vp || !ctx?.studyUid) return summary;
   const seriesList = await fetchSeries(ctx.studyUid).catch(() => []);
   const segSeries = seriesList.filter((s) => (s.modality ?? "").toUpperCase() === "SEG");
-  if (!segSeries.length) return 0;
+  if (!segSeries.length) return summary;
+  summary.hadSeg = true;
 
   let total = 0;
   const seriesCount = segSeries.length;
@@ -38,9 +50,16 @@ export async function importSegForCurrentView(onProgress?: (frac: number) => voi
       continue;
     }
     const label = s.seriesDescription?.trim() || "SEG";
-    const res = await importMaskFrames(vp, result, label, (segFrac) => onProgress?.((i + segFrac) / seriesCount));
-    if (res) total += res.segmentCount;
+    const res = await importMaskFrames(vp, result, label, (segFrac) => onProgress?.((i + segFrac) / seriesCount), true);
+    if (res) {
+      total += res.segmentCount;
+      if (totalRejected(res.rejected) > 0) {
+        for (const k of Object.keys(summary.rejected) as Array<keyof SegRejectCounts>) summary.rejected[k] += res.rejected[k];
+        summary.rejectedLabels.push(label);
+      }
+    }
     onProgress?.((i + 1) / seriesCount);
   }
-  return total;
+  summary.segments = total;
+  return summary;
 }

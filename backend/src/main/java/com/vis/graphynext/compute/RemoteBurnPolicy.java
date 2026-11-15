@@ -20,13 +20,13 @@ final class RemoteBurnPolicy {
 
     /** マスクが無ければ送らないモダリティ（焼き込みが普通にあり、BurnedInAnnotation が当てにならない）。 */
     static final Set<String> RISKY_MODALITIES = Set.of(
-            "US", "XA", "RF", "ES", "SC", "OT", "DX", "CR", "MG", "XC", "GM", "SM", "IVUS", "IVOCT", "DOC");
+            "US", "XA", "RF", "ES", "SC", "OT", "DX", "CR", "MG", "PX", "IO", "XC", "GM", "SM", "IVUS", "IVOCT", "DOC");
 
     /**
-     * データがこの PC の外へ出ない計算機（kind=local）に限り、マスク無しでも通すモダリティ。胸部X線などの単純X線は
+     * データがこの PC の外へ出ない計算機（kind=local）に限り、マスク無しでも通すモダリティ。胸部X線・パノラマ・口内撮影などの単純X線は
      * 焼き込みが普通にあるが、外へ出ないので匿名化だけで足りる。それ以外の危ない種類は local でも通さない。
      */
-    static final Set<String> LOCAL_OK_MODALITIES = Set.of("DX", "CR", "MG");
+    static final Set<String> LOCAL_OK_MODALITIES = Set.of("DX", "CR", "MG", "PX", "IO");
 
     /** マスクが無ければ送らない SOP クラス（の接頭辞）。二次キャプチャ・可視光（写真・動画）・PDF。 */
     static final Set<String> RISKY_SOP_PREFIXES = Set.of(

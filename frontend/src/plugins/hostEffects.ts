@@ -48,6 +48,8 @@ export const HOST_EFFECTS: Record<HostKey, ToolEffect> = {
   measureLabels: "read",
   extractCenterline: "read",
   sampleCenterlineFrames: "read",
+  measureMaskCrossSections: "read",
+  orientCenterlineGraph: "read",
   loadStore: "read",
   // 表示・遷移（画面の見え方を変える。保存データは変えない）
   notify: "display",
@@ -63,6 +65,7 @@ export const HOST_EFFECTS: Record<HostKey, ToolEffect> = {
   mountVolumeView: "display",
   mountSeriesPanel: "display",
   openCurvedMpr: "display",
+  openViewer3d: "display",
   openTransientSeries: "display",
   openVesselModel3d: "display",
   // データを書く・外へ出す・外部を動かす
@@ -90,6 +93,7 @@ export const HOST_EFFECTS: Record<HostKey, ToolEffect> = {
   cache: "write",
   db: "write",
   microscopy: "write",
+  nifti: "write",
   video: "write",
 };
 

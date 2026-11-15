@@ -10,15 +10,16 @@
  *
  * <p>🔴 中心線は**登録簿のモデルの点列**を渡す。H12 の色は `segments[0].points` の添字で塗られるので、
  * 再計算した点列を渡すと色が前後逆に乗る（旧ダイアログの注記と同じ）。
- * <p>🔴 分岐部のモデルでは開かない。3D 画面は中心線を 1 本しか描かず、先頭区間だけに色を乗せると他の枝が
- * 「値なし」に見えて誤解を招く（`Geometry3DScreen` の注記: 分岐部は将来）。
+ * <p>単一血管の XA（`xa-qca3d`）は従来どおり中心線 1 本。**木（分岐部の XA・CT 由来）は区間ごとの点列を `segments` に入れ**、
+ * 3D 画面が区間ごとに 1 物体を描き、色も `segmentId` で区間ごとに乗せる（先頭区間だけに色が乗って他の枝が
+ * 「値なし」に見える問題は、区間ごとの描画で解消した）。
  */
 import { desktop } from "../desktopBridge";
-import { getVesselModel, type XaVesselModel } from "../viewer/xaVesselModelStore";
+import { getVesselModel, type VesselModel } from "../viewer/xaVesselModelStore";
 import { writeGeometry3dContext, type Geometry3DContext } from "./geometry3dContext";
 
 export interface OpenVesselModel3dDeps {
-  getModel: (runId: string) => XaVesselModel | null;
+  getModel: (runId: string) => VesselModel | null;
   writeContext: (ctx: Omit<Geometry3DContext, "ts">) => void;
   openWindow: () => void;
 }
@@ -35,24 +36,29 @@ const defaultDeps: OpenVesselModel3dDeps = {
 };
 
 /** 開けない理由（英語の短文。プラグインの結果欄にそのまま出る）。開けるなら null。 */
-function blocker(model: XaVesselModel | null): string | null {
+function blocker(model: VesselModel | null): string | null {
   if (!model) return "no vessel model is registered under this runId";
-  if (model.kind !== "xa-qca3d") return "the 3D view shows a single centerline; bifurcation models are not supported";
-  const points = model.segments[0]?.points;
-  if (!points || points.length < 2) return "the model has fewer than 2 centerline points";
+  if (model.segments.length === 0) return "the model has no segments";
+  const short = model.segments.find((s) => !s.points || s.points.length < 2);
+  if (short) return `segment ${short.id} has fewer than 2 centerline points`;
   return null;
 }
 
-/** @returns 開いたら true。モデルが無い・分岐部・点が足りないときは何もせず false。 */
+/** @returns 開いたら true。モデルが無い・点が足りないときは何もせず false。 */
 export function openVesselModel3d(runId: string, deps: OpenVesselModel3dDeps = defaultDeps): boolean {
   const model = deps.getModel(runId);
   if (blocker(model)) return false;
-  const points = model!.segments[0].points;
+  const copy = (pts: [number, number, number][]) => pts.map((p) => [p[0], p[1], p[2]]);
+  const first = model!.segments[0].points;
   deps.writeContext({
-    kind: "xa-qca3d",
+    kind: model!.kind,
     name: model!.label,
     runId: model!.runId,
-    centerlineLps: points.map((p) => [p[0], p[1], p[2]]),
+    centerlineLps: copy(first),
+    // 単一血管の XA は従来どおり centerlineLps だけ（挙動を変えない）。木は区間ごとに渡す。
+    ...(model!.kind === "xa-qca3d"
+      ? {}
+      : { segments: model!.segments.map((s) => ({ id: s.id, ...(s.name !== undefined ? { name: s.name } : {}), points: copy(s.points) })) }),
   });
   deps.openWindow();
   return true;

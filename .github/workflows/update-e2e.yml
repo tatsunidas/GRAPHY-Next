@@ -1,0 +1,83 @@
+name: Update E2E (real release)
+
+# アプリ内の自動更新の「本物」の通し確認。アプリのコードは変えない。製品のコード（desktop/appUpdate.js・minisign.js）を
+# 実際の GitHub のリリースで通す。設計・読み方: automator/src/smoke/updateE2e.ts の冒頭。
+#   mode=draft     下書きの新版（公開前）。gh で取得し、SHA-256 と公式鍵の署名を検証 → Windows で v旧 → v新 のサイレント更新。
+#   mode=published 公開後。製品の取得・検証のコード（pickAsset・fetchText・downloadToFile・verifyFile）を本物の releases/latest で通す
+#                  → Windows のサイレント更新、Linux の AppImage の置き換え。
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "draft（公開前の下書き）か published（公開後）"
+        required: true
+        default: "draft"
+        type: choice
+        options: [draft, published]
+      old_tag:
+        description: "旧版（公開済みのタグ）"
+        required: true
+        default: "v0.6.1"
+      new_tag:
+        description: "新版（下書きまたは公開済みのタグ）"
+        required: true
+        default: "v0.6.2"
+
+# 下書きのリリースは contents: read のトークンでは見えない（release not found）ので write にする。
+# このワークフローは取得（読み取り）しかしない（書き込み・公開・削除はしない）。
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    name: Windows (${{ inputs.mode }})
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install automator
+        working-directory: automator
+        shell: bash
+        run: npm ci
+      - name: End-to-end
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MODE: ${{ inputs.mode }}
+          OLD_TAG: ${{ inputs.old_tag }}
+          NEW_TAG: ${{ inputs.new_tag }}
+        run: |
+          cd automator
+          npx tsx src/smoke/updateE2e.ts --mode "$MODE" --old "$OLD_TAG" --new "$NEW_TAG"
+
+  linux:
+    name: Linux AppImage (${{ inputs.mode }})
+    if: ${{ inputs.mode == 'published' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install automator
+        working-directory: automator
+        run: npm ci
+      # Ubuntu 24.04 の AppArmor は非特権の user namespace を制限し、展開した AppImage の Chromium sandbox が動かない。
+      # CI のランナーでだけ緩める（製品には影響しない。deb の検査は別に apparmor プロファイルで行っている）。
+      - name: Allow unprivileged user namespaces (CI only)
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+      - name: Install xvfb
+        run: command -v xvfb-run >/dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq xvfb; }
+      - name: End-to-end
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MODE: ${{ inputs.mode }}
+          OLD_TAG: ${{ inputs.old_tag }}
+          NEW_TAG: ${{ inputs.new_tag }}
+        run: |
+          cd automator
+          xvfb-run -a --server-args="-screen 0 1600x1000x24" npx tsx src/smoke/updateE2e.ts --mode "$MODE" --old "$OLD_TAG" --new "$NEW_TAG"

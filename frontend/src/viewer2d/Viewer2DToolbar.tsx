@@ -25,6 +25,7 @@ import type {
   PluginRtDoseResult,
 } from "../plugins/pluginTypes";
 import type { PluginCurvedMprResult, PluginCurvedMprSpec } from "../plugins/pluginCurvedMprApi";
+import type { PluginViewer3dResult, PluginViewer3dSpec } from "../plugins/pluginViewer3dApi";
 import type { PluginTransientSeriesHandle, PluginTransientSeriesSpec } from "../plugins/pluginTypes";
 import { ToolIcon } from "../icons/ToolIcon";
 import { OverflowRow } from "../viewer/OverflowRow";
@@ -261,6 +262,8 @@ export interface ViewerActions {
   launchCurvedMpr(): void;
   /** プラグインから中心線を渡して Curved MPR 窓を開く（H73）。出所は呼び出し側（host）が渡す。 */
   openCurvedMpr(spec: PluginCurvedMprSpec, producer: { id: string; name: string; version: string }): Promise<PluginCurvedMprResult>;
+  /** プラグインから視点・クリップ面を渡して 3D 窓を開く（出所は呼び出し側（host）が渡す）。 */
+  openViewer3d(spec: PluginViewer3dSpec, producer: { id: string; name: string; version: string }): Promise<PluginViewer3dResult>;
   /** プラグインが計算した値を一時シリーズのタイルとして開く。出所は呼び出し側（host）が渡す。保管庫には保存されない。 */
   openTransientSeries(spec: PluginTransientSeriesSpec, producer: { id: string; name: string }): Promise<PluginTransientSeriesHandle>;
   /** 対象タイルのシリーズで Histogram 解析ダイアログを開く。 */

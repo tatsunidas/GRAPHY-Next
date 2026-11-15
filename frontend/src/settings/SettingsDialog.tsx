@@ -17,6 +17,7 @@ import { DbFolderPanel } from "./DbFolderPanel";
 import { GdrivePanel } from "./GdrivePanel";
 import { ImportWatchPanel } from "./ImportWatchPanel";
 import { RetentionPanel } from "./RetentionPanel";
+import { PrefetchPanel } from "./PrefetchPanel";
 import { isDesktop } from "../desktopBridge";
 import { useI18n, type Locale, type TFn } from "../i18n/i18n";
 import { getDateFormat, getTimeFormat, setDateFormat, setTimeFormat, type DateFormat, type TimeFormat } from "../i18n/dateFormat";
@@ -155,6 +156,8 @@ export function SettingsDialog({
               <ImportWatchPanel />
             ) : category.id === "retention" ? (
               <RetentionPanel />
+            ) : category.id === "prefetch" ? (
+              <PrefetchPanel />
             ) : category.id === "ai" ? (
               // 🔴 **AI の設定は backend の Settings に載せない。** 提供元・接続先・モデルは
               //    Electron main の ai-providers.json、鍵は safeStorage（fw/ai-routing-design.md §4.1）。

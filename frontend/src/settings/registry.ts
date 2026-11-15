@@ -552,6 +552,15 @@ export const SETTINGS_REGISTRY: CategoryDef[] = [
               { value: "full", labelKey: "settings.opt.viewer3dRenderQuality.full" },
             ],
           },
+          {
+            key: "viewer3d.gpuMemoryMb",
+            labelKey: "settings.field.viewer3dGpuMemoryMb",
+            type: "number",
+            default: 0,
+            min: 0,
+            max: 1048576,
+            helpKey: "settings.field.viewer3dGpuMemoryMb.help",
+          },
         ],
       },
       {
@@ -640,6 +649,13 @@ export const SETTINGS_REGISTRY: CategoryDef[] = [
     id: "retention",
     labelKey: "settings.cat.retention",
     icon: "🗑",
+    sections: [],
+  },
+  {
+    // 事前取得は専用パネル（予約一覧の元・定時・取得の絞り込みと実行の状態）。SettingsDialog で特別扱い。standalone のみ動く。
+    id: "prefetch",
+    labelKey: "settings.cat.prefetch",
+    icon: "⏬",
     sections: [],
   },
   {

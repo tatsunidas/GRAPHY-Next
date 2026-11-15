@@ -8,6 +8,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.vis.graphynext.dicom.store.DicomInstanceRepository;
 import com.vis.graphynext.plugin.store.PluginDocumentRepository;
+import com.vis.graphynext.prefetch.PrefetchHoldRepository;
 import com.vis.graphynext.radiomics.GlamAnalysisDocumentRepository;
 import com.vis.graphynext.registration.RegistrationDocumentRepository;
 import com.vis.graphynext.report.ReportRepository;
@@ -64,12 +65,14 @@ public class RetentionProtections {
     private final PluginDocumentRepository plugins;
     private final SettingsService settings;
     private final InUseRegistry inUse;
+    private final PrefetchHoldRepository prefetchHolds;
     private final ObjectMapper mapper = new ObjectMapper();
 
     public RetentionProtections(DicomInstanceRepository instances, StudyRetentionHoldRepository holds,
                                 ReportRepository reports, GlamAnalysisDocumentRepository glam,
                                 RoiDocumentRepository rois, RegistrationDocumentRepository registrations,
-                                PluginDocumentRepository plugins, SettingsService settings, InUseRegistry inUse) {
+                                PluginDocumentRepository plugins, SettingsService settings, InUseRegistry inUse,
+                                PrefetchHoldRepository prefetchHolds) {
         this.instances = instances;
         this.holds = holds;
         this.reports = reports;
@@ -79,6 +82,7 @@ public class RetentionProtections {
         this.plugins = plugins;
         this.settings = settings;
         this.inUse = inUse;
+        this.prefetchHolds = prefetchHolds;
     }
 
     /** 与えた検査のうち、保護の理由があるもの（受信日時に関わる理由は {@link RetentionPlanner} が足す）。 */
@@ -94,6 +98,8 @@ public class RetentionProtections {
         reports.studiesWithReports().forEach(s -> add(out, known, s, ProtectionReason.REPORT));
         glam.studiesWithAnalyses().forEach(s -> add(out, known, s, ProtectionReason.GLAM));
         inUse.snapshot().forEach(s -> add(out, known, s, ProtectionReason.IN_USE));
+        prefetchHolds.activeStudyUids(System.currentTimeMillis())
+                .forEach(s -> add(out, known, s, ProtectionReason.PREFETCH_SCHEDULED));
 
         // ROI・解析状態: SOP → 検査
         Set<String> sops = new HashSet<>();

@@ -176,7 +176,10 @@ public class SegExportService {
         pmItem.setDouble(Tag.PixelSpacing, VR.DS, req.pixelSpacing()[0], req.pixelSpacing()[1]);
         double thick = req.sliceThickness() > 0 ? req.sliceThickness() : 1.0;
         pmItem.setDouble(Tag.SliceThickness, VR.DS, thick);
-        pmItem.setDouble(Tag.SpacingBetweenSlices, VR.DS, thick);
+        // SpacingBetweenSlices は隣接スライスの中心間距離（任意）。間隔が一様でなければ呼び出し側が 0 を渡し、書かない。
+        if (req.spacingBetweenSlices() > 0) {
+            pmItem.setDouble(Tag.SpacingBetweenSlices, VR.DS, req.spacingBetweenSlices());
+        }
         pm.add(pmItem);
         shared.add(sharedItem);
 

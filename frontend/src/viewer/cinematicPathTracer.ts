@@ -7,7 +7,7 @@
  * 旧 GRAPHY `shaders/cinematic.frag`(355行)＋`present.frag` の **WebGL2 (GLSL ES 3.00) 忠実移植**。
  *
  * pure-vtk の描画とは独立した WebGL2 コンテキスト（オーバーレイ canvas）で動く。ボリュームを 3D テクスチャ
- * （正規化・最大 256³ にダウンサンプル）、色 LUT＋W/L を焼き込んだ 256×1 テクスチャに載せ、HG 位相関数＋
+ * （[0,1] に正規化した R16F。大きさは `cinematicBudget.planCinematicGrid` が GPU の予算から決め、間引くときは箱平均）、色 LUT＋W/L を焼き込んだ 256×1 テクスチャに載せ、HG 位相関数＋
  * Cook-Torrance GGX サーフェス BRDF＋ソフトシャドウで各ピクセル 1 パス分の放射輝度を推定する。
  *
  * 蓄積は **ping-pong RGBA32F**（float ブレンド拡張に依存せず、前フレーム蓄積をサンプルして加算）。present パスで
@@ -23,7 +23,7 @@
 type Any = any;
 type V3 = [number, number, number];
 
-const MAX_DIM = 256; // 3D テクスチャの各軸上限（メモリ/性能ガード）
+import { maxStepsFor, resampleSlabs, TEXEL_BYTES, type Vec3 as BudgetVec3 } from "./cinematicBudget";
 
 // ── フルスクリーン三角形 頂点シェーダ ──
 const VERT = `#version 300 es
@@ -72,7 +72,13 @@ uniform float uClearcoat;
 uniform float uClearcoatRoughness;
 uniform float uSurfaceGradientThreshold;
 
-const int PRIMARY_STEPS = 128;
+uniform vec3 uTexDims;         // 3D テクスチャの寸法（テクセル）
+uniform vec3 uBoxMm;           // ボリュームの箱の各軸の長さ（mm）。tex 空間の長さ → mm
+uniform float uOpacityUnitMm;  // 不透明度カーブの単位長さ（mm。vtk の scalarOpacityUnitDistance）
+uniform int uMaxSteps;         // 一次レイの歩数の上限（箱の対角のテクセル数）
+uniform int uCorrect;          // 1: 歩幅に応じた不透明度の補正（検査用に 0 にできる）
+uniform int uDebugSteps;       // 1: 中央の一次レイの歩数を色で返す（検査用）
+
 const int SHADOW_STEPS = 48;
 const int MAX_BOUNCES = 4;
 const float PI = 3.14159265359;
@@ -97,6 +103,18 @@ float sampleAlpha(vec3 texCoord, out vec3 albedo) {
   return src.a;
 }
 
+// 不透明度カーブの α は「単位長さ uOpacityUnitMm を通り抜けたときの不透明度」。歩幅 stepMm の 1 歩の不透明度に直す。
+float stepAlpha(float alpha, float stepMm) {
+  if (uCorrect == 0) return alpha;
+  return 1.0 - pow(1.0 - alpha, stepMm / uOpacityUnitMm);
+}
+
+// 一次レイの歩数: 箱の中の区間をテクセル単位で測った弦長の切り上げ（1 歩 ≤ 1 テクセル）。float の誤差で 100.0 が 101 にならないよう 1e-3 を引く。
+int primaryStepsFor(float dist, vec3 dir) {
+  float chord = length(dir * dist * uTexDims);
+  return clamp(int(ceil(chord - 1e-3)), 1, uMaxSteps);
+}
+
 float sampleAlphaOnly(vec3 texCoord) {
   float rawVal = texture(volumeTex, texCoord).r;
   float winMin = uWinCenter - (uWinWidth * 0.5);
@@ -105,10 +123,11 @@ float sampleAlphaOnly(vec3 texCoord) {
 }
 
 vec3 computeGradient(vec3 pos) {
-  const float eps = 0.005;
-  float dx = sampleAlphaOnly(pos + vec3(eps, 0.0, 0.0)) - sampleAlphaOnly(pos - vec3(eps, 0.0, 0.0));
-  float dy = sampleAlphaOnly(pos + vec3(0.0, eps, 0.0)) - sampleAlphaOnly(pos - vec3(0.0, eps, 0.0));
-  float dz = sampleAlphaOnly(pos + vec3(0.0, 0.0, eps)) - sampleAlphaOnly(pos - vec3(0.0, 0.0, eps));
+  // 中心差分の幅は各軸 1 テクセル（テクスチャの解像度に合わせる）。
+  vec3 e = 1.0 / uTexDims;
+  float dx = sampleAlphaOnly(pos + vec3(e.x, 0.0, 0.0)) - sampleAlphaOnly(pos - vec3(e.x, 0.0, 0.0));
+  float dy = sampleAlphaOnly(pos + vec3(0.0, e.y, 0.0)) - sampleAlphaOnly(pos - vec3(0.0, e.y, 0.0));
+  float dz = sampleAlphaOnly(pos + vec3(0.0, 0.0, e.z)) - sampleAlphaOnly(pos - vec3(0.0, 0.0, e.z));
   return vec3(dx, dy, dz);
 }
 
@@ -165,12 +184,14 @@ float shadowTransmittance(vec3 origin) {
   float dist = tFar - tNear;
   if (dist <= 0.0001) return 1.0;
   float stepSize = dist / float(SHADOW_STEPS);
+  // 光学的厚みは歩幅（mm）に比例させる（補正あり）。補正なしは 1 歩あたり α のまま。
+  float depthScale = uCorrect == 0 ? 1.0 : length(lightDir * stepSize * uBoxMm) / uOpacityUnitMm;
   vec3 pos = origin + lightDir * tNear;
   float opticalDepth = 0.0;
   for (int i = 0; i < SHADOW_STEPS; i++) {
     vec3 albedo;
     float alpha = sampleAlpha(pos, albedo);
-    opticalDepth += -log(max(1.0 - alpha, 1e-4));
+    opticalDepth += -log(max(1.0 - alpha, 1e-4)) * depthScale;
     pos += lightDir * stepSize;
   }
   return exp(-opticalDepth);
@@ -225,13 +246,15 @@ vec3 tracePath(vec3 rayOrigin, vec3 rayDir) {
     tNear = max(tNear, 0.0);
     float dist = tFar - tNear;
     if (dist <= 0.0001) break;
-    float stepSize = dist / float(PRIMARY_STEPS);
+    int nSteps = primaryStepsFor(dist, rayDir);
+    float stepSize = dist / float(nSteps);
+    float stepMm = length(rayDir * stepSize * uBoxMm);
     vec3 pos = rayOrigin + rayDir * (tNear + rand() * stepSize);
     bool hit = false;
     vec3 hitAlbedo = vec3(0.0);
-    for (int i = 0; i < PRIMARY_STEPS; i++) {
+    for (int i = 0; i < nSteps; i++) {
       vec3 albedo;
-      float alpha = sampleAlpha(pos, albedo);
+      float alpha = stepAlpha(sampleAlpha(pos, albedo), stepMm);
       if (rand() < alpha) { hit = true; hitAlbedo = albedo; break; }
       pos += rayDir * stepSize;
     }
@@ -292,6 +315,15 @@ void main() {
   vec3 oTex = (uWorldToTex * vec4(uCameraPos, 1.0)).xyz;
   vec3 fTex = (uWorldToTex * vec4(farW, 1.0)).xyz;
   vec3 primaryDir = normalize(fTex - oTex);
+
+  if (uDebugSteps == 1) {
+    // 検査用: 一次レイの歩数をそのまま返す（RGBA32F の蓄積に書き、1 画素読み戻す）。
+    float dn, df;
+    int ns = 0;
+    if (intersectBox(oTex, primaryDir, dn, df)) ns = primaryStepsFor(df - max(dn, 0.0), primaryDir);
+    FragColor = vec4(float(ns) / 4096.0, 0.0, 0.0, 1.0);
+    return;
+  }
 
   uvec2 px = uvec2(gl_FragCoord.xy);
   uint pixelSeed = px.x * 1973u + px.y * 9277u + uFrameSeed * 26699u;
@@ -360,7 +392,41 @@ export function defaultPathTraceParams(): PathTraceParams {
   };
 }
 
+/** 3D テクスチャの実際の大きさ（テクスチャを作った後に読む）。 */
+export interface CinematicTexInfo {
+  /** 作ったテクスチャの寸法。 */
+  texDims: BudgetVec3;
+  /** 元のボリュームの寸法。 */
+  srcDims: BudgetVec3;
+  /** 間引き後の 1 テクセルの間隔 mm（元の箱と同じ長さを保つ）。 */
+  spacingMm: BudgetVec3;
+  /** テクスチャのバイト数（R16F）。 */
+  textureBytes: number;
+}
+
+export type CinematicCreateFailure = "unsupported" | "shader" | "out-of-memory" | "error";
+
+export type CinematicCreateResult =
+  | { ok: true; engine: CinematicEngine }
+  | { ok: false; reason: CinematicCreateFailure; detail?: string };
+
 export interface CinematicEngine {
+  /** 3D テクスチャの実際の大きさ。 */
+  getTexInfo(): CinematicTexInfo;
+  /** 不透明度カーブの単位長さ（mm。vtk の scalarOpacityUnitDistance）。歩幅に応じた不透明度の補正の基準。蓄積はやり直す。 */
+  setOpacityUnitMm(mm: number): void;
+  /** 開発・検査用: 歩幅に応じた不透明度の補正を入／切（既定は入）。蓄積はやり直す。 */
+  setOpacityCorrection(on: boolean): void;
+  /** 開発・検査用: 中央の画素の一次レイの歩数（シェーダが決めた値）を読み戻す。蓄積は壊れる。読めなければ null。 */
+  debugPrimarySteps(): number | null;
+  /** このコンテキストが失われたか（GPU のメモリ不足・ドライバのリセットなど）。失われたら描画は止まる。 */
+  isLost(): boolean;
+  /** コンテキストが失われたときに呼ばれる。戻り値で解除。 */
+  onLost(cb: () => void): () => void;
+  /** 開発・検査用: 乱数の種をずらす（画は同じ分布で別の雑音になる。蓄積は呼び出し側が reset する）。 */
+  setSeedOffset(n: number): void;
+  /** 開発・検査用: 3D テクスチャの z 層を読み戻す（[0,1] に正規化した値、tx×ty の Float32Array）。読めなければ null。 */
+  readTexLayer(z: number): Float32Array | null;
   /** vtk カメラ（renderer から取得）と表示サイズで per-pixel レイを更新。 */
   setCamera(invViewProj: number[], cameraPosWorld: V3): void;
   /** 色 LUT（W/L 焼き込み済み 256×4 RGBA 0..255）を設定。 */
@@ -393,17 +459,30 @@ export interface CinematicEngine {
   dispose(): void;
 }
 
-/** WebGL2 パストレーサを canvas 上に構築。GPU 非対応（float FBO 不可等）なら null。 */
+/**
+ * WebGL2 パストレーサを canvas 上に構築する。3D テクスチャの寸法は呼び出し側が決める（`texDims`。
+ * `cinematicBudget.planCinematicGrid` の結果）。失敗したら**作ったコンテキストを必ず解放**し、理由を返す
+ * （unsupported=WebGL2・float 描画が使えない／shader／out-of-memory=テクスチャの確保で GPU のメモリ不足／error）。
+ */
 export function createCinematicPathTracer(
   canvas: HTMLCanvasElement,
   imageData: Any,
   geom: { origin: V3; spacing: V3; direction: number[]; dims: [number, number, number] },
   params: PathTraceParams,
-): CinematicEngine | null {
+  texDims: BudgetVec3,
+): CinematicCreateResult {
   const gl = canvas.getContext("webgl2", { alpha: true, premultipliedAlpha: false, antialias: false });
-  if (!gl) return null;
-  if (!gl.getExtension("EXT_color_buffer_float")) return null; // RGBA32F レンダー必須
-  const floatLinear = !!gl.getExtension("OES_texture_float_linear");
+  if (!gl) return { ok: false, reason: "unsupported" };
+  const release = (reason: CinematicCreateFailure, detail?: string): CinematicCreateResult => {
+    try {
+      gl.getExtension("WEBGL_lose_context")?.loseContext(); // 失敗した経路でもコンテキストを残さない（開閉で上限に達する）
+    } catch {
+      /* ignore */
+    }
+    return { ok: false, reason, detail };
+  };
+  if (!gl.getExtension("EXT_color_buffer_float")) return release("unsupported"); // RGBA32F レンダー必須
+  const floatLinear = !!gl.getExtension("OES_texture_float_linear"); // 蓄積（RGBA32F）の線形補間用。ボリュームは R16F なので不要
 
   const compile = (type: number, src: string): WebGLShader | null => {
     const sh = gl.createShader(type);
@@ -438,7 +517,7 @@ export function createCinematicPathTracer(
 
   const traceProg = link(CINEMATIC_FRAG);
   const presentProg = link(PRESENT_FRAG);
-  if (!traceProg || !presentProg) return null;
+  if (!traceProg || !presentProg) return release("shader");
 
   // フルスクリーン三角形。
   const vao = gl.createVertexArray();
@@ -450,9 +529,27 @@ export function createCinematicPathTracer(
   gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
   gl.bindVertexArray(null);
 
-  // ── 3D ボリュームテクスチャ（正規化・ダウンサンプル）──
-  const volTex = buildVolumeTexture(gl, imageData, geom.dims, floatLinear);
-  if (!volTex) return null;
+  // ── 3D ボリュームテクスチャ（正規化・箱平均で間引き・R16F）──
+  const built = buildVolumeTexture(gl, imageData, geom.dims, texDims);
+  if (!built.ok) return release(built.reason, built.detail);
+  const volTex = built.tex;
+  const texInfo: CinematicTexInfo = {
+    texDims: built.texDims,
+    srcDims: [geom.dims[0], geom.dims[1], geom.dims[2]],
+    spacingMm: [0, 1, 2].map((i) => (geom.dims[i] * (geom.spacing[i] || 1)) / built.texDims[i]) as BudgetVec3,
+    textureBytes: built.texDims[0] * built.texDims[1] * built.texDims[2] * TEXEL_BYTES,
+  };
+  let lost = false;
+  const lostCbs = new Set<() => void>();
+  canvas.addEventListener(
+    "webglcontextlost",
+    (e) => {
+      e.preventDefault();
+      lost = true;
+      for (const cb of Array.from(lostCbs)) cb();
+    },
+    false,
+  );
 
   // ── LUT テクスチャ（256×1 RGBA）──
   const lutTex = gl.createTexture();
@@ -513,6 +610,8 @@ export function createCinematicPathTracer(
     uRoughness: uT("uRoughness"), uSpecular: uT("uSpecular"), uMetallic: uT("uMetallic"),
     uClearcoat: uT("uClearcoat"), uClearcoatRoughness: uT("uClearcoatRoughness"),
     uSurfaceGradientThreshold: uT("uSurfaceGradientThreshold"),
+    uTexDims: uT("uTexDims"), uBoxMm: uT("uBoxMm"), uOpacityUnitMm: uT("uOpacityUnitMm"),
+    uMaxSteps: uT("uMaxSteps"), uCorrect: uT("uCorrect"), uDebugSteps: uT("uDebugSteps"),
   };
   const uP = (n: string) => gl.getUniformLocation(presentProg, n);
   const ploc = { uAccumTex: uP("uAccumTex"), uFrameCount: uP("uFrameCount"), uExposure: uP("uExposure") };
@@ -525,6 +624,11 @@ export function createCinematicPathTracer(
   let clipMax: V3 = [1, 1, 1];
   let p = { ...params };
   let frameCount = 0;
+  let seedOffset = 0; // 検査用（乱数の種だけ変えて雑音の床を測る）
+  let opacityUnitMm = 1.0; // vtk の scalarOpacityUnitDistance（呼び出し側が渡す）
+  let opacityCorrection = true; // 検査用に切れる
+  const boxMm: V3 = [geom.dims[0] * (geom.spacing[0] || 1), geom.dims[1] * (geom.spacing[1] || 1), geom.dims[2] * (geom.spacing[2] || 1)];
+  const maxSteps = maxStepsFor(texInfo.texDims);
   let fence: WebGLSync | null = null; // 直前のフレームの完了を見る（isIdle）
   let src = 0; // 現在の「前フレーム蓄積」= accum[src]、書込先 = accum[1-src]
 
@@ -546,7 +650,112 @@ export function createCinematicPathTracer(
     gl.bindVertexArray(null);
   };
 
+  /** trace プログラムの uniform を現在の状態で設定する（renderFrame と検査用の読み戻しで共有）。 */
+  const applyTraceUniforms = (debugSteps: boolean): void => {
+  gl.uniformMatrix4fv(loc.uInvViewProj, false, new Float32Array(invViewProj));
+  gl.uniformMatrix4fv(loc.uWorldToTex, false, new Float32Array(worldToTex));
+  gl.uniform3fv(loc.uCameraPos, cameraPos);
+  gl.uniform1f(loc.uWinCenter, 0.5);
+  gl.uniform1f(loc.uWinWidth, 1.0);
+  gl.uniform3fv(loc.uLightDir, lightTex());
+  gl.uniform1f(loc.uLightIntensity, p.lightIntensity);
+  gl.uniform1f(loc.uAmbientIntensity, p.ambientIntensity);
+  gl.uniform1f(loc.uAnisotropy, p.anisotropy);
+  gl.uniform1f(loc.uLightAngularRadius, p.lightAngularRadius);
+  gl.uniform1i(loc.uSamplesPerFrame, Math.max(1, Math.round(p.samplesPerFrame)));
+  gl.uniform1ui(loc.uFrameSeed, (frameCount + 1 + seedOffset) >>> 0);
+  gl.uniform3fv(loc.uClipMin, clipMin);
+  gl.uniform3fv(loc.uClipMax, clipMax);
+  gl.uniform1f(loc.uRoughness, p.roughness);
+  gl.uniform1f(loc.uSpecular, p.specular);
+  gl.uniform1f(loc.uMetallic, p.metallic);
+  gl.uniform1f(loc.uClearcoat, p.clearcoat);
+  gl.uniform1f(loc.uClearcoatRoughness, p.clearcoatRoughness);
+  gl.uniform1f(loc.uSurfaceGradientThreshold, p.surfaceGradientThreshold);
+    gl.uniform3f(loc.uTexDims, texInfo.texDims[0], texInfo.texDims[1], texInfo.texDims[2]);
+    gl.uniform3fv(loc.uBoxMm, boxMm);
+    gl.uniform1f(loc.uOpacityUnitMm, opacityUnitMm);
+    gl.uniform1i(loc.uMaxSteps, maxSteps);
+    gl.uniform1i(loc.uCorrect, opacityCorrection ? 1 : 0);
+    gl.uniform1i(loc.uDebugSteps, debugSteps ? 1 : 0);
+  };
+
   const engine: CinematicEngine = {
+    getTexInfo() {
+      return texInfo;
+    },
+    setOpacityUnitMm(mm) {
+      if (Number.isFinite(mm) && mm > 0 && mm !== opacityUnitMm) {
+        opacityUnitMm = mm;
+        frameCount = 0;
+      }
+    },
+    setOpacityCorrection(on) {
+      if (on !== opacityCorrection) {
+        opacityCorrection = on;
+        frameCount = 0;
+      }
+    },
+    debugPrimarySteps() {
+      try {
+        // 中央の画素の一次レイの歩数をシェーダに出力させ、1 画素読み戻す。蓄積は壊れるので 0 からやり直す。
+        const dst = 1 - src;
+        gl.bindFramebuffer(gl.FRAMEBUFFER, accum[dst].fbo);
+        gl.viewport(0, 0, IW, IH);
+        gl.disable(gl.BLEND);
+        gl.useProgram(traceProg);
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_3D, volTex);
+        gl.uniform1i(loc.volumeTex, 0);
+        gl.activeTexture(gl.TEXTURE1);
+        gl.bindTexture(gl.TEXTURE_2D, lutTex);
+        gl.uniform1i(loc.uLutTex, 1);
+        gl.activeTexture(gl.TEXTURE2);
+        gl.bindTexture(gl.TEXTURE_2D, accum[src].tex);
+        gl.uniform1i(loc.uPrevAccum, 2);
+        applyTraceUniforms(true);
+        drawFullscreen();
+        const px = new Float32Array(4);
+        gl.readPixels(Math.floor(IW / 2), Math.floor(IH / 2), 1, 1, gl.RGBA, gl.FLOAT, px);
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+        frameCount = 0;
+        return Math.round(px[0] * 4096);
+      } catch {
+        return null;
+      }
+    },
+    setSeedOffset(n) {
+      seedOffset = Math.max(0, Math.floor(n)) >>> 0;
+    },
+    isLost() {
+      return lost || gl.isContextLost();
+    },
+    onLost(cb) {
+      lostCbs.add(cb);
+      return () => lostCbs.delete(cb);
+    },
+    readTexLayer(z) {
+      try {
+        const [tx, ty, tz] = texInfo.texDims;
+        if (!(z >= 0 && z < tz)) return null;
+        const fbo = gl.createFramebuffer();
+        gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+        gl.framebufferTextureLayer(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, volTex, 0, z);
+        let out: Float32Array | null = null;
+        if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE) {
+          out = new Float32Array(tx * ty * 4);
+          gl.readPixels(0, 0, tx, ty, gl.RGBA, gl.FLOAT, out);
+          const r = new Float32Array(tx * ty);
+          for (let i = 0; i < r.length; i++) r[i] = out[i * 4];
+          out = r;
+        }
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+        gl.deleteFramebuffer(fbo);
+        return out;
+      } catch {
+        return null;
+      }
+    },
     setCamera(ivp, pos) {
       invViewProj = ivp.slice();
       cameraPos = [pos[0], pos[1], pos[2]];
@@ -590,26 +799,7 @@ export function createCinematicPathTracer(
         gl.clearColor(0, 0, 0, 0);
         gl.clear(gl.COLOR_BUFFER_BIT);
       }
-      gl.uniformMatrix4fv(loc.uInvViewProj, false, new Float32Array(invViewProj));
-      gl.uniformMatrix4fv(loc.uWorldToTex, false, new Float32Array(worldToTex));
-      gl.uniform3fv(loc.uCameraPos, cameraPos);
-      gl.uniform1f(loc.uWinCenter, 0.5);
-      gl.uniform1f(loc.uWinWidth, 1.0);
-      gl.uniform3fv(loc.uLightDir, lightTex());
-      gl.uniform1f(loc.uLightIntensity, p.lightIntensity);
-      gl.uniform1f(loc.uAmbientIntensity, p.ambientIntensity);
-      gl.uniform1f(loc.uAnisotropy, p.anisotropy);
-      gl.uniform1f(loc.uLightAngularRadius, p.lightAngularRadius);
-      gl.uniform1i(loc.uSamplesPerFrame, Math.max(1, Math.round(p.samplesPerFrame)));
-      gl.uniform1ui(loc.uFrameSeed, (frameCount + 1) >>> 0);
-      gl.uniform3fv(loc.uClipMin, clipMin);
-      gl.uniform3fv(loc.uClipMax, clipMax);
-      gl.uniform1f(loc.uRoughness, p.roughness);
-      gl.uniform1f(loc.uSpecular, p.specular);
-      gl.uniform1f(loc.uMetallic, p.metallic);
-      gl.uniform1f(loc.uClearcoat, p.clearcoat);
-      gl.uniform1f(loc.uClearcoatRoughness, p.clearcoatRoughness);
-      gl.uniform1f(loc.uSurfaceGradientThreshold, p.surfaceGradientThreshold);
+      applyTraceUniforms(false);
       drawFullscreen();
       frameCount++;
       src = dst; // 次回の prev = 今書いた dst
@@ -671,6 +861,7 @@ export function createCinematicPathTracer(
       }
     },
     dispose() {
+      lostCbs.clear(); // 自分で loseContext するので、その通知は失敗として扱わせない
       try {
         if (fence) gl.deleteSync(fence);
         for (const a of accum) {
@@ -696,7 +887,7 @@ export function createCinematicPathTracer(
       }
     },
   };
-  return engine;
+  return { ok: true, engine };
 }
 
 // ── ヘルパ ──────────────────────────────────────────────────────
@@ -713,18 +904,24 @@ function grayscaleLut(): Uint8Array {
   return a;
 }
 
-/** imageData のスカラーを [0,1] 正規化＋最大 256³ にダウンサンプルして R32F 3D テクスチャを作る。 */
+/**
+ * imageData のスカラーを [0,1] に正規化し、{@link texDims} の R16F 3D テクスチャにする（寸法が違う軸は箱平均で間引く）。
+ * `texStorage3D` で確保してから z の板ごとに `texSubImage3D` で上げる（一時配列は板 1 枚＋元スライス 1 枚ぶん）。
+ * 確保・アップロードの直後に `gl.getError()` を見て、GPU のメモリ不足（OUT_OF_MEMORY）を失敗として返す。
+ * R16F は WebGL2 の本体で線形補間できる（拡張が要らない）。float→半精度の変換は最近接丸めか切り捨てかが実装まかせで
+ * （実機の Mesa では切り捨て相当だった）、誤差は [0,1] で最大 1 ulp ＝ 2^-11 以下。LUT の 1 段（1/255）の 1/7 以下。
+ */
 function buildVolumeTexture(
   gl: WebGL2RenderingContext,
   imageData: Any,
   dims: [number, number, number],
-  floatLinear: boolean,
-): WebGLTexture | null {
+  texDims: BudgetVec3,
+): { ok: true; tex: WebGLTexture; texDims: BudgetVec3 } | { ok: false; reason: CinematicCreateFailure; detail?: string } {
   try {
     const scalars = imageData.getPointData().getScalars();
     const data = scalars.getData() as ArrayLike<number>;
     const [nx, ny, nz] = dims;
-    if (!data || data.length < nx * ny * nz) return null;
+    if (!data || data.length < nx * ny * nz) return { ok: false, reason: "error", detail: "no-scalars" };
     let dmin = Infinity, dmax = -Infinity;
     const range = scalars.getRange?.();
     if (Array.isArray(range) && range.length >= 2 && range[1] > range[0]) {
@@ -738,31 +935,39 @@ function buildVolumeTexture(
       }
     }
     const span = dmax - dmin || 1;
-    const tx = Math.min(nx, MAX_DIM), ty = Math.min(ny, MAX_DIM), tz = Math.min(nz, MAX_DIM);
-    const out = new Float32Array(tx * ty * tz);
-    const frame = nx * ny;
-    for (let z = 0; z < tz; z++) {
-      const sz = Math.min(nz - 1, Math.floor((z * nz) / tz));
-      for (let y = 0; y < ty; y++) {
-        const sy = Math.min(ny - 1, Math.floor((y * ny) / ty));
-        for (let x = 0; x < tx; x++) {
-          const sx = Math.min(nx - 1, Math.floor((x * nx) / tx));
-          out[(z * ty + y) * tx + x] = (data[sz * frame + sy * nx + sx] - dmin) / span;
-        }
-      }
+    const td: BudgetVec3 = [
+      Math.max(1, Math.min(nx, Math.floor(texDims[0]))),
+      Math.max(1, Math.min(ny, Math.floor(texDims[1]))),
+      Math.max(1, Math.min(nz, Math.floor(texDims[2]))),
+    ];
+    while (gl.getError() !== gl.NO_ERROR) {
+      /* 直前までの未取得のエラーを捨てる（確保の結果だけを見る） */
     }
     const tex = gl.createTexture();
     gl.bindTexture(gl.TEXTURE_3D, tex);
-    gl.texImage3D(gl.TEXTURE_3D, 0, gl.R32F, tx, ty, tz, 0, gl.RED, gl.FLOAT, out);
-    const filt = floatLinear ? gl.LINEAR : gl.NEAREST;
-    gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MIN_FILTER, filt);
-    gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MAG_FILTER, filt);
+    gl.texStorage3D(gl.TEXTURE_3D, 1, gl.R16F, td[0], td[1], td[2]);
+    let err = gl.getError();
+    if (err !== gl.NO_ERROR) {
+      gl.deleteTexture(tex);
+      return { ok: false, reason: err === gl.OUT_OF_MEMORY ? "out-of-memory" : "error", detail: `texStorage3D:${err}` };
+    }
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+    resampleSlabs(data, dims, td, dmin, span, (z, slab) => {
+      gl.texSubImage3D(gl.TEXTURE_3D, 0, 0, 0, z, td[0], td[1], 1, gl.RED, gl.FLOAT, slab);
+    });
+    err = gl.getError();
+    if (err !== gl.NO_ERROR) {
+      gl.deleteTexture(tex);
+      return { ok: false, reason: err === gl.OUT_OF_MEMORY ? "out-of-memory" : "error", detail: `texSubImage3D:${err}` };
+    }
+    gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_R, gl.CLAMP_TO_EDGE);
-    return tex;
-  } catch {
-    return null;
+    return { ok: true, tex: tex as WebGLTexture, texDims: td };
+  } catch (e) {
+    return { ok: false, reason: "error", detail: String(e) };
   }
 }
 

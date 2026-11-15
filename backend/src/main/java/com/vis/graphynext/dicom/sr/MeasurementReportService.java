@@ -264,6 +264,14 @@ public class MeasurementReportService {
         measured.newSequence(Tag.MeasurementUnitsCodeSequence, 1)
                 .add(code(unitOf(m), "UCUM", unitOf(m)));
         n.newSequence(Tag.MeasuredValueSequence, 1).add(measured);
+        if (m.name() != null && !m.name().isBlank()) {
+            // 量の名前。NUM の修飾（HAS CONCEPT MOD → TEXT。PS3.3 Table A.35.3-2 の any type → TEXT, CODE）。
+            Sequence content = n.newSequence(Tag.ContentSequence, 1);
+            content.add(text2("HAS CONCEPT MOD",
+                    code(SrMeasurementConcepts.QUANTITY_NAME_CODE, SrMeasurementConcepts.PRIVATE_SCHEME,
+                            SrMeasurementConcepts.QUANTITY_NAME_MEANING),
+                    m.name().trim()));
+        }
         return n;
     }
 
@@ -450,7 +458,7 @@ public class MeasurementReportService {
         return out.length() <= 64 ? out : out.substring(0, 64);
     }
 
-    private void validate(MeasurementReportRequest req) {
+    void validate(MeasurementReportRequest req) {
         if (req == null || req.studyInstanceUid() == null || req.studyInstanceUid().isBlank()) {
             throw new IllegalArgumentException("studyInstanceUid は必須です");
         }
@@ -477,6 +485,10 @@ public class MeasurementReportService {
                     }
                     if (concept.defaultUnit() == null && (m.unit() == null || m.unit().isBlank())) {
                         throw new IllegalArgumentException("計測種別 " + m.type() + " は単位が必須です");
+                    }
+                    if (concept.nameRequired() && (m.name() == null || m.name().isBlank())) {
+                        // 割合・比・スコアは「何の値か」が名前でしか決まらない。黙って名無しで保存しない。
+                        throw new IllegalArgumentException("計測種別 " + m.type() + " は量の名前（name）が必須です");
                     }
                     if (m.value() == null || !Double.isFinite(m.value()) || (m.value() < 0 && !concept.signed())) {
                         // 負値は「引き算の向きを間違えた」等の取り違えでしか出ない。

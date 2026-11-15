@@ -17,10 +17,11 @@ import { cache, imageLoader, getRenderingEngines } from "@cornerstonejs/core";
 import { annotation as csAnnotation, segmentation as csSeg, Enums as csToolsEnums } from "@cornerstonejs/tools";
 import { roiKindOf } from "./roiKind";
 import { deleteRoiMaskMeta, getRoiMaskMeta, setRoiMaskMeta } from "./roiMaskStore";
-import { worldToImageCoords } from "./imageCoords";
+import { worldToImageCoords, worldSpacingOf } from "./imageCoords";
+import { rasterizeRoiPx } from "./roiRaster";
+import { roiPointsPx } from "./roiRead";
 import { alignToStack, combineLabelSlices, scopeZFromForeground, withTemp, type BoolOp } from "./maskScope";
 import { isSegmentForeground } from "./maskStatsCore";
-import { fillPolygonsEvenOdd } from "./maskContour";
 
 const LABELMAP = csToolsEnums.SegmentationRepresentations.Labelmap;
 const MAX_SEGMENTS = 64; // SPLIT の成分数上限（色枯渇/重さ回避）。
@@ -223,53 +224,24 @@ function rasterizeRoi(
   // 頂点（world）: フリーハンドは contour.polyline、その他は handles.points。
   const world: number[][] = ann?.data?.contour?.polyline ?? ann?.data?.handles?.points ?? [];
   if (!world.length) return null;
-  const ipts: Array<[number, number]> = [];
-  for (const w of world) {
-    try {
-      const ic = worldToImageCoords(refImageId, w as [number, number, number]) as [number, number];
-      ipts.push([ic[0], ic[1]]);
-    } catch {
-      /* skip */
-    }
-  }
+  // 幾何（IPP/IOP）が無いスタック（XA など）でも頂点を失わない換算（NaN を作らない）は roiPointsPx に集約してある。
+  const basis = worldSpacingOf(refImageId);
+  const ipts = roiPointsPx(
+    world,
+    (w) => worldToImageCoords(refImageId, w as [number, number, number]) as [number, number],
+    basis.col,
+    basis.row,
+  ) as Array<[number, number]>;
   if (!ipts.length) return null;
 
-  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-  for (const [x, y] of ipts) {
-    if (x < minX) minX = x;
-    if (x > maxX) maxX = x;
-    if (y < minY) minY = y;
-    if (y > maxY) maxY = y;
-  }
-  const fg = new Uint8Array(cols * rows);
-  const set = (x: number, y: number) => {
-    if (x >= 0 && y >= 0 && x < cols && y < rows) fg[y * cols + x] = 1;
-  };
-  const x0 = Math.max(0, Math.floor(minX)), x1 = Math.min(cols - 1, Math.ceil(maxX));
-  const y0 = Math.max(0, Math.floor(minY)), y1 = Math.min(rows - 1, Math.ceil(maxY));
-
-  if (/circle/i.test(tool) && ipts.length >= 2) {
-    const [cx, cy] = ipts[0];
-    const r = Math.hypot(ipts[1][0] - cx, ipts[1][1] - cy) || 0.5;
-    for (let y = Math.max(0, Math.floor(cy - r)); y <= Math.min(rows - 1, Math.ceil(cy + r)); y++)
-      for (let x = Math.max(0, Math.floor(cx - r)); x <= Math.min(cols - 1, Math.ceil(cx + r)); x++)
-        if (Math.hypot(x + 0.5 - cx, y + 0.5 - cy) <= r) set(x, y);
-  } else if (/ellip/i.test(tool)) {
-    const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
-    const rx = (maxX - minX) / 2 || 0.5, ry = (maxY - minY) / 2 || 0.5;
-    for (let y = y0; y <= y1; y++)
-      for (let x = x0; x <= x1; x++) {
-        const nx = (x + 0.5 - cx) / rx, ny = (y + 0.5 - cy) / ry;
-        if (nx * nx + ny * ny <= 1) set(x, y);
-      }
-  } else if (/rect/i.test(tool)) {
-    for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) set(x, y);
-  } else {
-    // 画素中心の偶奇判定。マスク→輪郭（maskContour）の塗り直しと同じ関数を使う。
-    const filled = fillPolygonsEvenOdd([ipts], cols, rows);
-    for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) if (filled[y * cols + x]) set(x, y);
-  }
-  return fg;
+  return rasterizeRoiPx(
+    tool,
+    ipts,
+    ann?.data?.contour?.closed as boolean | undefined,
+    cols,
+    rows,
+    worldSpacingOf(refImageId),
+  );
 }
 
 /** ROI の referencedImageId を含む stack viewport を探し、source スタックと表示先を返す。 */

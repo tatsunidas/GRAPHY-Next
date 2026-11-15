@@ -8,8 +8,19 @@ import { skillsPromptLines } from "./skills/skillTools";
 import type { Skill } from "./skills/skillModel";
 
 /** 操作案内用の system プロンプト。資料は質問ごとに検索した上位の断片だけを添える。 */
-export function buildSystemPrompt(locale: Locale, hits: DocHit[], opts: { canOperate?: boolean; robot?: boolean; pluginTools?: boolean; robotPluginTools?: boolean; skills?: readonly Skill[] } = {}): string {
+export function buildSystemPrompt(locale: Locale, hits: DocHit[], opts: { guide?: boolean; canOperate?: boolean; robot?: boolean; pluginTools?: boolean; robotPluginTools?: boolean; skills?: readonly Skill[] } = {}): string {
   const lang = locale === "ja" ? "日本語" : "English";
+  if (opts.guide) {
+    // 案内役: 操作の手順を尋ねる質問用。操作の道具は渡さず、手順は propose_steps のカードで出す。
+    const guide = [
+      "You are the in-app help assistant of GRAPHY-Next, a DICOM viewer for medical imaging.",
+      `Answer in ${lang}, concisely. You cannot operate the application; explain how the user can do it.`,
+      "When the user asks how to do something that takes several steps, call propose_steps with the steps, using only the screen terms found in the DOCUMENTS below.",
+      "Base answers on the DOCUMENTS below. If they do not cover the question, say that the documentation does not cover it rather than guessing menu names or features.",
+      "This is not a diagnostic tool.",
+    ];
+    return [...guide, "", ...documentLines(hits)].join("\n");
+  }
   const lines = [
     "You are the in-app help assistant of GRAPHY-Next, a DICOM viewer for medical imaging.",
     `Answer in ${lang}, concisely, with numbered steps for operations.`,
@@ -46,11 +57,11 @@ export function buildSystemPrompt(locale: Locale, hits: DocHit[], opts: { canOpe
     "This is not a diagnostic tool: do not give clinical interpretation of images.",
     `Window: assistant. UI language: ${locale}.`,
   ];
-  if (hits.length) {
-    lines.push("", "DOCUMENTS:");
-    for (const h of hits) lines.push(`--- ${h.file} / ${h.heading}`, h.text);
-  } else {
-    lines.push("", "DOCUMENTS: (no relevant document was found for this question)");
-  }
+  lines.push("", ...documentLines(hits));
   return lines.join("\n");
+}
+
+function documentLines(hits: DocHit[]): string[] {
+  if (!hits.length) return ["DOCUMENTS: (no relevant document was found for this question)"];
+  return ["DOCUMENTS:", ...hits.flatMap((h) => [`--- ${h.file} / ${h.heading}`, h.text])];
 }

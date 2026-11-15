@@ -50,7 +50,9 @@ public class ComputeDatasetService {
     static final String PSEUDONYM = "GRAPHY-ANON";
 
     public enum Format {
-        DICOM_ZIP("dicom-zip", ".zip"), NPZ("npz", ".npz");
+        DICOM_ZIP("dicom-zip", ".zip"), NPZ("npz", ".npz"),
+        /** NIfTI-1（.nii.gz・float32）。書き出し専用（計算機への送信には使えない）。 */
+        NIFTI("nifti", ".nii.gz");
 
         final String code;
         final String extension;
@@ -62,6 +64,11 @@ public class ComputeDatasetService {
 
         public String code() {
             return code;
+        }
+
+        /** 計算機への送信（egress）で使える形式。{@link #NIFTI} は書き出し専用なので含めない（送信側の同意画面・規則の範囲外）。 */
+        public static Optional<Format> forEgress(String code) {
+            return of(code).filter(f -> f != NIFTI);
         }
 
         public static Optional<Format> of(String code) {
@@ -82,13 +89,29 @@ public class ComputeDatasetService {
      */
     public record Dataset(String handle, Format format, Path file, long bytes, String sha256, int instances,
                           int burnedInstances, String sourceStudyUid, String sourceSeriesUid, String modality,
-                          Instant createdAt, boolean localOnly) {
+                          Instant createdAt, boolean localOnly, NiftiInfo niftiInfo) {
+        public Dataset(String handle, Format format, Path file, long bytes, String sha256, int instances,
+                       int burnedInstances, String sourceStudyUid, String sourceSeriesUid, String modality,
+                       Instant createdAt, boolean localOnly) {
+            this(handle, format, file, bytes, sha256, instances, burnedInstances, sourceStudyUid, sourceSeriesUid,
+                    modality, createdAt, localOnly, null);
+        }
+
         public Dataset(String handle, Format format, Path file, long bytes, String sha256, int instances,
                        int burnedInstances, String sourceStudyUid, String sourceSeriesUid, String modality,
                        Instant createdAt) {
             this(handle, format, file, bytes, sha256, instances, burnedInstances, sourceStudyUid, sourceSeriesUid,
-                    modality, createdAt, false);
+                    modality, createdAt, false, null);
         }
+    }
+
+    /**
+     * NIfTI の書き出しの補足（呼び出し側が利用者・プラグインに伝える）。
+     *
+     * @param phases    時相の数（3D は 1）
+     * @param dtSeconds 時相の間隔（秒）。均等と確かめられなかった・時刻が無いときは 0（推測で埋めない）
+     */
+    public record NiftiInfo(int phases, double dtSeconds) {
     }
 
     /** 作らなかった（送ってはいけない・形が合わない）。{@link #reason()} は画面で訳すコード。 */
@@ -135,7 +158,7 @@ public class ComputeDatasetService {
     }
 
     /**
-     * @param localDestination 送り先が kind=local の計算機か。true のときだけ、単純X線（CR/DX/MG）をマスク無しで通す。
+     * @param localDestination 送り先が kind=local の計算機か。true のときだけ、単純X線（CR/DX/MG/PX/IO）をマスク無しで通す。
      *                         通したデータセットは {@code localOnly} になり、local 以外の宛先には送れない
      */
     public Dataset create(String studyUid, String seriesUid, Format format, boolean localDestination) {
@@ -150,7 +173,7 @@ public class ComputeDatasetService {
                     facts.modalities());
             throw new DatasetRefused(decision.reason(), null);
         }
-        AnonymizeConfig cfg = remoteConfig();
+        AnonymizeConfig cfg = format == Format.NIFTI ? niftiConfig() : remoteConfig();
         String handle = "dsh_" + UUID.randomUUID();
         Path dir = null;
         try {
@@ -158,9 +181,10 @@ public class ComputeDatasetService {
             Path file = dir.resolve("dataset" + format.extension);
             MessageDigest sha = MessageDigest.getInstance("SHA-256");
             AnonymizeService.Result r;
+            NiftiInfo niftiInfo = null;
             String modality = facts.modalities().size() == 1 ? facts.modalities().iterator().next() : null;
             try (OutputStream out = new DigestOutputStream(Files.newOutputStream(file), sha)) {
-                if (format == Format.NPZ) {
+                if (format == Format.NPZ || format == Format.NIFTI) {
                     VolumeAssembler va = new VolumeAssembler(codec);
                     r = anonymizer.anonymizeSeries(studyUid, seriesUid, cfg, decision.burnIn(), va);
                     if (va.failure() != null) {
@@ -168,7 +192,19 @@ public class ComputeDatasetService {
                     }
                     check(r, decision);
                     try {
-                        va.writeNpz(out, mapper);
+                        if (format == Format.NIFTI) {
+                            NiftiWriter.Info info = NiftiWriter.write(out, va, va.assemble4d());
+                            niftiInfo = new NiftiInfo(info.phases(), info.dtSeconds());
+                            if (info.stepSource() != null) {
+                                log.info("[compute] nifti single slice: slice step from {}", info.stepSource());
+                            }
+                            if (info.phases() > 1) {
+                                log.info("[compute] nifti 4D: phases={} ordered by {} dt={}s", info.phases(), info.timeKey(),
+                                        info.dtSeconds() > 0 ? String.valueOf(info.dtSeconds()) : "unknown(0)");
+                            }
+                        } else {
+                            va.writeNpz(out, mapper);
+                        }
                     } catch (VolumeAssembler.UnsupportedLayout e) {
                         throw new DatasetRefused(e.getMessage(), null); // 並べてみて分かる形（重なり・欠け）
                     }
@@ -187,7 +223,7 @@ public class ComputeDatasetService {
                 }
             }
             Dataset d = new Dataset(handle, format, file, Files.size(file), HexFormat.of().formatHex(sha.digest()),
-                    r.instances(), r.burnedInstances(), studyUid, seriesUid, modality, Instant.now(), decision.localOnly());
+                    r.instances(), r.burnedInstances(), studyUid, seriesUid, modality, Instant.now(), decision.localOnly(), niftiInfo);
             datasets.put(handle, d);
             log.info("[compute] dataset {} {} instances={} burned={} bytes={}", handle, format.code, d.instances(),
                     d.burnedInstances(), d.bytes());
@@ -249,6 +285,17 @@ public class ComputeDatasetService {
         cfg.addOption(AnonymizeConfig.Option.CleanPixelData);
         cfg.setReplacePatientId(PSEUDONYM);
         cfg.setReplacePatientName(PSEUDONYM);
+        return cfg;
+    }
+
+    /**
+     * NIfTI の書き出し用。{@link #remoteConfig()} に、時刻を残す Retain Longitudinal Temporal Information（日付はずらす）を足す。
+     * 時相の並べ替えと時相間隔（AcquisitionTime）に要るため。時刻はメモリの中で時相の間隔を求めるのに使うだけで、NIfTI には書かない
+     * （患者の識別・日付は今までどおり置き換わる・消える）。
+     */
+    static AnonymizeConfig niftiConfig() {
+        AnonymizeConfig cfg = remoteConfig();
+        cfg.addOption(AnonymizeConfig.Option.RetainLongitudinalTemporalInformationModifiedDates);
         return cfg;
     }
 

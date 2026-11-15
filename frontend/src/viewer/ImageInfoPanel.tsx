@@ -152,6 +152,12 @@ export function ImageInfoPanel({
           {sample?.suvValue !== undefined && (
             <Row label={t("suv.info.value")} value={`${num(sample.suvValue, 2)} ${info.suvUnit || "SUV"}`} />
           )}
+          {info.suvRef && (
+            <Row
+              label={t("suv.info.ref")}
+              value={`${info.suvRef.label} / ${num(info.suvRef.mean, 4)} ${info.suvRef.unit} / n=${info.suvRef.n}`}
+            />
+          )}
         </>
       )}
       <div style={divider} />

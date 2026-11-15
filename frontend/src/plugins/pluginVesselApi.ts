@@ -27,11 +27,16 @@ import {
   listVesselModels as storeListVesselModels,
   putVesselAnalysis as storePutVesselAnalysis,
   registerVesselModel as storeRegisterVesselModel,
+  type CtVesselModel,
+  type VesselModel,
   type XaVesselAnalysis,
   type XaVesselModel,
 } from "../viewer/xaVesselModelStore";
 
 export type {
+  CtVesselModel,
+  CtVesselProvenance,
+  VesselModel,
   XaVesselAnalysis,
   XaVesselAnalysisPoint,
   XaVesselCalibration,
@@ -43,7 +48,7 @@ export type {
 /** 一覧に出す最小限（モデル本体は点列が重いので、選ぶまで渡さない）。 */
 export interface XaVesselModelSummary {
   runId: string;
-  kind: XaVesselModel["kind"];
+  kind: VesselModel["kind"];
   label: string;
   segmentCount: number;
   pointCount: number;
@@ -83,7 +88,7 @@ export function weakestTier(
   return "calibrated";
 }
 
-export function summarizeVesselModel(m: XaVesselModel): XaVesselModelSummary {
+export function summarizeVesselModel(m: VesselModel): XaVesselModelSummary {
   return {
     runId: m.runId,
     kind: m.kind,
@@ -104,7 +109,7 @@ export function listVesselModels(): XaVesselModelSummary[] {
 }
 
 /** H11: モデル本体。`runId` 省略時は**最も新しいもの**。無ければ null。 */
-export function getVesselModel(runId?: string): XaVesselModel | null {
+export function getVesselModel(runId?: string): VesselModel | null {
   if (runId) return storeGetVesselModel(runId);
   const all = [...storeListVesselModels()].sort((a, b) => b.at - a.at);
   return all[0] ?? null;
@@ -112,23 +117,58 @@ export function getVesselModel(runId?: string): XaVesselModel | null {
 
 export type VesselAnalysisResult = { ok: boolean; error?: string };
 
-/** プラグインが渡すモデル。`runId`・`at`・`producer` は host が決めるので含まない。 */
+/** プラグインが渡す XA のモデル。`runId`・`at`・`producer` は host が決めるので含まない。 */
 export type XaVesselModelInput = Omit<XaVesselModel, "runId" | "at" | "producer"> & {
   /** 同じ鍵で登録し直すと置き換わる（解析し直したら新しいほうが正しい）。1〜200 文字。 */
   runKey: string;
 };
+
+/** プラグインが渡す CT 由来のモデル（`kind: "ct-vessel"`）。 */
+export type CtVesselModelInput = Omit<CtVesselModel, "runId" | "at" | "producer"> & { runKey: string };
+
+/** プラグインが渡すモデル（XA または CT）。 */
+export type VesselModelInput = XaVesselModelInput | CtVesselModelInput;
 
 export type RegisterVesselModelResult = { ok: true; runId: string } | { ok: false; error: string };
 
 /** 1 モデルの総点数の上限（点列の無制限な受け入れを避ける。暫定）。 */
 export const MAX_VESSEL_MODEL_POINTS = 20000;
 
-const MODEL_KINDS = ["xa-qca3d", "xa-bifurcation3d"] as const;
+const MODEL_KINDS = ["xa-qca3d", "xa-bifurcation3d", "ct-vessel"] as const;
 const TIERS = ["calibrated", "approximate", "uncalibrated"] as const;
-const METHODS = ["half-max", "densitometric", "mixed"] as const;
+const METHODS = ["half-max", "densitometric", "mask-equivalent-area", "mask-min-width", "mixed"] as const;
 
 const isNum = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
 const isStr = (v: unknown): v is string => typeof v === "string";
+
+/** `ct-vessel` の出自を検査する。通らないものは理由つきで返す。 */
+function validateCtProvenance(pv: unknown): string | null {
+  if (!pv || typeof pv !== "object") return "provenance is required";
+  const p = pv as Record<string, unknown>;
+  if (!isStr(p.studyUid) || p.studyUid === "") return "provenance.studyUid is required";
+  if (!isStr(p.seriesUid) || p.seriesUid === "") return "provenance.seriesUid is required";
+  if (p.frameOfReferenceUid !== null && !isStr(p.frameOfReferenceUid)) return "provenance.frameOfReferenceUid must be a string or null";
+  if (p.sopUids !== undefined && !(Array.isArray(p.sopUids) && p.sopUids.every(isStr))) return "provenance.sopUids must be strings";
+  const v = p.voxelSpacingMm;
+  if (!Array.isArray(v) || v.length !== 3 || !v.every((x) => isNum(x) && x > 0)) return "provenance.voxelSpacingMm must be three positive finite numbers";
+  const m = p.maskOrigin as { type?: unknown; roiUids?: unknown; sopInstanceUid?: unknown } | null | undefined;
+  if (!m || typeof m !== "object") return "provenance.maskOrigin is required";
+  if (m.type === "roi") {
+    if (!Array.isArray(m.roiUids) || !m.roiUids.every(isStr)) return "provenance.maskOrigin.roiUids must be strings";
+  } else if (m.type === "seg") {
+    if (!isStr(m.sopInstanceUid) || m.sopInstanceUid === "") return "provenance.maskOrigin.sopInstanceUid is required";
+  } else if (m.type !== "plugin") {
+    return "provenance.maskOrigin.type must be 'plugin', 'roi' or 'seg'";
+  }
+  const ph = p.phase as { c?: unknown; t?: unknown } | undefined;
+  if (ph !== undefined) {
+    if (!ph || typeof ph !== "object") return "provenance.phase must be an object";
+    for (const k of ["c", "t"] as const) {
+      if (ph[k] !== undefined && !(isNum(ph[k]) && Number.isInteger(ph[k]) && (ph[k] as number) >= 0)) return `provenance.phase.${k} must be a non-negative integer`;
+    }
+  }
+  return null;
+}
 
 /**
  * H73: 外部から来るモデルの形を検査する。**通らないものは理由付きで返す**（黙って直さない・落とさない）。
@@ -136,7 +176,7 @@ const isStr = (v: unknown): v is string => typeof v === "string";
  * <p>🔴 測れなかった点の径は `null`（0 や補間値で埋めない）。未校正（`diameterCalibrated: false`）なら**全点 null**
  * でなければ拒否する——px の値が mm の顔で FFR の入力に入る事故を、入口で止める。
  */
-export function validateVesselModelInput(input: XaVesselModelInput | null | undefined): string | null {
+export function validateVesselModelInput(input: VesselModelInput | null | undefined): string | null {
   if (!input || typeof input !== "object") return "model is required";
   if (!isStr(input.runKey) || input.runKey.length < 1 || input.runKey.length > 200) return "runKey must be 1-200 chars";
   if (!(MODEL_KINDS as readonly unknown[]).includes(input.kind)) return `unknown kind: ${String(input.kind)}`;
@@ -157,6 +197,7 @@ export function validateVesselModelInput(input: XaVesselModelInput | null | unde
     if (!s || typeof s !== "object" || !isStr(s.id) || s.id === "") return "segment.id is required";
     if (ids.has(s.id)) return `duplicate segment id: ${s.id}`;
     ids.add(s.id);
+    if (s.name !== undefined && (!isStr(s.name) || s.name.length > 100)) return `segment ${s.id}: name must be a string of at most 100 chars`;
   }
   const cal = input.calibration;
   if (!cal || typeof cal !== "object" || typeof cal.diameterCalibrated !== "boolean") return "calibration.diameterCalibrated is required";
@@ -183,6 +224,7 @@ export function validateVesselModelInput(input: XaVesselModelInput | null | unde
   if (!Array.isArray(cal.tiers) || !cal.tiers.every((t) => (TIERS as readonly unknown[]).includes(t))) return "calibration.tiers is invalid";
   if (cal.diameterMethod !== null && !(METHODS as readonly unknown[]).includes(cal.diameterMethod)) return "calibration.diameterMethod is invalid";
 
+  if (input.kind === "ct-vessel") return validateCtProvenance(input.provenance);
   const pv = input.provenance;
   if (!pv || typeof pv !== "object") return "provenance is required";
   if (!isStr(pv.studyUid)) return "provenance.studyUid is required";
@@ -202,24 +244,24 @@ export function validateVesselModelInput(input: XaVesselModelInput | null | unde
  * 同じ `runKey` は置き換える。登録はセッション限り（`xaVesselModelStore` と同じ）。
  */
 export function registerPluginVesselModel(
-  input: XaVesselModelInput,
+  input: VesselModelInput,
   producer: PluginProducer,
 ): RegisterVesselModelResult {
   const error = validateVesselModelInput(input);
   if (error) return { ok: false, error };
   const runId = `plugin:${producer.id}:${input.runKey}`;
   // 参照を持ち回らない（プラグインが後から書き換えると、登録済みのモデルが黙って変わる）。
-  const model: XaVesselModel = {
+  const common = {
     runId,
     stableKey: input.stableKey ?? null,
     orientation: input.orientation ?? { proximalFirst: null, source: null },
-    kind: input.kind,
     label: input.label.trim(),
     segments: input.segments.map((s) => ({
       id: s.id,
       points: s.points.map((p) => [p[0], p[1], p[2]] as [number, number, number]),
       diameterMm: [...s.diameterMm],
       parentId: s.parentId,
+      ...(s.name !== undefined ? { name: s.name } : {}),
     })),
     calibration: {
       diameterCalibrated: input.calibration.diameterCalibrated,
@@ -227,20 +269,42 @@ export function registerPluginVesselModel(
       tiers: [...input.calibration.tiers],
       diameterMethod: input.calibration.diameterMethod,
     },
-    provenance: {
-      studyUid: input.provenance.studyUid,
-      seriesUids: [...input.provenance.seriesUids],
-      sopUids: [...input.provenance.sopUids],
-      angles: input.provenance.angles.map((a) => [a[0], a[1]] as [number, number]),
-      angleCorrected: input.provenance.angleCorrected,
-      visibleFractions: [...input.provenance.visibleFractions],
-      anchorReprojectionPx: input.provenance.anchorReprojectionPx,
-      separationDeg: input.provenance.separationDeg,
-      frameIndices: [...input.provenance.frameIndices],
-    },
     producer: { pluginId: producer.id, pluginName: producer.name, version: producer.version },
     at: Date.now(),
   };
+  let model: VesselModel;
+  if (input.kind === "ct-vessel") {
+    const pv = input.provenance;
+    model = {
+      ...common,
+      kind: "ct-vessel",
+      provenance: {
+        studyUid: pv.studyUid,
+        seriesUid: pv.seriesUid,
+        frameOfReferenceUid: pv.frameOfReferenceUid,
+        ...(pv.sopUids ? { sopUids: [...pv.sopUids] } : {}),
+        voxelSpacingMm: [pv.voxelSpacingMm[0], pv.voxelSpacingMm[1], pv.voxelSpacingMm[2]],
+        maskOrigin: pv.maskOrigin.type === "roi" ? { type: "roi", roiUids: [...pv.maskOrigin.roiUids] } : { ...pv.maskOrigin },
+        ...(pv.phase ? { phase: { ...pv.phase } } : {}),
+      },
+    };
+  } else {
+    model = {
+      ...common,
+      kind: input.kind,
+      provenance: {
+        studyUid: input.provenance.studyUid,
+        seriesUids: [...input.provenance.seriesUids],
+        sopUids: [...input.provenance.sopUids],
+        angles: input.provenance.angles.map((a) => [a[0], a[1]] as [number, number]),
+        angleCorrected: input.provenance.angleCorrected,
+        visibleFractions: [...input.provenance.visibleFractions],
+        anchorReprojectionPx: input.provenance.anchorReprojectionPx,
+        separationDeg: input.provenance.separationDeg,
+        frameIndices: [...input.provenance.frameIndices],
+      },
+    };
+  }
   storeRegisterVesselModel(model);
   return { ok: true, runId };
 }
@@ -252,7 +316,7 @@ export function registerPluginVesselModel(
  * ずれている状態でそれをやると、**ずれたまま色が乗る**——値は付くので誰も間違いに気付かない。
  */
 export function validateVesselAnalysis(
-  model: XaVesselModel | null,
+  model: VesselModel | null,
   input: XaVesselAnalysisInput | null | undefined,
 ): string | null {
   if (!model) return "vessel model not found";

@@ -23,6 +23,8 @@ interface MenuItem {
   label: string;
   onClick: () => void;
   disabled?: boolean;
+  /** 押せない理由など、項目に添える説明（ホバーで出る）。 */
+  title?: string;
   /** E2E検証(automator)用の安定セレクタ。翻訳テキストに依存させたくない項目にのみ付与する。 */
   testId?: string;
 }
@@ -39,6 +41,7 @@ export function MenuBar({
   onOpenDb,
   onOpenHelp,
   onOpenMobileUi,
+  niftiExport,
 }: {
   isStandalone: boolean;
   canImport: boolean;
@@ -54,6 +57,8 @@ export function MenuBar({
   onOpenHelp: () => void;
   /** モバイル UI（`#mobile`）への手動切替。渡されなければ項目を出さない。 */
   onOpenMobileUi?: () => void;
+  /** ［ファイル］→「NIfTI で書き出し…」。渡されなければ項目を出さない（公開デモ等）。理由があれば押せない。 */
+  niftiExport?: { onClick: () => void; disabledReason: string | null };
 }) {
   const { t, locale } = useI18n();
   const updateState = useUpdateState();
@@ -94,6 +99,15 @@ export function MenuBar({
         { label: t("main.import.action"), onClick: onImport, disabled: !canImport },
         { label: t("urlImport.action"), onClick: () => onOpenTool("urlImport"), disabled: !canImport, testId: "menu-item-url-import" },
         ...(isDemo ? [] : [{ label: t("main.toolbar.export"), onClick: () => onOpenTool("export") }]),
+        ...(niftiExport
+          ? [{
+              label: t("niftiExport.menu"),
+              onClick: niftiExport.onClick,
+              disabled: niftiExport.disabledReason !== null,
+              title: niftiExport.disabledReason ?? t("niftiExport.menuHint"),
+              testId: "menu-item-nifti-export",
+            }]
+          : []),
         { label: t("main.toolbar.send"), onClick: () => onOpenTool("send"), testId: "menu-item-send" },
         ...(isDemo ? [] : [{ label: t("qr.title"), onClick: () => onOpenViewer("qr") }]),
         { label: t("main.toolbar.nonDicomImport"), onClick: () => onOpenTool("nonDicomImport") },
@@ -192,6 +206,7 @@ export function MenuBar({
                   key={it.label}
                   data-testid={it.testId}
                   disabled={it.disabled}
+                  title={it.title}
                   onClick={() => {
                     setOpen(null);
                     if (!it.disabled) it.onClick();

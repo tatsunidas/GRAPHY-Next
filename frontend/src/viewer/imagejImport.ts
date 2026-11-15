@@ -16,7 +16,7 @@ import { annotation as csAnnotation, utilities as csToolsUtil } from "@cornersto
 import { getViewerContext } from "./viewerContext";
 import { setRoiMaskMeta } from "./roiMaskStore";
 import type { ImageJRoiDto } from "../api";
-import { imageToWorldCoords } from "./imageCoords";
+import { makePixelToWorld } from "./roiClipboard";
 import { CONTOUR_TOOL_NAMES, SPLINE_TYPE_LINEAR, ensureSplineInstance } from "./roiContourTools";
 import { POINT_ROI_TOOL_NAME } from "./pointRoiTool";
 
@@ -55,8 +55,9 @@ export function importImageJDtos(dtos: ImageJRoiDto[]): number {
     const zIdx = Math.min(imageIds.length - 1, Math.max(0, (d.position || 1) - 1));
     const imageId = imageIds[zIdx];
     if (!imageId) continue;
-    const toWorld = (x: number, y: number): V3 =>
-      imageToWorldCoords(imageId, [x, y]) as V3;
+    // 幾何が無いスタック（XA など）でも頂点を失わない換算（roiPointsPx の逆）。
+    const pixelToWorld = makePixelToWorld(imageId);
+    const toWorld = (x: number, y: number): V3 => pixelToWorld([x, y]) as V3;
 
     let toolName: string;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any

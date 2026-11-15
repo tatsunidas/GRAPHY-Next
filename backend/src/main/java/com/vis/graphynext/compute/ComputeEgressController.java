@@ -77,7 +77,7 @@ public class ComputeEgressController {
         List<String> handles = new ArrayList<>();
         try {
             for (Input in : body.inputs()) {
-                ComputeDatasetService.Format f = ComputeDatasetService.Format.of(in.format() == null ? "npz" : in.format())
+                ComputeDatasetService.Format f = ComputeDatasetService.Format.forEgress(in.format() == null ? "npz" : in.format())
                         .orElseThrow(() -> new ComputeDatasetService.DatasetRefused("bad-format", in.format()));
                 handles.add(datasets.create(in.studyUid(), in.seriesUid(), f, egress.isLocalEndpoint(endpointId)).handle());
             }

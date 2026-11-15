@@ -143,7 +143,8 @@ describe("loadAnonRoiCandidates", () => {
     });
     fetchRoiDocument.mockResolvedValue(docWith([savedRoi()]));
     const { candidates } = await loadAnonRoiCandidates(STUDY, SERIES);
-    expect(candidates[0].polygon.xs).toEqual([5, 10, 10, 5]);
+    // world ÷ 間隔 に 0.5 を足す（画素の左上隅が 0。backend の焼き込みは画素中心 x+0.5 で判定するのと同じ規約）。
+    expect(candidates[0].polygon.xs).toEqual([5.5, 10.5, 10.5, 5.5]);
   });
 
   it("🔴 SOP がそのシリーズに無い ROI は候補にしない（幾何なしフォールバックで別の場所を塗らない）", async () => {
