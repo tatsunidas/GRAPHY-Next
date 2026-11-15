@@ -14,7 +14,7 @@ import { metaData } from "@cornerstonejs/core";
 import { useI18n } from "../i18n/i18n";
 import type { Study, Series, Instance } from "../api";
 import type { ViewerMode } from "../viewer/imageId";
-import { loadRegVolume, type LoadedRegVolume } from "../viewer/regVolumeLoader";
+import { loadRegVolume, NonUniformSliceSpacingError, regLoadErrorText, type LoadedRegVolume } from "../viewer/regVolumeLoader";
 import { GRID_EDGE_TOLERANCE, estimateGridBytes, resampleToGrid, type Grid } from "../viewer/gridResample";
 import { composeTransforms, isZeroAdjust, manualAdjustToTransform, type ManualAdjust, type Vec3, type WorldTransform }
   from "../viewer/regTransform";
@@ -98,7 +98,7 @@ export function FusionCalcDialog({
         setBg(b);
         setFg(f);
       } catch (e) {
-        if (alive.current) { setLoadMsg(`${t("resample.loadFailed")}: ${String(e)}`); setFailed(true); }
+        if (alive.current) { setLoadMsg(e instanceof NonUniformSliceSpacingError ? regLoadErrorText(e, t) : `${t("resample.loadFailed")}: ${regLoadErrorText(e, t)}`); setFailed(true); }
       }
     })();
     return () => { alive.current = false; };

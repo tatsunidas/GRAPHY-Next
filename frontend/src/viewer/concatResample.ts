@@ -15,7 +15,7 @@ import { fetchInstances, type Series, type Study } from "../api";
 import type { TFn } from "../i18n/i18n";
 import type { ViewerMode } from "./imageId";
 import { buildCorrectedMetadata, type BuildVolumeResult } from "./mpr";
-import { loadRegVolume } from "./regVolumeLoader";
+import { loadRegVolume, NonUniformSliceSpacingError } from "./regVolumeLoader";
 import { sliceGeometry } from "./sliceGeometry";
 import type { ConcatPlan } from "./concatPlan";
 import type { ConcatPart } from "./virtualLayout";
@@ -25,7 +25,7 @@ import { stitchSlices, unionGrid, type StitchInput } from "./volumeStitch";
 
 /** 再サンプルを続けられない理由。読み込めなかった・枚数が合わない・共通格子が見積もりと違う。 */
 export class ConcatResampleError extends Error {
-  constructor(readonly reason: "loadFailed" | "missingSlices" | "gridMismatch", message: string) {
+  constructor(readonly reason: "loadFailed" | "missingSlices" | "gridMismatch" | "nonUniform", message: string) {
     super(message);
     this.name = "ConcatResampleError";
   }
@@ -53,10 +53,16 @@ export async function buildConcatResampledVolume(a: BuildConcatResampledArgs): P
   for (let p = 0; p < n; p++) {
     const { study, series } = a.sources[p];
     const instances = await fetchInstances(study.studyInstanceUid, series.seriesInstanceUid);
-    const loaded = await loadRegVolume(
-      a.mode, study.studyInstanceUid, series.seriesInstanceUid, instances, 0, 0,
-      (done, total) => a.onProgress?.((p + done / total) / n * 0.5),
-    );
+    let loaded;
+    try {
+      loaded = await loadRegVolume(
+        a.mode, study.studyInstanceUid, series.seriesInstanceUid, instances, 0, 0,
+        (done, total) => a.onProgress?.((p + done / total) / n * 0.5),
+      );
+    } catch (e) {
+      if (e instanceof NonUniformSliceSpacingError) throw new ConcatResampleError("nonUniform", `part ${p}: ${e.message}`);
+      throw e;
+    }
     if (!loaded) throw new ConcatResampleError("loadFailed", `part ${p}: not loadable`);
     // loadRegVolume は読めなかった枚数を黙って飛ばす。期待枚数と合わなければ、間隔の狂った体積を作らず止める。
     if (loaded.slices.length !== a.parts[p].layout.nZ) {

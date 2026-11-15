@@ -8,7 +8,7 @@ import type { Instance, Series, Study } from "../api";
 import { saveDerivedVolume } from "./derivedVolumeSave";
 import { estimateGridBytes } from "./gridResample";
 import type { ViewerMode } from "./imageId";
-import { loadRegVolume } from "./regVolumeLoader";
+import { loadRegVolume, NonUniformSliceSpacingError } from "./regVolumeLoader";
 import type { SuvCalibration } from "./suvStore";
 import { calibrationUnit, describeCalibratedSave, gridOfVolume, isUniformStack } from "./calibratedSeriesSave";
 import { getAppliedVolumeMaxMb } from "./volumeMemory";
@@ -30,7 +30,13 @@ export type SaveCalibratedResult =
   | { ok: false; reason: "noGeometry" | "nonUniform" | "declined" };
 
 export async function saveCalibratedSeries(i: SaveCalibratedInput): Promise<SaveCalibratedResult> {
-  const loaded = await loadRegVolume(i.mode, i.study.studyInstanceUid, i.series.seriesInstanceUid, i.instances, i.c, i.t);
+  let loaded;
+  try {
+    loaded = await loadRegVolume(i.mode, i.study.studyInstanceUid, i.series.seriesInstanceUid, i.instances, i.c, i.t);
+  } catch (e) {
+    if (e instanceof NonUniformSliceSpacingError) return { ok: false, reason: "nonUniform" };
+    throw e;
+  }
   if (!loaded) return { ok: false, reason: "noGeometry" };
   // 保存するのは元と同じ格子。等間隔でない元はアフィン 1 つで IPP を再現できないので断る。
   if (!isUniformStack(loaded.volume, loaded.slices)) return { ok: false, reason: "nonUniform" };

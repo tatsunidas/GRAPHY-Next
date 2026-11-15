@@ -20,6 +20,8 @@ import { imageIdForInstance, type ViewerMode } from "./imageId";
 import { getModalityCalibration } from "./pixelCalibration";
 import { fetchSeriesLayout, type Instance } from "../api";
 import { makeVolume, type RegVolume } from "./regGeometry";
+import { sliceGeometry } from "./sliceGeometry";
+import type { TFn } from "../i18n/i18n";
 import type { Vec3 } from "./regTransform";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -101,11 +103,38 @@ export async function estimateRegVolume(
 }
 
 /**
+ * スライスが等間隔でないシリーズを {@link loadRegVolume} が断るときの例外。
+ * `null`（幾何が無い・読めない）とは別。呼び出し側が理由を利用者に示せるよう、kind と間隔の範囲を持たせる。
+ */
+export class NonUniformSliceSpacingError extends Error {
+  constructor(
+    readonly kind: "missing" | "irregular" | "duplicates",
+    readonly minStepMm: number,
+    readonly maxStepMm: number,
+    message: string,
+  ) {
+    super(message);
+    this.name = "NonUniformSliceSpacingError";
+  }
+}
+
+/** 読み込み失敗を利用者向けの文言にする。等間隔でないシリーズの断りは翻訳した文言、それ以外は従来どおり。 */
+export function regLoadErrorText(e: unknown, t: TFn): string {
+  if (e instanceof NonUniformSliceSpacingError) {
+    return t("regvolume.nonUniform", { kind: e.kind, min: e.minStepMm.toFixed(2), max: e.maxStepMm.toFixed(2) });
+  }
+  return String(e);
+}
+
+/**
  * シリーズを 1 本の {@link RegVolume} として読み込む。
  *
  * <p>スライスは **法線方向の位置で並べ替える**。ファイル名や InstanceNumber の順を
  * 信じると、逆順・欠番のあるシリーズで z が裏返り、レジストレーションは
  * 「よく合った鏡像」を返す（最も気付きにくい壊れ方）。
+ *
+ * <p>z の刻みは先頭 2 枚の IPP 差で決まる 1 つの値なので、欠損・不等間隔・重複のシリーズは
+ * {@link NonUniformSliceSpacingError} で断る（返すと位置・体積が黙って誤る）。
  *
  * @returns 幾何（IOP/IPP）が無いシリーズでは `null`。レジストレーションは
  *   実座標が定義できないと成立しない。
@@ -182,6 +211,18 @@ export async function loadRegVolume(
   if (loaded.length === 0) return null;
 
   loaded.sort((a, b) => a.w - b.w);
+
+  // 判定は MPR・3D と同じ `sliceGeometry`（新しいしきい値は作らない）。
+  const geo = sliceGeometry(loaded.map((sl, i) => ({ id: sopOf(sl.imageId) ?? String(i), ipp: sl.ipp, iop })));
+  if (geo.kind !== "uniform" && geo.kind !== "single") {
+    const steps = geo.steps.map(Math.abs);
+    const lo = Math.min(...steps), hi = Math.max(...steps);
+    const detail = geo.kind === "missing" ? `, ${geo.missingCount} slice(s) missing` : "";
+    throw new NonUniformSliceSpacingError(
+      geo.kind, lo, hi,
+      `Series slices are not evenly spaced (${geo.kind}${detail}; spacing ${lo.toFixed(3)}–${hi.toFixed(3)} mm).`,
+    );
+  }
 
   const cols = dto.imageWidth || 512;
   const rows = dto.imageHeight || 512;
