@@ -1,0 +1,14 @@
+exit=2
+11:23:06.955 INFO  - Initiate connection from 0.0.0.0/0.0.0.0:0 to 127.0.0.1:59998
+findscu: Connection refused
+java.net.ConnectException: Connection refused
+	at java.base/sun.nio.ch.Net.connect0(Native Method)
+	at java.base/sun.nio.ch.Net.connect(Net.java:601)
+	at java.base/sun.nio.ch.Net.connect(Net.java:590)
+	at java.base/sun.nio.ch.NioSocketImpl.connect(NioSocketImpl.java:583)
+	at java.base/java.net.SocksSocketImpl.connect(SocksSocketImpl.java:327)
+	at java.base/java.net.Socket.connect(Socket.java:751)
+	at org.dcm4che3.net.Connection.connect(Connection.java:1072)
+	at org.dcm4che3.net.ApplicationEntity.connect(ApplicationEntity.java:684)
+	at org.dcm4che3.tool.findscu.FindSCU.open(FindSCU.java:437)
+	at org.dcm4che3.tool.findscu.FindSCU.main(FindSCU.java:352)

@@ -1,0 +1,66 @@
+exit=0
+11:23:01.909 INFO  - Initiate connection from 0.0.0.0/0.0.0.0:0 to 127.0.0.1:37367
+11:23:01.918 INFO  - Established connection Socket[addr=/127.0.0.1,port=37367,localport=59271]
+11:23:01.927 DEBUG - /127.0.0.1:59271->/127.0.0.1:37367(1): enter state: Sta4 - Awaiting transport connection opening to complete
+11:23:01.928 INFO  - GN->PEER(1) << A-ASSOCIATE-RQ
+11:23:01.929 DEBUG - A-ASSOCIATE-RQ[
+  calledAET: PEER
+  callingAET: GN
+  applicationContext: 1.2.840.10008.3.1.1.1 - DICOM Application Context Name
+  implClassUID: 1.2.40.0.13.1.3
+  implVersionName: dcm4che-5.34.3
+  maxPDULength: 16378
+  maxOpsInvoked/maxOpsPerformed: 0/0
+  PresentationContext[id: 1
+    as: 1.2.840.10008.5.1.4.1.2.2.2 - Study Root Query/Retrieve Information Model - MOVE
+    ts: 1.2.840.10008.1.2 - Implicit VR Little Endian
+    ts: 1.2.840.10008.1.2.1 - Explicit VR Little Endian
+    ts: 1.2.840.10008.1.2.2 - Explicit VR Big Endian (Retired)
+  ]
+]
+11:23:01.937 DEBUG - GN->PEER(1): enter state: Sta5 - Awaiting A-ASSOCIATE-AC or A-ASSOCIATE-RJ PDU
+11:23:01.939 INFO  - GN->PEER(1) >> A-ASSOCIATE-AC
+11:23:01.939 DEBUG - A-ASSOCIATE-AC[
+  calledAET: PEER
+  callingAET: GN
+  applicationContext: 1.2.840.10008.3.1.1.1 - DICOM Application Context Name
+  implClassUID: 1.2.40.0.13.1.3
+  implVersionName: dcm4che-5.34.3
+  maxPDULength: 16378
+  maxOpsInvoked/maxOpsPerformed: 1/1
+  PresentationContext[id: 1
+    result: 0 - acceptance
+    ts: 1.2.840.10008.1.2 - Implicit VR Little Endian
+  ]
+]
+11:23:01.939 DEBUG - GN->PEER(1): enter state: Sta6 - Association established and ready for data transfer
+11:23:01.942 INFO  - GN->PEER(1) << 1:C-MOVE-RQ[pcid=1, prior=0, dest=GN
+  cuid=1.2.840.10008.5.1.4.1.2.2.2 - Study Root Query/Retrieve Information Model - MOVE
+  tsuid=1.2.840.10008.1.2 - Implicit VR Little Endian]
+11:23:01.942 DEBUG - GN->PEER(1) << 1:C-MOVE-RQ Command:
+(0000,0002) UI [1.2.840.10008.5.1.4.1.2.2.2] AffectedSOPClassUID
+(0000,0100) US [33] CommandField
+(0000,0110) US [1] MessageID
+(0000,0600) AE [GN] MoveDestination
+(0000,0700) US [0] Priority
+(0000,0800) US [0] CommandDataSetType
+
+11:23:01.963 DEBUG - GN->PEER(1) << 1:C-MOVE-RQ Dataset:
+(0008,0052) CS [STUDY] QueryRetrieveLevel
+(0020,000D) UI [2.25.1] StudyInstanceUID
+
+11:23:01.968 INFO  - GN->PEER(1) >> 1:C-MOVE-RSP[pcid=1, status=0H
+  cuid=1.2.840.10008.5.1.4.1.2.2.2 - Study Root Query/Retrieve Information Model - MOVE
+  tsuid=1.2.840.10008.1.2 - Implicit VR Little Endian]
+11:23:01.968 DEBUG - GN->PEER(1) >> 1:C-MOVE-RSP Command:
+(0000,0002) UI [1.2.840.10008.5.1.4.1.2.2.2] AffectedSOPClassUID
+(0000,0100) US [32801] CommandField
+(0000,0120) US [1] MessageIDBeingRespondedTo
+(0000,0800) US [257] CommandDataSetType
+(0000,0900) US [0] Status
+
+11:23:01.969 INFO  - GN->PEER(1) << A-RELEASE-RQ
+11:23:01.969 DEBUG - GN->PEER(1): enter state: Sta7 - Awaiting A-RELEASE-RP PDU
+11:23:01.969 INFO  - GN->PEER(1) >> A-RELEASE-RP
+11:23:01.970 INFO  - GN->PEER(1): close Socket[addr=/127.0.0.1,port=37367,localport=59271]
+11:23:01.970 DEBUG - GN->PEER(1): enter state: Sta1 - Idle

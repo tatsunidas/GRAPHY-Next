@@ -29,9 +29,12 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     clearTimeout(timer);
   }
   if (!res.ok) {
+    const clone = res.clone();
     const message = await extractErrorMessage(res);
     log.warn("api error", init?.method ?? "GET", url, res.status, message);
-    throw new HttpError(message, res.status);
+    // 構造化エラーの本文（例: QR の { kind, status }）を、画面が分類で出し分けられるよう持たせる。
+    const detail = await clone.json().then((b: unknown) => (b && typeof b === "object" ? (b as Record<string, unknown>) : null)).catch(() => null);
+    throw new HttpError(message, res.status, detail);
   }
   // 204 No Content、および Spring の void ハンドラ（200 だが本文が空）の両方に対応する。
   if (res.status === 204) return undefined as T;
@@ -47,6 +50,8 @@ export class HttpError extends Error {
   constructor(
     message: string,
     readonly status: number,
+    /** 応答本文の JSON（無ければ null）。 */
+    readonly detail: Record<string, unknown> | null = null,
   ) {
     super(message);
     this.name = "HttpError";
