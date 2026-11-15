@@ -21,9 +21,9 @@ import java.util.List;
 import java.util.concurrent.TimeUnit;
 
 /** 試験用の PACS（実機 dcm4che の dcmqrscp）。検査を 1 枚ずつ storescu で入れる。ツールが無ければ {@link #available()} が false。 */
-final class FakePacs implements AutoCloseable {
+public final class FakePacs implements AutoCloseable {
 
-    final int port;
+    public final int port;
     private final Process process;
 
     private FakePacs(Process process, int port) {
@@ -31,7 +31,7 @@ final class FakePacs implements AutoCloseable {
         this.port = port;
     }
 
-    static Path tool(String name) {
+    public static Path tool(String name) {
         Path home = Path.of(System.getProperty("user.home"));
         try (var s = Files.newDirectoryStream(home, "dcm4che-*")) {
             for (Path d : s) {
@@ -47,16 +47,16 @@ final class FakePacs implements AutoCloseable {
         return null;
     }
 
-    static boolean available() {
+    public static boolean available() {
         return tool("dcmqrscp") != null && tool("storescu") != null;
     }
 
     /** 試験用の 1 検査（画像 1 枚）。 */
-    record Study(String patientId, String studyUid, String modality, String date) {
+    public record Study(String patientId, String studyUid, String modality, String date) {
     }
 
     /** @param ownScpPort 移動先 AE GRAPHYNEXT の受信口 */
-    static FakePacs start(List<Study> studies, int ownScpPort) throws Exception {
+    public static FakePacs start(List<Study> studies, int ownScpPort) throws Exception {
         int port = freePort();
         Path dir = Files.createTempDirectory("graphy-fakepacs-");
         Path ae = dir.resolve("ae.properties");
@@ -102,7 +102,7 @@ final class FakePacs implements AutoCloseable {
         }
     }
 
-    static int freePort() {
+    public static int freePort() {
         try (ServerSocket s = new ServerSocket(0)) {
             return s.getLocalPort();
         } catch (IOException e) {
