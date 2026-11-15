@@ -172,15 +172,21 @@ const dot = (a: Vec3, b: Vec3): number => a[0] * b[0] + a[1] * b[1] + a[2] * b[2
 const sub = (a: Vec3, b: Vec3): Vec3 => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
 const norm = (a: Vec3): number => Math.hypot(a[0], a[1], a[2]);
 
+/** 組み立てたソース。欠損・不等間隔を格子に載せたときは、その格子（元スライスとの対応）を持つ。 */
+export interface AssembledCtSource extends TiltSourceVolume {
+  grid?: { count: number; spacing: number; gridIndexOf: number[] };
+}
+
 /**
  * CT シリーズの全スライスをロードし、法線投影でソートして z-major の HU ボリュームを組み立てる。
  * 画素は rescale を適用して HU（Int16）で格納（チルト補正の補間も HU 上で行う）。
  * 幾何が揃わない/スライス数不足なら null。
  */
-async function assembleCtSourceVolume(
+export async function assembleCtSourceVolume(
   imageIds: string[],
   maxBytes?: number,
-): Promise<TiltSourceVolume | null> {
+  geometry?: SliceGeometry,
+): Promise<AssembledCtSource | null> {
   if (imageIds.length < 2) return null;
   await Promise.all(imageIds.map((id) => imageLoader.loadAndCacheImage(id).catch(() => null)));
 
@@ -220,14 +226,19 @@ async function assembleCtSourceVolume(
   const sliceSpacing = span / (depth - 1) || Number(plane0.sliceThickness) || 1;
 
   const sliceLen = cols * rows;
+  // 欠損・不等間隔のときは格子に載せる。`geometry` は呼び出し側が全 imageIds から作ったもの。
+  // 位置が読めなかったスライスがあって並びが合わないときは、従来どおり（平均間隔）に戻す。
+  const needGrid = !!geometry && (geometry.kind === "missing" || geometry.kind === "irregular") && geometry.order.length === depth;
+  const grid = needGrid ? regularGrid(geometry!) : null;
   // 二重防御（fw/volume-memory-guard.md V2）: 呼び出し側の予測が漏れた場合に備え、ロード後に
   // 確定した cols/rows/depth でも上限を見る。チルト補正経路はここの Int16 と correctGantryTilt の
-  // 出力（createLocalVolume）で 2 本生きるので ×2 で見積もる。
+  // 出力（createLocalVolume）で 2 本生きるので ×2 で見積もる。格子に載せるときは、元の Int16・
+  // 補間の Float32・格子の Int16 が同時に載る。
   if (maxBytes !== undefined) {
-    const needed = sliceLen * depth * 2 * 2;
+    const needed = grid ? sliceLen * (depth * 2 + grid.count * (4 + 2)) * 2 : sliceLen * depth * 2 * 2;
     if (needed > maxBytes) throw new VolumeMemoryExceededError(needed, maxBytes);
   }
-  const data = new Int16Array(sliceLen * depth);
+  const srcData = new Int16Array(sliceLen * depth);
   for (let z = 0; z < depth; z++) {
     const img = cache.getImage(recs[z].id) as AnyObj | undefined;
     if (!img) return null;
@@ -236,21 +247,36 @@ async function assembleCtSourceVolume(
     // preScale 済みなら {1,0} なので、そのまま px[i]*scale+offset でモダリティ値になる。
     const { scale, offset } = getModalityCalibration(img, recs[z].id);
     const base = z * sliceLen;
-    for (let i = 0; i < sliceLen; i++) data[base + i] = Math.round(px[i] * scale + offset);
+    for (let i = 0; i < sliceLen; i++) srcData[base + i] = Math.round(px[i] * scale + offset);
+  }
+
+  let data = srcData;
+  let outDepth = depth;
+  let outSpacing = sliceSpacing;
+  if (grid) {
+    const slices = Array.from({ length: depth }, (_, k) => srcData.subarray(k * sliceLen, (k + 1) * sliceLen));
+    const { data: f } = interpolateToGrid(slices, geometry!.order.map((_, i) => geometry!.positions[i]), grid, sliceLen);
+    data = new Int16Array(f.length);
+    for (let i = 0; i < f.length; i++) data[i] = Math.round(f[i]);
+    outDepth = grid.count;
+    // 格子の間隔は法線方向の距離。補正は IPP の進行方向の間隔（sliceSpacing）で位置を出すので、傾きぶんを割り戻す。
+    const dirK = span > 1e-6 ? ([0, 1, 2].map((a) => (ippLast[a] - ippFirst[a]) / span) as Vec3) : normal;
+    outSpacing = grid.spacing / Math.max(1e-3, Math.abs(dot(dirK, normal)));
   }
 
   return {
     data,
     width: cols,
     height: rows,
-    depth,
+    depth: outDepth,
     pixelSpacingX: psX,
     pixelSpacingY: psY,
-    sliceSpacing,
+    sliceSpacing: outSpacing,
     ippFirst,
     ippLast,
     iop,
     padding: -1000, // 空気 HU
+    ...(grid ? { grid: { count: grid.count, spacing: grid.spacing, gridIndexOf: grid.gridIndexOf } } : {}),
   };
 }
 
@@ -366,7 +392,7 @@ export async function buildMprVolume(
   const geometry = sliceGeometry(sliceInfosOf(imageIds));
   if (geometry.kind === "duplicates") throw new SliceDuplicatesError();
   if (isCT) {
-    const src = await assembleCtSourceVolume(imageIds, opts?.maxBytes);
+    const src = await assembleCtSourceVolume(imageIds, opts?.maxBytes, geometry);
     if (src && needsTiltCorrection(src.ippFirst, src.ippLast, src.iop)) {
       // 符号付きチルト角を colCosine の Y-Z 成分から導出（tanA = Cz/Cy、設計 §3.5 の幾何）。
       const tiltAngleDeg = (Math.atan2(src.iop[5], src.iop[4]) * 180) / Math.PI;
@@ -380,7 +406,10 @@ export async function buildMprVolume(
         direction: c.direction,
         scalarData: c.data,
       });
-      return { volumeId, corrected: true, tiltAngleDeg, geometry };
+      return {
+        volumeId, corrected: true, tiltAngleDeg, geometry,
+        ...(src.grid ? { grid: { ...src.grid, interpolated: true } } : {}),
+      };
     }
   }
   // wadouri は入力順を信頼するため、空間順（IPP 法線投影）に並べ替えてから volume 化する（Z 折り返り防止）。
