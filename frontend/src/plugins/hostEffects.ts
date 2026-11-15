@@ -93,6 +93,7 @@ export const HOST_EFFECTS: Record<HostKey, ToolEffect> = {
   cache: "write",
   db: "write",
   microscopy: "write",
+  nifti: "write",
   video: "write",
 };
 

@@ -1,0 +1,12 @@
+{
+  "id": "nifti-bridge-check",
+  "name": "NIfTI Bridge Check",
+  "version": "0.1.0",
+  "engines": { "graphy": ">0.5.0", "os": ["win32", "darwin", "linux"] },
+  "description": "Verifies host.nifti.exportSeries / importVolume: the plugin's own job reads the exported NIfTI and writes one back into its temp folder, and the host imports it after its consent dialog.",
+  "author": "automator",
+  "license": "MIT",
+  "contributes": ["mainscreen.menu"],
+  "ui": "ui.js",
+  "entrypoint": "automator.NiftiBridgeProbe"
+}

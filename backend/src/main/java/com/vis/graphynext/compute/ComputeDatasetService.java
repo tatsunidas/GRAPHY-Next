@@ -89,13 +89,29 @@ public class ComputeDatasetService {
      */
     public record Dataset(String handle, Format format, Path file, long bytes, String sha256, int instances,
                           int burnedInstances, String sourceStudyUid, String sourceSeriesUid, String modality,
-                          Instant createdAt, boolean localOnly) {
+                          Instant createdAt, boolean localOnly, NiftiInfo niftiInfo) {
+        public Dataset(String handle, Format format, Path file, long bytes, String sha256, int instances,
+                       int burnedInstances, String sourceStudyUid, String sourceSeriesUid, String modality,
+                       Instant createdAt, boolean localOnly) {
+            this(handle, format, file, bytes, sha256, instances, burnedInstances, sourceStudyUid, sourceSeriesUid,
+                    modality, createdAt, localOnly, null);
+        }
+
         public Dataset(String handle, Format format, Path file, long bytes, String sha256, int instances,
                        int burnedInstances, String sourceStudyUid, String sourceSeriesUid, String modality,
                        Instant createdAt) {
             this(handle, format, file, bytes, sha256, instances, burnedInstances, sourceStudyUid, sourceSeriesUid,
-                    modality, createdAt, false);
+                    modality, createdAt, false, null);
         }
+    }
+
+    /**
+     * NIfTI の書き出しの補足（呼び出し側が利用者・プラグインに伝える）。
+     *
+     * @param phases    時相の数（3D は 1）
+     * @param dtSeconds 時相の間隔（秒）。均等と確かめられなかった・時刻が無いときは 0（推測で埋めない）
+     */
+    public record NiftiInfo(int phases, double dtSeconds) {
     }
 
     /** 作らなかった（送ってはいけない・形が合わない）。{@link #reason()} は画面で訳すコード。 */
@@ -165,6 +181,7 @@ public class ComputeDatasetService {
             Path file = dir.resolve("dataset" + format.extension);
             MessageDigest sha = MessageDigest.getInstance("SHA-256");
             AnonymizeService.Result r;
+            NiftiInfo niftiInfo = null;
             String modality = facts.modalities().size() == 1 ? facts.modalities().iterator().next() : null;
             try (OutputStream out = new DigestOutputStream(Files.newOutputStream(file), sha)) {
                 if (format == Format.NPZ || format == Format.NIFTI) {
@@ -177,6 +194,7 @@ public class ComputeDatasetService {
                     try {
                         if (format == Format.NIFTI) {
                             NiftiWriter.Info info = NiftiWriter.write(out, va, va.assemble4d());
+                            niftiInfo = new NiftiInfo(info.phases(), info.dtSeconds());
                             if (info.stepSource() != null) {
                                 log.info("[compute] nifti single slice: slice step from {}", info.stepSource());
                             }
@@ -205,7 +223,7 @@ public class ComputeDatasetService {
                 }
             }
             Dataset d = new Dataset(handle, format, file, Files.size(file), HexFormat.of().formatHex(sha.digest()),
-                    r.instances(), r.burnedInstances(), studyUid, seriesUid, modality, Instant.now(), decision.localOnly());
+                    r.instances(), r.burnedInstances(), studyUid, seriesUid, modality, Instant.now(), decision.localOnly(), niftiInfo);
             datasets.put(handle, d);
             log.info("[compute] dataset {} {} instances={} burned={} bytes={}", handle, format.code, d.instances(),
                     d.burnedInstances(), d.bytes());
