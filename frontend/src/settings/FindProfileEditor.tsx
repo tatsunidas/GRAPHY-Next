@@ -5,12 +5,17 @@
 import type { FindProfile } from "../api";
 import { useI18n } from "../i18n/i18n";
 
+type KeyFields = Pick<FindProfile, "patientKeys" | "studyKeys" | "seriesKeys">;
+
+const MINIMAL_STUDY: string[] = ["StudyInstanceUID"];
+const BASIC_STUDY: string[] = ["StudyInstanceUID", "PatientID", "PatientName", "StudyDate", "AccessionNumber"];
+
 /** 返却項目のひな形。standard は「指定なし」（backend の標準の一覧を使う）。 */
-export const KEY_PRESETS = {
+export const KEY_PRESETS: Record<"standard" | "minimal" | "basic", KeyFields | undefined> = {
   standard: undefined,
-  minimal: { patientKeys: ["PatientID"], studyKeys: ["StudyInstanceUID"], seriesKeys: ["SeriesInstanceUID"] },
-  basic: { patientKeys: undefined, studyKeys: ["StudyInstanceUID", "PatientID", "PatientName", "StudyDate", "AccessionNumber"], seriesKeys: undefined },
-} as const;
+  minimal: { patientKeys: ["PatientID"], studyKeys: MINIMAL_STUDY, seriesKeys: ["SeriesInstanceUID"] },
+  basic: { patientKeys: undefined, studyKeys: BASIC_STUDY, seriesKeys: undefined },
+};
 
 export type KeyPreset = keyof typeof KEY_PRESETS;
 
@@ -18,8 +23,8 @@ export function presetOf(p: FindProfile | null | undefined): KeyPreset | "custom
   const sk = p?.studyKeys;
   if (!sk || sk.length === 0) return "standard";
   const same = (a: readonly string[], b: readonly string[]) => a.length === b.length && a.every((x, i) => x === b[i]);
-  if (same(sk, KEY_PRESETS.minimal.studyKeys)) return "minimal";
-  if (same(sk, KEY_PRESETS.basic.studyKeys)) return "basic";
+  if (same(sk, MINIMAL_STUDY)) return "minimal";
+  if (same(sk, BASIC_STUDY)) return "basic";
   return "custom";
 }
 
