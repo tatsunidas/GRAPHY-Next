@@ -422,6 +422,29 @@ interface PluginHostBase {
   microscopy: {
     importVolume: (req: PluginMicroscopyImportRequest, opts?: PluginJobOptions) => Promise<PluginMicroscopyImportOutcome>;
   };
+  /**
+   * NIfTI の受け渡し（H78・H79〔仮〕・**0.5.0 より後の版**）。研究用の画像形式（ECAT7・Interfile・AFNI・MINC・BIDS など）の読み書きは
+   * プラグインの JAR に置き、本体は NIfTI を「作る」「取り込む」口だけを開ける（幾何〔LPS↔RAS〕は本体の 2 か所に閉じ込める）。
+   * ファイルの受け渡しは一時フォルダ `<java.io.tmpdir>/graphy-plugin-nifti/<プラグイン ID>/` の下だけ。デスクトップ専用
+   * （web では `error: "desktop-only"`）。
+   */
+  nifti: {
+    /**
+     * H78: 1 シリーズを NIfTI-1（.nii.gz・float32・患者情報なし）にして、そのプラグインの一時フォルダへ置き、パスを返す。
+     * 匿名化の出力から作るので、本体の「NIfTI で書き出し」と同じ規則で断られることがある（`error` は理由コード:
+     * `volume-sheared`〔チルト〕・`nifti-uneven-phases`・`nifti-ambiguous-phases`・`nifti-mosaic` など）。
+     * 使い終わったら {@link release}（忘れた分は 2 時間後に本体が掃除する）。確認画面は出ない。
+     */
+    exportSeries: (req: PluginNiftiExportRequest) => Promise<PluginNiftiExportOutcome>;
+    /** H78: {@link exportSeries} で渡したファイル（そのプラグインの一時フォルダの下だけ）を消す。 */
+    release: (path: string) => Promise<{ ok: boolean; error?: string }>;
+    /**
+     * H79: プラグインの JAR が作った NIfTI を、本体が DICOM にして取り込む。**毎回、本体が確認画面を出す**（消せない。
+     * 向きが NIfTI に無く本体が合成するときは、その警告も出る）。`path`・`sidecar` はそのプラグインの一時フォルダの下の
+     * ファイルだけ（本体が確かめ、取り込んだら消す）。やめたときは `cancelled`。
+     */
+    importVolume: (req: PluginNiftiImportRequest, opts?: PluginJobOptions) => Promise<PluginNiftiImportOutcome>;
+  };
   video: {
     /** H47: 諸元・指紋（SHA-256）・既に取り込み済みか。本体の ffmpeg で調べる（ffprobe 不要）。 */
     probe: (path: string) => Promise<PluginVideoProbe>;
@@ -1383,7 +1406,7 @@ type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K>
  */
 export type PluginHostSeed = DistributiveOmit<
   PluginHost,
-  "ai" | "file" | "runBackendJob" | "db" | "video" | "apiBase" | "compute" | "storage" | "microscopy" | "cache"
+  "ai" | "file" | "runBackendJob" | "db" | "video" | "apiBase" | "compute" | "storage" | "microscopy" | "cache" | "nifti"
 >;
 
 /**
@@ -1441,6 +1464,59 @@ export interface PluginMicroscopyImported {
   channelName: string;
   frames: number;
 }
+
+/** H78: 書き出す 1 シリーズ。 */
+export interface PluginNiftiExportRequest {
+  studyUid: string;
+  seriesUid: string;
+}
+
+export type PluginNiftiExportOutcome =
+  | {
+      ok: true;
+      /** 書き出した .nii.gz の絶対パス（そのプラグインの一時フォルダの下）。 */
+      path: string;
+      bytes: number;
+      /** 書き出したインスタンス数（4D は位置×時相）。 */
+      slices: number;
+      /** 時相の数（3D は 1）。 */
+      frames: number;
+      /** 時相の間隔（秒）。決まらないとき（不明・不均一）と 3D は null（推測の値は返さない）。 */
+      timeStepSec: number | null;
+    }
+  | { ok: false; error: string };
+
+/** H79: 取り込む NIfTI。 */
+export interface PluginNiftiImportRequest {
+  /** プラグインの一時フォルダの下の .nii / .nii.gz（.hdr/.img の対も可）。 */
+  path: string;
+  /** サイドカー JSON（任意。同じ一時フォルダの下）。 */
+  sidecar?: string;
+  /** 元のファイル名（確認画面に出る）。 */
+  sourceName?: string;
+  patient: { patientId: string; patientName?: string; birthDate?: string; sex?: string };
+  /** 既定は MR。 */
+  modality?: string;
+  studyDescription?: string;
+  seriesDescription?: string;
+  seriesNumber?: number;
+  /** 既存の検査に足すとき。 */
+  studyInstanceUid?: string;
+  /** 値の単位（UCUM のコード・16 文字以内。省略・"1" は単位なし）。 */
+  valueUnit?: string;
+}
+
+export type PluginNiftiImportOutcome =
+  | {
+      ok: true;
+      studyInstanceUid: string;
+      seriesInstanceUid: string;
+      slices: number;
+      phases: number;
+      /** 向きが NIfTI に無く、本体が合成した（患者座標の向きは保証されない）。 */
+      geometrySynthesized: boolean;
+    }
+  | { ok: false; error?: string; cancelled?: boolean };
 
 /** 途中で失敗しても、取り込めた分は `imported` に入る。 */
 export type PluginMicroscopyImportOutcome =

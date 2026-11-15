@@ -90,24 +90,33 @@ public class NiftiImportController {
             return ResponseEntity.badRequest().body(error("ファイルが見つかりません"));
         }
         try {
-            NiftiHeader h = NiftiPair.isPairPath(file) ? NiftiPair.resolve(file).readHeader() : NiftiToDicom.readHeader(file);
-            NiftiGeometry geom = NiftiGeometry.of(h);
-            String conversion;
-            boolean supported;
-            try {
-                conversion = NiftiToDicom.PixelSpec.of(h).description;
-                supported = true;
-            } catch (IOException e) {
-                conversion = e.getMessage();
-                supported = false;
-            }
-            return ResponseEntity.ok(new Probe(h.nx(), h.ny(), h.nz(), h.nt(), h.nc(),
-                    h.spacingX() * h.spatialUnitToMm(), h.spacingY() * h.spatialUnitToMm(),
-                    h.spacingZ() * h.spatialUnitToMm(), h.datatype, conversion,
-                    geom.source, geom.synthesized, h.description, supported, null, formatOf(h), h.bitpixNote));
+            return ResponseEntity.ok(probeOf(file));
         } catch (IOException e) {
             return ResponseEntity.badRequest().body(error(e.getMessage()));
         }
+    }
+
+    /**
+     * ヘッダの下読み（パスの検査は呼び出し側。プラグインの口（H79）と共通）。
+     *
+     * @throws IOException ヘッダを読めない
+     */
+    public static Probe probeOf(Path file) throws IOException {
+        NiftiHeader h = NiftiPair.isPairPath(file) ? NiftiPair.resolve(file).readHeader() : NiftiToDicom.readHeader(file);
+        NiftiGeometry geom = NiftiGeometry.of(h);
+        String conversion;
+        boolean supported;
+        try {
+            conversion = NiftiToDicom.PixelSpec.of(h).description;
+            supported = true;
+        } catch (IOException e) {
+            conversion = e.getMessage();
+            supported = false;
+        }
+        return new Probe(h.nx(), h.ny(), h.nz(), h.nt(), h.nc(),
+                h.spacingX() * h.spatialUnitToMm(), h.spacingY() * h.spatialUnitToMm(),
+                h.spacingZ() * h.spatialUnitToMm(), h.datatype, conversion,
+                geom.source, geom.synthesized, h.description, supported, null, formatOf(h), h.bitpixNote);
     }
 
     @PostMapping("/import")
@@ -116,34 +125,41 @@ public class NiftiImportController {
         if (file == null) {
             return ResponseEntity.badRequest().build();
         }
+        NiftiImportService.Result result = importFrom(service, file, readMetadata(req.metadataPath()), req);
+        return result.error() == null ? ResponseEntity.ok(result) : ResponseEntity.badRequest().body(result);
+    }
+
+    /**
+     * 取り込みの本体（パスの検査は呼び出し側。プラグインの口（H79）と共通）。失敗は {@code Result.error()} に入る。
+     *
+     * @param meta サイドカー JSON の中身（無ければ空）
+     */
+    public static NiftiImportService.Result importFrom(NiftiImportService service, Path file, Map<String, Object> meta,
+                                                       ImportRequest req) {
         if (!NiftiToDicom.validUnit(req.valueUnit())) {
-            return ResponseEntity.badRequest().body(NiftiImportService.failure(
-                    "単位のコードが長すぎるか、使えない文字を含みます（UCUM・16 文字以内）: " + req.valueUnit()));
+            return NiftiImportService.failure(
+                    "単位のコードが長すぎるか、使えない文字を含みます（UCUM・16 文字以内）: " + req.valueUnit());
         }
-        Map<String, Object> meta = readMetadata(req.metadataPath());
         NiftiToDicom.Options opts = new NiftiToDicom.Options(
                 req.modality() == null ? "MR" : req.modality(),
                 req.patientId(), req.patientName(), req.patientBirthDate(), req.patientSex(),
                 req.studyDate(), req.studyDescription(), req.seriesDescription(),
                 req.seriesNumber() == null ? 1 : req.seriesNumber(),
                 req.studyInstanceUid(), null, meta, req.valueUnit());
-        NiftiImportService.Result result;
         if (NiftiPair.isPairPath(file)) {
             // .hdr／.img（ANALYZE・NIfTI の 2 ファイル形式）。どちらを選んでも同じ対になる
             try {
                 NiftiPair pair = NiftiPair.resolve(file);
-                result = service.importWithHeader(pair.data(), pair.readHeader(), opts);
+                return service.importWithHeader(pair.data(), pair.readHeader(), opts);
             } catch (IOException e) {
-                return ResponseEntity.badRequest().body(NiftiImportService.failure(e.getMessage()));
+                return NiftiImportService.failure(e.getMessage());
             }
-        } else {
-            result = service.importFile(file, meta, opts);
         }
-        return result.error() == null ? ResponseEntity.ok(result) : ResponseEntity.badRequest().body(result);
+        return service.importFile(file, meta, opts);
     }
 
     /** サイドカー JSON を読む。壊れていても取り込みは続ける（属性が付かないだけ）。 */
-    private static Map<String, Object> readMetadata(String path) {
+    public static Map<String, Object> readMetadata(String path) {
         Path p = resolve(path);
         if (p == null) {
             return Map.of();

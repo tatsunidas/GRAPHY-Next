@@ -7,6 +7,7 @@
 // 動的 import して activate(host) を呼ぶ。設計: fw/plugin-architecture.md。
 import { EffectViolation, guardHost, type ToolEffect } from "./hostEffects";
 import { importMicroscopyVolume } from "./pluginMicroscopyApi";
+import { exportNiftiSeries, importNiftiVolume, releaseNifti } from "./pluginNiftiApi";
 import { runComputeJob, computeStatus, releaseComputeRuntime } from "./pluginComputeApi";
 import { pickSeries } from "./pluginSeriesPickApi";
 import { runComputeBatch, listComputeJobs, attachComputeBatch } from "./pluginComputeBatchApi";
@@ -142,6 +143,12 @@ function withHostApis(m: PluginManifest, host: PluginHostSeed): PluginHost {
     // H68: 出所（id・名前）はマニフェストから本体が入れる。一時フォルダもその id のものだけ
     microscopy: {
       importVolume: (req, opts) => importMicroscopyVolume({ id: m.id, name: m.name }, req, opts),
+    },
+    // H78・H79（仮）: 出所（id・名前）はマニフェストから本体が入れる。一時フォルダもその id のものだけ
+    nifti: {
+      exportSeries: (req) => exportNiftiSeries(m.id, req),
+      release: (path) => releaseNifti(m.id, path),
+      importVolume: (req, opts) => importNiftiVolume({ id: m.id, name: m.name }, req, opts),
     },
     // H47〜H49: 出所（id・名前）はマニフェストから本体が入れる。プラグインに名乗らせない
     video: {
