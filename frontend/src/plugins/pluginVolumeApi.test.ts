@@ -1,7 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const loadRegVolume = vi.fn();
-vi.mock("../viewer/regVolumeLoader", () => ({ loadRegVolume: (...a: unknown[]) => loadRegVolume(...a), estimateRegVolume: vi.fn() }));
+// vi.fn に reject する実装を置くと、spy が結果の Promise を未処理のまま持ち、テストが失敗扱いになる。素の関数で投げる。
+let throwNext: unknown = null;
+vi.mock("../viewer/regVolumeLoader", async (orig) => ({
+  ...(await orig<typeof import("../viewer/regVolumeLoader")>()),
+  loadRegVolume: (...a: unknown[]) => (throwNext ? Promise.reject(throwNext) : loadRegVolume(...a)),
+  estimateRegVolume: vi.fn(),
+}));
 vi.mock("../api", () => ({ fetchInstances: vi.fn(async () => [{ sopInstanceUid: "1.2.3" }]) }));
 vi.mock("@cornerstonejs/core", () => ({
   imageLoader: { loadAndCacheImage: vi.fn(async () => ({})) },
@@ -40,40 +46,22 @@ const run = (zs: number[]) => {
 };
 const range = (n: number, d = 2.5) => Array.from({ length: n }, (_, k) => k * d);
 
-describe("loadPluginVolume: 等間隔でないシリーズを断る", () => {
-  beforeEach(() => loadRegVolume.mockReset());
+describe("loadPluginVolume: 等間隔でないシリーズの断りは loadRegVolume が行い、そのまま通す", () => {
+  beforeEach(() => { loadRegVolume.mockReset(); throwNext = null; });
 
-  it("等間隔なら体積を返す", async () => {
+  it("loadRegVolume が体積を返せば、体積を返す", async () => {
     const v = await run(range(20));
     expect(v?.dims).toEqual([2, 2, 20]);
     expect(v?.unit).toBe("HU");
   });
-  it("1 枚欠損は NonUniformSliceSpacingError（kind と欠けた枚数）", async () => {
-    const zs = range(20).filter((_, k) => k !== 10);
-    const e = await run(zs).catch((x) => x);
-    expect(e).toBeInstanceOf(NonUniformSliceSpacingError);
-    expect(e.name).toBe("NonUniformSliceSpacingError");
-    expect(e.message).toMatch(/missing/);
-    expect(e.message).toMatch(/1 slice\(s\) missing/);
-    expect(e.message).toMatch(/2\.500–5\.000 mm/);
+  it("1 枚だけのシリーズも返す", async () => {
+    expect((await run([0]))?.dims[2]).toBe(1);
   });
-  it("不等間隔は NonUniformSliceSpacingError（irregular）", async () => {
-    const zs = [0]; const pat = [2, 3.5, 2.5, 3];
-    for (let k = 0; k < 19; k++) zs.push(zs[k] + pat[k % 4]);
-    await expect(run(zs)).rejects.toThrow(/irregular/);
-    await expect(run(zs)).rejects.toMatchObject({ name: "NonUniformSliceSpacingError", kind: "irregular" });
-  });
-  it("重複（同じ位置の 2 枚）は NonUniformSliceSpacingError（duplicates）", async () => {
-    const zs = range(20); zs.splice(5, 0, zs[5]);
-    await expect(run(zs)).rejects.toMatchObject({ name: "NonUniformSliceSpacingError", kind: "duplicates" });
-  });
-  it("間隔の 0.5% の揺らぎ（IPP の丸め相当）は等間隔として返す", async () => {
-    const zs = range(20).map((z, k) => z + (k % 2 ? 0.005 : -0.005) * 2.5);
-    expect(await run(zs)).not.toBeNull();
-  });
-  it("1 枚だけのシリーズは返す", async () => {
-    const v = await run([0]);
-    expect(v?.dims[2]).toBe(1);
+  it("loadRegVolume の NonUniformSliceSpacingError を握りつぶさず、そのまま投げる（null にしない）", async () => {
+    const err = new NonUniformSliceSpacingError("missing", 2.5, 5, "Series slices are not evenly spaced (missing, 1 slice(s) missing; spacing 2.500–5.000 mm).");
+    throwNext = err;
+    const got = await loadPluginVolume("standalone", () => "1.2.8", ref).then(() => null, (x: unknown) => x);
+    expect(got === err).toBe(true);
   });
   it("loadRegVolume が null なら null（幾何が無い・読めない）", async () => {
     loadRegVolume.mockResolvedValue(null);

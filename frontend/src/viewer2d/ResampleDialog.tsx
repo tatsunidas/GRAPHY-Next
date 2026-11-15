@@ -11,7 +11,7 @@ import { metaData } from "@cornerstonejs/core";
 import { useI18n } from "../i18n/i18n";
 import type { Study, Series, Instance } from "../api";
 import type { ViewerMode } from "../viewer/imageId";
-import { loadRegVolume, type LoadedRegVolume } from "../viewer/regVolumeLoader";
+import { loadRegVolume, NonUniformSliceSpacingError, regLoadErrorText, type LoadedRegVolume } from "../viewer/regVolumeLoader";
 import {
   GRID_EDGE_TOLERANCE,
   axisGrid,
@@ -85,7 +85,7 @@ export function ResampleDialog({
         setSk(String(Math.round(s[2] * 100) / 100));
         setLoaded(v);
       } catch (e) {
-        if (alive.current) setLoadMsg(`${t("resample.loadFailed")}: ${String(e)}`);
+        if (alive.current) setLoadMsg(e instanceof NonUniformSliceSpacingError ? regLoadErrorText(e, t) : `${t("resample.loadFailed")}: ${regLoadErrorText(e, t)}`);
       }
     })();
     return () => { alive.current = false; };

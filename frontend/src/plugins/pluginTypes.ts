@@ -1033,6 +1033,7 @@ export interface Viewer2DPluginHost extends PluginHostBase {
    * <p>🔴 **スライスが等間隔でないシリーズ（欠損・不等間隔・重複）は例外**（`name` が
    * `NonUniformSliceSpacingError`。メッセージに種別と間隔の範囲）。この格子は z の刻みを 1 つしか持てず、
    * 等間隔でないまま返すと位置・体積・重心が黙って誤るため。`null` は幾何が無い・読めないときだけ。
+   * 位置合わせ（`registerVolumes`）も同じ読み込みを通るので、等間隔でないシリーズは同じ例外で断られる。
    */
   loadVolume: (
     ref: PluginSeriesRef,

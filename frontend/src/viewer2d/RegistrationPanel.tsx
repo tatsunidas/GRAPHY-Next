@@ -17,7 +17,7 @@ import { useI18n } from "../i18n/i18n";
 import { useDateFormat, formatDateTime } from "../i18n/dateFormat";
 import { fetchSeriesLayout, type Instance, type Series, type Study } from "../api";
 import type { ViewerMode } from "../viewer/imageId";
-import { estimateRegVolume, loadRegVolume } from "../viewer/regVolumeLoader";
+import { estimateRegVolume, loadRegVolume, NonUniformSliceSpacingError, regLoadErrorText } from "../viewer/regVolumeLoader";
 import { runRigidInWorker, toPayload } from "../viewer/regWorkerClient";
 import type { MetricKind } from "../viewer/regMetrics";
 import {
@@ -260,7 +260,7 @@ export function RegistrationPanel({
       abortRef.current = null;
       // 中止は「失敗」ではないので赤字にしない。
       const msg = e instanceof Error ? e.message : String(e);
-      setError(msg === "registration aborted" ? null : msg);
+      setError(msg === "registration aborted" ? null : e instanceof NonUniformSliceSpacingError ? regLoadErrorText(e, t) : msg);
       setPhase("idle");
       setStatus("");
     }
