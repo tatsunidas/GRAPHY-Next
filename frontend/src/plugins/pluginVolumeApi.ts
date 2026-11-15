@@ -22,6 +22,7 @@ import type { ViewerMode } from "../viewer/imageId";
 import { imageIdForInstance } from "../viewer/imageId";
 import { imageLoader, metaData } from "@cornerstonejs/core";
 import { getModalityCalibration } from "../viewer/pixelCalibration";
+import { sliceGeometry } from "../viewer/sliceGeometry";
 import { estimateRegVolume, loadRegVolume, type VolumeEstimate } from "../viewer/regVolumeLoader";
 import { runRigidInWorker, toPayload } from "../viewer/regWorkerClient";
 import { registrationToTransform, type RegistrationResult } from "../viewer/regResult";
@@ -42,6 +43,20 @@ type AnyObj = Record<string, any>;
 function resolveStudy(ref: PluginSeriesRef, resolver: StudyResolver): string | null {
   const uid = ref.studyUid ?? resolver(ref.seriesUid);
   return uid ?? null;
+}
+
+/**
+ * スライスが等間隔でないシリーズを `loadVolume` が断るときの例外。
+ * `null`（幾何が無い・読めない）とは別。呼び出し側が理由を利用者に示せるよう、kind と間隔を持たせる。
+ */
+export class NonUniformSliceSpacingError extends Error {
+  constructor(
+    readonly kind: "missing" | "irregular" | "duplicates",
+    message: string,
+  ) {
+    super(message);
+    this.name = "NonUniformSliceSpacingError";
+  }
 }
 
 /**
@@ -71,6 +86,21 @@ export async function loadPluginVolume(
     onProgress,
   );
   if (!loaded) return null;
+
+  // `loadRegVolume` の z の刻みは先頭 2 枚の IPP 差だけで決まる。等間隔でないシリーズに返すと、
+  // 位置・体積・重心が黙って誤る。判定は MPR・3D と同じ `sliceGeometry`（新しいしきい値は作らない）。
+  const geo = sliceGeometry(
+    loaded.slices.map((sl, i) => ({ id: sl.sopInstanceUid ?? String(i), ipp: sl.ipp, iop: loaded.iop })),
+  );
+  if (geo.kind !== "uniform" && geo.kind !== "single") {
+    const steps = geo.steps.map(Math.abs);
+    const lo = Math.min(...steps), hi = Math.max(...steps);
+    const detail = geo.kind === "missing" ? `, ${geo.missingCount} slice(s) missing` : "";
+    throw new NonUniformSliceSpacingError(
+      geo.kind,
+      `Series slices are not evenly spaced (${geo.kind}${detail}; spacing ${lo.toFixed(3)}–${hi.toFixed(3)} mm). loadVolume returns evenly spaced series only.`,
+    );
+  }
 
   // 単位とスライス厚は「読んだ 1 枚目」から取る（`loadRegVolume` は幾何しか返さない）。
   // 画像は直前の読み込みでキャッシュ済みなので、ここでの取得は実質ゼロコスト。

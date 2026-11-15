@@ -506,7 +506,7 @@ export interface PluginVolume extends PluginVolumeGrid {
   ipp: [number, number, number];
   /** ImageOrientationPatient（6 要素）。 */
   iop: number[];
-  /** スライスが 1 進むときの移動ベクトル（法線 × 間隔ではなく実測の IPP 差）。 */
+  /** スライスが 1 進むときの移動ベクトル（法線 × 間隔ではなく実測の IPP 差）。`loadVolume` は等間隔のシリーズにしか返さないので、全スライスで同じ。 */
   sliceStep: [number, number, number];
   frameOfReferenceUid: string | null;
   modality: string;
@@ -1029,6 +1029,10 @@ export interface Viewer2DPluginHost extends PluginHostBase {
    *
    * <p>★ **1 回 1 ボリューム。** まとめて返す API にすると呼び出し側がメモリを見積もらなくなる。
    * 大きさは {@link estimateVolume} で**先に**聞ける。`studyUid` 省略時は開いているタイルから解決。
+   *
+   * <p>🔴 **スライスが等間隔でないシリーズ（欠損・不等間隔・重複）は例外**（`name` が
+   * `NonUniformSliceSpacingError`。メッセージに種別と間隔の範囲）。この格子は z の刻みを 1 つしか持てず、
+   * 等間隔でないまま返すと位置・体積・重心が黙って誤るため。`null` は幾何が無い・読めないときだけ。
    */
   loadVolume: (
     ref: PluginSeriesRef,
