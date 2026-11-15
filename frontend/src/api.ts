@@ -1710,7 +1710,71 @@ export interface RemoteAe {
   host: string;
   port: number;
   tls: boolean;
+  /** この通信先への検索（C-FIND）の方式。未指定なら標準（Study Root・標準の返却項目）。 */
+  find?: FindProfile | null;
 }
+
+/**
+ * 通信先ごとの検索（C-FIND）の方式。すべて未指定なら従来どおりの検索になる（backend の FindProfile と同じ形）。
+ * 相手によって、情報モデル・返却項目・転送構文・文字コードのどれかで検索が通らないことがある。
+ */
+export interface FindProfile {
+  model?: "StudyRoot" | "PatientRoot";
+  patientKeys?: string[];
+  studyKeys?: string[];
+  seriesKeys?: string[];
+  /** 患者 ID・患者名の一致方法。contains＝前後に *（既定）。 */
+  wildcard?: "contains" | "prefix" | "exact";
+  transferSyntax?: "implicit" | "explicit";
+  /** 照合キーに付ける SpecificCharacterSet（例 ISO_IR 192）。 */
+  charset?: string;
+  responseTimeoutMs?: number;
+}
+
+/** 通信テストの 1 段（実行順）。stage: echo / find / get / move。 */
+export interface QrProbeStep {
+  id: string;
+  stage: "echo" | "find" | "get" | "move";
+  label: string;
+}
+
+/** 通信テスト 1 段の結果。verdict: ok / warn（受け付けたが相手がエラー status）/ ng / skipped。患者の値は含まない。 */
+export interface QrProbeResult {
+  id: string;
+  stage: "echo" | "find" | "get" | "move";
+  label: string;
+  verdict: "ok" | "warn" | "ng" | "skipped";
+  /** OK / SERVICE_REFUSED / ASSOCIATION_REJECTED / DROPPED / UNREACHABLE / TIMEOUT / STATUS_ERROR / UNKNOWN */
+  kind: string | null;
+  status: number | null;
+  errorComment: string | null;
+  reason: string | null;
+  count: number | null;
+  returnedKeys: string[];
+  millis: number;
+  command: string | null;
+  evidence: string | null;
+  sampleStudyUid: string | null;
+  /** この組み合わせを通信先の検索方式として採るときの値（採れないものは null）。 */
+  adopt: FindProfile | null;
+}
+
+export interface QrProbeTarget {
+  host: string;
+  port: number;
+  calledAet: string;
+  tls: boolean;
+  patientId?: string;
+  studyDate?: string;
+  studyUid?: string;
+}
+
+/** 通信テストの段の一覧（実行順）。 */
+export const qrProbePlan = () => httpGet<QrProbeStep[]>("/api/dicom/qr/probe/plan");
+
+/** 通信テストを 1 段実行する（画面が 1 段ずつ表示を進める）。 */
+export const qrProbeRun = (stepId: string, t: QrProbeTarget) =>
+  httpSend<QrProbeResult>("/api/dicom/qr/probe/run", "POST", { stepId, ...t });
 
 /** mDNS（_dicom._tcp）で見つかった機器。認証されていない（同じ LAN の誰でも名前を名乗れる）。 */
 export interface DiscoveredDevice {
@@ -1870,7 +1934,7 @@ export interface QrRetrieveJob {
   message: string;
 }
 
-interface QrDest {
+export interface QrDest {
   host: string;
   port: number;
   calledAet: string;

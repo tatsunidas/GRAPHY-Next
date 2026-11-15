@@ -43,7 +43,7 @@ public class DicomRemoteAeService {
         for (DicomProperties.RemoteAe a : props.getRemoteAes()) {
             if (a.getAeTitle() != null && !a.getAeTitle().isBlank()) {
                 byAet.put(a.getAeTitle(),
-                        new DicomController.RemoteAeDto(a.getAeTitle(), a.getHost(), a.getPort(), a.isTls()));
+                        new DicomController.RemoteAeDto(a.getAeTitle(), a.getHost(), a.getPort(), a.isTls(), a.getFind()));
             }
         }
         String json = settings.getAll().get(DicomController.REMOTE_AES_KEY);

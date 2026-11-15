@@ -22,6 +22,8 @@ import { useI18n } from "../i18n/i18n";
 import { QrSearchBar } from "./QrSearchBar";
 import { QrTable } from "./QrTable";
 import { filtersToMatchKeys } from "./qrUtil";
+import { qrErrorMsg } from "../settings/probeView";
+import { HttpError } from "../http";
 
 type DestResult = { studies: QrStudyRow[] | null; loading: boolean; error: string | null };
 
@@ -75,13 +77,17 @@ export function QRScreen({ status }: { status: AppStatus | null }) {
     try {
       const rows = await qrFindStudies(
         { host: ae.host, port: ae.port, calledAet: ae.aeTitle, tls: ae.tls },
-        filtersToMatchKeys(filtersRef.current),
+        filtersToMatchKeys(filtersRef.current, ae.find?.wildcard),
       );
       setResults((m) => new Map(m).set(ae.aeTitle, { studies: rows, loading: false, error: null }));
     } catch (e) {
-      setResults((m) => new Map(m).set(ae.aeTitle, { studies: null, loading: false, error: String(e) }));
+      // 相手の返事（検索の拒否・エラー status・応答なしの切断）は、分類に応じた文言と次の行動で出す。
+      const friendly = e instanceof HttpError ? qrErrorMsg(e.detail) : null;
+      setResults((m) => new Map(m).set(ae.aeTitle, {
+        studies: null, loading: false, error: friendly ? t(friendly.key, friendly.vars) : String(e),
+      }));
     }
-  }, []);
+  }, [t]);
 
   /**
    * Query ボタン処理（仕様の順序）:

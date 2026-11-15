@@ -47,11 +47,16 @@ export function fmtDate(d: string | null | undefined): string {
 }
 
 /** StudyFilters を C-FIND の matchKeys（DICOM キーワード）へ変換する。 */
-export function filtersToMatchKeys(f: StudyFilters | null): Record<string, string> {
+export function filtersToMatchKeys(
+  f: StudyFilters | null,
+  /** 患者 ID・名前の一致方法（通信先ごとの設定）。既定は部分一致（前後に *）。 */
+  wildcard: "contains" | "prefix" | "exact" = "contains",
+): Record<string, string> {
+  const wrap = (v: string) => (wildcard === "exact" ? v : wildcard === "prefix" ? `${v}*` : `*${v}*`);
   const m: Record<string, string> = {};
   if (!f) return m;
-  if (f.patientId) m.PatientID = `*${f.patientId}*`;
-  if (f.patientName) m.PatientName = `*${f.patientName}*`;
+  if (f.patientId) m.PatientID = wrap(f.patientId);
+  if (f.patientName) m.PatientName = wrap(f.patientName);
   if (f.accessionNumber) m.AccessionNumber = f.accessionNumber;
   if (f.modality) m.ModalitiesInStudy = f.modality.split(",")[0].trim(); // C-FIND は単一値マッチ
   // StudyDate は範囲表記 "from-to" / "from-" / "-to" / 単日。
