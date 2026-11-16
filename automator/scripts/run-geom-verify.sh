@@ -42,7 +42,7 @@ for s in "${SPECS[@]}"; do ALL_NAMES="$ALL_NAMES ${s%%|*}"; done
 ONLY=",${GEOM_ONLY:-},"
 if [ -n "${GEOM_ONLY:-}" ]; then
   for n in ${GEOM_ONLY//,/ }; do
-    case " $ALL_NAMES " in *" $n "*) ;; *) echo "GEOM_ONLY に未知の検査名: $n（$ALL_NAMES）" >&2; exit 2 ;; esac
+    case " $ALL_NAMES " in *" $n "*) ;; *) echo "GEOM_ONLY に未知の検査名: ${n}（${ALL_NAMES}）" >&2; exit 2 ;; esac
   done
 fi
 
@@ -93,11 +93,11 @@ if ! precheck_python; then
   exit 2
 fi
 export GRAPHY_TEST_PYTHON="$PY"
-echo "[python] $PY（依存は requirements-geom.txt と一致）"
+echo "[python] ${PY}（依存は requirements-geom.txt と一致）"
 
 # ── 前提 ──
 JAR="$AUTOMATOR/../backend/target/graphy-next-backend.jar"
-if [ ! -f "$JAR" ]; then echo "backend の jar が無い: $JAR（mvn -Dfrontend.skip=true -DskipTests package）" >&2; exit 2; fi
+if [ ! -f "$JAR" ]; then echo "backend の jar が無い: ${JAR}（mvn -Dfrontend.skip=true -DskipTests package）" >&2; exit 2; fi
 if [ -z "${DISPLAY:-}" ] && [ -z "${WAYLAND_DISPLAY:-}" ]; then
   echo "[警告] DISPLAY が無い。Electron は画面が要る（ヘッドレスなら xvfb-run -a bash $0）。" >&2
 fi
@@ -143,7 +143,7 @@ for spec in "${SPECS[@]}"; do
   PID=$!
   wait "$PID"; RC=$?
   ELAPSED=$(( $(date +%s) - START ))
-  echo "[$NAME] 終了 exit=$RC（${ELAPSED} 秒）"
+  echo "[$NAME] 終了 exit=${RC}（${ELAPSED} 秒）"
   EXITS[$NAME]="$RC"
   [ "$RC" != 0 ] && OVERALL=1
   [ "$RC" = 124 ] && echo "[$NAME] タイムアウト（${TMO} 秒）" >&2
