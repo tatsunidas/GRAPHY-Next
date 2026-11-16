@@ -78,5 +78,6 @@ jobs:
         with:
           name: geom-verify-results
           path: automator/.results
+          include-hidden-files: true
           retention-days: 14
           if-no-files-found: ignore
