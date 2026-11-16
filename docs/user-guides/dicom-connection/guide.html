@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>DICOM 通信と接続の設定ガイド</title>
+<style>
+@page { size: A4; margin: 16mm 15mm; }
+* { box-sizing: border-box; }
+body { font-family: "Yu Gothic", "Meiryo", "Hiragino Sans", sans-serif; font-size: 10.5pt; line-height: 1.6; color: #1a1a1a; margin: 0; }
+h1 { font-size: 20pt; margin: 0 0 4pt; }
+.sub { color: #555; margin-bottom: 14pt; }
+h2 { font-size: 14pt; border-left: 5px solid #1f5fa8; padding-left: 8pt; margin: 20pt 0 8pt; page-break-after: avoid; }
+h3 { font-size: 11.5pt; margin: 14pt 0 4pt; page-break-after: avoid; }
+table { border-collapse: collapse; width: 100%; margin: 6pt 0 10pt; page-break-inside: avoid; }
+th, td { border: 1px solid #b9c2cc; padding: 4pt 6pt; vertical-align: top; font-size: 9.5pt; }
+th { background: #e8eff7; text-align: left; }
+.box { border: 1px solid #b9c2cc; border-radius: 4pt; padding: 7pt 10pt; margin: 8pt 0; background: #f7f9fb; page-break-inside: avoid; }
+.key { border-color: #1f5fa8; background: #eef4fb; }
+.warn { border-color: #b36b00; background: #fff6e6; }
+code { font-family: Consolas, monospace; font-size: 9.5pt; background: #eef0f2; padding: 0 3pt; border-radius: 2pt; }
+ul, ol { margin: 4pt 0 6pt 18pt; padding: 0; }
+.pb { page-break-before: always; }
+svg { width: 100%; height: auto; margin: 4pt 0; page-break-inside: avoid; }
+.small { font-size: 9pt; color: #555; }
+</style>
+</head>
+<body>
+
+<h1>DICOM 通信と接続の設定ガイド</h1>
+<div class="sub">SCU / SCP の立場ごとに、STORE・QR（FIND・GET・MOVE）で「どちらに何を設定するか」。GRAPHY-Next（スタンドアロン）をサーバーとして使う場合を含む。<br>作成: 2026-11-16 ／ Visionary Imaging Services</div>
+
+<div class="box key">
+<b>この資料の要点</b>
+<ul>
+<li>接続（TCP）を<b>始める側が SCU</b>、<b>待ち受ける側が SCP</b>。設定は「待ち受ける側＝ポートと許可」、「始める側＝相手の宛先」と分けて考える。</li>
+<li><b>C-GET</b>: 接続は 1 本だけ。受け取る側（SCU）が相手の AE・IP・ポートを持てば足りる。受け取る側の待ち受けポートは不要。</li>
+<li><b>C-MOVE</b>: 接続は 2 本。要求を受けた SCP が、<b>移動先 AE の名前から宛先（IP・ポート）を自分の登録表で引き</b>、新しく C-STORE の接続を張る。移動先の登録と、移動先の待ち受けが要る。</li>
+<li>Q/R の許可（SOP クラス）が無いと、エコーが通っても QR だけ失敗する。</li>
+</ul>
+</div>
+
+<h2>1. 用語</h2>
+<table>
+<tr><th style="width:22%">用語</th><th>意味</th></tr>
+<tr><td>SCU（Service Class User）</td><td>サービスを使う側。TCP 接続を<b>開始する</b>側（クライアント）。</td></tr>
+<tr><td>SCP（Service Class Provider）</td><td>サービスを提供する側。指定ポートで<b>待ち受ける</b>側（サーバー）。</td></tr>
+<tr><td>AE タイトル</td><td>DICOM ノードの名前（最大 16 文字）。接続のとき、<b>Calling AE</b>（自分の名前）と <b>Called AE</b>（相手の名前）を名乗る。</td></tr>
+<tr><td>IP・ポート</td><td>SCP の待ち受け先。SCU 側の送信元ポートは接続のたびに変わる一時ポートで、設定しない。</td></tr>
+<tr><td>SOP クラス</td><td>「何ができるか」の種類（画像保存、検索、取得など）。接続の交渉で SCU が提案し、SCP が受理・拒否する。</td></tr>
+<tr><td>DIMSE</td><td>C-ECHO、C-STORE、C-FIND、C-GET、C-MOVE などの命令。</td></tr>
+</table>
+
+<div class="pb"></div>
+<h2>2. 操作ごとの早見表</h2>
+<p class="small">「始める側」＝ SCU（接続を開く）、「待ち受ける側」＝ SCP。画像の向きは操作ごとに違う点に注意。</p>
+<table>
+<tr><th style="width:12%">操作</th><th style="width:22%">始める側（SCU）に必要</th><th style="width:30%">待ち受ける側（SCP）に必要</th><th>画像の流れ・接続数</th></tr>
+<tr><td><b>C-ECHO</b><br>疎通確認</td><td>相手の AE・IP・ポート<br>自分の AE</td><td>待ち受けポート、自分の AE、Verification の受理</td><td>画像なし。接続 1 本。</td></tr>
+<tr><td><b>C-STORE</b><br>画像を送る</td><td>相手の AE・IP・ポート<br>自分の AE</td><td>待ち受けポート、自分の AE、<b>Storage SOP クラスの受理</b>、保存先。製品によっては送り手の AE（と IP）の許可登録</td><td>SCU → SCP。接続 1 本。</td></tr>
+<tr><td><b>C-FIND</b><br>検索</td><td>相手の AE・IP・ポート<br>自分の AE</td><td>待ち受けポート、自分の AE、<b>Q/R（FIND）の SOP クラスの受理</b>、SCU の AE の許可（Query/Retrieve の許可）</td><td>検索結果（メタデータ）が SCP → SCU。画像は動かない。接続 1 本。</td></tr>
+<tr><td><b>C-GET</b><br>画像を取得</td><td>相手の AE・IP・ポート<br>自分の AE<br><b>待ち受けは不要</b></td><td>C-FIND と同じ。加えて <b>GET の SOP クラスの受理</b>。SCU の IP・ポートの登録は<b>不要</b></td><td>画像が <b>同じ接続の中で</b> SCP → SCU。接続 1 本。SCU が Storage の SOP クラスを受け取る役で提案する。</td></tr>
+<tr><td><b>C-MOVE</b><br>画像を別ノードへ移動</td><td>相手の AE・IP・ポート<br>自分の AE<br>要求に<b>移動先 AE の名前</b>を書く</td><td>C-FIND と同じ。加えて <b>MOVE の SOP クラスの受理</b>。<b>移動先 AE の AE・IP・ポートの登録（必須）</b></td><td>要求は SCU → SCP（接続①）。画像は SCP → <b>移動先</b>（接続②、SCP が新しく開く）。移動先が SCU 自身の場合は、自分が待ち受ける必要がある。</td></tr>
+</table>
+
+<h3>図 1　C-GET と C-MOVE の接続の違い</h3>
+<svg viewBox="0 0 700 250" xmlns="http://www.w3.org/2000/svg" font-family="Yu Gothic, Meiryo, sans-serif" font-size="12">
+  <defs><marker id="a" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#1f5fa8"/></marker>
+  <marker id="b" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#b36b00"/></marker></defs>
+  <text x="10" y="18" font-weight="bold">C-GET（接続 1 本）</text>
+  <rect x="20" y="30" width="150" height="50" rx="4" fill="#eef4fb" stroke="#1f5fa8"/><text x="95" y="52" text-anchor="middle">受け取る側（SCU）</text><text x="95" y="68" text-anchor="middle" font-size="10">待ち受け不要</text>
+  <rect x="440" y="30" width="170" height="50" rx="4" fill="#eef4fb" stroke="#1f5fa8"/><text x="525" y="52" text-anchor="middle">画像の持ち主（SCP）</text><text x="525" y="68" text-anchor="middle" font-size="10">待ち受けポート・Q/R 許可</text>
+  <line x1="170" y1="46" x2="438" y2="46" stroke="#1f5fa8" stroke-width="1.5" marker-end="url(#a)"/><text x="304" y="40" text-anchor="middle" font-size="10">① 接続＋C-GET 要求（相手の AE・IP・ポート）</text>
+  <line x1="438" y1="66" x2="172" y2="66" stroke="#1f5fa8" stroke-width="1.5" marker-end="url(#a)"/><text x="304" y="82" text-anchor="middle" font-size="10">② 画像が同じ接続で戻る</text>
+
+  <text x="10" y="130" font-weight="bold">C-MOVE（接続 2 本）</text>
+  <rect x="20" y="145" width="150" height="50" rx="4" fill="#fff6e6" stroke="#b36b00"/><text x="95" y="167" text-anchor="middle">要求する側（SCU）</text><text x="95" y="183" text-anchor="middle" font-size="10">移動先 AE 名を指定</text>
+  <rect x="270" y="145" width="170" height="50" rx="4" fill="#fff6e6" stroke="#b36b00"/><text x="355" y="167" text-anchor="middle">画像の持ち主（SCP）</text><text x="355" y="183" text-anchor="middle" font-size="10">移動先 AE の IP・ポートを登録</text>
+  <rect x="520" y="145" width="170" height="50" rx="4" fill="#fff6e6" stroke="#b36b00"/><text x="605" y="167" text-anchor="middle">移動先（C-STORE SCP）</text><text x="605" y="183" text-anchor="middle" font-size="10">待ち受けポート・開放</text>
+  <line x1="170" y1="160" x2="268" y2="160" stroke="#b36b00" stroke-width="1.5" marker-end="url(#b)"/><text x="219" y="154" text-anchor="middle" font-size="10">① 要求</text>
+  <line x1="440" y1="170" x2="518" y2="170" stroke="#b36b00" stroke-width="1.5" marker-end="url(#b)"/><text x="479" y="164" text-anchor="middle" font-size="10">② C-STORE</text>
+  <text x="355" y="225" text-anchor="middle" font-size="10">要求した側と移動先が同じノードのときは、そのノードが SCU と SCP の両方になる</text>
+</svg>
+
+<h3>GET では、送信側にしか AE・IP・ポートの設定は要らないのか</h3>
+<div class="box">
+<p>「GET の要求を出す側（画像を受け取る側）」には、<b>相手（画像の持ち主）の AE・IP・ポート</b>と自分の AE があれば足ります。受け取る側は、待ち受けポートの開放や、自分の IP・ポートを相手に教える必要はありません。画像が、要求したのと同じ接続で返ってくるためです。</p>
+<p>一方、画像の持ち主（SCP）側には、次が要ります。</p>
+<ul>
+<li>GET を含む Q/R の SOP クラスを受理する設定。</li>
+<li>要求元の <b>AE タイトルの許可</b>（製品によっては IP も）。ここが抜けると、エコーが通っても GET・FIND・MOVE が拒否される。</li>
+</ul>
+<p>注意: C-GET に対応しない PACS は少なくありません。その場合は C-MOVE を使います。</p>
+</div>
+
+<h2>3. GRAPHY-Next（スタンドアロン）の設定</h2>
+<p class="small">以下は、GRAPHY-Next の実装（main、2026-11-16 時点）の確認に基づきます。画面の名称は環境設定内の表示です。</p>
+
+<h3>3.1 GRAPHY-Next 自身の「ノードとしての設定」</h3>
+<table>
+<tr><th style="width:26%">項目</th><th>内容</th></tr>
+<tr><td>自局 AE タイトル</td><td>既定は <code>GRAPHYNEXT</code>。SCU として接続するときの Calling AE、SCP として待ち受けるときの AE 名になる。</td></tr>
+<tr><td>SCP リスナー</td><td>既定は<b>無効</b>。有効にすると、既定ポート <code>11112</code>、バインドは全 NIC（<code>0.0.0.0</code>）で待ち受ける。</td></tr>
+<tr><td>TLS</td><td>使う場合は平文とは別のポート（既定 <code>2762</code>）で待ち受ける。既定で相互 TLS（クライアント証明書を要求）。</td></tr>
+<tr><td>通信先（リモート AE）</td><td>環境設定の「DICOM 通信先」に、相手の AE タイトル・ホスト・ポート・TLS の有無を登録する。送信・検索・取得・移動の宛先になり、C-MOVE の移動先の表としても使う。</td></tr>
+<tr><td>保存先</td><td>受信した DICOM は、ローカル保管庫（既定 <code>./data/dicom</code>）に保存する。</td></tr>
+</table>
+
+<h3>3.2 GRAPHY-Next を SCP（サーバー）として使うとき</h3>
+<table>
+<tr><th style="width:18%">受ける操作</th><th>既定の挙動と、必要な設定</th></tr>
+<tr><td>C-ECHO</td><td>常に応答する（SCP が起動していれば）。</td></tr>
+<tr><td>C-STORE（受信）</td><td>SCP を有効にし、ポートを開放すれば受信できる。実装上、呼び出し AE の許可リストは設けていない（受信側 AE に絞り込みを設定していない）。</td></tr>
+<tr><td>C-FIND / C-GET / C-MOVE（他端末からの検索・取得）</td><td>患者情報を返すため、<b>既定は OFF</b>。環境設定の「他端末からの検索を受け付ける」を ON にする（SCP の起動時に読むので、<b>変更後は再起動</b>）。</td></tr>
+<tr><td>Q/R を許可する相手</td><td>ON にしても、既定では<b>登録済みの通信先 AE（AE タイトルが一致するもの）からの要求だけ</b>に応える。登録外の相手に応えるには「登録外にも応える（すべて許可）」を設定する。許可の判定は<b>要求のたびに</b>行うので、通信先の追加・変更はすぐに効く。</td></tr>
+<tr><td>C-MOVE の宛先</td><td>宛先 AE は、「すべて許可」にしても<b>登録済みの通信先だけ</b>。未登録の宛先は失敗（0xA801）、許可されない相手は 0xC000。TLS が要る宛先で TLS が使えないときは、平文で送らず 0xA702 で失敗にする。</td></tr>
+</table>
+<div class="box warn">呼び出し AE タイトルは相手の自己申告で、偽装できます。本人確認が必要な環境では、相互 TLS（クライアント証明書）を併用してください。</div>
+
+<h3>3.3 GRAPHY-Next を SCU（クライアント）として使うとき</h3>
+<table>
+<tr><th style="width:18%">操作</th><th>GRAPHY-Next 側</th><th>相手（PACS・モダリティ）側</th></tr>
+<tr><td>送信（C-STORE）</td><td>通信先に相手の AE・ホスト・ポートを登録。</td><td>待ち受け・Storage の受理。製品によっては GRAPHY-Next の AE（と IP）を登録。</td></tr>
+<tr><td>検索（C-FIND）</td><td>通信先を登録。「通信テスト」で、通る検索方式を調べて採用できる。</td><td>GRAPHY-Next の AE に、Q/R（FIND）を許可。</td></tr>
+<tr><td>取得（C-GET）</td><td>通信先の登録だけ。待ち受けは不要。</td><td>GRAPHY-Next の AE に、GET を含む Q/R を許可。</td></tr>
+<tr><td>取得（C-MOVE）</td><td>通信先を登録。<b>SCP を有効にして、ポートを開放</b>（移動先＝自局 AE として受信する）。</td><td><b>GRAPHY-Next を移動先 AE として登録</b>（AE・IP・ポート）。MOVE を許可。</td></tr>
+</table>
+
+<h3>3.4 場面別のチェック（スタンドアロンをサーバーに使う）</h3>
+<table>
+<tr><th style="width:30%">場面</th><th>GRAPHY-Next 側</th><th>相手側</th></tr>
+<tr><td>A. 他の装置から画像を受け取る（相手が STORE）</td><td>SCP 有効・ポート開放・AE の通知</td><td>送信先として GRAPHY-Next の AE・IP・ポートを登録</td></tr>
+<tr><td>B. 他の端末が GRAPHY-Next を検索し、GET で取る</td><td>SCP 有効＋「他端末からの検索を受け付ける」ON（再起動）＋相手を通信先に登録（または「すべて許可」）＋ポート開放</td><td>GRAPHY-Next の AE・IP・ポートを接続先に登録（GET は相手が待ち受け不要）</td></tr>
+<tr><td>C. 他の端末が GRAPHY-Next を検索し、MOVE で取る</td><td>B に加え、<b>相手の受信ノード（移動先）を通信先に登録</b></td><td>GRAPHY-Next を接続先に登録。<b>自身を移動先として待ち受ける</b>（ポート開放）</td></tr>
+</table>
+
+<h2>4. ファイアウォールとネットワーク</h2>
+<ul>
+<li>開放するのは、<b>待ち受ける側のポートだけ</b>（受信側の入口）。SCU 側の送信元ポート（接続のたびに変わる一時ポート）の設定や開放は不要。</li>
+<li>C-MOVE では、<b>移動先ノードの待ち受けポート</b>も、持ち主側から到達できる必要がある（NAT・VPN をまたぐ構成で詰まりやすい）。</li>
+<li>相手のサーバーが複数の AE を持つ場合、Called AE ごとに許可する操作（Q/R の可否）が違うことがある（例: 受信専用の AE と、検索用の AE）。</li>
+</ul>
+
+<h2>5. エラーの切り分け</h2>
+<table>
+<tr><th style="width:36%">症状（ログの文言）</th><th>主な原因と確認先</th></tr>
+<tr><td>接続できない／タイムアウト</td><td>IP・ポート違い、ファイアウォール、相手が起動していない。</td></tr>
+<tr><td>A-ASSOCIATE-RJ（Called AE が不明など）</td><td>Called AE の名前違い（大文字小文字・末尾の空白も）。相手側の AE 登録。</td></tr>
+<tr><td>A-ASSOCIATE-RJ（Calling AE が不明など）</td><td>相手に自分の AE が登録されていない。</td></tr>
+<tr><td>エコーは通るが QR が失敗<br><code>abstract-syntax-not-supported (provider rejection)</code></td><td><b>Q/R の SOP クラスが、その AE に許可されていない。</b>情報モデル（Patient Root / Study Root）や検索キーを変えても直らない。相手の管理者に、自局 AE への FIND・GET・MOVE の許可を依頼する。Q/R 用の別 AE が無いかも確認。</td></tr>
+<tr><td><code>EOFException</code>（接続確立後に切断）</td><td>上の拒否の副作用のことがある（拒否の後に要求を送り、相手が切る）。ログの <code>result: 3</code> の有無を先に見る。無ければ、相手の処理失敗（返却キーが重い・非対応）を疑う。</td></tr>
+<tr><td>C-MOVE で「移動先が不明」（0xA801）</td><td>要求を受けた側に、移動先 AE が登録されていない。</td></tr>
+<tr><td>C-MOVE は成功と出るが、画像が届かない</td><td>移動先の待ち受け（ポート・FW）、または移動先の登録 IP・ポートの間違い。</td></tr>
+<tr><td>0xC000（許可されない）</td><td>要求元 AE が、相手の許可リストに無い。</td></tr>
+</table>
+
+<h2>6. 設定の前に確認するチェックリスト</h2>
+<ol>
+<li>どちらが接続を始めるか（SCU）、どちらが待ち受けるか（SCP）を決める。</li>
+<li>SCU: 相手の <b>AE・IP・ポート</b>と、自分の AE を確認する。</li>
+<li>SCP: <b>待ち受けポート</b>、自分の AE、<b>受理する SOP クラス</b>（Storage / Q/R）、<b>許可する相手の AE</b>を確認する。</li>
+<li>C-GET: 画像を受け取る側の待ち受けは不要。持ち主側の GET 許可を確認する。</li>
+<li>C-MOVE: 持ち主側に<b>移動先 AE の AE・IP・ポート</b>を登録し、移動先の待ち受けを確認する。</li>
+<li>ファイアウォールは、待ち受け側（と C-MOVE の移動先）のポートを開ける。</li>
+<li>まず C-ECHO、次に C-FIND、最後に GET/MOVE の順で確認する。</li>
+</ol>
+
+<p class="small">本書の「製品別の設定画面」には触れていません（相手の製品により異なるため）。GRAPHY-Next 以外の記述は、DICOM の一般的な仕組みに基づく一般論です。</p>
+</body>
+</html>
