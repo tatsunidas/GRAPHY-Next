@@ -54,4 +54,12 @@ function createMcpPrefs({ file }) {
   };
 }
 
-module.exports = { createMcpPrefs, KEYS, defaults };
+/**
+ * 変更のうち、**オンにする**（false → true）キーを、確認を出す順に返す。オフにする変更は確認しない（安全側へ戻すだけ）。
+ * 確認の文面と表示は main が持つ。ここは「何を確認するか」だけを決める純関数。
+ */
+function confirmationsFor(prev, patch) {
+  return KEYS.filter((k) => patch && patch[k] === true && !(prev && prev[k] === true));
+}
+
+module.exports = { createMcpPrefs, confirmationsFor, KEYS, defaults };

@@ -6,7 +6,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 
-const { createMcpPrefs } = require("./mcpPrefs");
+const { createMcpPrefs, confirmationsFor } = require("./mcpPrefs");
 const { buildRecord, createMcpAudit } = require("./mcpAudit");
 const { createProjector } = require("./mcpProjection");
 const T = require("./mcpTools");
@@ -33,6 +33,16 @@ test("prefs: 負例 — 壊れた保存・未知のキー・真偽値以外は�
   assert.equal(p.get().enabled, false);
   assert.throws(() => p.set({ nope: true }), /unknown key/);
   assert.throws(() => p.set({ enabled: 1 }), /boolean/);
+});
+
+test("prefs: confirmationsFor — オンにするキーだけを、確認の順に返す（オフにする・変わらない変更は確認しない）", () => {
+  const off = { enabled: false, includePhi: false, allowAnalysis: false };
+  assert.deepEqual(confirmationsFor(off, { enabled: true }), ["enabled"]);
+  assert.deepEqual(confirmationsFor(off, { allowAnalysis: true, enabled: true, includePhi: true }), ["enabled", "includePhi", "allowAnalysis"]);
+  assert.deepEqual(confirmationsFor({ ...off, enabled: true }, { enabled: true }), []); // すでにオン
+  assert.deepEqual(confirmationsFor({ ...off, includePhi: true }, { includePhi: false }), []); // 安全側へ戻すだけ
+  assert.deepEqual(confirmationsFor(off, { enabled: "true", unknown: true }), []); // 真偽値以外・未知のキーは対象外（set が例外にする）
+  assert.deepEqual(confirmationsFor(off, null), []);
 });
 
 // ---- 監査 ----

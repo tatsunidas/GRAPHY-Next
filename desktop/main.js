@@ -718,6 +718,124 @@ app.on("before-quit", () => {
   emrWatcher.stop();
 });
 
+// MCP サーバー（外部 AI クライアントが、起動中のこのアプリを使う）。設計: roadmap fw/mcp-server-design.md。既定はすべてオフ。
+// 🔴 受け口・同意・患者情報の射影・監査・拒否リストはすべて main 側（mcpBridge / mcpTools / mcpProjection）。中継（graphy-mcp）は転送だけ。
+// 🔴 設定の変更は設定画面（main 窓）からだけ。オンにするときは main が確認を描く（描いた確認をレンダラが飛ばせない）。
+const { createMcpPrefs, confirmationsFor } = require("./mcpPrefs");
+const { createMcpAudit } = require("./mcpAudit");
+const { createMcpBridge } = require("./mcpBridge");
+let mcpPrefsStore = null;
+let mcpBridgeInst = null;
+function mcpPrefs() {
+  if (!mcpPrefsStore) mcpPrefsStore = createMcpPrefs({ file: path.join(app.getPath("userData"), "mcp.json") });
+  return mcpPrefsStore;
+}
+
+const MCP_ENABLE_TEXT = {
+  enabled: {
+    message: "外部の AI クライアント（Claude Desktop など）が、このアプリに接続できるようにします。",
+    detail: "接続できるのはこの PC の中だけです。起動のたびに、最初の接続で、接続元の確認をもう一度お聞きします。いつでも設定でオフに戻せます。",
+  },
+  includePhi: {
+    message: "患者情報（氏名・患者 ID・生年月日など）を、接続した AI クライアントへ返せるようにします。",
+    detail: "返した内容は、そのクライアントを通じてクラウドの AI へ送られる可能性があります。オフのときは患者情報を伏せ、識別子は仮の札にして返します。",
+  },
+  allowAnalysis: {
+    message: "AI クライアントからの解析の実行（Radiomics の特徴量の計算）を許可します。",
+    detail: "元の画像・マスクは変更しません。計算結果はキャッシュに保存されます。",
+  },
+};
+
+async function mcpBackend(method, p, { query, body } = {}) {
+  const u = new URL(p, API_BASE);
+  for (const [k, v] of Object.entries(query || {})) u.searchParams.set(k, String(v));
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), 15000);
+  try {
+    const res = await fetch(u, { method, headers: body ? { "content-type": "application/json" } : undefined, body: body ? JSON.stringify(body) : undefined, signal: ctl.signal });
+    const text = await res.text();
+    if (text.length > 8 * 1024 * 1024) return { status: 502, json: null };
+    let json = null;
+    try {
+      json = text ? JSON.parse(text) : null;
+    } catch {
+      /* JSON でない本文は使わない */
+    }
+    return { status: res.status, json };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function mcpConfirmClient(client) {
+  const p = mcpPrefs().get();
+  const parent = mainWin && !mainWin.isDestroyed() ? mainWin : undefined;
+  const r = await dialog.showMessageBox(parent, {
+    type: "warning",
+    buttons: ["接続を許可", "拒否"],
+    defaultId: 1,
+    cancelId: 1,
+    title: "外部 AI クライアントの接続",
+    message: `外部 AI クライアント「${client}」が、GRAPHY-Next への接続を求めています。`,
+    detail: `クライアント名は相手の自己申告で、確認できません。心当たりがなければ［拒否］を選んでください（拒否すると、アプリを再起動するまで受け付けません）。\n現在の設定: 患者情報 = ${p.includePhi ? "返す" : "伏せる"} ／ 解析の実行 = ${p.allowAnalysis ? "許可" : "許可しない"}`,
+  });
+  return r.response === 0;
+}
+
+function mcpBridge() {
+  if (!mcpBridgeInst) {
+    mcpBridgeInst = createMcpBridge({
+      prefs: mcpPrefs(),
+      audit: createMcpAudit({ file: path.join(app.getPath("userData"), "mcp-audit.jsonl") }),
+      backend: mcpBackend,
+      confirmClient: mcpConfirmClient,
+      discoveryFile: path.join(app.getPath("userData"), "mcp-endpoint.json"),
+    });
+  }
+  return mcpBridgeInst;
+}
+
+function mcpState() {
+  return { prefs: mcpPrefs().get(), readError: mcpPrefs().readError(), listening: mcpBridge().listening() };
+}
+
+async function mcpApply() {
+  try {
+    await mcpBridge().apply();
+  } catch (e) {
+    console.warn("[mcp] could not apply:", e && e.message);
+    try {
+      mcpPrefs().set({ enabled: false }); // 待ち受けられないのに「有効」と見せない
+    } catch {
+      /* 書けないときも、以降の受け口は止まっている */
+    }
+    return false;
+  }
+  return true;
+}
+
+ipcMain.handle("graphy:mcp-get", (e) => (isMainSender(e) ? mcpState() : null));
+ipcMain.handle("graphy:mcp-set", async (e, patch) => {
+  if (!isMainSender(e)) return { ok: false, error: "forbidden" };
+  try {
+    const prev = mcpPrefs().get();
+    for (const k of confirmationsFor(prev, patch)) {
+      const t = MCP_ENABLE_TEXT[k];
+      const r = await dialog.showMessageBox(mainWin, { type: "warning", buttons: ["オンにする", "やめる"], defaultId: 1, cancelId: 1, title: "外部 AI クライアントの接続", message: t.message, detail: t.detail });
+      if (r.response !== 0) return { ok: false, error: "cancelled", state: mcpState() };
+    }
+    mcpPrefs().set(patch);
+  } catch (err) {
+    console.warn("[mcp] set failed:", err && err.message);
+    return { ok: false, error: "invalid" };
+  }
+  const applied = await mcpApply();
+  return { ok: applied, ...(applied ? {} : { error: "listen-failed" }), state: mcpState() };
+});
+app.on("before-quit", () => {
+  if (mcpBridgeInst) void mcpBridgeInst.stop(); // 発見用ファイルは同期で消える
+});
+
 function createWindow() {
   const keeper = createWindowStateKeeper("main", {
     width: WINDOW.width,
@@ -2884,6 +3002,7 @@ app.whenReady().then(async () => {
   } catch (e) {
     console.warn("[background] could not apply:", e && e.message);
   }
+  void mcpApply();
   createSplash();
   try {
     // 再起動のあとは、前のアプリの backend がポートを離すのを待つ（後始末と並んで起動するため）
