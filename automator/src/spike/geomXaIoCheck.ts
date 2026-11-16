@@ -18,6 +18,7 @@ import { openFirstSeriesInViewer } from "../checklist/items/shared/helpers.js";
 import { dragOnCanvasHost } from "../common/pointerDrag.js";
 import { createStepRecorder } from "../checklist/types.js";
 import { AUTOMATOR_ROOT } from "../fixtures/manifest.js";
+import { exitWithSummary, exitWithGeomError } from "./computeSpikeShared.js";
 
 const OUT_DIR = path.join(AUTOMATOR_ROOT, ".results", "geom-xa-io-check");
 const HOST = "viewer2d-canvas-host";
@@ -63,7 +64,7 @@ interface Handle { uid: string; tool: string; points: number[][] }
 const allHandles = (p: Page) => dbg<Handle[]>(p, "getAnnotationCanvasPoints");
 
 function reader(args: string[]): any {
-  const r = spawnSync("python3", ["-I", READER, ...args], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
+  const r = spawnSync(process.env.GRAPHY_TEST_PYTHON ?? "python3", ["-I", READER, ...args], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
   if (r.status !== 0) throw new Error(`reader 失敗: ${r.stderr.slice(0, 600)}`);
   return JSON.parse(r.stdout);
 }
@@ -86,7 +87,7 @@ async function main() {
   const dir = path.join(OUT_DIR, "phantom");
   fs.rmSync(dir, { recursive: true, force: true });
   fs.mkdirSync(dir, { recursive: true });
-  const r = spawnSync("python3", ["-I", path.join(AUTOMATOR_ROOT, "scripts", "make-geom-xa-seed-phantom.py"), dir, "--uid-seed", String(Date.now() % 1_000_000_000)], { encoding: "utf8" });
+  const r = spawnSync(process.env.GRAPHY_TEST_PYTHON ?? "python3", ["-I", path.join(AUTOMATOR_ROOT, "scripts", "make-geom-xa-seed-phantom.py"), dir, "--uid-seed", String(Date.now() % 1_000_000_000)], { encoding: "utf8" });
   if (r.status !== 0) throw new Error(r.stderr);
   const truth = JSON.parse(fs.readFileSync(path.join(dir, "truth.json"), "utf8")) as Truth;
   // 検証プラグインを配置（前回の痕跡を消してから）
@@ -123,6 +124,7 @@ async function main() {
   for (const [k, v] of Object.entries(perSeries)) console.log(`  ${k}: 合格 ${v.pass} / 失敗 ${v.fail.length} / 未達 ${v.unmet.length}`);
   fail.forEach((f) => console.log(`  [失敗] ${f}`));
   unmetL.forEach((f) => console.log(`  [未達] ${f}`));
+  exitWithSummary({ name: "XaIo", passed: pass.length, failures: fail, unreached: unmetL });
 }
 
 async function runOne(d: DesktopDriver, dir: string, truth: Truth, s: Truth["series"][number]) {
@@ -418,4 +420,4 @@ async function runOne(d: DesktopDriver, dir: string, truth: Truth, s: Truth["ser
   await v.close().catch(() => {});
   await main.waitForTimeout(1500);
 }
-main().catch((e) => { console.error(e); process.exitCode = 1; });
+main().catch((e) => exitWithGeomError("XaIo", e));

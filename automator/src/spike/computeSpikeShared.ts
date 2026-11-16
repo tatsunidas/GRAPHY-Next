@@ -2,9 +2,12 @@
  * 外部の計算機（fw/remote-compute-design.md）の実機検証で共有する部品。
  * computeRunJobCheck（ローカルの Jupyter）と computeColabCheck（Google Colab）が使う。
  */
+import fs from "node:fs";
+import path from "node:path";
 import type { Page } from "@playwright/test";
 
 import type { DesktopDriver } from "../driver/desktopDriver.js";
+import { AUTOMATOR_ROOT } from "../fixtures/manifest.js";
 
 export const RUNJOB_PLUGIN_ID = "compute-runjob-check";
 
@@ -27,6 +30,59 @@ export function createChecker() {
       return failures.length;
     },
   };
+}
+
+// ── 幾何検証（geom*Check.ts）の終わり方の統一 ──
+// 失敗 > 0 または例外 → 終了コード 1、それ以外 0。未達は終了コードに入れず、標準出力と結果 JSON に出す。
+
+export const GEOM_RESULTS_DIR = path.join(AUTOMATOR_ROOT, ".results", "geom-verify");
+
+export interface GeomSummaryOpts {
+  /** 検査名（Roi・Mask・Export・Calib・Radiomics・Mpr・XaSeed・XaIo）。結果 JSON のファイル名。 */
+  name: string;
+  passed: number;
+  failures: string[];
+  unreached: string[];
+  /** 参考（情報）の件数。合否にも未達にも入れない。 */
+  info?: number;
+  /** 負例の実行（落ちることが合格）。結果 JSON は書かない。 */
+  neg?: boolean;
+}
+
+function writeGeomResult(name: string, body: Record<string, unknown>): void {
+  fs.mkdirSync(GEOM_RESULTS_DIR, { recursive: true });
+  fs.writeFileSync(path.join(GEOM_RESULTS_DIR, `${name}.json`), JSON.stringify(body, null, 1));
+}
+
+/** 集計を出して終了コード（process.exitCode）を決め、結果 JSON を書く。 */
+export function exitWithSummary(o: GeomSummaryOpts): number {
+  const nFail = o.failures.length;
+  console.log(`\n[geom-verify:${o.name}] 合格 ${o.passed} / 失敗 ${nFail} / 未達 ${o.unreached.length}${o.info ? ` / 参考 ${o.info}` : ""}`);
+  if (o.neg) {
+    // 負例では「落ちること」が合格。
+    process.exitCode = nFail > 0 ? 0 : 1;
+    return process.exitCode;
+  }
+  const code = nFail > 0 ? 1 : 0;
+  writeGeomResult(o.name, {
+    name: o.name, passed: o.passed, failed: nFail, unreached: o.unreached.length, info: o.info ?? 0,
+    failures: o.failures, unreachedNames: o.unreached, exitCode: code, finishedAt: new Date().toISOString(),
+  });
+  process.exitCode = code;
+  return code;
+}
+
+/** 例外で終わるとき: 結果 JSON に error を残し、終了コード 1。 */
+export function exitWithGeomError(name: string, e: unknown): never {
+  console.error(e);
+  try {
+    writeGeomResult(name, {
+      name, error: String((e as Error)?.stack ?? e).slice(0, 2000), exitCode: 1, finishedAt: new Date().toISOString(),
+    });
+  } catch (w) {
+    console.error(w);
+  }
+  process.exit(1);
 }
 
 /** main が描く同意の窓を掴む（匿名化が終わってから開くので待つ）。 */

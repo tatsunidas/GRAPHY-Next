@@ -28,6 +28,7 @@ import { resetDb } from "../backend/dbReset.js";
 import { importPaths } from "../fixtures/importFixtures.js";
 import { waitForBackendReady } from "../backend/healthcheck.js";
 import { AUTOMATOR_ROOT } from "../fixtures/manifest.js";
+import { exitWithSummary, exitWithGeomError } from "./computeSpikeShared.js";
 
 const OUT_DIR = path.join(AUTOMATOR_ROOT, ".results", "geom-radiomics-check");
 const JAR = path.join(AUTOMATOR_ROOT, "..", "backend", "target", "graphy-next-backend.jar");
@@ -66,6 +67,8 @@ function rec(r: Rec): void {
   console.log(`  [${r.verdict}] ${r.geom} ${r.group} ${r.label}` +
     (r.expected !== undefined ? ` — 期待 ${r.expected} / 実測 ${r.measured} / 比 ${r.ratio}` : "") + (r.note ? ` (${r.note})` : ""));
 }
+/** 結果 JSON での名前。期待・実測の値は入れない（実行ごとに変わりうる）。 */
+const recName = (r: Rec) => `${r.geom} ${r.group} ${r.label}`;
 const f = (x: number, d = 3) => (Number.isFinite(x) ? x.toFixed(d) : String(x));
 
 // ── 形状（解析）──
@@ -279,7 +282,7 @@ function drawMask(g: Grid, sh: Shape, file: string): void {
   for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) buf[y * W + x] = pl[Math.floor(y / scale) * cols + Math.floor(x / scale)] ? 255 : 40;
   const pgm = path.join(OUT_DIR, "tmp.pgm");
   fs.writeFileSync(pgm, Buffer.concat([Buffer.from(`P5 ${W} ${H} 255\n`), buf]));
-  spawnSync("python3", ["-I", "-c",
+  spawnSync(process.env.GRAPHY_TEST_PYTHON ?? "python3", ["-I", "-c",
     `import sys\nfrom PIL import Image\nImage.open(sys.argv[1]).save(sys.argv[2])`, pgm, file]);
   fs.rmSync(pgm, { force: true });
 }
@@ -450,7 +453,7 @@ function refMeshes(items: { key: string; planes: Uint8Array[]; rows: number; col
   });
   const sp = path.join(OUT_DIR, "mesh-spec.json"), op = path.join(OUT_DIR, "mesh-out.json");
   fs.writeFileSync(sp, JSON.stringify(spec));
-  const r = spawnSync("python3", ["-I", path.join(AUTOMATOR_ROOT, "src", "spike", "geomMeshReference.py"), sp, op], { encoding: "utf8" });
+  const r = spawnSync(process.env.GRAPHY_TEST_PYTHON ?? "python3", ["-I", path.join(AUTOMATOR_ROOT, "src", "spike", "geomMeshReference.py"), sp, op], { encoding: "utf8" });
   if (r.status !== 0) throw new Error(`mesh 参照の計算に失敗: ${r.stderr}`);
   for (const it of spec) fs.rmSync(it.file, { force: true });
   return JSON.parse(fs.readFileSync(op, "utf8")) as Record<string, MeshRef>;
@@ -500,12 +503,12 @@ async function main(): Promise<void> {
   const dir = path.join(OUT_DIR, "phantom");
   fs.mkdirSync(dir, { recursive: true });
   const seed = Date.now() % 1_000_000_000;
-  const mk = spawnSync("python3", ["-I", path.join(AUTOMATOR_ROOT, "scripts", "make-geom-verify-phantom.py"), dir, "--uid-seed", String(seed)], { encoding: "utf8" });
+  const mk = spawnSync(process.env.GRAPHY_TEST_PYTHON ?? "python3", ["-I", path.join(AUTOMATOR_ROOT, "scripts", "make-geom-verify-phantom.py"), dir, "--uid-seed", String(seed)], { encoding: "utf8" });
   if (mk.status !== 0) throw new Error(`ファントム生成に失敗: ${mk.stderr}`);
   const truth = JSON.parse(fs.readFileSync(path.join(dir, "truth.json"), "utf8")) as Truth;
   // 負例用: g1 の行/列間隔を入れ替えた複製（新 UID）
   const swapDir = path.join(OUT_DIR, "swapped");
-  const sw = spawnSync("python3", ["-I", path.join(AUTOMATOR_ROOT, "src", "spike", "geomMakeSwapped.py"), path.join(dir, "g1_aniso"), swapDir, String(seed + 7)], { encoding: "utf8" });
+  const sw = spawnSync(process.env.GRAPHY_TEST_PYTHON ?? "python3", ["-I", path.join(AUTOMATOR_ROOT, "src", "spike", "geomMakeSwapped.py"), path.join(dir, "g1_aniso"), swapDir, String(seed + 7)], { encoding: "utf8" });
   if (sw.status !== 0) throw new Error(`負例の複製に失敗: ${sw.stderr}`);
   const swapped = JSON.parse(sw.stdout) as { seriesUid: string; sops: string[] };
   const [S, E] = shapes(truth);
@@ -681,6 +684,12 @@ async function main(): Promise<void> {
   console.log(`\n合格 ${count("合格")} / 失敗 ${count("失敗")} / 未達 ${count("未達")}`);
   fs.writeFileSync(path.join(OUT_DIR, "recs.json"), JSON.stringify({ recs, negatives, negSummary }, null, 1));
   writeReport(negatives);
+  exitWithSummary({
+    name: "Radiomics",
+    passed: count("合格"),
+    failures: recs.filter((r) => r.verdict === "失敗").map(recName),
+    unreached: recs.filter((r) => r.verdict === "未達").map(recName),
+  });
 }
 
 function writeReport(negatives: { name: string; recs: Rec[] }[]): void {
@@ -704,4 +713,4 @@ function writeReport(negatives: { name: string; recs: Rec[] }[]): void {
   fs.writeFileSync(path.join(OUT_DIR, "report.md"), L.join("\n"));
 }
 
-main().catch((e) => { console.error(e); stopBackend(); process.exitCode = 1; });
+main().catch((e) => { stopBackend(); exitWithGeomError("Radiomics", e); });

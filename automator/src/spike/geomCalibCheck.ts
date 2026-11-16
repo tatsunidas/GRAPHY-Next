@@ -29,6 +29,7 @@ import { openFirstSeriesInViewer } from "../checklist/items/shared/helpers.js";
 import { dragOnCanvasHost } from "../common/pointerDrag.js";
 import { createStepRecorder } from "../checklist/types.js";
 import { AUTOMATOR_ROOT } from "../fixtures/manifest.js";
+import { exitWithSummary, exitWithGeomError } from "./computeSpikeShared.js";
 
 const OUT_DIR = path.join(AUTOMATOR_ROOT, ".results", "geom-calib-check");
 const HOST = "viewer2d-canvas-host";
@@ -101,7 +102,7 @@ function makePhantom(): { dir: string; truth: Truth } {
   fs.rmSync(dir, { recursive: true, force: true });
   fs.mkdirSync(dir, { recursive: true });
   const seed = String(Date.now() % 1_000_000_000); // UID は実行ごとに変える
-  const r = spawnSync("python3", ["-I", path.join(AUTOMATOR_ROOT, "scripts", "make-geom-calib-phantom.py"), dir, "--uid-seed", seed], { encoding: "utf8" });
+  const r = spawnSync(process.env.GRAPHY_TEST_PYTHON ?? "python3", ["-I", path.join(AUTOMATOR_ROOT, "scripts", "make-geom-calib-phantom.py"), dir, "--uid-seed", seed], { encoding: "utf8" });
   if (r.status !== 0) throw new Error(`ファントム生成に失敗: ${r.stderr}`);
   return { dir, truth: JSON.parse(fs.readFileSync(path.join(dir, "truth.json"), "utf8")) as Truth };
 }
@@ -615,11 +616,7 @@ async function main(): Promise<void> {
   if (unreached.length) console.log("未達:\n  - " + unreached.join("\n  - "));
   if (notes.length) console.log("記録:\n  - " + notes.join("\n  - "));
   fs.writeFileSync(path.join(OUT_DIR, NEG ? "summary-neg.json" : "summary.json"), JSON.stringify({ passed, failures, unreached, notes }, null, 1));
-  // 負例では「落ちること」が合格。
-  process.exitCode = NEG ? (failures.length > 0 ? 0 : 1) : failures.length || unreached.length ? 1 : 0;
+  exitWithSummary({ name: "Calib", passed, failures, unreached, info: notes.length, neg: NEG });
 }
 
-main().catch((e) => {
-  console.error(e);
-  process.exit(2);
-});
+main().catch((e) => exitWithGeomError("Calib", e));

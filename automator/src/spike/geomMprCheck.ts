@@ -31,6 +31,7 @@ import { importPaths } from "../fixtures/importFixtures.js";
 import { openFirstSeriesInViewer } from "../checklist/items/shared/helpers.js";
 import { createStepRecorder } from "../checklist/types.js";
 import { AUTOMATOR_ROOT } from "../fixtures/manifest.js";
+import { exitWithSummary, exitWithGeomError } from "./computeSpikeShared.js";
 
 const DRIVER = (process.env.GEOM_DRIVER ?? "desktop") as "desktop" | "web";
 const OUT_DIR = path.join(AUTOMATOR_ROOT, ".results", "geom-mpr-check", DRIVER);
@@ -80,7 +81,7 @@ function makePhantom(): { dir: string; truth: Truth } {
   fs.rmSync(dir, { recursive: true, force: true });
   fs.mkdirSync(dir, { recursive: true });
   const seed = String(Date.now() % 1_000_000_000); // 毎回 UID を変える
-  const r = spawnSync("python3", ["-I", path.join(AUTOMATOR_ROOT, "scripts", "make-geom-verify-phantom.py"), dir, "--uid-seed", seed], { encoding: "utf8" });
+  const r = spawnSync(process.env.GRAPHY_TEST_PYTHON ?? "python3", ["-I", path.join(AUTOMATOR_ROOT, "scripts", "make-geom-verify-phantom.py"), dir, "--uid-seed", seed], { encoding: "utf8" });
   if (r.status !== 0) throw new Error(`ファントム生成に失敗: ${r.stderr}`);
   return { dir, truth: JSON.parse(fs.readFileSync(path.join(dir, "truth.json"), "utf8")) as Truth };
 }
@@ -646,6 +647,13 @@ async function main(): Promise<void> {
   console.log(`\n合格 ${n("合格")} / 失敗 ${n("失敗")} / 未達 ${n("未達")}`);
   for (const i of items.filter((x) => x.status === "失敗")) console.log(`  失敗: ${i.label} — 期待 ${JSON.stringify(i.expected)} 実測 ${JSON.stringify(i.measured)} 差 ${JSON.stringify(i.diff)}`);
   for (const i of items.filter((x) => x.status === "未達")) console.log(`  未達: ${i.label} — ${JSON.stringify(i.measured)}`);
+  // 名前は項目の id（ラベルには rms などの実測値が入る）。
+  exitWithSummary({
+    name: "Mpr",
+    passed: n("合格"),
+    failures: items.filter((x) => x.status === "失敗").map((x) => x.id),
+    unreached: items.filter((x) => x.status === "未達").map((x) => x.id),
+  });
 }
 
-main().catch((e) => { console.error(e); process.exit(2); });
+main().catch((e) => exitWithGeomError("Mpr", e));

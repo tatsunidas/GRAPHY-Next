@@ -1,0 +1,8 @@
+# 幾何検証（src/spike/geom*Check.ts と scripts/make-geom-*.py・verify-geom-export.py）が使う Python の依存。
+# 版は 2026-11-16 に検査が通っていた環境（Python 3.13）の値。numpy 2.4 は Python 3.11 以上が要る。
+# 導入: python3 -m pip install -r scripts/requirements-geom.txt（venv 推奨）。一括実行は導入を事前チェックする。
+numpy==2.4.4
+pydicom==3.0.2
+scipy==1.17.1
+scikit-image==0.26.0
+Pillow==12.2.0

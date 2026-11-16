@@ -17,6 +17,7 @@ import { openFirstSeriesInViewer } from "../checklist/items/shared/helpers.js";
 import { dragOnCanvasHost } from "../common/pointerDrag.js";
 import { createStepRecorder } from "../checklist/types.js";
 import { AUTOMATOR_ROOT } from "../fixtures/manifest.js";
+import { exitWithSummary, exitWithGeomError } from "./computeSpikeShared.js";
 
 const OUT_DIR = path.join(AUTOMATOR_ROOT, ".results", "geom-xa-seed-check");
 const HOST = "viewer2d-canvas-host";
@@ -71,7 +72,7 @@ async function main() {
   const dir = path.join(OUT_DIR, "phantom");
   fs.rmSync(dir, { recursive: true, force: true });
   fs.mkdirSync(dir, { recursive: true });
-  const r = spawnSync("python3", ["-I", path.join(AUTOMATOR_ROOT, "scripts", "make-geom-xa-seed-phantom.py"), dir, "--uid-seed", String(Date.now() % 1_000_000_000)], { encoding: "utf8" });
+  const r = spawnSync(process.env.GRAPHY_TEST_PYTHON ?? "python3", ["-I", path.join(AUTOMATOR_ROOT, "scripts", "make-geom-xa-seed-phantom.py"), dir, "--uid-seed", String(Date.now() % 1_000_000_000)], { encoding: "utf8" });
   if (r.status !== 0) throw new Error(r.stderr);
   const truth = JSON.parse(fs.readFileSync(path.join(dir, "truth.json"), "utf8")) as Truth;
   const d = new DesktopDriver();
@@ -87,6 +88,7 @@ async function main() {
   console.log(`\n==== 集計: 合格 ${pass.length} / 失敗 ${fail.length} / 未達 ${unmetL.length} ====`);
   fail.forEach((f) => console.log(`  [失敗] ${f}`));
   unmetL.forEach((f) => console.log(`  [未達] ${f}`));
+  exitWithSummary({ name: "XaSeed", passed: pass.length, failures: fail, unreached: unmetL });
 }
 
 async function runOne(d: DesktopDriver, dir: string, truth: Truth, s: Truth["series"][number]) {
@@ -203,4 +205,4 @@ async function runOne(d: DesktopDriver, dir: string, truth: Truth, s: Truth["ser
   await v.close().catch(() => {});
   await main.waitForTimeout(1500);
 }
-main().catch((e) => { console.error(e); process.exitCode = 1; });
+main().catch((e) => exitWithGeomError("XaSeed", e));
