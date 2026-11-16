@@ -26,6 +26,7 @@ const readline = require("node:readline");
 const PROGRESS_PREFIX = "__GRAPHY_PROGRESS__";
 
 const externalOpen = require("./externalOpen");
+const emrWatch = require("./emrWatch");
 const appUpdate = require("./appUpdate");
 
 // --- 単一インスタンス（外部から検査を開く入口の前提。fw/external-open.md） ---
@@ -563,6 +564,49 @@ function showMainWindow() {
   }
 }
 
+// --- 電子カルテ連携（backend が監視している「いまの患者」の変化を見て、直近の検査を開く）---
+// ファイルの読み取り・過去検査の取り込みは backend。main は状態を 1 秒ごとに見て、患者が変わったら（自動で開く設定のとき）、
+// 既存の「外部から検査を開く」の経路で、患者 ID だけの要求（latest）を画面へ渡す。窓がトレイで隠れていても止まらない。
+// 判定は emrWatch.js（electron を読み込まない純粋なモジュール。emrWatch.test.js）。🔴 患者 ID はログに出さない。
+async function emrFetchStatus() {
+  const ctl = new AbortController();
+  const t = setTimeout(() => ctl.abort(), 2000);
+  try {
+    const res = await fetch(`${API_BASE}/api/emr/status`, { signal: ctl.signal });
+    return res.ok ? await res.json() : null; // web・無効・未起動（404 など）は null
+  } finally {
+    clearTimeout(t);
+  }
+}
+
+async function emrPostPrefetch() {
+  const ctl = new AbortController();
+  const t = setTimeout(() => ctl.abort(), 5000);
+  try {
+    await fetch(`${API_BASE}/api/emr/prefetch`, { method: "POST", signal: ctl.signal });
+  } finally {
+    clearTimeout(t);
+  }
+}
+
+const emrWatcher = emrWatch.createWatcher({
+  fetchStatus: emrFetchStatus,
+  onOpen: (patientId) => {
+    enqueueExternal({ ok: true, req: { patientId, latest: true } });
+    showMainWindow();
+  },
+});
+
+/** トレイの［電子カルテの患者を開く］。無効・患者なしのときは、窓を出すだけ（状態は画面の状態バーで分かる）。 */
+async function openEmrFromTray() {
+  try {
+    await emrWatch.openNow({ fetchStatus: emrFetchStatus, postPrefetch: emrPostPrefetch, enqueue: enqueueExternal });
+  } catch (e) {
+    console.warn("[emr] open from tray failed:", e && e.message);
+  }
+  showMainWindow();
+}
+
 ipcMain.on("graphy:external-open-ready", (e) => {
   if (!mainWin || mainWin.isDestroyed() || e.sender !== mainWin.webContents) return; // メインウィンドウの画面だけ
   externalReady = true;
@@ -614,7 +658,9 @@ function keepInTray() {
 }
 
 function trayLabels() {
-  return String(app.getLocale()).startsWith("ja") ? { open: "開く", quit: "終了" } : { open: "Open", quit: "Quit" };
+  return String(app.getLocale()).startsWith("ja")
+    ? { open: "開く", emr: "電子カルテの患者を開く", quit: "終了" }
+    : { open: "Open", emr: "Open EMR patient", quit: "Quit" };
 }
 
 function applyBackground() {
@@ -626,6 +672,7 @@ function applyBackground() {
     tray.setContextMenu(
       Menu.buildFromTemplate([
         { label: l.open, click: () => showMainWindow() },
+        { label: l.emr, click: () => void openEmrFromTray() },
         { type: "separator" },
         { label: l.quit, click: () => { quitting = true; app.quit(); } },
       ]),
@@ -668,6 +715,7 @@ ipcMain.handle("graphy:background-set", (e, patch) => {
 });
 app.on("before-quit", () => {
   quitting = true;
+  emrWatcher.stop();
 });
 
 function createWindow() {
@@ -2797,6 +2845,8 @@ function offerDefaultDbAfterFailure(e) {
 
 app.whenReady().then(async () => {
   if (secondaryInstance) return; // 2 つ目の起動は、何もせず終わる（上の app.exit）
+  // 電子カルテ連携の監視。backend がまだ起動していない間は、状態が取れないだけで何も起きない（最初に取れた状態が基準）。
+  emrWatcher.start();
   // 外部から検査を開く URL（graphynext://）の登録。パッケージ版だけ（開発版は起動の引数が違うので登録しない）。
   if (app.isPackaged) {
     try {

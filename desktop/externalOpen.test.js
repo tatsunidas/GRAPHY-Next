@@ -144,3 +144,28 @@ test("validate は、許可していない形（数値など）も弾く", () =>
   assert.strictEqual(validate({ studyInstanceUid: 123 }).ok, false);
   assert.strictEqual(validate({}).ok, false);
 });
+
+test("latest: 患者 ID だけで、直近の検査の要求になる（URL・内部の呼び出し）", () => {
+  assert.deepStrictEqual(parseUrl("graphynext://open?patientId=P-001&latest=1"), { ok: true, req: { patientId: "P-001", latest: true } });
+  assert.deepStrictEqual(parseUrl("graphynext://open?patientId=P-001&latest=true").req, { patientId: "P-001", latest: true });
+  assert.deepStrictEqual(validate({ patientId: "P-001", latest: true }), { ok: true, req: { patientId: "P-001", latest: true } });
+});
+
+test("latest: 検査・シリーズ・検査日と組み合わせたり、患者 ID が無かったり、値が違うものは断る", () => {
+  for (const bad of [
+    "graphynext://open?patientId=P&latest=1&studyDate=20260131",
+    `graphynext://open?patientId=P&latest=1&studyInstanceUid=${UID}`,
+    `graphynext://open?studyInstanceUid=${UID}&latest=1`,
+    "graphynext://open?latest=1",
+    "graphynext://open?patientId=P&latest=yes",
+    "graphynext://open?patientId=P&latest=0",
+    "graphynext://open?patientId=P&latest=1&latest=1", // 同じキーの重複
+    "graphynext://open?patientId=A%00B&latest=1", // 制御文字
+  ]) {
+    assert.strictEqual(parseUrl(bad).ok, false, bad);
+  }
+  assert.strictEqual(validate({ patientId: "P", latest: "no" }).ok, false);
+  assert.strictEqual(validate({ patientId: "P", latest: false }).ok, false);
+  // 従来どおり: latest なしの patientId だけは、検査日が要る
+  assert.strictEqual(parseUrl("graphynext://open?patientId=P").ok, false);
+});

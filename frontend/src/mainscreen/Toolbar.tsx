@@ -35,6 +35,7 @@ export function Toolbar({
   onOpenViewer,
   onOpenSettings,
   onOpenHelp,
+  emrOpen,
 }: {
   isStandalone: boolean;
   canImport: boolean;
@@ -47,6 +48,8 @@ export function Toolbar({
   onOpenViewer: (kind: ViewerKind) => void;
   onOpenSettings: () => void;
   onOpenHelp: () => void;
+  /** 電子カルテの患者を開く（standalone で電子カルテ連携が有効なときだけ渡す）。 */
+  emrOpen?: { onClick: () => void };
 }) {
   const { t } = useI18n();
   return (
@@ -68,6 +71,7 @@ export function Toolbar({
       {/* ビューア */}
       {!isDemo && <ToolButton iconFile={UI_ICON_FILES.qr} icon="🔎" label={t("qr.title")} onClick={() => onOpenViewer("qr")} />}
       <ToolButton testId="viewer2d-toolbar-button" iconFile={UI_ICON_FILES.viewer2d} icon="🖼" label={t("main.toolbar.viewer2d")} onClick={() => onOpenViewer("2d")} />
+      {emrOpen && <ToolButton testId="emr-open-button" icon="🏥" label={t("emr.open.button")} onClick={emrOpen.onClick} />}
       <ToolButton iconFile={UI_ICON_FILES.viewer3d} icon="🧊" label={t("main.toolbar.viewer3d")} onClick={() => onOpenViewer("3d")} />
       {/* MPR は適切なアイコンが無いためグリフ（十字）を維持 */}
       <ToolButton icon="➕" label={t("main.toolbar.mpr")} onClick={() => onOpenViewer("mpr")} />

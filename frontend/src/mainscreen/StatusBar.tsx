@@ -2,6 +2,7 @@
  * Copyright (c) Visionary Imaging Services, Inc. All rights reserved.
  * Author: Tatsuaki Kobayashi
  */
+import type { EmrBar } from "../settings/emrView";
 import { useEffect, useState } from "react";
 import { type AppStatus } from "../api";
 import { useI18n } from "../i18n/i18n";
@@ -15,6 +16,7 @@ export function StatusBar({
   error,
   importWatch,
   storeChanged,
+  emr,
   receiveAnon,
   computeJobs,
   keepAwake,
@@ -27,6 +29,8 @@ export function StatusBar({
   importWatch?: WatchBarView;
   /** 操作中に、受信・取り込み・削除で保管庫が変わったか（一覧は自動では読み直さない）。 */
   storeChanged?: boolean;
+  /** 電子カルテ連携の状態（有効なときだけ visible）。 */
+  emr?: EmrBar;
   /** 受信時の匿名化の状態（有効なときだけ visible）。 */
   receiveAnon?: ReceiveAnonBar;
   /** 計算ジョブの数（standalone で数えるものがあるときだけ）。 */
@@ -96,6 +100,15 @@ export function StatusBar({
           <button data-testid="statusbar-store-changed" style={{ ...reloadBtn, marginLeft: 12 }} onClick={onReloadList}>
             {t("main.status.storeChanged")}
           </button>
+        )}
+        {emr?.visible && (
+          <span
+            data-testid="statusbar-emr"
+            data-tone={emr.tone}
+            style={{ marginLeft: 12, color: emr.tone === "error" ? "#b00020" : emr.tone === "warn" ? "#8a5a00" : undefined }}
+          >
+            {t("emr.bar.label")}: {t(emr.key, emr.vars)}
+          </span>
         )}
         {receiveAnon?.visible && (
           <span
