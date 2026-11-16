@@ -37,6 +37,10 @@ public record DimseOutcome(Kind kind, Integer status, String errorComment, Strin
 
     private static final Pattern RSP = Pattern.compile(
             "C-(?:FIND|GET|MOVE)-RSP\\[pcid=\\d+, status=([0-9a-fA-F]+)H(?:, errorComment=([^\\r\\n\\]]*))?");
+    /** A-ASSOCIATE-RQ のダンプの「PC の番号 → 抽象構文（SOP クラス UID）」。 */
+    private static final Pattern PC_AS = Pattern.compile("PresentationContext\\[id: (\\d+)\\s+as: ([0-9.]+)");
+    /** A-ASSOCIATE-AC のダンプの「PC の番号 → 結果（0=受理、3=抽象構文の拒否、4=転送構文の拒否…）」。 */
+    private static final Pattern PC_RESULT = Pattern.compile("PresentationContext\\[id: (\\d+)\\s+result: (\\d+) - ([\\w-]+)");
     private static final Pattern RJ = Pattern.compile(
             "A-ASSOCIATE-RJ\\[result: \\d+ - ([\\w-]+), source: \\d+ - ([\\w-]+), reason: \\d+ - ([\\w-]+)\\]");
 
@@ -77,6 +81,13 @@ public record DimseOutcome(Kind kind, Integer status, String errorComment, Strin
         if (rj.find()) {
             return new DimseOutcome(Kind.ASSOCIATION_REJECTED, null, null, rj.group(3));
         }
+        // 🔴 Q/R の SOP クラス（Patient Root／Study Root／MWL の FIND・MOVE・GET）の PC が、A-ASSOCIATE-AC で受理されなかった。
+        // 相手がそのあと接続を切っても（EOF・Socket closed）、原因は切断ではなく「この AE にその Q/R を許していない」こと
+        // （実機: PSP 中継サーバー）。切断の判定より先に見る。保存用の SOP クラスの拒否は、GET でも普通に起きるので見ない。
+        String refusedPc = refusedQrContext(out);
+        if (refusedPc != null) {
+            return new DimseOutcome(Kind.SERVICE_REFUSED, null, null, refusedPc);
+        }
         if (out.contains("NoPresentationContextException") || out.contains("No Presentation Context for Abstract Syntax")) {
             return new DimseOutcome(Kind.SERVICE_REFUSED, null, null, "abstract-syntax-not-supported");
         }
@@ -97,6 +108,35 @@ public record DimseOutcome(Kind kind, Integer status, String errorComment, Strin
             return new DimseOutcome(Kind.OK, null, null, sawPending ? "status-not-captured" : null);
         }
         return new DimseOutcome(Kind.UNKNOWN, null, null, firstLineWith(out, "findscu:", "getscu:", "movescu:"));
+    }
+
+    /** Q/R（検索・取得）の SOP クラスか。Patient Root／Study Root／Patient-Study の FIND・MOVE・GET と、MWL。 */
+    private static boolean isQrSopClass(String uid) {
+        return uid.startsWith("1.2.840.10008.5.1.4.1.2.") || uid.equals("1.2.840.10008.5.1.4.31");
+    }
+
+    /**
+     * 出力に A-ASSOCIATE-RQ と -AC のダンプがあれば、Q/R の SOP クラスの PC のうち受理されなかったものの理由
+     * （{@code abstract-syntax-not-supported}・{@code transfer-syntaxes-not-supported} など）を返す。無ければ null。
+     */
+    static String refusedQrContext(String out) {
+        java.util.Map<String, String> qrIds = new java.util.HashMap<>();
+        Matcher a = PC_AS.matcher(out);
+        while (a.find()) {
+            if (isQrSopClass(a.group(2))) {
+                qrIds.put(a.group(1), a.group(2));
+            }
+        }
+        if (qrIds.isEmpty()) {
+            return null;
+        }
+        Matcher r = PC_RESULT.matcher(out);
+        while (r.find()) {
+            if (qrIds.containsKey(r.group(1)) && !"0".equals(r.group(2))) {
+                return r.group(3);
+            }
+        }
+        return null;
     }
 
     /**

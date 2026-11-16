@@ -81,6 +81,26 @@ class DimseOutcomeTest {
     }
 
     @Test
+    void qrContextRefusedInTheAssociation_thenTheyCloseTheSocket_isRefusedNotDropped() throws IOException {
+        // 実機（PSP）: A-ASSOCIATE-AC で Q/R の SOP クラスが result: 3 で拒否され、そのあと EOF。切断ではなく、サービスの拒否
+        DimseOutcome o = parse("find-pc-refused-then-eof");
+        assertEquals(Kind.SERVICE_REFUSED, o.kind());
+        assertEquals("abstract-syntax-not-supported", o.reason());
+        // 転送構文の拒否（result: 4）は、理由を区別して返す
+        DimseOutcome t = parse("get-pc-ts-refused");
+        assertEquals(Kind.SERVICE_REFUSED, t.kind());
+        assertEquals("transfer-syntaxes-not-supported", t.reason());
+    }
+
+    @Test
+    void storagePcRejectionsAlone_doNotMakeItARefusal_andAcceptedQrPcThenEofIsStillDropped() throws IOException {
+        // GET の成功: Q/R の PC は受理（result: 0）、保存用の PC は多数が拒否（result: 3）。これは拒否ではない
+        assertEquals(Kind.OK, parse("get-ok").kind());
+        // Q/R の PC は受理されたうえで、要求を送ったあとに切られた: 従来どおり「切断」
+        assertEquals(Kind.DROPPED, parse("find-drop").kind());
+    }
+
+    @Test
     void unreachable() throws IOException {
         assertEquals(Kind.UNREACHABLE, parse("find-refused").kind());
     }
