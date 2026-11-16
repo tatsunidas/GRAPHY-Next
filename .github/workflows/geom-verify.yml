@@ -6,6 +6,8 @@ name: Geom verify
 on:
   workflow_call:
   workflow_dispatch:
+  push: # TEMP-PUSH-TRIGGER（default ブランチに無い間の実行用。マージ前に削除）
+    branches: [feat/geom-verify-workflow]
   pull_request:
     paths:
       - ".github/workflows/geom-verify.yml"
