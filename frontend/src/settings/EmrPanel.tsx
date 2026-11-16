@@ -109,7 +109,7 @@ export function EmrPanel() {
     setCheck(null);
     try {
       const r = await checkEmrFile();
-      setCheck(r.ok ? t("emr.check.ok", { hint: r.hint ?? "" }) : t("emr.check.ng", { reason: t(errorKey(r.error)) }));
+      setCheck(r.ok ? t("emr.check.ok", { hint: r.hint ?? "", n: r.length }) : t("emr.check.ng", { reason: t(errorKey(r.error)) }));
     } catch (e) {
       setCheck(String(e));
     }

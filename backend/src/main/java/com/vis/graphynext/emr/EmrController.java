@@ -21,8 +21,8 @@ import java.util.List;
 @RequestMapping("/api/emr")
 public class EmrController {
 
-    /** 読み取りの確認の結果。ID は、全文でなく先頭と末尾だけ（確かめるには足りる）。 */
-    public record CheckDto(boolean ok, String error, String hint) {
+    /** 読み取りの確認の結果。ID は、全文でなく先頭と末尾だけ（確かめるには足りる）と、文字数。文言は画面側で作る。 */
+    public record CheckDto(boolean ok, String error, String hint, int length) {
     }
 
     public record PatientDto(String id, long seq, long changedAt) {
@@ -52,7 +52,7 @@ public class EmrController {
     @PostMapping("/check")
     public CheckDto check() {
         EmrFileReader.Result r = watch.readNow();
-        return new CheckDto(r.ok(), r.error(), r.ok() ? hint(r.patientId()) : null);
+        return new CheckDto(r.ok(), r.error(), r.ok() ? hint(r.patientId()) : null, r.ok() ? r.patientId().length() : 0);
     }
 
     /** いまの患者の過去検査を、もう一度取りに行く（［開く］を押したとき）。 */
@@ -65,9 +65,9 @@ public class EmrController {
         return prefetch.state();
     }
 
+    /** 先頭と末尾の数文字だけ（全文は出さない）。 */
     static String hint(String id) {
         int n = id.length();
-        String h = n >= 6 ? id.substring(0, 2) + "…" + id.substring(n - 2) : id.substring(0, 1) + "…";
-        return h + "（" + n + " 文字）";
+        return n >= 6 ? id.substring(0, 2) + "…" + id.substring(n - 2) : id.substring(0, 1) + "…";
     }
 }

@@ -5442,7 +5442,7 @@ export const ja: Record<string, string> = {
   "emr.bat.var": "bat の変数名",
   "emr.file.note": "CSV は最後の行、bat は最後の set を、いまの患者として読みます。起動した直後や、設定を変えた直後に読めた ID は、記憶するだけで開きません（前の日の患者が開くのを避けるため）。",
   "emr.check": "いま読めるか確認",
-  "emr.check.ok": "読めました: {{hint}}",
+  "emr.check.ok": "読めました: {{hint}}（{{n}} 文字）",
   "emr.check.ng": "読めません: {{reason}}",
   "emr.check.saveFirst": "（保存してから確認できます）",
   "emr.sec.behavior": "動き",

@@ -5451,7 +5451,7 @@ export const en: Record<string, string> = {
   "emr.bat.var": "bat variable name",
   "emr.file.note": "For CSV the last row is read, for bat the last set. An ID read right after start-up or after changing these settings is only remembered, not opened (so yesterday's patient is not opened).",
   "emr.check": "Check that it can be read",
-  "emr.check.ok": "Read: {{hint}}",
+  "emr.check.ok": "Read: {{hint}} ({{n}} characters)",
   "emr.check.ng": "Cannot read: {{reason}}",
   "emr.check.saveFirst": "(Save first, then check)",
   "emr.sec.behavior": "Behavior",

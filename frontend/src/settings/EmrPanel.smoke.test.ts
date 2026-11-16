@@ -65,7 +65,7 @@ beforeEach(async () => {
   settings = {};
   status = baseStatus();
   statusCode = 200;
-  checkResult = { ok: true, error: null, hint: "12…78（8 文字）" };
+  checkResult = { ok: true, error: null, hint: "12…78", length: 8 };
   vi.stubGlobal("fetch", vi.fn(fakeHost));
   localStorage.setItem("graphy.locale", "ja");
   host = document.createElement("div");
@@ -141,7 +141,7 @@ describe("EmrPanel（実際に描画して操作する）", () => {
     await act(async () => { root.render(createElement(I18nProvider, null, createElement(EmrPanel))); });
     await flush();
     await flush();
-    checkResult = { ok: false, error: "id-invalid", hint: null };
+    checkResult = { ok: false, error: "id-invalid", hint: null, length: 0 };
     await click("emr-check");
     expect(q("emr-check-result")!.textContent).toContain("ID として使えない文字");
   });

@@ -37,6 +37,8 @@ export interface EmrCheck {
   error: string | null;
   /** 先頭と末尾の数文字だけ（全文は返らない）。 */
   hint: string | null;
+  /** ID の文字数。 */
+  length: number;
 }
 
 /** 入力欄の文字列（空は未入力）。 */
