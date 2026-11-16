@@ -87,6 +87,27 @@ jobs:
         run: |
           npm ci || npm install
           npm run build
+      # ROI・マスク・計測・校正・SEG の幾何の回帰テスト（名指し）。vitest 全体は回さない
+      # （既知の失敗 attachments.test.ts があるため）。実アプリの幾何検証は automator/scripts/run-geom-verify.sh。
+      - name: Geometry regression tests (vitest)
+        working-directory: frontend
+        run: |
+          npx vitest run \
+            src/viewer/geomTruth.test.ts \
+            src/viewer/geomVolumeTruth.test.ts \
+            src/viewer/regVolumeLoader.test.ts \
+            src/curvedmpr/curvedMprVolume.test.ts \
+            src/viewer/mprTiltMissing.test.ts \
+            src/plugins/pluginVolumeApi.test.ts \
+            src/viewer/calibratedSeriesSaveRun.test.ts \
+            src/viewer/concatResample.test.ts \
+            src/viewer2d/RegVolumeDialogs.dom.test.tsx \
+            src/viewer/suv.test.ts \
+            src/viewer/SUVCalibrationDialog.smoke.test.ts \
+            src/viewer/roiStats.test.ts \
+            src/viewer/roiCircleAnisotropic.test.ts \
+            src/viewer/maskStatsCore.test.ts \
+            src/viewer/segSliceMeasures.test.ts
       # 一括抽出の無人実行（desktop/batchCli.js）が使う束ね。壊れたら PR で気付く（リリースでも同じ手順で作る）。
       - name: Bundle batch CLI
         working-directory: frontend

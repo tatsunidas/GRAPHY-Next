@@ -28,6 +28,7 @@ import { openFirstSeriesInViewer } from "../checklist/items/shared/helpers.js";
 import { dragOnCanvasHost } from "../common/pointerDrag.js";
 import { createStepRecorder } from "../checklist/types.js";
 import { AUTOMATOR_ROOT } from "../fixtures/manifest.js";
+import { exitWithSummary, exitWithGeomError } from "./computeSpikeShared.js";
 
 const OUT_DIR = path.join(AUTOMATOR_ROOT, ".results", "geom-roi-check");
 const HOST = "viewer2d-canvas-host";
@@ -36,6 +37,7 @@ const IDS = (process.env.GEOM_IDS ?? "g0_iso,g1_aniso").split(",").map((s) => s.
 
 let passed = 0;
 const failures: string[] = [];
+const unreached: string[] = [];
 function check(cond: boolean, label: string, detail?: unknown): void {
   if (cond) {
     passed++;
@@ -67,7 +69,7 @@ function makePhantom(): { dir: string; truth: Truth } {
   // UID は実行ごとに変える（同じ SOP UID の再取り込みで古いメタデータを掴まないため）。
   const seed = String(Date.now() % 1_000_000_000);
   const r = spawnSync(
-    "python3",
+    process.env.GRAPHY_TEST_PYTHON ?? "python3",
     ["-I", path.join(AUTOMATOR_ROOT, "scripts", "make-geom-verify-phantom.py"), dir, "--uid-seed", seed],
     { encoding: "utf8" },
   );
@@ -235,7 +237,7 @@ async function main(): Promise<void> {
     });
     for (const id of IDS) {
       const s = truth.series.find((x) => x.id === id);
-      if (!s) { console.log(`  [skip] ${id}: truth に無い`); continue; }
+      if (!s) { console.log(`  [未達] ${id}: truth に無い`); unreached.push(`${id}: truth に無い`); continue; }
       console.log(`\n=== ${id}${NEG ? "（負例: 行/列間隔を入れ替えた真値）" : ""} ===`);
       await runOne(d, dir, truth, s);
     }
@@ -246,8 +248,7 @@ async function main(): Promise<void> {
   if (failures.length) {
     console.log("失敗:\n  - " + failures.join("\n  - "));
   }
-  // 負例では「落ちること」が合格。
-  process.exitCode = NEG ? (failures.length > 0 ? 0 : 1) : failures.length ? 1 : 0;
+  exitWithSummary({ name: "Roi", passed, failures, unreached, neg: NEG });
 }
 
 async function runOne(d: DesktopDriver, dir: string, truth: Truth, s: SeriesTruth): Promise<void> {
@@ -405,7 +406,4 @@ async function runOne(d: DesktopDriver, dir: string, truth: Truth, s: SeriesTrut
   await viewer.close().catch(() => {});
 }
 
-main().catch((e) => {
-  console.error(e);
-  process.exit(2);
-});
+main().catch((e) => exitWithGeomError("Roi", e));

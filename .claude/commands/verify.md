@@ -71,3 +71,7 @@ verify: green — frontend typecheck + vitest (N tests), backend mvn test (M tes
   守られていない**。typecheck と vitest が緑でも、画面の動作確認が必要な変更はその旨を報告する。
 - Electron 実機の確認が要る変更（packaging / `main.js` / `preload.js` / ネイティブダイアログ）は、
   このゲートの対象外であることを明示する。
+- ROI・マスク・計測・校正・MPR の幾何を変えたときは、実アプリの幾何検証（8 本）を別に走らせる。
+  `cd automator && bash scripts/run-geom-verify.sh`（Python 依存は `scripts/requirements-geom.txt`。`GEOM_ONLY=Roi,Mask` で一部だけ）。
+  約 30 分・Electron が要る。失敗があると終了コード 1（未達は表示のみ）。詳細は `automator/src/spike/README-geom.md`。
+  このゲート（typecheck・vitest）には含めない。

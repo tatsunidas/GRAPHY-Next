@@ -26,6 +26,7 @@ import { openFirstSeriesInViewer } from "../checklist/items/shared/helpers.js";
 import { dragOnCanvasHost } from "../common/pointerDrag.js";
 import { createStepRecorder } from "../checklist/types.js";
 import { AUTOMATOR_ROOT } from "../fixtures/manifest.js";
+import { exitWithSummary, exitWithGeomError } from "./computeSpikeShared.js";
 
 const OUT_ROOT = path.join(AUTOMATOR_ROOT, ".results", "geom-export-check");
 const HOST = "viewer2d-canvas-host";
@@ -79,13 +80,13 @@ function makePhantom(): { dir: string; truth: Truth } {
   fs.mkdirSync(dir, { recursive: true });
   // UID は実行ごとに変える（同じ SOP UID の再取り込みで古いメタデータを掴まないため）。
   const seed = String(Date.now() % 1_000_000_000);
-  const r = spawnSync("python3", ["-I", path.join(AUTOMATOR_ROOT, "scripts", "make-geom-verify-phantom.py"), dir, "--uid-seed", seed], { encoding: "utf8" });
+  const r = spawnSync(process.env.GRAPHY_TEST_PYTHON ?? "python3", ["-I", path.join(AUTOMATOR_ROOT, "scripts", "make-geom-verify-phantom.py"), dir, "--uid-seed", seed], { encoding: "utf8" });
   if (r.status !== 0) throw new Error(`ファントム生成に失敗: ${r.stderr}`);
   return { dir, truth: JSON.parse(fs.readFileSync(path.join(dir, "truth.json"), "utf8")) as Truth };
 }
 
 function reader(cmd: string, args: string[]): any {
-  const r = spawnSync("python3", ["-I", READER, cmd, ...args], { encoding: "utf8", maxBuffer: 256 * 1024 * 1024 });
+  const r = spawnSync(process.env.GRAPHY_TEST_PYTHON ?? "python3", ["-I", READER, cmd, ...args], { encoding: "utf8", maxBuffer: 256 * 1024 * 1024 });
   if (r.status !== 0) throw new Error(`読み手 ${cmd} が失敗: ${r.stderr.slice(0, 800)}`);
   return JSON.parse(r.stdout);
 }
@@ -815,8 +816,8 @@ async function main(): Promise<void> {
   try {
     for (const id of IDS) {
       const s = truth.series.find((x) => x.id === id);
-      if (!s) { console.log(`  [skip] ${id}: truth に無い`); continue; }
       curId = id;
+      if (!s) { console.log(`  [未達] ${id}: truth に無い`); tally().unreached.push(`${id}: truth に無い`); continue; }
       console.log(`\n=== ${id}${NEG ? `（負例: ${NEG}）` : ""} ===`);
       try {
         await runOne(d, dir, truth, s);
@@ -829,16 +830,18 @@ async function main(): Promise<void> {
     await d.stop().catch(() => {});
   }
   console.log("\n════ 集計 ════");
-  let totalFail = 0, totalUnreached = 0;
+  let totalFail = 0, totalUnreached = 0, totalPass = 0, totalInfo = 0;
+  const allFail: string[] = [], allUnreached: string[] = [];
   for (const [id, t] of tallies) {
     console.log(`${id}: 合格 ${t.pass} / 失敗 ${t.fail.length} / 未達 ${t.unreached.length} / 参考 ${t.info.length}`);
     for (const f of t.fail) console.log(`   失敗: ${f}`);
     for (const u of t.unreached) console.log(`   未達: ${u}`);
     totalFail += t.fail.length; totalUnreached += t.unreached.length;
+    totalPass += t.pass; totalInfo += t.info.length;
+    allFail.push(...t.fail); allUnreached.push(...t.unreached);
   }
   fs.writeFileSync(path.join(OUT_ROOT, `summary${NEG ? "-neg-" + NEG : ""}.json`), JSON.stringify([...tallies.entries()], null, 1));
-  // 負例では「落ちること」が合格。
-  process.exitCode = NEG ? (totalFail > 0 ? 0 : 1) : totalFail || totalUnreached ? 1 : 0;
+  exitWithSummary({ name: "Export", passed: totalPass, failures: allFail, unreached: allUnreached, info: totalInfo, neg: !!NEG });
 }
 
-main().catch((e) => { console.error(e); process.exit(2); });
+main().catch((e) => exitWithGeomError("Export", e));
