@@ -42,6 +42,7 @@ export function MenuBar({
   onOpenHelp,
   onOpenMobileUi,
   niftiExport,
+  emrOpen,
 }: {
   isStandalone: boolean;
   canImport: boolean;
@@ -59,6 +60,8 @@ export function MenuBar({
   onOpenMobileUi?: () => void;
   /** ［ファイル］→「NIfTI で書き出し…」。渡されなければ項目を出さない（公開デモ等）。理由があれば押せない。 */
   niftiExport?: { onClick: () => void; disabledReason: string | null };
+  /** ［ファイル］→「電子カルテの患者を開く」。電子カルテ連携が有効なときだけ渡す。 */
+  emrOpen?: { onClick: () => void };
 }) {
   const { t, locale } = useI18n();
   const updateState = useUpdateState();
@@ -107,6 +110,9 @@ export function MenuBar({
               title: niftiExport.disabledReason ?? t("niftiExport.menuHint"),
               testId: "menu-item-nifti-export",
             }]
+          : []),
+        ...(emrOpen
+          ? [{ label: t("emr.open.button"), onClick: emrOpen.onClick, title: t("emr.open.hint"), testId: "menu-item-emr-open" }]
           : []),
         { label: t("main.toolbar.send"), onClick: () => onOpenTool("send"), testId: "menu-item-send" },
         ...(isDemo ? [] : [{ label: t("qr.title"), onClick: () => onOpenViewer("qr") }]),
