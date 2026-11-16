@@ -49,8 +49,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Install xvfb
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq xvfb
+      - name: Install xvfb + openbox
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq xvfb openbox
       - name: Build backend jar (frontend は検査が Vite で開発版を使うので同梱しない)
         working-directory: backend
         run: mvn -B -ntp -Dfrontend.skip=true -DskipTests package
@@ -66,7 +66,14 @@ jobs:
           GRAPHY_TEST_PYTHON: ${{ runner.temp }}/geom-venv/bin/python
           # Electron の chrome-sandbox は SUID が付かない（ランナー専用。製品の起動オプションではない）。
           ELECTRON_DISABLE_SANDBOX: "1"
-        run: xvfb-run -a --server-args="-screen 0 1600x1000x24" bash automator/scripts/run-geom-verify.sh
+        # ウィンドウマネージャが無いと BrowserWindow.maximize() が効かず、小さい既定サイズのまま検査が走る
+        # （2026-11-16 の初回実行で XaIo・Mask・Mpr が画面縮尺の不足で落ちた）。openbox を先に立てる。
+        run: |
+          xvfb-run -a --server-args="-screen 0 1600x1000x24" bash -c '
+            openbox >"$RUNNER_TEMP/openbox.log" 2>&1 &
+            sleep 2
+            exec bash automator/scripts/run-geom-verify.sh'
+
       - name: Summary
         if: always()
         run: |
