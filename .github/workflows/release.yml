@@ -185,6 +185,13 @@ jobs:
           [ -d node_modules/esbuild ] || npm ci
           npm run build:batch-cli
           test -s ../desktop/batch-cli/run.cjs
+      # MCP の中継 graphy-mcp（desktop/mcpCli.js が読む mcp/run.cjs。build.files に入る生成物）。
+      - name: Bundle MCP relay (desktop/mcp/run.cjs)
+        working-directory: frontend
+        shell: bash
+        run: |
+          npm run build:mcp
+          test -s ../desktop/mcp/run.cjs
       - name: Bundle Java 21 runtime (jlink, このOS向け)
         shell: bash
         run: |
