@@ -6,6 +6,7 @@ package com.vis.graphynext.importer;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.vis.graphynext.activity.ActiveWork;
 import com.vis.graphynext.dbadmin.DbAdminService;
 import com.vis.graphynext.dicom.store.DicomInstance;
 import com.vis.graphynext.dicom.store.DicomInstanceRepository;
@@ -54,7 +55,7 @@ import java.util.concurrent.TimeUnit;
  */
 @Service
 @Profile("standalone")
-public class ImportWatchService {
+public class ImportWatchService implements ActiveWork {
 
     private static final Logger log = LoggerFactory.getLogger(ImportWatchService.class);
 
@@ -617,5 +618,25 @@ public class ImportWatchService {
         ImportWatchItem item = new ImportWatchItem(key, size, mtime, status, clock.millis(), error);
         repo.save(item);
         ledger.put(key, item);
+    }
+
+    @Override
+    public String kind() {
+        return "watchScan";
+    }
+
+    @Override
+    public int activeCount() {
+        return scanning ? 1 : 0;
+    }
+
+    @Override
+    public void cancelAll() {
+        // 走査は止める口が無い（1 回の走査は短く、取り込み済みは巻き戻さない）
+    }
+
+    @Override
+    public boolean cancellable() {
+        return false;
     }
 }

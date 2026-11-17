@@ -4,6 +4,7 @@
  */
 package com.vis.graphynext.anonymize;
 
+import com.vis.graphynext.activity.ActiveWork;
 import com.vis.graphynext.dicom.web.WebDicomDataService;
 import jakarta.annotation.PreDestroy;
 import org.dcm4che3.data.Tag;
@@ -49,7 +50,7 @@ import java.util.zip.ZipOutputStream;
  */
 @Service
 @Profile("web")
-public class AnonymizeJobService {
+public class AnonymizeJobService implements ActiveWork {
 
     private static final Logger log = LoggerFactory.getLogger(AnonymizeJobService.class);
     private static final int MAX_REPORTED_ERRORS = 5;
@@ -329,5 +330,24 @@ public class AnonymizeJobService {
         } catch (IOException ignored) {
             // 同上
         }
+    }
+
+    @Override
+    public String kind() {
+        return "anonymize";
+    }
+
+    @Override
+    public int activeCount() {
+        return (int) jobs.values().stream()
+                .filter(j -> j.state == State.QUEUED
+                        || j.state == State.RUNNING)
+                .count();
+    }
+
+    @Override
+    public void cancelAll() {
+        // cancel は Map から消すので、先にキーを写してから回す
+        new ArrayList<>(jobs.keySet()).forEach(this::cancel);
     }
 }

@@ -103,6 +103,84 @@ class PluginJobServiceTest {
     }
 
     @Test
+    void activeWork_計算機の列のジョブは_pluginでは数えない_computeが数える() throws Exception {
+        CountDownLatch started = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        PluginJobService s = new PluginJobService(registry(args -> Map.of(), true));
+        try {
+            String id = s.submitSerialTask("lane-1", "p", ctx -> {
+                started.countDown();
+                try {
+                    release.await(10, TimeUnit.SECONDS);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+                return Map.of();
+            }).jobId();
+            assertTrue(started.await(5, TimeUnit.SECONDS));
+            assertEquals(PluginJobService.State.RUNNING, s.status(id).orElseThrow().state());
+            assertEquals(0, s.activeCount(), "終了前の一覧で、compute と二重に出さない");
+            s.cancelAll();
+            assertEquals(PluginJobService.State.RUNNING, s.status(id).orElseThrow().state(), "plugin の中止では触らない（compute 側が止める）");
+
+            // 負例: 同じ状況でも、列に載らない通常のジョブは数える（数え落としていない）
+            CountDownLatch started2 = new CountDownLatch(1);
+            PluginJobService s2 = new PluginJobService(registry(args -> {
+                started2.countDown();
+                BooleanSupplier c = (BooleanSupplier) args.get(PluginJobService.CANCELLED_KEY);
+                while (!c.getAsBoolean()) Thread.onSpinWait();
+                return Map.of();
+            }, true));
+            try {
+                s2.submit("p", Map.of());
+                assertTrue(started2.await(5, TimeUnit.SECONDS));
+                assertEquals(1, s2.activeCount());
+            } finally {
+                s2.cancelAll();
+                s2.shutdown();
+            }
+        } finally {
+            release.countDown();
+            s.shutdown();
+        }
+    }
+
+    @Test
+    void activeWork_実行中を数え_cancelAllで止まり_完了と空は数えない() throws Exception {
+        CountDownLatch started = new CountDownLatch(1);
+        boolean[] block = {true};
+        PluginJobService s = new PluginJobService(registry(args -> {
+            BooleanSupplier cancelled = (BooleanSupplier) args.get(PluginJobService.CANCELLED_KEY);
+            started.countDown();
+            while (block[0] && !cancelled.getAsBoolean()) Thread.onSpinWait();
+            return Map.of("partial", true);
+        }, true));
+        try {
+            assertEquals("plugin", s.kind());
+            assertTrue(s.cancellable());
+            assertEquals(0, s.activeCount(), "何も無いとき");
+            s.cancelAll();
+
+            String id = s.submit("p", Map.of()).jobId();
+            assertTrue(started.await(5, TimeUnit.SECONDS));
+            assertEquals(PluginJobService.State.RUNNING, s.status(id).orElseThrow().state());
+            assertEquals(1, s.activeCount());
+
+            s.cancelAll();
+
+            assertEquals(PluginJobService.State.CANCELLED, await(s, id).state());
+            assertEquals(0, s.activeCount());
+
+            // 負例: 完了したジョブは数えない
+            block[0] = false;
+            assertEquals(PluginJobService.State.DONE, await(s, s.submit("p", Map.of()).jobId()).state());
+            assertEquals(0, s.activeCount());
+        } finally {
+            s.shutdown();
+        }
+    }
+
+    @Test
     void 例外はFAILEDとして原因を返す() throws Exception {
         PluginJobService s = new PluginJobService(registry(args -> {
             throw new RuntimeException("wrapped", new IllegalStateException("boom"));

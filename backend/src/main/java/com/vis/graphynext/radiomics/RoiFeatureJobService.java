@@ -4,6 +4,7 @@
  */
 package com.vis.graphynext.radiomics;
 
+import com.vis.graphynext.activity.ActiveWork;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -25,7 +26,7 @@ import java.util.concurrent.Executors;
  * {@link RadiomicsLock} で直列化する。
  */
 @Service
-public class RoiFeatureJobService {
+public class RoiFeatureJobService implements ActiveWork {
 
     private static final Logger log = LoggerFactory.getLogger(RoiFeatureJobService.class);
 
@@ -160,5 +161,21 @@ public class RoiFeatureJobService {
                 jobs.remove(finished.get(i).id);
             }
         }
+    }
+
+    @Override
+    public String kind() {
+        return "roiFeature";
+    }
+
+    @Override
+    public int activeCount() {
+        // 取り消すと state は進まず RUNNING のまま止まるので、state ではなく「終わったか（finally で入る finishedAt）」で数える
+        return (int) jobs.values().stream().filter(j -> j.finishedAt == 0).count();
+    }
+
+    @Override
+    public void cancelAll() {
+        jobs.keySet().forEach(this::cancel);
     }
 }

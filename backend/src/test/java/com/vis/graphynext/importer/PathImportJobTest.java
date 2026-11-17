@@ -6,6 +6,7 @@ package com.vis.graphynext.importer;
 
 import com.vis.graphynext.dicom.DicomPhantomFactory;
 import com.vis.graphynext.dicom.store.DicomStorageService;
+import com.vis.graphynext.dicom.store.StorageLayout;
 import org.dcm4che3.data.Attributes;
 import org.dcm4che3.data.UID;
 import org.junit.jupiter.api.Test;
@@ -20,6 +21,8 @@ import java.io.OutputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Stream;
 import java.util.zip.ZipEntry;
@@ -203,5 +206,57 @@ class PathImportJobTest {
         Path z = zipOf("idem.zip", 2, "1.2.pj.i1");
         PathImportJobService.Status s = await(svc, svc.submit(List.of(z.toString())).jobId());
         assertEquals(PathImportJobService.State.DONE, svc.cancel(s.jobId()).state(), "終わったジョブの中止は何も変えない");
+    }
+
+    @Test
+    void activeWork_countsUnfinishedJobs_andCancelAllStopsThem() throws Exception {
+        CountDownLatch scanning = new CountDownLatch(1);
+        // 数え上げの途中で止まり、中止されたら抜ける（実際の走査が「次の 1 件の前」で止まるのと同じ形）
+        ImportService blocking = new ImportService(null, new StorageLayout(tmp.resolve("fake-store"))) {
+            @Override
+            public long countFiles(List<String> paths, Progress progress) {
+                scanning.countDown();
+                for (int i = 0; i < 500 && !progress.isCancelled(); i++) {
+                    try {
+                        Thread.sleep(20);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        break;
+                    }
+                }
+                return 0;
+            }
+
+            @Override
+            public ImportResult importPaths(List<String> paths, Progress progress) {
+                return new ImportResult(0, 0, 0, 0, List.of(), List.of());
+            }
+        };
+        PathImportJobService svc = new PathImportJobService(blocking);
+        assertEquals("import", svc.kind());
+        assertTrue(svc.cancellable());
+        assertEquals(0, svc.activeCount(), "何も無いとき");
+        svc.cancelAll(); // 何も無くても落ちない
+
+        String running = svc.submit(List.of("x")).jobId();
+        String queued = svc.submit(List.of("y")).jobId(); // 並行は 1 ジョブなので QUEUED で待つ
+        assertTrue(scanning.await(5, TimeUnit.SECONDS));
+        assertEquals(PathImportJobService.State.SCANNING, svc.get(running).state());
+        assertEquals(PathImportJobService.State.QUEUED, svc.get(queued).state());
+        assertEquals(2, svc.activeCount());
+
+        svc.cancelAll();
+
+        assertEquals(PathImportJobService.State.CANCELLED, await(svc, running).state());
+        assertEquals(PathImportJobService.State.CANCELLED, await(svc, queued).state());
+        assertEquals(0, svc.activeCount());
+    }
+
+    @Test
+    void activeWork_doneJobIsNotCounted() throws Exception {
+        PathImportJobService svc = new PathImportJobService(importService);
+        PathImportJobService.Status s = await(svc, svc.submit(List.of(zipOf("aw.zip", 2, "1.2.pj.aw").toString())).jobId());
+        assertEquals(PathImportJobService.State.DONE, s.state());
+        assertEquals(0, svc.activeCount());
     }
 }

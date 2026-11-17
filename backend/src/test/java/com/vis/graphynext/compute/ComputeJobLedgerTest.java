@@ -47,6 +47,11 @@ class ComputeJobLedgerTest {
                 ComputeEgressService.Status.CONSUMED);
     }
 
+    /** 別のテストから、渡した台帳に待ちの行を 1 つ作る。 */
+    static String queuedIn(ComputeJobLedger l) {
+        return l.create(request(), List.of(new ComputeJobLedger.InputRef("1.2.3", "1.2.3.4", "npz")), 600);
+    }
+
     String queued() {
         return ledger.create(request(), List.of(new ComputeJobLedger.InputRef("1.2.3", "1.2.3.4", "npz"),
                 new ComputeJobLedger.InputRef("1.2.9", "1.2.9.9", "dicom-zip")), 600);

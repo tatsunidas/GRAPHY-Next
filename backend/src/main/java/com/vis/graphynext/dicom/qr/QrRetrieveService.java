@@ -4,6 +4,7 @@
  */
 package com.vis.graphynext.dicom.qr;
 
+import com.vis.graphynext.activity.ActiveWork;
 import com.vis.graphynext.dicom.DicomLocalAeService;
 import com.vis.graphynext.dicom.store.DicomStorageService;
 import com.vis.graphynext.dicom.web.WebDicomDataService;
@@ -29,7 +30,7 @@ import java.util.concurrent.atomic.AtomicLong;
  * <p>前提: C-MOVE はソース PACS 側に移動先 AE（自局 AE / dcm4chee）が登録済みであること（QR の標準設定）。
  */
 @Service
-public class QrRetrieveService {
+public class QrRetrieveService implements ActiveWork {
 
     private static final Logger log = LoggerFactory.getLogger(QrRetrieveService.class);
 
@@ -153,5 +154,25 @@ public class QrRetrieveService {
         } catch (Exception e) {
             return 0;
         }
+    }
+
+    @Override
+    public String kind() {
+        return "qrRetrieve";
+    }
+
+    @Override
+    public int activeCount() {
+        return (int) jobs.values().stream().filter(j -> !j.done).count();
+    }
+
+    @Override
+    public void cancelAll() {
+        // 中止の口が無い（C-MOVE は止められない）
+    }
+
+    @Override
+    public boolean cancellable() {
+        return false;
     }
 }

@@ -7,6 +7,7 @@ package com.vis.graphynext.dbtransfer;
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
+import com.vis.graphynext.activity.ActiveWork;
 import com.vis.graphynext.dbtransfer.TransferManifest.FileEntry;
 import com.vis.graphynext.dicom.store.DicomInstanceRepository;
 import com.vis.graphynext.dicom.store.DicomStorageService;
@@ -41,7 +42,7 @@ import java.util.stream.Stream;
  */
 @Service
 @Profile("standalone")
-public class InboxIngestService {
+public class InboxIngestService implements ActiveWork {
 
     private static final Logger log = LoggerFactory.getLogger(InboxIngestService.class);
 
@@ -174,5 +175,25 @@ public class InboxIngestService {
         log.info("[db-inbox] {}: 取り込み {} / 既存で飛ばした {} / 失敗 {} / 付随データ 追加 {}・同一 {}・衝突 {}",
                 m.id(), imported, skipped, errors.size(), rel.inserted(), rel.same(), rel.conflicts().size());
         return r;
+    }
+
+    @Override
+    public String kind() {
+        return "dbInbox";
+    }
+
+    @Override
+    public int activeCount() {
+        return running ? 1 : 0;
+    }
+
+    @Override
+    public void cancelAll() {
+        // 取り込みを止める口が無い
+    }
+
+    @Override
+    public boolean cancellable() {
+        return false;
     }
 }

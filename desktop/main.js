@@ -52,6 +52,8 @@ if (app.isPackaged || process.env.GRAPHY_SINGLE_INSTANCE === "1") {
 const cfg = require("./config.json");
 const { createWindowStateKeeper } = require("./windowState");
 const windowControl = require("./windowControl");
+const { createQuitFlow } = require("./quitFlow");
+const { buildQuitDialog } = require("./quitMessages");
 const messages = require("./startupMessages");
 const secretStore = require("./secretStore");
 const aiGateway = require("./aiGateway");
@@ -639,6 +641,16 @@ const background = require("./background");
 let backgroundPrefs = null;
 let tray = null;
 let quitting = false;
+// 終了の承認。利用者が決める終了（Exit・窓の ×・トレイ・Cmd+Q）は quitFlow が確認して承認する。
+// main が自分で決める終了（再起動・更新・OS のサインアウト）は、確認なしで承認済みとして進める。
+// before-quit の後始末（Colab・backend の停止など）は、承認された終了でだけ走らせる
+// （「終了しない」を選んだあとに backend だけ止まる、を防ぐ）。
+let quitApproved = false;
+const quitGo = () => quitApproved || quitting;
+function approveQuit() {
+  quitApproved = true;
+  quitting = true; // 常駐（トレイ）でも、終了の最中は窓を隠さずに閉じる
+}
 let startHiddenPending = false; // ログイン時の起動（--hidden）で、最初の表示を見送る
 let hiddenRestore = null; // 見送った間に取っておいた、前回の窓の状態（最大化・全画面）
 
@@ -675,7 +687,7 @@ function applyBackground() {
         { label: l.open, click: () => showMainWindow() },
         { label: l.emr, click: () => void openEmrFromTray() },
         { type: "separator" },
-        { label: l.quit, click: () => { quitting = true; app.quit(); } },
+        { label: l.quit, click: () => void quitFlow.request("tray") },
       ]),
     );
     tray.on("click", () => showMainWindow());
@@ -715,6 +727,7 @@ ipcMain.handle("graphy:background-set", (e, patch) => {
   }
 });
 app.on("before-quit", () => {
+  if (!quitGo()) return;
   quitting = true;
   emrWatcher.stop();
 });
@@ -865,6 +878,7 @@ ipcMain.handle("graphy:mcp-set", async (e, patch) => {
   return { ok: applied, ...(applied ? {} : { error: "listen-failed" }), state: mcpState() };
 });
 app.on("before-quit", () => {
+  if (!quitGo()) return;
   if (mcpBridgeInst) void mcpBridgeInst.stop(); // 発見用ファイルは同期で消える
 });
 
@@ -899,6 +913,12 @@ function createWindow() {
     if (background.shouldHideOnClose({ keepInTray: keepInTray(), quitting })) {
       e.preventDefault();
       win.hide();
+      return;
+    }
+    // メイン窓の × は Exit と同じ（実行中の処理の確認 → 終了）。macOS は窓を閉じてもアプリが残る慣習なので従来どおり
+    if (!quitGo() && process.platform !== "darwin") {
+      e.preventDefault();
+      void quitFlow.request("window-close");
     }
   });
   win.on("session-end", () => {
@@ -1327,7 +1347,7 @@ const updateCtl = new appUpdate.UpdateController({
   ctx: { appImage: process.env.APPIMAGE || null },
   // 開発（未パッケージ）で偽サーバーを指したときだけ http://127.0.0.1 を許す。パッケージ版は常に https の GitHub だけ
   netOpts: { insecureLocal: !app.isPackaged && !!process.env.GRAPHY_UPDATE_API_BASE },
-  deps: { quit: () => app.quit() },
+  deps: { quit: () => { approveQuit(); app.quit(); } }, // 更新の適用は、利用者が選んだ「今すぐ」。確認なしで進める
 });
 {
   let lastSent = 0;
@@ -2897,7 +2917,9 @@ ipcMain.handle("graphy:compute-keep-awake", (e, on) => {
 });
 // 計算ジョブの窓が「いま眠りを止めているか」を表示するための読み取り（止めたり外したりはしない）
 ipcMain.handle("graphy:compute-keep-awake-status", () => ({ ok: true, active: computeKeepAwake.active() }));
-app.on("before-quit", () => computeKeepAwake.set(false));
+app.on("before-quit", () => {
+  if (quitGo()) computeKeepAwake.set(false);
+});
 
 // 名前を付けて保存。OS ネイティブのダイアログを使うので、**同名ファイルの上書き確認は
 // OS が標準で出す**（アプリ側で自前実装しない）。保存したパスを返す。取り消しなら null。
@@ -3093,7 +3115,115 @@ function stopBackend() {
   }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// 終了の流れ（Exit メニュー・メイン窓の ×・トレイの［終了］・Cmd+Q）。順序と失敗時の動きは quitFlow.js。
+// backend の「いま走っている処理」を聞き、あれば［終了しない／中止して終了］を出す。中止して終了なら、中止 → 全窓を閉じる →
+// backend を穏当に止める（Spring の終了処理。Windows の kill() は強制終了で @PreDestroy が走らないので、HTTP の停止を使う）
+// → 上限で強制終了 → アプリを終える。外部の backend（GRAPHY_BACKEND_EXTERNAL）は自分で起動したものではないので触らない。
+// 上限は計測から導いた数値ではない: 中止の後始末 5 秒、窓の閉じ待ち 3 秒、backend の停止 15 秒（Spring の停止待ち 10 秒＋余裕）。
+const QUIT_CANCEL_SETTLE_MS = 5000;
+const QUIT_CLOSE_WINDOWS_MS = 3000;
+const QUIT_BACKEND_STOP_MS = 15000;
+const quitSleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+function internalFetch(pathname, { method = "GET", timeoutMs = 3000 } = {}) {
+  return fetch(`${API_BASE}${pathname}`, {
+    method,
+    headers: { Authorization: `Bearer ${MAIN_SECRET}` },
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+}
+
+async function quitGetActivity() {
+  // 自分で起動した backend が立ち上がっていなければ、走っている処理は無い
+  if (EXTERNAL_BACKEND || !MAIN_SECRET || !backendProc || !backendHealthy) return { kind: "none" };
+  try {
+    const res = await internalFetch("/api/internal/activity");
+    if (!res.ok) return { kind: "unknown", reason: `HTTP ${res.status}` };
+    const body = await res.json();
+    const items = Array.isArray(body && body.items) ? body.items : [];
+    return items.length ? { kind: "items", items } : { kind: "none" };
+  } catch (e) {
+    return { kind: "unknown", reason: String((e && e.message) || e) };
+  }
+}
+
+async function quitAsk({ items, unknown }) {
+  const win = BrowserWindow.getFocusedWindow() || (mainWin && !mainWin.isDestroyed() && mainWin.isVisible() ? mainWin : null);
+  const locale = String(app.getLocale() || "").startsWith("ja") ? "ja" : "en";
+  const opts = buildQuitDialog({ items, unknown, locale });
+  const r = win ? await dialog.showMessageBox(win, opts) : await dialog.showMessageBox(opts);
+  return r.response === 1 ? "quit" : "stay";
+}
+
+async function quitCancelAll() {
+  const res = await internalFetch("/api/internal/cancel-all", { method: "POST", timeoutMs: 8000 });
+  if (!res.ok) console.warn(`[quit] cancel-all が失敗しました（HTTP ${res.status}）`);
+  // 中止の後始末（エクスポートの書きかけの削除など）が済むのを待つ。済まなくても上限で進む
+  const end = Date.now() + QUIT_CANCEL_SETTLE_MS;
+  while (Date.now() < end) {
+    const a = await quitGetActivity();
+    if (a.kind !== "items" || !a.items.some((i) => i.cancellable)) break;
+    await quitSleep(300);
+  }
+}
+
+async function quitCloseWindows() {
+  const wins = BrowserWindow.getAllWindows().filter((w) => !w.isDestroyed());
+  if (wins.length === 0) return;
+  await Promise.race([
+    Promise.all(wins.map((w) => new Promise((resolve) => { w.once("closed", resolve); w.close(); }))),
+    quitSleep(QUIT_CLOSE_WINDOWS_MS),
+  ]);
+  await quitSleep(300); // 窓が閉じる間に送り出した保存（ROI・マスク）が、backend が生きているうちに届くのを待つ
+}
+
+async function quitStopBackend() {
+  const proc = backendProc;
+  if (!proc || EXTERNAL_BACKEND) return true;
+  if (!backendHealthy) {
+    // 起動の途中（まだ HTTP が立っていない）。穏当に止める口が無く、守るものも無いので、待たずに止める
+    stopBackend();
+    return true;
+  }
+  const exited = new Promise((resolve) => proc.once("exit", () => resolve(true)));
+  try {
+    await internalFetch("/api/internal/shutdown", { method: "POST" });
+  } catch (e) {
+    console.warn("[quit] shutdown の要求に失敗しました:", e && e.message);
+  }
+  const ok = await Promise.race([exited, quitSleep(QUIT_BACKEND_STOP_MS).then(() => false)]);
+  if (!ok) {
+    console.warn("[quit] backend が上限内に止まらないため強制終了します");
+    stopBackend();
+  }
+  return ok;
+}
+
+const quitFlow = createQuitFlow({
+  log: (msg, e) => console.warn(`[quit] ${msg}`, (e && e.message) || ""),
+  getActivity: quitGetActivity,
+  ask: quitAsk,
+  approve: approveQuit,
+  cancelAll: quitCancelAll,
+  closeWindows: quitCloseWindows,
+  stopBackend: quitStopBackend,
+  quitApp: () => app.quit(),
+});
+ipcMain.handle("graphy:request-quit", () => {
+  void quitFlow.request("menu");
+  return { ok: true };
+});
+// Cmd+Q・OS からの終了など、利用者が決める終了。承認されていなければ止めて、確認の流れへ回す
+app.on("before-quit", (event) => {
+  if (quitGo()) return;
+  event.preventDefault();
+  void quitFlow.request("before-quit");
+});
+
+
 app.on("window-all-closed", () => {
+  if (quitFlow.isRunning()) return; // 終了の流れが backend の停止とアプリの終了まで運ぶ
   // 常駐中は backend を止めない（隠れたメインの窓があるうちは、ここへは来ない。ビューアだけが残る場合などの保険）
   if (keepInTray() && !quitting) return;
   stopBackend();
@@ -3106,6 +3236,7 @@ app.on("window-all-closed", () => {
 let releasedOnQuit = false;
 let releasedLocalAi = false;
 app.on("before-quit", (event) => {
+  if (!quitGo()) return;
   const hasColab = !!colabRuntimes && colabRuntimes.endpoints().length > 0;
   const hasLocal = localJupyter.endpoint() !== null;
   if (releasedOnQuit || (!hasColab && !hasLocal)) return;
@@ -3117,14 +3248,20 @@ app.on("before-quit", (event) => {
   Promise.race([Promise.allSettled(jobs), new Promise((r) => setTimeout(r, 10000))]).finally(() => app.quit());
 });
 app.on("before-quit", (event) => {
+  if (!quitGo()) return;
   const ai = localLlm.get();
   if (releasedLocalAi || !ai || !ai.status().running) return;
   event.preventDefault();
   releasedLocalAi = true;
   Promise.race([ai.stop().catch(() => undefined), new Promise((r) => setTimeout(r, 10000))]).finally(() => app.quit());
 });
-app.on("before-quit", () => localPython.cancel());
-app.on("before-quit", stopBackend);
+app.on("before-quit", () => {
+  if (!quitGo()) return;
+  localPython.cancel();
+});
+app.on("before-quit", () => {
+  if (quitGo()) stopBackend();
+});
 process.on("exit", stopBackend);
 
 /**
@@ -3162,6 +3299,7 @@ function relaunchApp() {
     process.env.GRAPHY_RELAUNCHED = "1"; // app.relaunch は今の環境変数を引き継ぐ
     app.relaunch();
   }
+  approveQuit(); // main が決めた終了。確認なしで進める（従来どおり）
   app.quit();
 }
 // 描画に使う GPU の選択（設定＞描画環境）を、GPU プロセスが生まれる前（ready の前）に付ける。保存先は resolveDataDir()
@@ -3284,7 +3422,7 @@ app.whenReady().then(() => {
   }, RENDER_GPU_CONFIRM_MS).unref();
 });
 app.on("before-quit", () => {
-  if (!renderGpuFailureHandled) clearRenderTrying();
+  if (quitGo() && !renderGpuFailureHandled) clearRenderTrying();
 });
 
 // before-quit の後始末（Colab の解放・backend の停止）が済んだあとに、終了コードを付けて終える

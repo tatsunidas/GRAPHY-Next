@@ -4,6 +4,8 @@
  */
 package com.vis.graphynext.importer;
 
+import com.vis.graphynext.activity.ActiveWork;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.annotation.Profile;
@@ -26,7 +28,7 @@ import java.util.concurrent.Executors;
  */
 @Service
 @Profile("standalone")
-public class PathImportJobService {
+public class PathImportJobService implements ActiveWork {
 
     private static final Logger log = LoggerFactory.getLogger(PathImportJobService.class);
 
@@ -114,5 +116,24 @@ public class PathImportJobService {
                 jobs.remove(j.id);
             }
         }
+    }
+
+    @Override
+    public String kind() {
+        return "import";
+    }
+
+    @Override
+    public int activeCount() {
+        return (int) jobs.values().stream()
+                .filter(j -> j.state == State.QUEUED
+                        || j.state == State.SCANNING
+                        || j.state == State.IMPORTING)
+                .count();
+    }
+
+    @Override
+    public void cancelAll() {
+        jobs.keySet().forEach(this::cancel);
     }
 }

@@ -91,6 +91,8 @@ contextBridge.exposeInMainWorld("graphyDesktop", {
   // Window メニュー: この窓のフルスクリーン・最大化・最小化・元に戻す、と今の状態。
   windowControl: (action) => ipcRenderer.invoke("graphy:window-control", action),
   windowState: () => ipcRenderer.invoke("graphy:window-state"),
+  // アプリを終了する（File ＞ 終了）。実行中の処理があれば、main が確認のダイアログを出す。
+  requestQuit: () => ipcRenderer.invoke("graphy:request-quit"),
   // API キー等の秘密情報。**取り出す口は無い**（平文を main の外へ出さないため）。
   // 分かるのは「入っているか」「OS のキーチェーンが使えるか」だけ。
   secretSet: (key, value) => ipcRenderer.invoke("graphy:secret-set", { key, value }),

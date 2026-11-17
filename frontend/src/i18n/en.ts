@@ -96,6 +96,7 @@ export const en: Record<string, string> = {
   "main.menu.pluginsNone": "(no plug-ins)",
   "main.menu.help": "Help",
   "main.menu.window": "Window",
+  "main.menu.exit": "Exit",
   "window.fullscreen": "Full screen",
   "window.maximize": "Maximize",
   "window.minimize": "Minimize",

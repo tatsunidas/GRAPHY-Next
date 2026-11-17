@@ -4,6 +4,8 @@
  */
 package com.vis.graphynext.seriesextract;
 
+import com.vis.graphynext.activity.ActiveWork;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -20,7 +22,7 @@ import java.util.concurrent.Executors;
  * （{@code ExportJobService} と同じ形）。並行して回すのは 1 ジョブだけ。
  */
 @Service
-public class SeriesExtractJobService {
+public class SeriesExtractJobService implements ActiveWork {
 
     private static final Logger log = LoggerFactory.getLogger(SeriesExtractJobService.class);
 
@@ -191,5 +193,23 @@ public class SeriesExtractJobService {
                 jobs.remove(j.id);
             }
         }
+    }
+
+    @Override
+    public String kind() {
+        return "seriesExtract";
+    }
+
+    @Override
+    public int activeCount() {
+        return (int) jobs.values().stream()
+                .filter(j -> j.state == State.QUEUED
+                        || j.state == State.RUNNING)
+                .count();
+    }
+
+    @Override
+    public void cancelAll() {
+        jobs.keySet().forEach(this::cancel);
     }
 }

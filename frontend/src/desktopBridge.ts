@@ -525,6 +525,8 @@ export interface GraphyDesktop {
   windowControl?: (action: WindowAction) => Promise<WindowStateResult>;
   /** この窓の今の表示状態。 */
   windowState?: () => Promise<WindowStateResult>;
+  /** アプリを終了する（File ＞ 終了）。実行中の処理があれば main が確認する。デスクトップのみ。 */
+  requestQuit?: () => Promise<{ ok: boolean }>;
   /** 秘密情報を OS のキーチェーンで暗号化して保存する（デスクトップのみ）。 */
   secretSet?: (key: string, value: string) => Promise<SecretSetResult>;
   /** 秘密情報の「有無」だけを問い合わせる。**値は返らない。** */
