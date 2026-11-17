@@ -85,6 +85,9 @@ contextBridge.exposeInMainWorld("graphyDesktop", {
   dbFoldersForget: (folder) => ipcRenderer.invoke("graphy:db-folders-forget", { folder }),
   // ネイティブダイアログ後にレンダラのキーボードフォーカスを復帰させる。
   refocus: () => ipcRenderer.send("graphy:refocus"),
+  // Window メニュー: この窓のフルスクリーン・最大化・最小化・元に戻す、と今の状態。
+  windowControl: (action) => ipcRenderer.invoke("graphy:window-control", action),
+  windowState: () => ipcRenderer.invoke("graphy:window-state"),
   // API キー等の秘密情報。**取り出す口は無い**（平文を main の外へ出さないため）。
   // 分かるのは「入っているか」「OS のキーチェーンが使えるか」だけ。
   secretSet: (key, value) => ipcRenderer.invoke("graphy:secret-set", { key, value }),

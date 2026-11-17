@@ -46,6 +46,12 @@ export interface GpuStatus {
 /** 描画に使う GPU の選択。auto＝OS の既定、high＝高性能 GPU。 */
 export type RenderGpuChoice = "auto" | "high";
 
+/** Window メニューの操作。fullscreen はフレームレス最大化の切り替え、maximize は枠つきの最大化、restore は通常の大きさへ戻す。 */
+export type WindowAction = "fullscreen" | "maximize" | "minimize" | "restore";
+export type WindowStateResult =
+  | { ok: true; maximized: boolean; fullscreen: boolean; minimized: boolean }
+  | { ok: false };
+
 /** GPU 1 つ分の搭載メモリ。 */
 export interface GpuMemoryEntry {
   name: string;
@@ -512,6 +518,10 @@ export interface GraphyDesktop {
   ) => Promise<{ ok: true; folder: string; mode?: GdriveMode } | { ok: false; error?: string; canceled?: boolean }>;
   /** ネイティブダイアログ（confirm/alert/prompt）後にレンダラのキーボードフォーカスを復帰させる。 */
   refocus?: () => void;
+  /** Window メニュー: この窓を操作する（フルスクリーンは切り替え。restore は通常の大きさへ）。デスクトップのみ。 */
+  windowControl?: (action: WindowAction) => Promise<WindowStateResult>;
+  /** この窓の今の表示状態。 */
+  windowState?: () => Promise<WindowStateResult>;
   /** 秘密情報を OS のキーチェーンで暗号化して保存する（デスクトップのみ）。 */
   secretSet?: (key: string, value: string) => Promise<SecretSetResult>;
   /** 秘密情報の「有無」だけを問い合わせる。**値は返らない。** */

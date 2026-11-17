@@ -51,6 +51,7 @@ if (app.isPackaged || process.env.GRAPHY_SINGLE_INSTANCE === "1") {
 
 const cfg = require("./config.json");
 const { createWindowStateKeeper } = require("./windowState");
+const windowControl = require("./windowControl");
 const messages = require("./startupMessages");
 const secretStore = require("./secretStore");
 const aiGateway = require("./aiGateway");
@@ -856,6 +857,7 @@ function createWindow() {
     },
   });
   keeper.track(win); // 移動/リサイズ/最大化/閉じるを追従して位置を保存
+  windowControl.attachFullScreenShortcut(win); // F11 でフルスクリーン（Win/Linux）
   mainWin = win;
   externalReady = false; // 新しい画面は、読み込んで受け取れると知らせてくるまで、外部からの要求を渡さない
   win.webContents.on("did-start-loading", () => {
@@ -936,6 +938,7 @@ function createViewerWindow(screen, keeper) {
       additionalArguments: [`--graphy-api-base=${API_BASE}`],
     },
   });
+  windowControl.attachFullScreenShortcut(win);
   if (keeper) {
     keeper.track(win);
     win.once("ready-to-show", () => {
@@ -1378,6 +1381,24 @@ ipcMain.handle("graphy:pick-directory", async () => {
     properties: ["openDirectory", "createDirectory"],
   });
   return result.canceled || result.filePaths.length === 0 ? null : result.filePaths[0];
+});
+
+// Window メニュー（フルスクリーン・最大化・最小化・元に戻す）。操作する窓は送信元の窓。
+// スプラッシュとモニタ QC の窓（全画面の目視テスト用）は対象外。
+function windowControlTarget(e) {
+  const win = BrowserWindow.fromWebContents(e.sender);
+  if (!win || win.isDestroyed() || win === splashWin || win === monitorQcWin) return null;
+  return win;
+}
+ipcMain.handle("graphy:window-control", async (e, action) => {
+  const win = windowControlTarget(e);
+  if (!win || !windowControl.ACTIONS.includes(action)) return { ok: false };
+  const state = await windowControl.apply(win, action);
+  return state ? { ok: true, ...state } : { ok: false };
+});
+ipcMain.handle("graphy:window-state", (e) => {
+  const win = windowControlTarget(e);
+  return win ? { ok: true, ...windowControl.getState(win) } : { ok: false };
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
