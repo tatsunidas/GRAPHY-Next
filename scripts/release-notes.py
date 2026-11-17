@@ -9,6 +9,8 @@ PR 内の途中コミットは並ばない。docs / test / ci / chore などの�
 
 .github/release-highlights/<タグ>.md があれば、その内容を先頭に付ける（大きな版で
 「何が変わったか」を人の言葉で伝えるため。自動の一覧はその下に続く）。
+.github/release-highlights/<タグ>.wip があれば、1 行 1 スコープ（例: mcp）として読み、そのスコープの項目に
+「【開発中】」を付ける（マージ済みの PR タイトルは直せないので、開発途中の機能を新機能に載せるときの目印）。
 
 使い方: python3 scripts/release-notes.py v0.3.5 [owner/repo]
 """
@@ -34,6 +36,15 @@ LEGACY = [
     (re.compile(r"^release\b", re.I), None),
 ]
 PR_MERGE = re.compile(r"^Merge pull request #(?P<num>\d+) from ")
+
+
+def wip_scopes(tag):
+    """この版で「開発中」と表記するスコープ。<タグ>.wip の 1 行 1 スコープ（# 以降はコメント）。"""
+    f = HIGHLIGHTS_DIR / f"{tag}.wip"
+    if not f.is_file():
+        return set()
+    lines = (l.split("#", 1)[0].strip() for l in f.read_text(encoding="utf-8").splitlines())
+    return {l for l in lines if l}
 
 
 def git(*args):
@@ -99,6 +110,7 @@ def main():
     prev = previous_tag(tag, repo)
     grouped = {key: [] for key, _ in SECTIONS}
     other = []
+    wip = wip_scopes(tag)
 
     for line in entries(f"{prev}..{tag}" if prev else tag):
         m = CONVENTIONAL.match(line)
@@ -116,7 +128,8 @@ def main():
         kind = next(k for k in kinds if k not in HIDDEN)
         scope = f"**{m.group('scope')}**: " if m.group("scope") else ""
         breaking = "⚠️ 互換性のない変更: " if m.group("bang") else ""
-        item = f"- {breaking}{scope}{m.group('desc')}"
+        dev = "【開発中】" if m.group("scope") in wip else ""
+        item = f"- {breaking}{scope}{dev}{m.group('desc')}"
         if kind in grouped:
             grouped[kind].append(item)
         else:
