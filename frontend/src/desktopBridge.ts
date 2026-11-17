@@ -432,6 +432,9 @@ export interface GraphyDesktop {
   /** 常駐の設定（閉じてもトレイに残る・ログイン時に起動する）。メインの窓以外では null / forbidden。 */
   getBackground?: () => Promise<BackgroundState | null>;
   setBackground?: (patch: Partial<Pick<BackgroundState, "keepInTray" | "launchAtLogin">>) => Promise<{ ok: boolean; error?: string; state?: BackgroundState }>;
+  /** 外部 AI クライアント（MCP）の接続の設定。メインの窓以外では null / forbidden。オンにするときの確認は main が描く。 */
+  getMcp?: () => Promise<McpState | null>;
+  setMcp?: (patch: Partial<McpPrefs>) => Promise<{ ok: boolean; error?: string; state?: McpState }>;
   /** 2d/3d/mpr/slicer 等の独立ビューアを新規ウィンドウで開く。 */
   openViewer?: (screen: string) => Promise<void>;
   /** 外部（RIS など）から「この検査を開く」を受ける（main が検証した要求だけ）。購読を外す関数を返す。メインウィンドウだけが使う。 */
@@ -877,6 +880,21 @@ export function desktop(): GraphyDesktop | undefined {
 }
 
 export const isDesktop = (): boolean => !!desktop();
+
+/** MCP の設定（既定はすべてオフ）。desktop/mcpPrefs.js と同じ 3 つ。 */
+export interface McpPrefs {
+  enabled: boolean;
+  includePhi: boolean;
+  allowAnalysis: boolean;
+}
+
+/** `graphy:mcp-get` の結果。readError は設定ファイルが読めなかった理由（すべてオフに戻してある）、relayCommand はパッケージ版だけ。 */
+export interface McpState {
+  prefs: McpPrefs;
+  readError: "unreadable" | "corrupt" | null;
+  listening: boolean;
+  relayCommand?: string;
+}
 
 /** 常駐の設定と、この環境で使えるか（ログイン時の起動は、パッケージ版の Windows・macOS だけ。トレイは macOS 以外）。 */
 export interface BackgroundState {

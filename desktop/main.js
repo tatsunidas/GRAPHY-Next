@@ -796,8 +796,14 @@ function mcpBridge() {
   return mcpBridgeInst;
 }
 
+// 外部 AI クライアントに登録してもらう中継のコマンド。パッケージ版だけ（開発起動には resources/cli が無い）。
+function mcpRelayCommand() {
+  if (!app.isPackaged) return undefined;
+  return path.join(process.resourcesPath, "cli", process.platform === "win32" ? "graphy-mcp.cmd" : "graphy-mcp");
+}
+
 function mcpState() {
-  return { prefs: mcpPrefs().get(), readError: mcpPrefs().readError(), listening: mcpBridge().listening() };
+  return { prefs: mcpPrefs().get(), readError: mcpPrefs().readError(), listening: mcpBridge().listening(), relayCommand: mcpRelayCommand() };
 }
 
 async function mcpApply() {

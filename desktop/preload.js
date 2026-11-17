@@ -26,6 +26,9 @@ contextBridge.exposeInMainWorld("graphyDesktop", {
   // 常駐（閉じてもトレイに残る・ログイン時に起動する）の設定。メインの窓だけが読み書きできる（main が送信元を確かめる）。
   getBackground: () => ipcRenderer.invoke("graphy:background-get"),
   setBackground: (patch) => ipcRenderer.invoke("graphy:background-set", patch),
+  // 外部 AI クライアント（MCP）の接続の設定。メインの窓だけが読み書きできる（main が送信元を確かめ、オンにするときの確認も main が描く）。
+  getMcp: () => ipcRenderer.invoke("graphy:mcp-get"),
+  setMcp: (patch) => ipcRenderer.invoke("graphy:mcp-set", patch),
   openViewer: (screen) => ipcRenderer.invoke("graphy:open-viewer", screen),
   // 外部（RIS など）から「この検査を開く」を受ける。main が解釈・検証した要求だけが来る。購読を外す関数を返す。
   onExternalOpen: (cb) => {
