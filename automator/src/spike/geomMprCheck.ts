@@ -179,6 +179,7 @@ interface PlaneMeas {
 interface StateMeas { label: string; canvas: CanvasInfo[]; planes: PlaneMeas[]; win: { iw: number; ih: number } }
 
 async function measureState(page: Page, label: string, shotPrefix: string): Promise<StateMeas> {
+  await diagDom(page, `measureState ${label}`);
   const canvas = await canvasInfo(page);
   const planes: PlaneMeas[] = [];
   const win = (await page.evaluate(`({iw:innerWidth,ih:innerHeight})`)) as { iw: number; ih: number };
@@ -368,6 +369,19 @@ function outlineMm(plane: Plane, g: Geo, colMm: number, rowMm: number): [number,
 type Win = { type: "default" } | { type: "max" } | { type: "size"; w: number; h: number };
 const parseSize = (s: string): Win => (s === "default" ? { type: "default" } : s === "max" ? { type: "max" } : { type: "size", w: Number(s.split("x")[0]), h: Number(s.split("x")[1]) });
 
+
+/** 診断: 幅・メディアクエリ・mpr-viewport の数と各々の表示状態（ランナーで 1 面表示になる原因の特定用。判定には使わない）。 */
+async function diagDom(page: Page, label: string): Promise<void> {
+  const d = await page.evaluate(`(function(){
+    var vs=Array.from(document.querySelectorAll('[data-testid="mpr-viewport"]')).map(function(v){var r=v.getBoundingClientRect();var cs=getComputedStyle(v);
+      var hid=false;for(var e=v;e;e=e.parentElement){var c=getComputedStyle(e);if(c.display==="none"||c.visibility==="hidden"||e.hidden){hid=true;break;}}
+      return {w:Math.round(r.width),h:Math.round(r.height),disp:cs.display,vis:cs.visibility,anyHidden:hid};});
+    var btns=Array.from(document.querySelectorAll('button,[role=tab]')).map(function(b){return (b.textContent||"").trim();}).filter(function(t){return /^(Axial|Sagittal|Coronal)/.test(t);});
+    return {iw:innerWidth,ih:innerHeight,phone:matchMedia("(max-width: 768px)").matches,tablet:matchMedia("(max-width: 1024px)").matches,coarse:matchMedia("(pointer: coarse)").matches,
+      focus:document.hasFocus(),vis:document.visibilityState,viewports:vs,paneButtons:btns,back:!!document.querySelector('[aria-label*="Back"],[aria-label*="戻る"]')};})()`).catch((e) => ({ err: String(e) }));
+  console.log(`  [診断 DOM ${label}] ${JSON.stringify(d)}`);
+}
+
 let drv: DesktopDriver | WebDriver;
 async function setWindow(page: Page, w: Win): Promise<void> {
   if (w.type === "default") return;
@@ -417,7 +431,9 @@ async function openMpr(main: Page, win: Win): Promise<{ mpr: Page; trace: Array<
   await mpr.evaluate(`(function(){window.__tr=[];var t0=performance.now();window.__trT=setInterval(function(){
     var v=document.querySelector('[data-testid="mpr-viewport"]'); if(!v)return; var c=v.querySelector('canvas'); var r=v.getBoundingClientRect();
     window.__tr.push({t:Math.round(performance.now()-t0),cellH:r.height,bh:c?c.height:0,ch:c?c.getBoundingClientRect().height:0,ready:document.querySelector('[data-testid="mpr-slab-projection"]')?1:0});},40);})()`).catch(() => {});
+  await diagDom(mpr, "mount直後");
   await setWindow(mpr, win);
+  await diagDom(mpr, "setWindow直後");
   await mpr.getByTestId("mpr-slab-projection").waitFor({ state: "visible", timeout: 120_000 });
   await mpr.waitForTimeout(4000);
   const trace = (await mpr.evaluate(`(function(){clearInterval(window.__trT);return window.__tr})()`)) as Array<Record<string, number>>;
