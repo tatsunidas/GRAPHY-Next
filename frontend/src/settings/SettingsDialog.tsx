@@ -13,6 +13,7 @@ import { RenderEnvPanel } from "./RenderEnvPanel";
 import { PluginManagerPanel } from "./PluginManagerPanel";
 import { AiPanel } from "./AiPanel";
 import { ComputePanel } from "./ComputePanel";
+import { McpPanel } from "./McpPanel";
 import { DbFolderPanel } from "./DbFolderPanel";
 import { GdrivePanel } from "./GdrivePanel";
 import { ImportWatchPanel } from "./ImportWatchPanel";
@@ -169,6 +170,8 @@ export function SettingsDialog({
             ) : category.id === "compute" ? (
               // 接続先は main の compute-endpoints.json、トークンは safeStorage（fw/remote-compute-design.md §4）
               <ComputePanel />
+            ) : category.id === "mcp" ? (
+              <McpPanel />
             ) : category.id === "plugins" ? (
               <PluginManagerPanel />
             ) : category.id === "about" ? (
