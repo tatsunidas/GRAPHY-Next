@@ -12,9 +12,13 @@ const MAX_STRING = 512;
 const MAX_DEPTH = 8;
 const PREFIX = { study: "st", series: "se", instance: "so", uid: "ui" };
 
-/** 患者を特定し得るキー（深い構造を通すときに落とす）。小文字で比較。 */
+/**
+ * 患者を特定し得るキー（深い構造を通すときに落とす）。小文字で比較。
+ * 末尾の message・errorValue・env・error は、プラグインや計算が書く**自由文・任意 JSON**（患者名が入り得る）。
+ * `guard` は「通った値」しか知らないので、先に患者を通していない呼び出し（list_compute_jobs が最初など）では止められない。キーごと落とす。
+ */
 const PHI_KEYS = new Set(
-  ["patientname", "patientid", "patientkey", "patientbirthdate", "patientsex", "patientage", "accessionnumber", "referringphysician", "referringphysicianname", "otherpatientids", "institutionname", "operatorsname", "performingphysicianname", "studydate", "studytime", "seriesdate", "acquisitiondate", "contentdate", "seriesdescription", "studydescription", "serieslabel", "label", "name"],
+  ["patientname", "patientid", "patientkey", "patientbirthdate", "patientsex", "patientage", "accessionnumber", "referringphysician", "referringphysicianname", "otherpatientids", "institutionname", "operatorsname", "performingphysicianname", "studydate", "studytime", "seriesdate", "acquisitiondate", "contentdate", "seriesdescription", "studydescription", "serieslabel", "label", "name", "message", "errorvalue", "env", "error"],
 );
 
 /** 患者情報を含まないタグの許可リスト（group+element の 8 桁・大文字）。技術的な撮像条件だけ。 */
