@@ -23,6 +23,9 @@
  *   3. 画面に **CSP 違反・未捕捉エラーが出ていない**
  *   4. **同梱の ffmpeg が動く**（検査用動画の合成と、非 H.264 動画のトランスコード取込に使う）
  *   5. 動画を取り込み、2D ビューアで開けて、**再生ボタンを押すとフレームが進み、もう一度押すと止まる**
+ *  14. MCP の中継 `resources/cli/graphy-mcp(.cmd)`（外部 AI クライアントが起動する stdio）: 起動時に userData/mcp.json の enabled が効き、
+ *      既定の場所の発見用ファイルから接続でき、tools/list・get_status が通り、患者情報オフで患者の値が 0 件（先にオンで出る）、
+ *      拒否した接続は断られ、アプリを閉じた後は「起動していない」と返す（src/smoke/mcpSection.ts。開発ツリーでは spike/mcpSectionLocal.ts で先に通す）
  *
  * ⚠ このスクリプトは**クリーンな環境で起動すること**の保証で、「どの端末でも動く」保証ではない。
  *    見た目・操作感・病院端末固有の事情（AV ソフト・日本語パス・権限）は人が見る。
@@ -44,6 +47,7 @@ import { waitForMainScreenReady } from "../checklist/items/shared/helpers.js";
 import { seedViewerSettings } from "../backend/seedSettings.js";
 import { dismissStartupDialogs } from "../common/dismissDialogs.js";
 import { killProcessTree } from "../common/processUtils.js";
+import { canSeedMcp, mcpSection, seedMcpPrefs, userDataFor, type McpSmokeCtx } from "./mcpSection.js";
 
 function arg(name: string, fallback: string): string {
   const i = process.argv.indexOf(`--${name}`);
@@ -761,6 +765,27 @@ async function main(): Promise<void> {
   delete env.GRAPHY_DEV; // 製品版として起動する（dev 経路に入らない）
   delete env.GRAPHY_BACKEND_EXTERNAL;
 
+  // MCP の中継 graphy-mcp の検査（[14]）の前準備: アプリの起動**前**に userData/mcp.json を置く（起動時に enabled が効く）。
+  // 実プロファイルを触るのは CI の Windows・macOS だけ（Linux はプロファイルを隔離済み）。AppImage はコマンドが無いので対象外。
+  const mcpUserData = userDataFor(profile);
+  const mcpTarget = !(process.platform === "linux" && LINUX_PACKAGE === "appimage");
+  const mcpSeeded = mcpTarget && canSeedMcp();
+  if (mcpSeeded) seedMcpPrefs(mcpUserData, { enabled: true, includePhi: false, allowAnalysis: false });
+  else console.log(`  [情報] [14] graphy-mcp の検査は行いません（${mcpTarget ? "実プロファイルを触らないため（CI 以外）" : "AppImage にはコマンドが無い"}）`);
+
+  const mcpCtx = (a: ElectronApplication): McpSmokeCtx => ({
+    app: a,
+    resources: inst.resources,
+    // Windows の Electron は appData を既知フォルダから取る。中継（mcpCli.js）は実際のアプリと同じ場所を見るので、差し替えを外す（cliSection と同じ）
+    env: process.platform === "win32" && process.env.APPDATA ? { ...env, APPDATA: process.env.APPDATA } : env,
+    userData: mcpUserData,
+    apiBase: `http://127.0.0.1:${PORT}`,
+    workDir: work,
+    outDir: OUT,
+    check,
+    info: (m) => console.log(`  [情報] ${m}`),
+  });
+
   console.log(`[launch] ${inst.exe}`);
   // 偽マイク（[9]）。マイクの無い runner でも getUserMedia が通るように。本体の挙動は変えない（Chromium のフラグ）。
   const toneFile = path.join(OUT, "tone.wav");
@@ -927,6 +952,11 @@ async function main(): Promise<void> {
     // ── 13. 一括抽出の無人実行（アプリが DB を開いている間）──
     await cliSection(inst, env, work, "running");
 
+    // ── 14. MCP の中継 graphy-mcp（stdio。アプリが起動している間）──
+    if (mcpSeeded) {
+      await mcpSection(mcpCtx(app), "running").catch((e) => check(false, "[14] graphy-mcp の検査が完走しなかった", String(e).slice(0, 300)));
+    }
+
     // ── 3. 画面の異常 ───────────────────────────────────────
     check(pageProblems.length === 0, "[3] ★★画面に CSP 違反・未捕捉エラーが出ていない", pageProblems.slice(0, 5));
   } catch (e) {
@@ -948,6 +978,8 @@ async function main(): Promise<void> {
 
   // ── 13. 一括抽出の無人実行（アプリを閉じた後。同梱の JRE と jar で backend を起動する）──
   await cliSection(inst, env, work, "closed");
+  // ── 14. MCP の中継（アプリを閉じた後は「起動していない」と返し、落ちない）──
+  if (mcpSeeded) await mcpSection(mcpCtx(app), "closed").catch((e) => check(false, "[14] 閉じた後の graphy-mcp の検査が完走しなかった", String(e).slice(0, 300)));
 
   if (localAi && localAi.pid !== null) {
     // アプリを閉じたら llama-server も終わる（孤児を残さない）。終了処理は最大 10 秒待つ。

@@ -13,8 +13,17 @@ export class McpStdio {
   private id = 0;
   private waiting = new Map<number, (m: Record<string, unknown>) => void>();
   stderr = "";
-  constructor(endpointFile: string, private clientName: string) {
-    this.proc = spawn(process.execPath, [path.join(REPO, "desktop", "mcpCli.js")], { env: { ...process.env, GRAPHY_MCP_ENDPOINT: endpointFile } });
+  private clientName: string;
+  /** 開発ツリーの desktop/mcpCli.js を、発見用ファイルを明示して起動する（実アプリの userData を使わない検査用）。 */
+  static fromRepo(endpointFile: string, clientName: string): McpStdio {
+    return new McpStdio({ command: process.execPath, args: [path.join(REPO, "desktop", "mcpCli.js")], env: { ...process.env, GRAPHY_MCP_ENDPOINT: endpointFile }, clientName });
+  }
+  /**
+   * @param o.shell Windows の .cmd は shell 経由でないと起動できない（Node 20.12 以降）。command は引用符で包んで渡すこと。
+   */
+  constructor(private o: { command: string; args: string[]; env: Record<string, string | undefined>; clientName: string; shell?: boolean }) {
+    this.clientName = o.clientName;
+    this.proc = spawn(o.command, o.args, { env: o.env, shell: o.shell === true });
     this.proc.stdout.on("data", (c: Buffer) => {
       this.buf += c.toString("utf8");
       let i: number;

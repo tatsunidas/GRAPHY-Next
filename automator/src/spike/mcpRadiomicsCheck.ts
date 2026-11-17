@@ -218,7 +218,7 @@ async function main(): Promise<void> {
       g.__orig = dialog.showMessageBox;
       (dialog as unknown as { showMessageBox: unknown }).showMessageBox = async () => ({ response: 0, checkboxChecked: false });
     });
-    mcp = new McpStdio(endpoint, "claude-radiomics-check");
+    mcp = McpStdio.fromRepo(endpoint, "claude-radiomics-check");
     await mcp.init();
     const tools = ((await mcp.request("tools/list")).result as { tools: { name: string }[] }).tools.map((t) => t.name);
     check(tools.includes("radiomics_submit") && tools.includes("radiomics_status"), "解析ツールが一覧に出る（allowAnalysis=true）", tools);

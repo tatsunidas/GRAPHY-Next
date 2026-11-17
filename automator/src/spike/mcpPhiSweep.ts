@@ -175,7 +175,7 @@ async function main(): Promise<void> {
     await d.app.evaluate(({ dialog }) => {
       (dialog as unknown as { showMessageBox: unknown }).showMessageBox = async () => ({ response: 0, checkboxChecked: false });
     });
-    mcp = new McpStdio(endpoint, "claude-phi-sweep");
+    mcp = McpStdio.fromRepo(endpoint, "claude-phi-sweep");
     await mcp.init();
 
     console.log("\n[2] 患者情報オン: 真値が出る（検査が空振りでないことの確認）");
