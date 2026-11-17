@@ -33,13 +33,18 @@ export interface McpSmokeCtx {
   info: (msg: string) => void;
 }
 
-/** アプリの userData（製品版は appData/GRAPHY-Next）。Linux はプロファイルを XDG_CONFIG_HOME に向けた前提。 */
+/**
+ * アプリの userData の想定。Electron の規則（package.json の productName、無ければ name。今は name=graphy-next-desktop）で、
+ * データ（DB・設定）の appData/GRAPHY-Next とは**別のフォルダ**（2026-11-17 の予行演習で判明）。想定が実際と合っているかは、起動後に
+ * app.getPath("userData") と突き合わせて検査する。Linux はプロファイルを XDG_CONFIG_HOME に向けた前提。
+ */
 export function userDataFor(profile: string): string {
   const base =
     process.platform === "win32" ? (process.env.APPDATA ?? path.join(os.homedir(), "AppData", "Roaming"))
     : process.platform === "darwin" ? path.join(os.homedir(), "Library", "Application Support")
     : profile;
-  return path.join(base, "GRAPHY-Next");
+  const pkg = JSON.parse(fs.readFileSync(path.join(import.meta.dirname, "..", "..", "..", "desktop", "package.json"), "utf8")) as { name: string; productName?: string };
+  return path.join(base, pkg.productName || pkg.name);
 }
 
 /** 実プロファイルを触ってよいのは、Linux（プロファイルを隔離してある）と CI だけ。 */
@@ -107,6 +112,10 @@ export async function mcpSection(ctx: McpSmokeCtx, phase: "running" | "closed"):
   }
 
   // ── running ──
+  // 前準備で mcp.json を置いた場所が、実際のアプリの userData と同じか（違えば起動時に enabled が効かない）
+  const actual = await ctx.app.evaluate(({ app }) => app.getPath("userData"));
+  const norm = (p: string) => path.resolve(p).toLowerCase();
+  check(norm(actual) === norm(ctx.userData), "[14] ★アプリの userData が、mcp.json を置いた場所（想定）と同じ（データの GRAPHY-Next とは別のフォルダ）", { actual: actual.replace(os.homedir(), "<home>"), expected: ctx.userData.replace(os.homedir(), "<home>") });
   const endpoint = path.join(ctx.userData, "mcp-endpoint.json");
   const up = await waitFor(() => fs.existsSync(endpoint), 30_000);
   check(up, "[14] ★アプリの起動時に mcp.json の enabled が効き、発見用ファイル（mcp-endpoint.json）が userData にできる", { userData: ctx.userData.replace(os.homedir(), "<home>") });

@@ -6,7 +6,7 @@
  *
  * 実行:  cd automator && GRAPHY_AUTOMATOR_HTTP_PORT=19540 GRAPHY_AUTOMATOR_SCP_PORT=19541 GRAPHY_AUTOMATOR_VITE_PORT=19543 \
  *          npx tsx src/spike/mcpSectionLocal.ts       （Linux 専用。実際の配布物の検査は release.yml の installedSmoke）
- *          MCP_LOCAL_NEG=1 を付けると負例（userData の名前を変える）。
+ *          MCP_LOCAL_NEG=1 を付けると負例（userData を以前の誤った想定 GRAPHY-Next に置く）。
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -47,10 +47,13 @@ async function main(): Promise<void> {
   fs.writeFileSync(path.join(inst, "graphy-next-desktop"), `#!/bin/sh\nexec "${electron}" "$@"\n`, { mode: 0o755 });
 
   const xdg = path.join(WORK, "profile");
-  // MCP_LOCAL_NEG=1: アプリの userData を製品版と違う名前にする（負例: 中継の既定の場所と食い違うと、節が落ちること）
-  const userData = path.join(xdg, process.env.MCP_LOCAL_NEG === "1" ? "graphy-next-desktop" : "GRAPHY-Next");
+  // 製品版の userData は appData/<package.json の name>（graphy-next-desktop）で、データの GRAPHY-Next とは別（v0.6.3 の deb で確認）。
+  // MCP_LOCAL_NEG=1: 以前の誤った想定（GRAPHY-Next）に置く（負例: 中継の既定の場所と食い違うと、節が落ちること）
+  const pkg = JSON.parse(fs.readFileSync(path.join(desktop, "package.json"), "utf8")) as { name: string; productName?: string };
+  const userData = path.join(xdg, process.env.MCP_LOCAL_NEG === "1" ? "GRAPHY-Next" : pkg.productName || pkg.name);
   seedMcpPrefs(userData, { enabled: true, includePhi: false, allowAnalysis: false });
-  const d = new DesktopDriver({}, { extraElectronArgs: [`--user-data-dir=${userData}`] });
+  // userData は --user-data-dir で決めず、製品版と同じく XDG_CONFIG_HOME から Electron に決めさせる（想定と実際が合っているかを節が検査する）
+  const d = new DesktopDriver({}, { extraEnv: { XDG_CONFIG_HOME: xdg } });
   await d.start();
   const ctx = {
     app: d.app,

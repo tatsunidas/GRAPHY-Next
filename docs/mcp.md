@@ -95,7 +95,7 @@ AI クライアントには、次のツールが見えます。ツールの使�
 
 ## 記録
 
-接続と呼び出しは、アプリのデータフォルダの `mcp-audit.jsonl` に記録されます（時刻・ツール名・結果・返したバイト数・患者情報の設定・クライアント名）。引数と結果の本文は記録しません。
+接続と呼び出しは、アプリのユーザーデータフォルダ（Windows は `%APPDATA%\graphy-next-desktop`、macOS は `~/Library/Application Support/graphy-next-desktop`、Linux は `~/.config/graphy-next-desktop`）の `mcp-audit.jsonl` に記録されます（時刻・ツール名・結果・返したバイト数・患者情報の設定・クライアント名）。引数と結果の本文は記録しません。
 
 ## うまくいかないとき
 

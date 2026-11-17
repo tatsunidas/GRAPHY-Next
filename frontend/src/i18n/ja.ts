@@ -4849,7 +4849,7 @@ export const ja: Record<string, string> = {
   "settings.mcp.privacy.confirm": "起動のたびに、最初の接続で、接続元のクライアント名を確認するダイアログが出ます。クライアント名は相手の自己申告で、確認できません。",
   "settings.mcp.privacy.noPixels": "画像そのもの（画素）は返しません。",
   "settings.mcp.privacy.readOnly": "できるのは、検査の一覧・シリーズの構成・タグなどの読み取りと、許可した解析の実行だけです。削除・設定の変更・外部への送信はできません。",
-  "settings.mcp.privacy.audit": "接続と呼び出しは、アプリのデータフォルダの mcp-audit.jsonl に記録されます（引数と結果の本文は記録しません）。",
+  "settings.mcp.privacy.audit": "接続と呼び出しは、アプリのユーザーデータフォルダの mcp-audit.jsonl に記録されます（引数と結果の本文は記録しません）。",
   "settings.compute.desktopOnly": "この設定はデスクトップ版でのみ利用できます（トークンの保護に OS のキーチェーンを使うため）。",
   "settings.compute.intro": "この PC の Python と GPU の状況を確認できます。また、GPU のある計算機（Jupyter Server）を登録すると、プラグインが計算をそこで行えるようになります。送られるのは匿名化した画像とプラグインのコードだけです。院内の GPU 機・契約したクラウド・Google Colab を使えます。",
   "settings.compute.local.title": "この PC",

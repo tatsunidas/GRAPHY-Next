@@ -4858,7 +4858,7 @@ export const en: Record<string, string> = {
   "settings.mcp.privacy.confirm": "At each launch, a dialog asks you to confirm the client name on its first connection. The client name is self-reported and cannot be verified.",
   "settings.mcp.privacy.noPixels": "Image pixels themselves are never returned.",
   "settings.mcp.privacy.readOnly": "Clients can only read study lists, series structure, tags and similar, and run analyses you allow. They cannot delete, change settings, or send data elsewhere.",
-  "settings.mcp.privacy.audit": "Connections and calls are logged to mcp-audit.jsonl in the app data folder (arguments and result bodies are not logged).",
+  "settings.mcp.privacy.audit": "Connections and calls are logged to mcp-audit.jsonl in the app's user data folder (arguments and result bodies are not logged).",
   "settings.compute.desktopOnly": "This setting is available in the desktop app only (tokens are protected by the OS keychain).",
   "settings.compute.intro": "You can check this PC's Python and GPU. You can also register a computer with a GPU (a Jupyter Server), and plugins can run their computations there. Only de-identified images and the plugin's code are sent. You can use an in-house GPU machine, a cloud server you have a contract for, or Google Colab.",
   "settings.compute.local.title": "This PC",
