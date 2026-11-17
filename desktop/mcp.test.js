@@ -217,16 +217,47 @@ test("tools: すべてのツールが、組み立てた要求を checkBackendCal
     for (const k of t.inputSchema.required) a[k] = args[k];
     const r = T.buildRequest(t.name, a, { projector: P, prefs: ON });
     assert.equal(r.error, undefined, `${t.name}: ${r.error}`);
+    // 2D ビューア窓から読むツールは backend の要求でなく、固定の kind だけを返す（それ以外の kind は作れない）
+    if (t.via === "viewer") {
+      assert.deepEqual(Object.keys(r), ["viewer"], t.name);
+      assert.ok(T.VIEWER_KINDS.includes(r.viewer.kind), `${t.name}: ${r.viewer.kind}`);
+    } else {
+      assert.ok(r.method && r.path, t.name);
+    }
   }
+});
+
+test("tools: ビューア系は 2 つだけ・読み取り・引数なし。画素（captureView）と操作（action・pluginTool）の kind は固定リストに無い", () => {
+  assert.deepEqual([...T.VIEWER_KINDS].sort(), ["getMeasurements", "getState"]);
+  const viewer = T.TOOLS.filter((t) => t.via === "viewer");
+  assert.deepEqual(viewer.map((t) => t.name).sort(), ["get_measurements", "get_viewer_state"]);
+  for (const t of viewer) {
+    assert.equal(t.effect, "read", t.name);
+    assert.deepEqual(t.inputSchema.properties, {}, t.name);
+    assert.ok(T.VIEWER_KINDS.includes(t.viewerKind), t.name);
+  }
+  // 解析オフでも読み取りなので一覧に出る
+  const names = T.listTools({ allowAnalysis: false, includePhi: false }).map((t) => t.name);
+  assert.ok(names.includes("get_viewer_state") && names.includes("get_measurements"));
+  // 引数は受けない
+  const P = createProjector({ includePhi: false });
+  assert.equal(T.buildRequest("get_viewer_state", { tile: "tile1" }, { projector: P, prefs: { includePhi: false, allowAnalysis: false } }).error, "unknown-arg:tile");
 });
 
 test("tools: projectResult — 患者情報オフで、全ツールの出力に患者の値が 0 件（オンでは出る）", () => {
   const SERIES = { seriesInstanceUid: "1.2.840.113619.2.55.3.1.7", modality: "CT", seriesNumber: 2, seriesDescription: "YAMADA head", numberOfInstances: 120, sopClassUid: "1.2.840.10008.5.1.4.1.1.2" };
-  const data = { search_studies: [STUDY], list_series: [SERIES], list_albums: [{ id: 3, name: "YAMADA 経過", createdAt: "2026-01-01", count: 4 }], list_instances: [{ sopInstanceUid: "1.2.840.113619.2.55.3.1.7.1", instanceNumber: 1 }] };
+  const STATE = { tiles: [{ tile: "tile1", modality: "CT", sliceIndex: 3, sliceCount: 120, windowCenter: 40, windowWidth: 400, seriesLabel: "YAMADA head 1.2.840.113619.2.55.3.1.7" }], activeTool: "WindowLevel", layoutCols: 1 };
+  const ROIS = { rois: [{ roi: "roi1", tile: "tile1", tool: "Length", sliceIndex: 3, lengthMm: 12.5, label: "YAMADA 腫瘤" }], truncated: false };
+  const data = { get_viewer_state: STATE, get_measurements: ROIS, search_studies: [STUDY], list_series: [SERIES], list_albums: [{ id: 3, name: "YAMADA 経過", createdAt: "2026-01-01", count: 4 }], list_instances: [{ sopInstanceUid: "1.2.840.113619.2.55.3.1.7.1", instanceNumber: 1 }] };
   const off = createProjector({ includePhi: false });
   const on = createProjector({ includePhi: true });
   const onAll = JSON.stringify(Object.entries(data).map(([n, d]) => T.projectResult(n, d, on)));
   assert.ok(onAll.includes("YAMADA") && onAll.includes("MRN12345")); // オンでは出る（検査が空振りでない証拠）
+  assert.ok(JSON.stringify(T.projectResult("get_viewer_state", STATE, on)).includes("seriesLabel") && JSON.stringify(T.projectResult("get_measurements", ROIS, on)).includes("腫瘤")); // ビューア系も、オンでは残る
+  // 伏せる側では、レンダラが落とし損ねた（想定外の）ラベルも main の射影が落とす。数値は残る
+  const offState = JSON.stringify(T.projectResult("get_viewer_state", STATE, off));
+  assert.ok(offState.includes('"sliceCount":120') && offState.includes('"windowWidth":400'));
+  assert.ok(JSON.stringify(T.projectResult("get_measurements", ROIS, off)).includes('"lengthMm":12.5'));
   for (const [n, d] of Object.entries(data)) {
     const s = JSON.stringify(T.projectResult(n, d, off));
     for (const v of [...PHI_VALUES, "1.2.840.113619.2.55.3.1.7", "経過"]) assert.equal(s.includes(v), false, `${n}: ${v}`);

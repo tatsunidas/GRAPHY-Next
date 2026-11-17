@@ -11,7 +11,7 @@ const { createMcpBridge } = require("./mcpBridge");
 
 const STUDY = { studyInstanceUid: "1.2.840.113619.2.55.3.1", patientId: "MRN12345", patientName: "YAMADA^TARO", studyDate: "20260101", modality: "CT", modalities: ["CT"], numberOfInstances: 120 };
 
-function setup({ prefs = { enabled: true, includePhi: false, allowAnalysis: false }, confirm = async () => true, backendImpl } = {}) {
+function setup({ prefs = { enabled: true, includePhi: false, allowAnalysis: false }, confirm = async () => true, backendImpl, viewerImpl } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "graphy-mcpbridge-"));
   const calls = [];
   const audits = [];
@@ -31,6 +31,7 @@ function setup({ prefs = { enabled: true, includePhi: false, allowAnalysis: fals
       return confirm(c);
     },
     discoveryFile: path.join(dir, "mcp-endpoint.json"),
+    ...(viewerImpl ? { viewer: viewerImpl } : {}),
   });
   return { bridge, state, calls, audits, asked, dir, file: path.join(dir, "mcp-endpoint.json") };
 }
@@ -219,4 +220,55 @@ test("bridge: 再起動するとトークンが変わる（古いトークンは
   } finally {
     await t.bridge.stop();
   }
+});
+
+test("bridge: ビューア系 — 2D 窓から読み、backend は呼ばない。includePhi・クライアント名が渡り、射影される", async () => {
+  const seen = [];
+  const viewerImpl = async (kind, ctx) => {
+    seen.push({ kind, ...ctx });
+    return kind === "getState"
+      ? { ok: true, state: { tiles: [{ tile: "tile1", modality: "CT", sliceIndex: 3, sliceCount: 120, windowCenter: 40, windowWidth: 400, seriesLabel: "YAMADA head" }] } }
+      : { ok: true, untrusted: true, measurements: { rois: [{ roi: "roi1", tile: "tile1", tool: "Length", lengthMm: 12.5, label: "YAMADA 腫瘤" }] } };
+  };
+  await withBridge({ viewerImpl }, async ({ port, token, calls, audits }) => {
+    const names = (await request(port, { headers: auth(token) })).json.tools.map((t) => t.name);
+    assert.ok(names.includes("get_viewer_state") && names.includes("get_measurements")); // 解析オフでも出る（読み取り）
+    const s = await call(port, token, "get_viewer_state", {});
+    assert.equal(s.json.ok, true);
+    assert.equal(s.json.result.tiles[0].sliceCount, 120);
+    assert.equal(s.text.includes("YAMADA"), false); // 伏せる設定: 想定外のラベルも落ちる
+    const m = await call(port, token, "get_measurements", {});
+    assert.equal(m.json.result.rois[0].lengthMm, 12.5);
+    assert.equal(m.text.includes("YAMADA"), false);
+    assert.deepEqual(seen, [{ kind: "getState", client: "claude-test", includePhi: false }, { kind: "getMeasurements", client: "claude-test", includePhi: false }]);
+    assert.equal(calls.length, 0); // backend には一度も行かない
+    assert.ok(audits.some((a) => a.tool === "get_viewer_state" && a.outcome === "ok"));
+  });
+  // 患者情報オンではラベルも残る（検査が空振りでない証拠）
+  await withBridge({ viewerImpl, prefs: { enabled: true, includePhi: true, allowAnalysis: false } }, async ({ port, token }) => {
+    assert.ok((await call(port, token, "get_viewer_state", {})).text.includes("YAMADA head"));
+  });
+});
+
+test("bridge: ビューア系の失敗は固定の符号だけ（窓の本文・例外の文は返さない）。引数は受けない。依存が無ければ viewer-unavailable", async () => {
+  const replies = [{ ok: false, error: "no-viewer" }, { ok: false, error: "timeout" }, { ok: false, error: "declined" }, { ok: false, error: "exec-failed:YAMADA^TARO" }, null];
+  let i = 0;
+  await withBridge({ viewerImpl: async () => replies[i++] }, async ({ port, token }) => {
+    assert.deepEqual((await call(port, token, "get_viewer_state", {})).json, { ok: false, error: "no-viewer" });
+    assert.deepEqual((await call(port, token, "get_viewer_state", {})).json, { ok: false, error: "timeout" });
+    assert.deepEqual((await call(port, token, "get_measurements", {})).json, { ok: false, error: "declined" });
+    const odd = await call(port, token, "get_viewer_state", {});
+    assert.deepEqual(odd.json, { ok: false, error: "viewer-failed" }); // 許可リスト外の符号は丸める
+    assert.equal(odd.text.includes("YAMADA"), false);
+    assert.deepEqual((await call(port, token, "get_viewer_state", {})).json, { ok: false, error: "viewer-failed" });
+    assert.equal((await call(port, token, "get_viewer_state", { tile: "tile1" })).json.error, "unknown-arg:tile");
+  });
+  await withBridge({ viewerImpl: async () => { throw new Error("boom YAMADA"); } }, async ({ port, token }) => {
+    const r = await call(port, token, "get_viewer_state", {});
+    assert.deepEqual(r.json, { ok: false, error: "viewer-failed" });
+    assert.equal(r.text.includes("YAMADA"), false);
+  });
+  await withBridge({}, async ({ port, token }) => {
+    assert.deepEqual((await call(port, token, "get_viewer_state", {})).json, { ok: false, error: "viewer-unavailable" });
+  });
 });

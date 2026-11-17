@@ -21,6 +21,8 @@ const { oneLine } = require("./mcpAudit");
 const MAX_BODY = 64 * 1024;
 const MAX_RESULT = 512 * 1024;
 const MAX_CONCURRENT = 4;
+/** 2D ビューア窓からの失敗のうち、そのまま返してよい符号（それ以外は viewer-failed）。 */
+const VIEWER_ERRORS = new Set(["no-viewer", "timeout", "declined"]);
 const LOCAL_HOST_RE = /^(localhost|127\.0\.0\.1|\[::1\])(:\d{1,5})?$/i;
 
 function tokenEquals(a, b) {
@@ -36,8 +38,9 @@ function tokenEquals(a, b) {
  * @param {(method: string, path: string, opts: {query?: object, body?: object}) => Promise<{status:number, json:any}>} o.backend
  * @param {(clientName: string) => Promise<boolean>} o.confirmClient  最初の接続の同意（main が描く）
  * @param {string} o.discoveryFile  userData/mcp-endpoint.json
+ * @param {(kind: string, ctx: {client: string, includePhi: boolean}) => Promise<{ok: boolean, state?: any, measurements?: any, error?: string}>} [o.viewer]  2D ビューア窓から読む（main が viewerRelay で中継。kind は mcpTools.VIEWER_KINDS の固定リストだけ）
  */
-function createMcpBridge({ prefs, audit, backend, confirmClient, discoveryFile, newToken = () => crypto.randomBytes(32).toString("hex") }) {
+function createMcpBridge({ prefs, audit, backend, confirmClient, discoveryFile, viewer, newToken = () => crypto.randomBytes(32).toString("hex") }) {
   let server = null;
   let token = null;
   let projector = null;
@@ -88,19 +91,33 @@ function createMcpBridge({ prefs, audit, backend, confirmClient, discoveryFile, 
     });
   }
 
-  async function runTool(name, args, p) {
+  async function runTool(name, args, p, client) {
     const projectorNow = projectorFor(p.includePhi);
     const req = T.buildRequest(name, args, { projector: projectorNow, prefs: p });
     if (req.error) return { ok: false, error: req.error };
-    let r;
-    try {
-      r = await backend(req.method, req.path, { query: req.query, body: req.body });
-    } catch {
-      return { ok: false, error: "backend-unreachable" };
+    let data;
+    if (req.viewer) {
+      // 2D ビューア窓から読む（backend は呼ばない）。失敗は固定の符号だけ返す（窓の本文は返さない）。
+      if (typeof viewer !== "function") return { ok: false, error: "viewer-unavailable" };
+      let v;
+      try {
+        v = await viewer(req.viewer.kind, { client, includePhi: p.includePhi });
+      } catch {
+        return { ok: false, error: "viewer-failed" };
+      }
+      if (!v || v.ok !== true) return { ok: false, error: VIEWER_ERRORS.has(v && v.error) ? v.error : "viewer-failed" };
+      data = req.viewer.kind === "getState" ? v.state : v.measurements;
+    } else {
+      let r;
+      try {
+        r = await backend(req.method, req.path, { query: req.query, body: req.body });
+      } catch {
+        return { ok: false, error: "backend-unreachable" };
+      }
+      if (!r || r.status < 200 || r.status >= 300) return { ok: false, error: `backend-${Number(r && r.status) || 0}` };
+      data = r.json;
+      if (name === "search_studies" && Array.isArray(data)) data = data.slice(0, req.limit ?? 50);
     }
-    if (!r || r.status < 200 || r.status >= 300) return { ok: false, error: `backend-${Number(r && r.status) || 0}` };
-    let data = r.json;
-    if (name === "search_studies" && Array.isArray(data)) data = data.slice(0, req.limit ?? 50);
     let result;
     try {
       result = T.projectResult(name, data, projectorNow);
@@ -146,7 +163,7 @@ function createMcpBridge({ prefs, audit, backend, confirmClient, discoveryFile, 
           return send(res, 400, { ok: false, error: "bad-request" });
         }
         const name = body && typeof body.tool === "string" ? body.tool : "";
-        const out = await runTool(name, body && body.args, p);
+        const out = await runTool(name, body && body.args, p, client);
         const bytes = out.ok ? JSON.stringify(out.result).length : 0;
         log({ event: "call", tool: /^[A-Za-z0-9_-]{1,64}$/.test(name) ? name : undefined, outcome: out.ok ? "ok" : String(out.error).replace(/[^a-z0-9-]/g, "-").slice(0, 40), bytes });
         return send(res, 200, out);

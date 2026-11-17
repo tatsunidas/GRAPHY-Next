@@ -14,7 +14,7 @@ const PREFIX = { study: "st", series: "se", instance: "so", uid: "ui" };
 
 /** 患者を特定し得るキー（深い構造を通すときに落とす）。小文字で比較。 */
 const PHI_KEYS = new Set(
-  ["patientname", "patientid", "patientkey", "patientbirthdate", "patientsex", "patientage", "accessionnumber", "referringphysician", "referringphysicianname", "otherpatientids", "institutionname", "operatorsname", "performingphysicianname", "studydate", "studytime", "seriesdate", "acquisitiondate", "contentdate", "seriesdescription", "studydescription", "label", "name"],
+  ["patientname", "patientid", "patientkey", "patientbirthdate", "patientsex", "patientage", "accessionnumber", "referringphysician", "referringphysicianname", "otherpatientids", "institutionname", "operatorsname", "performingphysicianname", "studydate", "studytime", "seriesdate", "acquisitiondate", "contentdate", "seriesdescription", "studydescription", "serieslabel", "label", "name"],
 );
 
 /** 患者情報を含まないタグの許可リスト（group+element の 8 桁・大文字）。技術的な撮像条件だけ。 */
