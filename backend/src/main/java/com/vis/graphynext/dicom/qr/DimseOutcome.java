@@ -48,6 +48,41 @@ public record DimseOutcome(Kind kind, Integer status, String errorComment, Strin
         return kind == Kind.OK;
     }
 
+    private static final Pattern STATE = Pattern.compile("enter state: (Sta\\d+) - ([^\\r\\n]+)");
+
+    /**
+     * ツールの実行結果を読む。時間切れ（強制終了）のときは、<b>それまでに受け取れていた応答の status</b> を生かす
+     * （応答を受け取ったあと、解放に応じない相手を待ち続けた場合）。status が無ければ時間切れで、理由に最後の状態遷移
+     * （Sta5=関連付けの応答待ち／Sta6=応答待ち／Sta7=解放待ち）を入れる。相手が先に拒否・エラーを返していたものは、そのまま。
+     */
+    public static DimseOutcome parse(Dcm4cheTools.Result r) {
+        if (!r.timedOut()) {
+            return parse(r.exitCode(), r.output());
+        }
+        DimseOutcome o = parse(-1, r.output());
+        switch (o.kind()) {
+            case OK, STATUS_ERROR, SERVICE_REFUSED, ASSOCIATION_REJECTED, UNREACHABLE:
+                // OK は status を受け取れているときだけ（status なしの OK は「終了コード 0」の読みで、時間切れでは起きない）
+                if (o.kind() != Kind.OK || o.status() != null) {
+                    return o;
+                }
+                break;
+            default:
+                break;
+        }
+        return new DimseOutcome(Kind.TIMEOUT, null, null, lastState(r.output()));
+    }
+
+    /** 出力の最後の状態遷移（例: {@code Sta7 - Awaiting A-RELEASE-RP PDU}）。無ければ null。 */
+    static String lastState(String out) {
+        String last = null;
+        Matcher m = STATE.matcher(out == null ? "" : out);
+        while (m.find()) {
+            last = m.group(1) + " - " + m.group(2).trim();
+        }
+        return last;
+    }
+
     /**
      * @param exitCode ツールの終了コード
      * @param output   ツールの出力（標準出力＋標準エラー）

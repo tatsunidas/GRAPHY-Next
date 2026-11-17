@@ -23,9 +23,14 @@ class FindArgsTest {
             "NumberOfStudyRelatedSeries", "NumberOfStudyRelatedInstances");
     private static final List<String> TLS = List.of("--key-store", "ks");
 
-    /** 変更前の DimseQrService.findStudiesForQr / findSeries が組んでいた引数（参照実装。旧コードの写し）。 */
+    /**
+     * 変更前の DimseQrService.findStudiesForQr / findSeries が組んでいた引数（参照実装。旧コードの写し）。
+     * ただし、<b>意図した変更</b>として、既定で {@code --release-timeout 3000}（解放に応じない相手を待ち続けない）が加わった。
+     * それ以外の引数と、その並びは変わらない。
+     */
     private static List<String> oldStudy(Map<String, String> match, List<String> tls) {
-        List<String> cmd = new ArrayList<>(List.of("findscu", "-b", "GRAPHYNEXT", "-c", "PACS@10.0.0.5:4000", "-L", "STUDY"));
+        List<String> cmd = new ArrayList<>(List.of("findscu", "-b", "GRAPHYNEXT", "-c", "PACS@10.0.0.5:4000", "-L", "STUDY",
+                "--release-timeout", "3000"));
         for (String key : STUDY_KEYS) {
             cmd.add("-r");
             cmd.add(key);
@@ -46,7 +51,7 @@ class FindArgsTest {
 
     private static List<String> oldSeries(String uid, Map<String, String> match, List<String> tls) {
         List<String> cmd = new ArrayList<>(List.of("findscu", "-b", "GRAPHYNEXT", "-c", "PACS@10.0.0.5:4000", "-L", "SERIES",
-                "-m", "StudyInstanceUID=" + uid));
+                "--release-timeout", "3000", "-m", "StudyInstanceUID=" + uid));
         for (String key : List.of("SeriesInstanceUID", "Modality")) {
             cmd.add("-r");
             cmd.add(key);
