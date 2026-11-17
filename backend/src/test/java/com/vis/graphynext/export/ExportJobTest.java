@@ -21,6 +21,8 @@ import java.nio.file.Path;
 import java.util.List;
 import java.util.Set;
 import java.util.TreeSet;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Stream;
 import java.util.zip.ZipEntry;
@@ -30,6 +32,9 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 @SpringBootTest(
         webEnvironment = SpringBootTest.WebEnvironment.NONE,
@@ -209,5 +214,52 @@ class ExportJobTest {
         try (ExportService.DirSink sink = new ExportService.DirSink(tmp.resolve("sink"))) {
             assertThrows(IOException.class, () -> sink.put("../evil.txt", new byte[]{1}));
         }
+    }
+
+    @Test
+    void activeWork_countsUnfinishedJobs_andCancelAllStopsThem() throws Exception {
+        ExportService fake = mock(ExportService.class);
+        CountDownLatch writing = new CountDownLatch(1);
+        boolean[] block = {true};
+        when(fake.write(any(), any(), any(), any())).thenAnswer(inv -> {
+            ExportService.Progress p = inv.getArgument(3);
+            writing.countDown();
+            // 中止されたら書きかけを打ち切る（本物の write と同じ止まり方）。block=false なら即完了
+            for (int i = 0; block[0] && i < 500; i++) {
+                if (p.isCancelled()) {
+                    throw new ExportService.CancelledException();
+                }
+                Thread.sleep(20);
+            }
+            return null;
+        });
+        Path dest = Files.createDirectories(tmp.resolve("dest-aw"));
+        List<ExportService.Selection> sel = List.of(new ExportService.Selection("1.2.aw", List.of("1.2.aw.s")));
+        ExportJobService svc = new ExportJobService(fake);
+        assertEquals("export", svc.kind());
+        assertTrue(svc.cancellable());
+        assertEquals(0, svc.activeCount(), "何も無いとき");
+        svc.cancelAll();
+
+        String running = svc.submit(sel, false, false, dest.toString()).jobId();
+        String queued = svc.submit(sel, false, false, dest.toString()).jobId(); // 並行は 1 ジョブなので QUEUED で待つ
+        assertTrue(writing.await(5, TimeUnit.SECONDS));
+        assertEquals(ExportJobService.State.RUNNING, svc.get(running).state());
+        assertEquals(ExportJobService.State.QUEUED, svc.get(queued).state());
+        assertEquals(2, svc.activeCount());
+
+        svc.cancelAll();
+
+        assertEquals(ExportJobService.State.CANCELLED, await(svc, running).state());
+        assertEquals(ExportJobService.State.CANCELLED, await(svc, queued).state());
+        assertEquals(0, svc.activeCount());
+        try (Stream<Path> s = Files.list(dest)) {
+            assertEquals(0, s.count(), "書きかけの出力が残らない");
+        }
+
+        // 負例: 完了したジョブは数えない
+        block[0] = false;
+        assertEquals(ExportJobService.State.DONE, await(svc, svc.submit(sel, false, false, dest.toString()).jobId()).state());
+        assertEquals(0, svc.activeCount());
     }
 }

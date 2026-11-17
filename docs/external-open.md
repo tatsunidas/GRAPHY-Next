@@ -12,7 +12,10 @@ RIS などの別のソフトから、読影室の同じ PC にある GRAPHY-Next
 graphynext://open?studyInstanceUid=<検査 UID>
 graphynext://open?studyInstanceUid=<検査 UID>&seriesInstanceUid=<シリーズ UID>
 graphynext://open?patientId=<患者 ID>&studyDate=<YYYYMMDD>
+graphynext://open?patientId=<患者 ID>&latest=1
 ```
+
+最後の形（`latest=1`）は、患者 ID だけで、**その患者の直近の検査**を開きます（電子カルテ連携が使います。PACS からの取り込みを待ち、無ければ手元の最新の検査を開きます）。検査・シリーズ・検査日とは組み合わせられません。詳しくは [電子カルテ連携](emr-link.md) を参照してください。
 
 OS から URL を開く方法（Windows は `start`、macOS は `open`、Linux は `xdg-open`）で呼べます。インストーラで入れた版が、OS に `graphynext://` を登録します（開発版は登録しません）。
 

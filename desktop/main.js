@@ -26,6 +26,7 @@ const readline = require("node:readline");
 const PROGRESS_PREFIX = "__GRAPHY_PROGRESS__";
 
 const externalOpen = require("./externalOpen");
+const emrWatch = require("./emrWatch");
 const appUpdate = require("./appUpdate");
 
 // --- 単一インスタンス（外部から検査を開く入口の前提。fw/external-open.md） ---
@@ -50,6 +51,9 @@ if (app.isPackaged || process.env.GRAPHY_SINGLE_INSTANCE === "1") {
 
 const cfg = require("./config.json");
 const { createWindowStateKeeper } = require("./windowState");
+const windowControl = require("./windowControl");
+const { createQuitFlow } = require("./quitFlow");
+const { buildQuitDialog } = require("./quitMessages");
 const messages = require("./startupMessages");
 const secretStore = require("./secretStore");
 const aiGateway = require("./aiGateway");
@@ -563,6 +567,49 @@ function showMainWindow() {
   }
 }
 
+// --- 電子カルテ連携（backend が監視している「いまの患者」の変化を見て、直近の検査を開く）---
+// ファイルの読み取り・過去検査の取り込みは backend。main は状態を 1 秒ごとに見て、患者が変わったら（自動で開く設定のとき）、
+// 既存の「外部から検査を開く」の経路で、患者 ID だけの要求（latest）を画面へ渡す。窓がトレイで隠れていても止まらない。
+// 判定は emrWatch.js（electron を読み込まない純粋なモジュール。emrWatch.test.js）。🔴 患者 ID はログに出さない。
+async function emrFetchStatus() {
+  const ctl = new AbortController();
+  const t = setTimeout(() => ctl.abort(), 2000);
+  try {
+    const res = await fetch(`${API_BASE}/api/emr/status`, { signal: ctl.signal });
+    return res.ok ? await res.json() : null; // web・無効・未起動（404 など）は null
+  } finally {
+    clearTimeout(t);
+  }
+}
+
+async function emrPostPrefetch() {
+  const ctl = new AbortController();
+  const t = setTimeout(() => ctl.abort(), 5000);
+  try {
+    await fetch(`${API_BASE}/api/emr/prefetch`, { method: "POST", signal: ctl.signal });
+  } finally {
+    clearTimeout(t);
+  }
+}
+
+const emrWatcher = emrWatch.createWatcher({
+  fetchStatus: emrFetchStatus,
+  onOpen: (patientId) => {
+    enqueueExternal({ ok: true, req: { patientId, latest: true } });
+    showMainWindow();
+  },
+});
+
+/** トレイの［電子カルテの患者を開く］。無効・患者なしのときは、窓を出すだけ（状態は画面の状態バーで分かる）。 */
+async function openEmrFromTray() {
+  try {
+    await emrWatch.openNow({ fetchStatus: emrFetchStatus, postPrefetch: emrPostPrefetch, enqueue: enqueueExternal });
+  } catch (e) {
+    console.warn("[emr] open from tray failed:", e && e.message);
+  }
+  showMainWindow();
+}
+
 ipcMain.on("graphy:external-open-ready", (e) => {
   if (!mainWin || mainWin.isDestroyed() || e.sender !== mainWin.webContents) return; // メインウィンドウの画面だけ
   externalReady = true;
@@ -594,6 +641,16 @@ const background = require("./background");
 let backgroundPrefs = null;
 let tray = null;
 let quitting = false;
+// 終了の承認。利用者が決める終了（Exit・窓の ×・トレイ・Cmd+Q）は quitFlow が確認して承認する。
+// main が自分で決める終了（再起動・更新・OS のサインアウト）は、確認なしで承認済みとして進める。
+// before-quit の後始末（Colab・backend の停止など）は、承認された終了でだけ走らせる
+// （「終了しない」を選んだあとに backend だけ止まる、を防ぐ）。
+let quitApproved = false;
+const quitGo = () => quitApproved || quitting;
+function approveQuit() {
+  quitApproved = true;
+  quitting = true; // 常駐（トレイ）でも、終了の最中は窓を隠さずに閉じる
+}
 let startHiddenPending = false; // ログイン時の起動（--hidden）で、最初の表示を見送る
 let hiddenRestore = null; // 見送った間に取っておいた、前回の窓の状態（最大化・全画面）
 
@@ -614,7 +671,9 @@ function keepInTray() {
 }
 
 function trayLabels() {
-  return String(app.getLocale()).startsWith("ja") ? { open: "開く", quit: "終了" } : { open: "Open", quit: "Quit" };
+  return String(app.getLocale()).startsWith("ja")
+    ? { open: "開く", emr: "電子カルテの患者を開く", quit: "終了" }
+    : { open: "Open", emr: "Open EMR patient", quit: "Quit" };
 }
 
 function applyBackground() {
@@ -626,8 +685,9 @@ function applyBackground() {
     tray.setContextMenu(
       Menu.buildFromTemplate([
         { label: l.open, click: () => showMainWindow() },
+        { label: l.emr, click: () => void openEmrFromTray() },
         { type: "separator" },
-        { label: l.quit, click: () => { quitting = true; app.quit(); } },
+        { label: l.quit, click: () => void quitFlow.request("tray") },
       ]),
     );
     tray.on("click", () => showMainWindow());
@@ -667,7 +727,159 @@ ipcMain.handle("graphy:background-set", (e, patch) => {
   }
 });
 app.on("before-quit", () => {
+  if (!quitGo()) return;
   quitting = true;
+  emrWatcher.stop();
+});
+
+// MCP サーバー（外部 AI クライアントが、起動中のこのアプリを使う）。設計: roadmap fw/mcp-server-design.md。既定はすべてオフ。
+// 🔴 受け口・同意・患者情報の射影・監査・拒否リストはすべて main 側（mcpBridge / mcpTools / mcpProjection）。中継（graphy-mcp）は転送だけ。
+// 🔴 設定の変更は設定画面（main 窓）からだけ。オンにするときは main が確認を描く（描いた確認をレンダラが飛ばせない）。
+const { createMcpPrefs, confirmationsFor } = require("./mcpPrefs");
+const { createMcpAudit } = require("./mcpAudit");
+const { createMcpBridge } = require("./mcpBridge");
+let mcpPrefsStore = null;
+let mcpBridgeInst = null;
+function mcpPrefs() {
+  if (!mcpPrefsStore) mcpPrefsStore = createMcpPrefs({ file: path.join(app.getPath("userData"), "mcp.json") });
+  return mcpPrefsStore;
+}
+
+const MCP_ENABLE_TEXT = {
+  enabled: {
+    message: "外部の AI クライアント（Claude Desktop など）が、このアプリに接続できるようにします。",
+    detail: "接続できるのはこの PC の中だけです。起動のたびに、最初の接続で、接続元の確認をもう一度お聞きします。いつでも設定でオフに戻せます。",
+  },
+  includePhi: {
+    message: "患者情報（氏名・患者 ID・生年月日など）を、接続した AI クライアントへ返せるようにします。",
+    detail: "返した内容は、そのクライアントを通じてクラウドの AI へ送られる可能性があります。オフのときは患者情報を伏せ、識別子は仮の札にして返します。",
+  },
+  allowAnalysis: {
+    message: "AI クライアントからの解析の実行（Radiomics の特徴量の計算）を許可します。",
+    detail: "元の画像・マスクは変更しません。計算結果はキャッシュに保存されます。",
+  },
+};
+
+async function mcpBackend(method, p, { query, body } = {}) {
+  const u = new URL(p, API_BASE);
+  for (const [k, v] of Object.entries(query || {})) u.searchParams.set(k, String(v));
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), 15000);
+  try {
+    const res = await fetch(u, { method, headers: body ? { "content-type": "application/json" } : undefined, body: body ? JSON.stringify(body) : undefined, signal: ctl.signal });
+    const text = await res.text();
+    if (text.length > 8 * 1024 * 1024) return { status: 502, json: null };
+    let json = null;
+    try {
+      json = text ? JSON.parse(text) : null;
+    } catch {
+      /* JSON でない本文は使わない */
+    }
+    return { status: res.status, json };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function mcpConfirmClient(client) {
+  const p = mcpPrefs().get();
+  const parent = mainWin && !mainWin.isDestroyed() ? mainWin : undefined;
+  const r = await dialog.showMessageBox(parent, {
+    type: "warning",
+    buttons: ["接続を許可", "拒否"],
+    defaultId: 1,
+    cancelId: 1,
+    title: "外部 AI クライアントの接続",
+    message: `外部 AI クライアント「${client}」が、GRAPHY-Next への接続を求めています。`,
+    detail: `クライアント名は相手の自己申告で、確認できません。心当たりがなければ［拒否］を選んでください（拒否すると、アプリを再起動するまで受け付けません）。\n現在の設定: 患者情報 = ${p.includePhi ? "返す" : "伏せる"} ／ 解析の実行 = ${p.allowAnalysis ? "許可" : "許可しない"}`,
+  });
+  return r.response === 0;
+}
+
+// ROI の計測値を外部 AI クライアントへ返す前の確認（クライアントごと・起動ごとに最初の 1 回。viewerRelay が数える）。
+async function mcpConfirmMeasurements(client, preview) {
+  const parent = mainWin && !mainWin.isDestroyed() ? mainWin : undefined;
+  const r = await dialog.showMessageBox(parent, {
+    type: "warning",
+    buttons: ["返す", "取り消す"],
+    defaultId: 1,
+    cancelId: 1,
+    title: "外部 AI クライアントの接続",
+    message: `2D ビューアの ROI の計測値を、外部 AI クライアント「${client}」へ返します。`,
+    detail: `結果の先頭: ${preview}\n\n返した内容は、そのクライアントを通じてクラウドの AI へ送られる可能性があります。患者情報が含まれていないか確認してください。返しますか？`,
+  });
+  return r.response === 0;
+}
+
+// 外部 AI クライアントが 2D ビューアの状態・ROI を読む。同じプロセス内の viewerRelay を直接呼ぶ（`graphy:assistant-viewer-cmd` の
+// 「チャット窓だけ」の関門は ipcMain の handler にあり、そのまま。2D 窓への送信 graphy:viewer-cmd は main→窓の一方向）。
+// kind は mcpTools.VIEWER_KINDS（getState・getMeasurements）だけ。ジャーナルの sessionId は `mcp:<クライアント名>`。
+// ラベル（SeriesDescription など自由記述）は、患者情報を返す設定のときだけ。画素（captureView）・操作（action・pluginTool）は中継しない。
+function mcpViewer(kind, { client, includePhi }) {
+  const opts = kind === "getMeasurements" ? { measurements: { external: true, confirmSend: (preview) => mcpConfirmMeasurements(client, preview) } } : {};
+  return viewerRelay.relay(`mcp:${client}`, { kind, includeLabels: includePhi === true }, opts);
+}
+
+function mcpBridge() {
+  if (!mcpBridgeInst) {
+    mcpBridgeInst = createMcpBridge({
+      prefs: mcpPrefs(),
+      audit: createMcpAudit({ file: path.join(app.getPath("userData"), "mcp-audit.jsonl") }),
+      backend: mcpBackend,
+      confirmClient: mcpConfirmClient,
+      viewer: mcpViewer,
+      discoveryFile: path.join(app.getPath("userData"), "mcp-endpoint.json"),
+    });
+  }
+  return mcpBridgeInst;
+}
+
+// 外部 AI クライアントに登録してもらう中継のコマンド。パッケージ版だけ（開発起動には resources/cli が無い）。
+function mcpRelayCommand() {
+  if (!app.isPackaged) return undefined;
+  return path.join(process.resourcesPath, "cli", process.platform === "win32" ? "graphy-mcp.cmd" : "graphy-mcp");
+}
+
+function mcpState() {
+  return { prefs: mcpPrefs().get(), readError: mcpPrefs().readError(), listening: mcpBridge().listening(), relayCommand: mcpRelayCommand() };
+}
+
+async function mcpApply() {
+  try {
+    await mcpBridge().apply();
+  } catch (e) {
+    console.warn("[mcp] could not apply:", e && e.message);
+    try {
+      mcpPrefs().set({ enabled: false }); // 待ち受けられないのに「有効」と見せない
+    } catch {
+      /* 書けないときも、以降の受け口は止まっている */
+    }
+    return false;
+  }
+  return true;
+}
+
+ipcMain.handle("graphy:mcp-get", (e) => (isMainSender(e) ? mcpState() : null));
+ipcMain.handle("graphy:mcp-set", async (e, patch) => {
+  if (!isMainSender(e)) return { ok: false, error: "forbidden" };
+  try {
+    const prev = mcpPrefs().get();
+    for (const k of confirmationsFor(prev, patch)) {
+      const t = MCP_ENABLE_TEXT[k];
+      const r = await dialog.showMessageBox(mainWin, { type: "warning", buttons: ["オンにする", "やめる"], defaultId: 1, cancelId: 1, title: "外部 AI クライアントの接続", message: t.message, detail: t.detail });
+      if (r.response !== 0) return { ok: false, error: "cancelled", state: mcpState() };
+    }
+    mcpPrefs().set(patch);
+  } catch (err) {
+    console.warn("[mcp] set failed:", err && err.message);
+    return { ok: false, error: "invalid" };
+  }
+  const applied = await mcpApply();
+  return { ok: applied, ...(applied ? {} : { error: "listen-failed" }), state: mcpState() };
+});
+app.on("before-quit", () => {
+  if (!quitGo()) return;
+  if (mcpBridgeInst) void mcpBridgeInst.stop(); // 発見用ファイルは同期で消える
 });
 
 function createWindow() {
@@ -690,6 +902,7 @@ function createWindow() {
     },
   });
   keeper.track(win); // 移動/リサイズ/最大化/閉じるを追従して位置を保存
+  windowControl.attachFullScreenShortcut(win); // F11 でフルスクリーン（Win/Linux）
   mainWin = win;
   externalReady = false; // 新しい画面は、読み込んで受け取れると知らせてくるまで、外部からの要求を渡さない
   win.webContents.on("did-start-loading", () => {
@@ -700,6 +913,12 @@ function createWindow() {
     if (background.shouldHideOnClose({ keepInTray: keepInTray(), quitting })) {
       e.preventDefault();
       win.hide();
+      return;
+    }
+    // メイン窓の × は Exit と同じ（実行中の処理の確認 → 終了）。macOS は窓を閉じてもアプリが残る慣習なので従来どおり
+    if (!quitGo() && process.platform !== "darwin") {
+      e.preventDefault();
+      void quitFlow.request("window-close");
     }
   });
   win.on("session-end", () => {
@@ -770,6 +989,7 @@ function createViewerWindow(screen, keeper) {
       additionalArguments: [`--graphy-api-base=${API_BASE}`],
     },
   });
+  windowControl.attachFullScreenShortcut(win);
   if (keeper) {
     keeper.track(win);
     win.once("ready-to-show", () => {
@@ -1127,7 +1347,7 @@ const updateCtl = new appUpdate.UpdateController({
   ctx: { appImage: process.env.APPIMAGE || null },
   // 開発（未パッケージ）で偽サーバーを指したときだけ http://127.0.0.1 を許す。パッケージ版は常に https の GitHub だけ
   netOpts: { insecureLocal: !app.isPackaged && !!process.env.GRAPHY_UPDATE_API_BASE },
-  deps: { quit: () => app.quit() },
+  deps: { quit: () => { approveQuit(); app.quit(); } }, // 更新の適用は、利用者が選んだ「今すぐ」。確認なしで進める
 });
 {
   let lastSent = 0;
@@ -1212,6 +1432,24 @@ ipcMain.handle("graphy:pick-directory", async () => {
     properties: ["openDirectory", "createDirectory"],
   });
   return result.canceled || result.filePaths.length === 0 ? null : result.filePaths[0];
+});
+
+// Window メニュー（フルスクリーン・最大化・最小化・元に戻す）。操作する窓は送信元の窓。
+// スプラッシュとモニタ QC の窓（全画面の目視テスト用）は対象外。
+function windowControlTarget(e) {
+  const win = BrowserWindow.fromWebContents(e.sender);
+  if (!win || win.isDestroyed() || win === splashWin || win === monitorQcWin) return null;
+  return win;
+}
+ipcMain.handle("graphy:window-control", async (e, action) => {
+  const win = windowControlTarget(e);
+  if (!win || !windowControl.ACTIONS.includes(action)) return { ok: false };
+  const state = await windowControl.apply(win, action);
+  return state ? { ok: true, ...state } : { ok: false };
+});
+ipcMain.handle("graphy:window-state", (e) => {
+  const win = windowControlTarget(e);
+  return win ? { ok: true, ...windowControl.getState(win) } : { ok: false };
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -2679,7 +2917,9 @@ ipcMain.handle("graphy:compute-keep-awake", (e, on) => {
 });
 // 計算ジョブの窓が「いま眠りを止めているか」を表示するための読み取り（止めたり外したりはしない）
 ipcMain.handle("graphy:compute-keep-awake-status", () => ({ ok: true, active: computeKeepAwake.active() }));
-app.on("before-quit", () => computeKeepAwake.set(false));
+app.on("before-quit", () => {
+  if (quitGo()) computeKeepAwake.set(false);
+});
 
 // 名前を付けて保存。OS ネイティブのダイアログを使うので、**同名ファイルの上書き確認は
 // OS が標準で出す**（アプリ側で自前実装しない）。保存したパスを返す。取り消しなら null。
@@ -2797,6 +3037,8 @@ function offerDefaultDbAfterFailure(e) {
 
 app.whenReady().then(async () => {
   if (secondaryInstance) return; // 2 つ目の起動は、何もせず終わる（上の app.exit）
+  // 電子カルテ連携の監視。backend がまだ起動していない間は、状態が取れないだけで何も起きない（最初に取れた状態が基準）。
+  emrWatcher.start();
   // 外部から検査を開く URL（graphynext://）の登録。パッケージ版だけ（開発版は起動の引数が違うので登録しない）。
   if (app.isPackaged) {
     try {
@@ -2834,6 +3076,7 @@ app.whenReady().then(async () => {
   } catch (e) {
     console.warn("[background] could not apply:", e && e.message);
   }
+  void mcpApply();
   createSplash();
   try {
     // 再起動のあとは、前のアプリの backend がポートを離すのを待つ（後始末と並んで起動するため）
@@ -2872,7 +3115,115 @@ function stopBackend() {
   }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// 終了の流れ（Exit メニュー・メイン窓の ×・トレイの［終了］・Cmd+Q）。順序と失敗時の動きは quitFlow.js。
+// backend の「いま走っている処理」を聞き、あれば［終了しない／中止して終了］を出す。中止して終了なら、中止 → 全窓を閉じる →
+// backend を穏当に止める（Spring の終了処理。Windows の kill() は強制終了で @PreDestroy が走らないので、HTTP の停止を使う）
+// → 上限で強制終了 → アプリを終える。外部の backend（GRAPHY_BACKEND_EXTERNAL）は自分で起動したものではないので触らない。
+// 上限は計測から導いた数値ではない: 中止の後始末 5 秒、窓の閉じ待ち 3 秒、backend の停止 15 秒（Spring の停止待ち 10 秒＋余裕）。
+const QUIT_CANCEL_SETTLE_MS = 5000;
+const QUIT_CLOSE_WINDOWS_MS = 3000;
+const QUIT_BACKEND_STOP_MS = 15000;
+const quitSleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+function internalFetch(pathname, { method = "GET", timeoutMs = 3000 } = {}) {
+  return fetch(`${API_BASE}${pathname}`, {
+    method,
+    headers: { Authorization: `Bearer ${MAIN_SECRET}` },
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+}
+
+async function quitGetActivity() {
+  // 自分で起動した backend が立ち上がっていなければ、走っている処理は無い
+  if (EXTERNAL_BACKEND || !MAIN_SECRET || !backendProc || !backendHealthy) return { kind: "none" };
+  try {
+    const res = await internalFetch("/api/internal/activity");
+    if (!res.ok) return { kind: "unknown", reason: `HTTP ${res.status}` };
+    const body = await res.json();
+    const items = Array.isArray(body && body.items) ? body.items : [];
+    return items.length ? { kind: "items", items } : { kind: "none" };
+  } catch (e) {
+    return { kind: "unknown", reason: String((e && e.message) || e) };
+  }
+}
+
+async function quitAsk({ items, unknown }) {
+  const win = BrowserWindow.getFocusedWindow() || (mainWin && !mainWin.isDestroyed() && mainWin.isVisible() ? mainWin : null);
+  const locale = String(app.getLocale() || "").startsWith("ja") ? "ja" : "en";
+  const opts = buildQuitDialog({ items, unknown, locale });
+  const r = win ? await dialog.showMessageBox(win, opts) : await dialog.showMessageBox(opts);
+  return r.response === 1 ? "quit" : "stay";
+}
+
+async function quitCancelAll() {
+  const res = await internalFetch("/api/internal/cancel-all", { method: "POST", timeoutMs: 8000 });
+  if (!res.ok) console.warn(`[quit] cancel-all が失敗しました（HTTP ${res.status}）`);
+  // 中止の後始末（エクスポートの書きかけの削除など）が済むのを待つ。済まなくても上限で進む
+  const end = Date.now() + QUIT_CANCEL_SETTLE_MS;
+  while (Date.now() < end) {
+    const a = await quitGetActivity();
+    if (a.kind !== "items" || !a.items.some((i) => i.cancellable)) break;
+    await quitSleep(300);
+  }
+}
+
+async function quitCloseWindows() {
+  const wins = BrowserWindow.getAllWindows().filter((w) => !w.isDestroyed());
+  if (wins.length === 0) return;
+  await Promise.race([
+    Promise.all(wins.map((w) => new Promise((resolve) => { w.once("closed", resolve); w.close(); }))),
+    quitSleep(QUIT_CLOSE_WINDOWS_MS),
+  ]);
+  await quitSleep(300); // 窓が閉じる間に送り出した保存（ROI・マスク）が、backend が生きているうちに届くのを待つ
+}
+
+async function quitStopBackend() {
+  const proc = backendProc;
+  if (!proc || EXTERNAL_BACKEND) return true;
+  if (!backendHealthy) {
+    // 起動の途中（まだ HTTP が立っていない）。穏当に止める口が無く、守るものも無いので、待たずに止める
+    stopBackend();
+    return true;
+  }
+  const exited = new Promise((resolve) => proc.once("exit", () => resolve(true)));
+  try {
+    await internalFetch("/api/internal/shutdown", { method: "POST" });
+  } catch (e) {
+    console.warn("[quit] shutdown の要求に失敗しました:", e && e.message);
+  }
+  const ok = await Promise.race([exited, quitSleep(QUIT_BACKEND_STOP_MS).then(() => false)]);
+  if (!ok) {
+    console.warn("[quit] backend が上限内に止まらないため強制終了します");
+    stopBackend();
+  }
+  return ok;
+}
+
+const quitFlow = createQuitFlow({
+  log: (msg, e) => console.warn(`[quit] ${msg}`, (e && e.message) || ""),
+  getActivity: quitGetActivity,
+  ask: quitAsk,
+  approve: approveQuit,
+  cancelAll: quitCancelAll,
+  closeWindows: quitCloseWindows,
+  stopBackend: quitStopBackend,
+  quitApp: () => app.quit(),
+});
+ipcMain.handle("graphy:request-quit", () => {
+  void quitFlow.request("menu");
+  return { ok: true };
+});
+// Cmd+Q・OS からの終了など、利用者が決める終了。承認されていなければ止めて、確認の流れへ回す
+app.on("before-quit", (event) => {
+  if (quitGo()) return;
+  event.preventDefault();
+  void quitFlow.request("before-quit");
+});
+
+
 app.on("window-all-closed", () => {
+  if (quitFlow.isRunning()) return; // 終了の流れが backend の停止とアプリの終了まで運ぶ
   // 常駐中は backend を止めない（隠れたメインの窓があるうちは、ここへは来ない。ビューアだけが残る場合などの保険）
   if (keepInTray() && !quitting) return;
   stopBackend();
@@ -2885,6 +3236,7 @@ app.on("window-all-closed", () => {
 let releasedOnQuit = false;
 let releasedLocalAi = false;
 app.on("before-quit", (event) => {
+  if (!quitGo()) return;
   const hasColab = !!colabRuntimes && colabRuntimes.endpoints().length > 0;
   const hasLocal = localJupyter.endpoint() !== null;
   if (releasedOnQuit || (!hasColab && !hasLocal)) return;
@@ -2896,14 +3248,20 @@ app.on("before-quit", (event) => {
   Promise.race([Promise.allSettled(jobs), new Promise((r) => setTimeout(r, 10000))]).finally(() => app.quit());
 });
 app.on("before-quit", (event) => {
+  if (!quitGo()) return;
   const ai = localLlm.get();
   if (releasedLocalAi || !ai || !ai.status().running) return;
   event.preventDefault();
   releasedLocalAi = true;
   Promise.race([ai.stop().catch(() => undefined), new Promise((r) => setTimeout(r, 10000))]).finally(() => app.quit());
 });
-app.on("before-quit", () => localPython.cancel());
-app.on("before-quit", stopBackend);
+app.on("before-quit", () => {
+  if (!quitGo()) return;
+  localPython.cancel();
+});
+app.on("before-quit", () => {
+  if (quitGo()) stopBackend();
+});
 process.on("exit", stopBackend);
 
 /**
@@ -2941,6 +3299,7 @@ function relaunchApp() {
     process.env.GRAPHY_RELAUNCHED = "1"; // app.relaunch は今の環境変数を引き継ぐ
     app.relaunch();
   }
+  approveQuit(); // main が決めた終了。確認なしで進める（従来どおり）
   app.quit();
 }
 // 描画に使う GPU の選択（設定＞描画環境）を、GPU プロセスが生まれる前（ready の前）に付ける。保存先は resolveDataDir()
@@ -3063,7 +3422,7 @@ app.whenReady().then(() => {
   }, RENDER_GPU_CONFIRM_MS).unref();
 });
 app.on("before-quit", () => {
-  if (!renderGpuFailureHandled) clearRenderTrying();
+  if (quitGo() && !renderGpuFailureHandled) clearRenderTrying();
 });
 
 // before-quit の後始末（Colab の解放・backend の停止）が済んだあとに、終了コードを付けて終える

@@ -48,7 +48,8 @@ import java.util.stream.Stream;
  */
 @Service
 @Profile("standalone")
-public class GdriveSyncService implements com.vis.graphynext.dicom.store.StorageBackend {
+public class GdriveSyncService implements com.vis.graphynext.dicom.store.StorageBackend,
+        com.vis.graphynext.activity.ActiveWork {
 
     private static final Logger log = LoggerFactory.getLogger(GdriveSyncService.class);
     static final String DICOM_FOLDER = "dicom";
@@ -1076,5 +1077,26 @@ public class GdriveSyncService implements com.vis.graphynext.dicom.store.Storage
         } catch (NoSuchAlgorithmException e) {
             throw new IllegalStateException(e);
         }
+    }
+
+    @Override
+    public String kind() {
+        return "gdrive";
+    }
+
+    /** 手元へ取り寄せ（localize）の実行中。 */
+    @Override
+    public int activeCount() {
+        return "RUNNING".equals(localize.get().phase()) ? 1 : 0;
+    }
+
+    @Override
+    public void cancelAll() {
+        // 終了時は止めずに件数だけ出す（取り寄せの中止は既存の画面操作の役目）
+    }
+
+    @Override
+    public boolean cancellable() {
+        return false;
     }
 }

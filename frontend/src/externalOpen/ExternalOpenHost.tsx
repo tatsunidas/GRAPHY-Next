@@ -4,6 +4,8 @@
  */
 import { useEffect, useRef, useState } from "react";
 import { fetchSeries, fetchStudies, type Study } from "../api";
+import { fetchEmrStatus } from "../settings/emrApi";
+import { decideLatest, newestExact } from "./emrOpenLogic";
 import { desktop } from "../desktopBridge";
 import { useI18n } from "../i18n/i18n";
 import { fetchSettings } from "../settings/settingsApi";
@@ -16,6 +18,14 @@ import {
   toFilters,
   type ExternalReq,
 } from "./externalOpenLogic";
+
+/** 電子カルテの患者の直近の検査を、取り込みが終わるまで待つ上限。 */
+const LATEST_TIMEOUT_MS = 180_000;
+const LATEST_POLL_MS = 500;
+/** ［開く］ボタン（メイン画面）から、この窗の ExternalOpenHost へ「電子カルテの患者を開く」を頼むイベント。 */
+export const EMR_OPEN_EVENT = "graphy:emr-open";
+
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 type Dialog =
   | { kind: "message"; text: string }
@@ -32,6 +42,8 @@ export function ExternalOpenHost() {
   const { t } = useI18n();
   const [dialog, setDialog] = useState<Dialog | null>(null);
   const busy = useRef(false);
+  /** 電子カルテの「直近の検査を開く」の世代。新しい要求が来たら増やし、古い待ちはそれを見て打ち切る。 */
+  const latestGen = useRef(0);
 
   const open = async (req: ExternalReq, study: Study) => {
     const list = await fetchSeries(study.studyInstanceUid).catch(() => []);
@@ -84,10 +96,81 @@ export function ExternalOpenHost() {
     }
   };
 
+  /** 検査をそのまま（先頭のシリーズで）2D ビューアへ渡す。選ぶ・確認するダイアログは出さない。 */
+  const openStudyDirect = async (study: Study) => {
+    const list = await fetchSeries(study.studyInstanceUid).catch(() => []);
+    const pick = pickSeries({}, list);
+    localStorage.setItem("graphy-viewer-ctx", JSON.stringify({ study, series: pick.kind === "series" ? pick.series : undefined, ts: Date.now() }));
+    const d = desktop();
+    if (d?.openViewer) await d.openViewer("2dviewer");
+  };
+
+  /**
+   * 電子カルテの患者の直近の検査を開く。開くのは PACS の直近の検査（backend が取り込む）。取り込みが終わるまで待ち、
+   * PACS に無い・取れないときは、手元にあるその患者の最新の検査を開く（無ければ理由を出す）。
+   * 新しい要求が来たら、古い待ちはやめる（患者が切り替わったのに、前の患者が開かない）。
+   */
+  const handleLatest = async (patientId: string) => {
+    const gen = ++latestGen.current;
+    const stale = () => gen !== latestGen.current;
+    const started = Date.now();
+    for (;;) {
+      const status = await fetchEmrStatus().catch(() => null);
+      if (stale()) return;
+      const dec = decideLatest(status, patientId, Date.now() - started, LATEST_TIMEOUT_MS);
+      if (dec.kind === "wait") {
+        await sleep(LATEST_POLL_MS);
+        if (stale()) return;
+        continue;
+      }
+      if (dec.kind === "open") {
+        const hit = (await fetchStudies({ studyInstanceUid: dec.studyUid }).catch(() => [] as Study[]))
+          .find((x) => x.studyInstanceUid === dec.studyUid);
+        if (stale()) return;
+        if (hit) {
+          await openStudyDirect(hit);
+          return;
+        }
+        // 取り込んだはずが手元に無い: 手元の最新に逃げる
+      }
+      const local = newestExact(await fetchStudies({ patientId }).catch(() => [] as Study[]), patientId);
+      if (stale()) return;
+      if (local) {
+        await openStudyDirect(local);
+        return;
+      }
+      const reasonKey = dec.kind === "local" && dec.reason === "not-found" ? "emr.open.none"
+        : dec.kind === "timeout" ? "emr.open.timeout" : "emr.open.failed";
+      setDialog({ kind: "message", text: t(reasonKey) });
+      return;
+    }
+  };
+
+  /** handleLatest の失敗（ビューアが開けないなど）を、画面の理由にする（握りつぶさない）。 */
+  const runLatest = (patientId: string) =>
+    handleLatest(patientId).catch(() => setDialog({ kind: "message", text: t("emr.open.failed") }));
+
+  useEffect(() => {
+    const onEvent = (e: Event) => {
+      const id = (e as CustomEvent<{ patientId?: string }>).detail?.patientId;
+      if (id) void runLatest(id);
+      else setDialog({ kind: "message", text: t("emr.open.noPatient") });
+    };
+    window.addEventListener(EMR_OPEN_EVENT, onEvent);
+    return () => window.removeEventListener(EMR_OPEN_EVENT, onEvent);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   useEffect(() => {
     const d = desktop();
     if (!d?.onExternalOpen) return; // web（ブラウザ）では何もしない
     const off = d.onExternalOpen((raw: unknown) => {
+      // 電子カルテの患者を開く要求は、前の待ちを打ち切って、いつでも受ける（連続で患者が切り替わるため）
+      const parsed = normalizeMsg(raw);
+      if (parsed.ok && parsed.req.latest && parsed.req.patientId) {
+        void runLatest(parsed.req.patientId);
+        return;
+      }
       // 要求は 1 件ずつ処理する（連続で届いても、画面の選択を取り合わない）
       if (busy.current) return;
       busy.current = true;

@@ -236,20 +236,25 @@ public class PrefetchService {
                 found++;
                 String uid = r.studyInstanceUid();
                 hold(uid, until);
-                long have = instances.countByStudyInstanceUid(uid);
                 int expected = r.numberOfStudyRelatedInstances();
-                if (have > 0 && (expected <= 0 || have >= expected)) {
+                // 電子カルテ連携の先取りと同じ検査を同時に取りに行かない（先に取り終えた側の結果を、もう片方は「揃っている」と見る）
+                String outcome = StudyFetchLocks.withLock(uid, () -> {
+                    long have = instances.countByStudyInstanceUid(uid);
+                    if (have > 0 && (expected <= 0 || have >= expected)) {
+                        return PrefetchItem.EXISTING;
+                    }
+                    String err = retrieve(cfg, pacs, uid);
+                    return err == null ? PrefetchItem.RETRIEVED : "FAILED:" + err;
+                });
+                if (PrefetchItem.EXISTING.equals(outcome)) {
                     existing++;
                     items.save(new PrefetchItem(run.getId(), uid, PrefetchItem.EXISTING, null));
-                    continue;
-                }
-                String err = retrieve(cfg, pacs, uid);
-                if (err == null) {
+                } else if (PrefetchItem.RETRIEVED.equals(outcome)) {
                     retrieved++;
                     items.save(new PrefetchItem(run.getId(), uid, PrefetchItem.RETRIEVED, null));
                 } else {
                     failed++;
-                    items.save(new PrefetchItem(run.getId(), uid, PrefetchItem.FAILED, err));
+                    items.save(new PrefetchItem(run.getId(), uid, PrefetchItem.FAILED, outcome.substring("FAILED:".length())));
                 }
             }
         }

@@ -29,6 +29,21 @@ describe("normalizeMsg", () => {
   });
 });
 
+describe("normalizeMsg: 直近の検査（latest・電子カルテ連携）", () => {
+  it("patientId だけと組む latest は通る", () => {
+    expect(normalizeMsg({ ok: true, req: { patientId: "P1", latest: true } })).toEqual({ ok: true, req: { patientId: "P1", latest: true } });
+  });
+  it("latest が true 以外・患者 ID なし・検査や日付と一緒は、開かない", () => {
+    expect(normalizeMsg({ ok: true, req: { patientId: "P1", latest: "yes" } }).ok).toBe(false);
+    expect(normalizeMsg({ ok: true, req: { patientId: "P1", latest: false } }).ok).toBe(false);
+    expect(normalizeMsg({ ok: true, req: { latest: true } }).ok).toBe(false);
+    expect(normalizeMsg({ ok: true, req: { patientId: "P1", latest: true, studyDate: "20260101" } }).ok).toBe(false);
+    expect(normalizeMsg({ ok: true, req: { patientId: "P1", latest: true, studyInstanceUid: "1.2" } }).ok).toBe(false);
+    // 従来どおり: latest なしの patientId だけは、検査日が無いので開かない
+    expect(normalizeMsg({ ok: true, req: { patientId: "P1" } }).ok).toBe(false);
+  });
+});
+
 describe("toFilters", () => {
   it("UID があれば UID だけ", () => {
     expect(toFilters({ studyInstanceUid: "1.2", patientId: "P", studyDate: "20260101" })).toEqual({ studyInstanceUid: "1.2" });

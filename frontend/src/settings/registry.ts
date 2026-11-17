@@ -659,6 +659,13 @@ export const SETTINGS_REGISTRY: CategoryDef[] = [
     sections: [],
   },
   {
+    // 電子カルテ連携は専用パネル（監視するファイル・自動で開く・過去検査の取り込みと状態）。SettingsDialog で特別扱い。standalone のみ動く。
+    id: "emr",
+    labelKey: "settings.cat.emr",
+    icon: "🏥",
+    sections: [],
+  },
+  {
     id: "dicom",
     labelKey: "settings.cat.dicom",
     icon: "🌐",
@@ -805,6 +812,14 @@ export const SETTINGS_REGISTRY: CategoryDef[] = [
     id: "compute",
     labelKey: "settings.cat.compute",
     icon: "🧮",
+    sections: [],
+  },
+  {
+    // 外部 AI クライアント（MCP）の接続も専用パネル。設定は main の userData/mcp.json（backend に載せない）。
+    // オンにするときの確認は main が描く。メインの窓以外からは読み書きできない。
+    id: "mcp",
+    labelKey: "settings.cat.mcp",
+    icon: "🔌",
     sections: [],
   },
   {

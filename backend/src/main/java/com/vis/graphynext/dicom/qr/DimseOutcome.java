@@ -37,11 +37,50 @@ public record DimseOutcome(Kind kind, Integer status, String errorComment, Strin
 
     private static final Pattern RSP = Pattern.compile(
             "C-(?:FIND|GET|MOVE)-RSP\\[pcid=\\d+, status=([0-9a-fA-F]+)H(?:, errorComment=([^\\r\\n\\]]*))?");
+    /** A-ASSOCIATE-RQ のダンプの「PC の番号 → 抽象構文（SOP クラス UID）」。 */
+    private static final Pattern PC_AS = Pattern.compile("PresentationContext\\[id: (\\d+)\\s+as: ([0-9.]+)");
+    /** A-ASSOCIATE-AC のダンプの「PC の番号 → 結果（0=受理、3=抽象構文の拒否、4=転送構文の拒否…）」。 */
+    private static final Pattern PC_RESULT = Pattern.compile("PresentationContext\\[id: (\\d+)\\s+result: (\\d+) - ([\\w-]+)");
     private static final Pattern RJ = Pattern.compile(
             "A-ASSOCIATE-RJ\\[result: \\d+ - ([\\w-]+), source: \\d+ - ([\\w-]+), reason: \\d+ - ([\\w-]+)\\]");
 
     public boolean ok() {
         return kind == Kind.OK;
+    }
+
+    private static final Pattern STATE = Pattern.compile("enter state: (Sta\\d+) - ([^\\r\\n]+)");
+
+    /**
+     * ツールの実行結果を読む。時間切れ（強制終了）のときは、<b>それまでに受け取れていた応答の status</b> を生かす
+     * （応答を受け取ったあと、解放に応じない相手を待ち続けた場合）。status が無ければ時間切れで、理由に最後の状態遷移
+     * （Sta5=関連付けの応答待ち／Sta6=応答待ち／Sta7=解放待ち）を入れる。相手が先に拒否・エラーを返していたものは、そのまま。
+     */
+    public static DimseOutcome parse(Dcm4cheTools.Result r) {
+        if (!r.timedOut()) {
+            return parse(r.exitCode(), r.output());
+        }
+        DimseOutcome o = parse(-1, r.output());
+        switch (o.kind()) {
+            case OK, STATUS_ERROR, SERVICE_REFUSED, ASSOCIATION_REJECTED, UNREACHABLE:
+                // OK は status を受け取れているときだけ（status なしの OK は「終了コード 0」の読みで、時間切れでは起きない）
+                if (o.kind() != Kind.OK || o.status() != null) {
+                    return o;
+                }
+                break;
+            default:
+                break;
+        }
+        return new DimseOutcome(Kind.TIMEOUT, null, null, lastState(r.output()));
+    }
+
+    /** 出力の最後の状態遷移（例: {@code Sta7 - Awaiting A-RELEASE-RP PDU}）。無ければ null。 */
+    static String lastState(String out) {
+        String last = null;
+        Matcher m = STATE.matcher(out == null ? "" : out);
+        while (m.find()) {
+            last = m.group(1) + " - " + m.group(2).trim();
+        }
+        return last;
     }
 
     /**
@@ -77,6 +116,13 @@ public record DimseOutcome(Kind kind, Integer status, String errorComment, Strin
         if (rj.find()) {
             return new DimseOutcome(Kind.ASSOCIATION_REJECTED, null, null, rj.group(3));
         }
+        // 🔴 Q/R の SOP クラス（Patient Root／Study Root／MWL の FIND・MOVE・GET）の PC が、A-ASSOCIATE-AC で受理されなかった。
+        // 相手がそのあと接続を切っても（EOF・Socket closed）、原因は切断ではなく「この AE にその Q/R を許していない」こと
+        // （実機: PSP 中継サーバー）。切断の判定より先に見る。保存用の SOP クラスの拒否は、GET でも普通に起きるので見ない。
+        String refusedPc = refusedQrContext(out);
+        if (refusedPc != null) {
+            return new DimseOutcome(Kind.SERVICE_REFUSED, null, null, refusedPc);
+        }
         if (out.contains("NoPresentationContextException") || out.contains("No Presentation Context for Abstract Syntax")) {
             return new DimseOutcome(Kind.SERVICE_REFUSED, null, null, "abstract-syntax-not-supported");
         }
@@ -97,6 +143,35 @@ public record DimseOutcome(Kind kind, Integer status, String errorComment, Strin
             return new DimseOutcome(Kind.OK, null, null, sawPending ? "status-not-captured" : null);
         }
         return new DimseOutcome(Kind.UNKNOWN, null, null, firstLineWith(out, "findscu:", "getscu:", "movescu:"));
+    }
+
+    /** Q/R（検索・取得）の SOP クラスか。Patient Root／Study Root／Patient-Study の FIND・MOVE・GET と、MWL。 */
+    private static boolean isQrSopClass(String uid) {
+        return uid.startsWith("1.2.840.10008.5.1.4.1.2.") || uid.equals("1.2.840.10008.5.1.4.31");
+    }
+
+    /**
+     * 出力に A-ASSOCIATE-RQ と -AC のダンプがあれば、Q/R の SOP クラスの PC のうち受理されなかったものの理由
+     * （{@code abstract-syntax-not-supported}・{@code transfer-syntaxes-not-supported} など）を返す。無ければ null。
+     */
+    static String refusedQrContext(String out) {
+        java.util.Map<String, String> qrIds = new java.util.HashMap<>();
+        Matcher a = PC_AS.matcher(out);
+        while (a.find()) {
+            if (isQrSopClass(a.group(2))) {
+                qrIds.put(a.group(1), a.group(2));
+            }
+        }
+        if (qrIds.isEmpty()) {
+            return null;
+        }
+        Matcher r = PC_RESULT.matcher(out);
+        while (r.find()) {
+            if (qrIds.containsKey(r.group(1)) && !"0".equals(r.group(2))) {
+                return r.group(3);
+            }
+        }
+        return null;
     }
 
     /**

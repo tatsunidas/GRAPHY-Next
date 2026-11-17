@@ -31,7 +31,6 @@ import java.util.concurrent.TimeUnit;
 import java.util.function.BooleanSupplier;
 
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 /**
  * standalone の C-GET / C-MOVE を、実機 dcm4che ツールと stock dcmqrscp（ピア PACS）で検証する。
@@ -76,7 +75,7 @@ class DicomQrInteropTest {
 
     @Test
     void cFind_fromStockDcmqrscp_returnsStudies() throws Exception {
-        assumeTrue(toolsPresent, "dcm4che ツール未検出のためスキップ");
+        Dcm4cheToolsGate.require(toolsPresent, "dcm4che ツール未検出のためスキップ");
 
         String study = "1.2.qr.find.study";
         try (Peer peer = Peer.startWithPhantom("PIDF", study, "1.2.qr.find.series", "1.2.qr.find.sop", null)) {
@@ -92,7 +91,7 @@ class DicomQrInteropTest {
 
     @Test
     void qrFindSeries_returnsSeriesOfStudy() throws Exception {
-        assumeTrue(toolsPresent, "dcm4che ツール未検出のためスキップ");
+        Dcm4cheToolsGate.require(toolsPresent, "dcm4che ツール未検出のためスキップ");
 
         String study = "1.2.qr.findse.study";
         String series = "1.2.qr.findse.series";
@@ -105,7 +104,7 @@ class DicomQrInteropTest {
 
     @Test
     void cMoveSeries_fromStockDcmqrscp_toOurScp_ingests() throws Exception {
-        assumeTrue(toolsPresent, "dcm4che ツール未検出のためスキップ");
+        Dcm4cheToolsGate.require(toolsPresent, "dcm4che ツール未検出のためスキップ");
 
         int ourScpPort = freePort();
         DicomScpServer ourScp = new DicomScpServer("GRAPHYNEXT", "127.0.0.1", ourScpPort);
@@ -130,7 +129,7 @@ class DicomQrInteropTest {
 
     @Test
     void cGet_fromStockDcmqrscp_ingestsLocally() throws Exception {
-        assumeTrue(toolsPresent, "dcm4che ツール未検出のためスキップ");
+        Dcm4cheToolsGate.require(toolsPresent, "dcm4che ツール未検出のためスキップ");
 
         String study = "1.2.qr.get.study";
         try (Peer peer = Peer.startWithPhantom("PIDG", study, "1.2.qr.get.series", "1.2.qr.get.sop", null)) {
@@ -142,7 +141,7 @@ class DicomQrInteropTest {
 
     @Test
     void cMove_fromStockDcmqrscp_toOurScp_ingests() throws Exception {
-        assumeTrue(toolsPresent, "dcm4che ツール未検出のためスキップ");
+        Dcm4cheToolsGate.require(toolsPresent, "dcm4che ツール未検出のためスキップ");
 
         int ourScpPort = freePort();
         // 自前 SCP（移動先）を AE=GRAPHYNEXT で起動

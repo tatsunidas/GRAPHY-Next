@@ -4,6 +4,7 @@
  */
 package com.vis.graphynext.radiomics;
 
+import com.vis.graphynext.activity.ActiveWork;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -31,7 +32,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * （{@link GlamMapSupport#runWithSettings} が直列化する）。
  */
 @Service
-public class TextureJobService {
+public class TextureJobService implements ActiveWork {
 
     private static final Logger log = LoggerFactory.getLogger(TextureJobService.class);
 
@@ -193,5 +194,23 @@ public class TextureJobService {
                 jobs.remove(finished.get(i).id);
             }
         }
+    }
+
+    @Override
+    public String kind() {
+        return "texture";
+    }
+
+    @Override
+    public int activeCount() {
+        return (int) jobs.values().stream()
+                .filter(j -> j.state == State.QUEUED
+                        || j.state == State.RUNNING)
+                .count();
+    }
+
+    @Override
+    public void cancelAll() {
+        jobs.keySet().forEach(this::cancel);
     }
 }

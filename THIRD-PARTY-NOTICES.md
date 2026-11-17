@@ -15,7 +15,7 @@ trees can be generated from the build manifests:
 |---|---|---|
 | Spring Boot (`org.springframework.boot`) | 3.3.5 | Apache-2.0 |
 | H2 Database Engine (`com.h2database:h2`) | — | EPL-1.0 / MPL-2.0 (dual) |
-| dcm4che (`org.dcm4che:dcm4che-core/-net/-imageio/-json`) | 5.34.3 | MPL-1.1 / LGPL-3.0 / GPL-3.0 (tri-license; used under LGPL) |
+| dcm4che (`org.dcm4che:dcm4che-core/-net/-imageio/-json`) | 5.35.2 | MPL-1.1 / LGPL-3.0 / GPL-3.0 (tri-license; used under LGPL) |
 | Bouncy Castle (`bcprov`) | — | Bouncy Castle License (MIT-style) |
 | RadiomicsJ (`radiomicsj`) | 2.4.1 | Apache-2.0 |
 | JmDNS (`org.jmdns:jmdns`) | 3.6.4 | Apache-2.0 |

@@ -13,11 +13,13 @@ import { RenderEnvPanel } from "./RenderEnvPanel";
 import { PluginManagerPanel } from "./PluginManagerPanel";
 import { AiPanel } from "./AiPanel";
 import { ComputePanel } from "./ComputePanel";
+import { McpPanel } from "./McpPanel";
 import { DbFolderPanel } from "./DbFolderPanel";
 import { GdrivePanel } from "./GdrivePanel";
 import { ImportWatchPanel } from "./ImportWatchPanel";
 import { RetentionPanel } from "./RetentionPanel";
 import { PrefetchPanel } from "./PrefetchPanel";
+import { EmrPanel } from "./EmrPanel";
 import { isDesktop } from "../desktopBridge";
 import { useI18n, type Locale, type TFn } from "../i18n/i18n";
 import { getDateFormat, getTimeFormat, setDateFormat, setTimeFormat, type DateFormat, type TimeFormat } from "../i18n/dateFormat";
@@ -158,6 +160,8 @@ export function SettingsDialog({
               <RetentionPanel />
             ) : category.id === "prefetch" ? (
               <PrefetchPanel />
+            ) : category.id === "emr" ? (
+              <EmrPanel />
             ) : category.id === "ai" ? (
               // 🔴 **AI の設定は backend の Settings に載せない。** 提供元・接続先・モデルは
               //    Electron main の ai-providers.json、鍵は safeStorage（fw/ai-routing-design.md §4.1）。
@@ -166,6 +170,8 @@ export function SettingsDialog({
             ) : category.id === "compute" ? (
               // 接続先は main の compute-endpoints.json、トークンは safeStorage（fw/remote-compute-design.md §4）
               <ComputePanel />
+            ) : category.id === "mcp" ? (
+              <McpPanel />
             ) : category.id === "plugins" ? (
               <PluginManagerPanel />
             ) : category.id === "about" ? (

@@ -17,7 +17,8 @@ import { openResearchUseTerms } from "../help/ResearchUseConsent";
 import { runUpdateCheck } from "../help/UpdateNotice";
 import { useUpdateState } from "../help/updateState";
 import { updateMenuLabel } from "../help/updateLabel";
-import { isDesktop } from "../desktopBridge";
+import { desktop, isDesktop } from "../desktopBridge";
+import { useWindowMenu } from "../window/windowMenuItems";
 
 interface MenuItem {
   label: string;
@@ -42,6 +43,7 @@ export function MenuBar({
   onOpenHelp,
   onOpenMobileUi,
   niftiExport,
+  emrOpen,
 }: {
   isStandalone: boolean;
   canImport: boolean;
@@ -59,6 +61,8 @@ export function MenuBar({
   onOpenMobileUi?: () => void;
   /** ［ファイル］→「NIfTI で書き出し…」。渡されなければ項目を出さない（公開デモ等）。理由があれば押せない。 */
   niftiExport?: { onClick: () => void; disabledReason: string | null };
+  /** ［ファイル］→「電子カルテの患者を開く」。電子カルテ連携が有効なときだけ渡す。 */
+  emrOpen?: { onClick: () => void };
 }) {
   const { t, locale } = useI18n();
   const updateState = useUpdateState();
@@ -83,6 +87,7 @@ export function MenuBar({
     saveStore: (json, opts) => savePluginStore(m.id, opts.patientKey, json, opts.version ?? null),
     deleteStore: (patientKey) => deletePluginStore(m.id, patientKey),
   }));
+  const windowItems = useWindowMenu(t);
   const [open, setOpen] = useState<string | null>(null);
 
   useEffect(() => {
@@ -108,9 +113,14 @@ export function MenuBar({
               testId: "menu-item-nifti-export",
             }]
           : []),
+        ...(emrOpen
+          ? [{ label: t("emr.open.button"), onClick: emrOpen.onClick, title: t("emr.open.hint"), testId: "menu-item-emr-open" }]
+          : []),
         { label: t("main.toolbar.send"), onClick: () => onOpenTool("send"), testId: "menu-item-send" },
         ...(isDemo ? [] : [{ label: t("qr.title"), onClick: () => onOpenViewer("qr") }]),
         { label: t("main.toolbar.nonDicomImport"), onClick: () => onOpenTool("nonDicomImport") },
+        // 終了はデスクトップのみ（web ではブラウザのタブを閉じる）。実行中の処理があれば main が確認する
+        ...(isDesktop() ? [{ label: t("main.menu.exit"), onClick: () => void desktop()?.requestQuit?.(), testId: "menu-item-exit" }] : []),
       ],
     },
     {
@@ -171,6 +181,8 @@ export function MenuBar({
           : []),
       ],
     },
+    // Window メニューはデスクトップのみ（web ではブラウザが窓を管理する）
+    ...(windowItems ? [{ id: "window", label: t("main.menu.window"), items: windowItems }] : []),
     {
       id: "help",
       label: t("main.menu.help"),

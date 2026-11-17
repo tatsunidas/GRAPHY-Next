@@ -12,9 +12,10 @@ const path = require("node:path");
 
 const root = __dirname;
 // batchCli.js は main.js から require されない別の入口（一括抽出の無人実行。`ELECTRON_RUN_AS_NODE` で動かす）。
-const ENTRIES = ["main.js", "preload.js", "splash-preload.js", "batchCli.js"];
+const ENTRIES = ["main.js", "preload.js", "splash-preload.js", "batchCli.js", "mcpCli.js"];
 // require の引数が組み立てられていて（`path.join(__dirname, "batch-cli", "run.cjs")`）たどれず、リリースで生成される（frontend の npm run build:batch-cli）ファイル。
-const GENERATED = ["batch-cli/run.cjs"];
+// mcp/run.cjs は mcpCli.js（MCP の中継 graphy-mcp。外部 AI クライアントが起動する。frontend の npm run build:mcp）の束ね。
+const GENERATED = ["batch-cli/run.cjs", "mcp/run.cjs"];
 
 function buildFiles() {
   return JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8")).build.files;

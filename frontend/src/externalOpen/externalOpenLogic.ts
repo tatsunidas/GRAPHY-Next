@@ -10,6 +10,8 @@ export type ExternalReq = {
   seriesInstanceUid?: string;
   patientId?: string;
   studyDate?: string;
+  /** 患者 ID だけで、その患者の直近の検査を開く（電子カルテ連携）。patientId だけと組む。 */
+  latest?: boolean;
 };
 
 export type ExternalMsg = { ok: true; req: ExternalReq } | { ok: false; reason: string };
@@ -39,7 +41,15 @@ export function normalizeMsg(raw: unknown): ExternalMsg {
     if (typeof r.studyDate !== "string" || !/^\d{8}$/.test(r.studyDate)) return { ok: false, reason: "studyDate の形式が正しくありません。" };
     req.studyDate = r.studyDate;
   }
-  if (!req.studyInstanceUid && !(req.patientId && req.studyDate)) {
+  if (r.latest !== undefined) {
+    if (r.latest !== true) return { ok: false, reason: "latest の形式が正しくありません。" };
+    // latest は、患者 ID だけと組む（検査や日付も指定すると、どちらを開くか曖昧になる）
+    if (!req.patientId || req.studyInstanceUid || req.seriesInstanceUid || req.studyDate) {
+      return { ok: false, reason: "latest は patientId だけと組み合わせてください。" };
+    }
+    req.latest = true;
+  }
+  if (!req.studyInstanceUid && !(req.patientId && req.studyDate) && !req.latest) {
     return { ok: false, reason: "検査を指定してください（studyInstanceUid、または patientId と studyDate）。" };
   }
   return { ok: true, req };

@@ -20,22 +20,30 @@
 #
 # 使い方:
 #   scripts/fetch-dcm4che-tools.sh
-#   DCM4CHE_TOOLS_VERSION=5.34.3 scripts/fetch-dcm4che-tools.sh   # 取得バージョンを固定
+#   DCM4CHE_TOOLS_VERSION=5.35.2 scripts/fetch-dcm4che-tools.sh   # 取得バージョンを上書き（既定は pom の版）
 #   scripts/fetch-dcm4che-tools.sh --check                          # 取得せず、このホスト向けに
 #                                                                  # 揃っているかだけ点検
 #   DCM4CHE_ALL_NATIVES=1 scripts/fetch-dcm4che-tools.sh           # 全プラットフォームの
 #                                                                  # OpenCV ネイティブを置く
 #                                                                  # （クロスビルド用・+113MB）
+#   DCM4CHE_TOOLS_OUT_DIR=~/dcm4che-<版> scripts/fetch-dcm4che-tools.sh --full
+#                                                                  # 配布物を絞らず丸ごと展開する
+#                                                                  # （テストのピア dcmqrscp 用。同梱には使わない）
 #
 # 取得元: dcm4che の SourceForge 配布（GitHub Releases にはバイナリ添付が無いため）。
 #   https://sourceforge.net/projects/dcm4che/files/dcm4che3/
 #
-# backend/pom.xml の dcm4che.version と一致させること（DIMSE プロトコル実装のずれを避ける）。
+# 版の正本は backend/pom.xml の dcm4che.version（DIMSE プロトコル実装のずれを避けるため、既定でそれを読む）。
 set -euo pipefail
 
-VERSION="${DCM4CHE_TOOLS_VERSION:-5.34.3}"
-URL="https://sourceforge.net/projects/dcm4che/files/dcm4che3/${VERSION}/dcm4che-${VERSION}-bin.zip/download"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+POM_VERSION="$(sed -n 's#.*<dcm4che.version>\(.*\)</dcm4che.version>.*#\1#p' "$SCRIPT_DIR/../backend/pom.xml" | head -1)"
+if [ -z "$POM_VERSION" ]; then
+  echo "backend/pom.xml から dcm4che.version を読めません。" >&2
+  exit 1
+fi
+VERSION="${DCM4CHE_TOOLS_VERSION:-$POM_VERSION}"
+URL="https://sourceforge.net/projects/dcm4che/files/dcm4che3/${VERSION}/dcm4che-${VERSION}-bin.zip/download"
 OUT_DIR="${DCM4CHE_TOOLS_OUT_DIR:-$SCRIPT_DIR/../desktop/resources/dcm4che}"
 # このホストに対応する dcm4che の lib/<os-arch> ディレクトリ名。
 #
@@ -99,6 +107,15 @@ TMP_EXTRACT="$(mktemp -d -t dcm4che-tools-extract-XXXXXX)"
 trap 'rm -f "$TMP_ZIP"; rm -rf "$TMP_EXTRACT"' EXIT
 unzip -q "$TMP_ZIP" -d "$TMP_EXTRACT"
 SRC="$TMP_EXTRACT/dcm4che-${VERSION}"
+
+if [ "${1:-}" = "--full" ]; then
+  rm -rf "$OUT_DIR"
+  mkdir -p "$(dirname "$OUT_DIR")"
+  mv "$SRC" "$OUT_DIR"
+  [ -x "$OUT_DIR/bin/dcmqrscp" ] || chmod +x "$OUT_DIR"/bin/* 2>/dev/null || true
+  echo "完了（--full）: $OUT_DIR に dcm4che $VERSION を丸ごと展開しました。"
+  exit 0
+fi
 
 # フル配布は 100+ ツール分の lib（150MB超）を含むが、使うのは findscu/movescu/getscu/storescu
 # の 4 本だけ。各ラッパー(bin/<tool>)の classpath 行から要る jar を集めて、それだけをコピーする

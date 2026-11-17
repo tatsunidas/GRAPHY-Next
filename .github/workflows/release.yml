@@ -27,11 +27,55 @@ permissions:
   contents: write
 
 jobs:
+  # リリース前の dcm4che 関門（1 OS）。
+  #  1. pom が固定している dcm4che が「取り込める最新の安定版」か（古ければここで止める。上げる PR を先に出す）
+  #  2. 実機の dcm4che ツールとの DICOM 通信（C-STORE・C-ECHO・C-FIND・C-GET・C-MOVE）が通るか
+  # 通常の CI は dcm4che のツールを取得せず、この通信テストは黙って「飛ばす」になる。ここでは飛ばさず落とす
+  # （GRAPHY_REQUIRE_DCM4CHE_TOOLS=1）うえ、Skipped が 0 であることも確かめる。落ちたら下書きもインストーラも作らない。
+  # backfill（公開済みタグへの dmg 追加）は古いソースを使うので回さない。
+  dcm4che-gate:
+    name: dcm4che gate (latest + DICOM interop)
+    if: ${{ inputs.backfill_tag == '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+      - name: pom の dcm4che が取り込める最新の安定版か
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: bash scripts/check-dcm4che-latest.sh
+      # ピア役の dcmqrscp は同梱物に無いので、配布 zip を丸ごと ~/dcm4che-<版> へ展開する（Dcm4cheHome が探す場所）。
+      - name: Fetch dcm4che (full)
+        shell: bash
+        run: |
+          v=$(sed -n 's#.*<dcm4che.version>\(.*\)</dcm4che.version>.*#\1#p' backend/pom.xml | head -1)
+          DCM4CHE_TOOLS_OUT_DIR="$HOME/dcm4che-$v" bash scripts/fetch-dcm4che-tools.sh --full
+      - name: DICOM interop tests (Skipped 0)
+        working-directory: backend
+        shell: bash
+        env:
+          GRAPHY_REQUIRE_DCM4CHE_TOOLS: "1"
+        run: |
+          mvn -B -Dfrontend.skip=true -Dtest='DicomInteropTest,DicomQrInteropTest' test \
+            -Dmaven.wagon.http.retryHandler.count=3 \
+            -Dmaven.wagon.httpconnectionManager.ttlSeconds=120
+          grep -h "Tests run" target/surefire-reports/*DicomInteropTest.txt target/surefire-reports/*DicomQrInteropTest.txt
+          if grep -h "Tests run" target/surefire-reports/*DicomInteropTest.txt target/surefire-reports/*DicomQrInteropTest.txt | grep -v "Skipped: 0"; then
+            echo "飛ばされたテストがある"; exit 1
+          fi
+
   # タグと各マニフェストの版数が一致していることを最初に検証する。
   # 一致しないままビルドすると、インストーラ名が旧版のまま公開される
   # （タグ v0.1.7 を package.json=0.1.6 のコミットに打つと 0.1.6 の資産が出る、の再発防止）。
   verify-version:
     name: Verify tag == code version
+    needs: dcm4che-gate
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     steps:
@@ -129,9 +173,11 @@ jobs:
   # デスクトップ配布物: 各 OS で Electron インストーラをビルド
   desktop:
     name: Desktop (${{ matrix.os }})
-    needs: verify-version
-    # タグのときは版数の検証が通ったものだけ。予行演習（verify-version が skipped）でも走らせる。
-    if: ${{ !cancelled() && needs.verify-version.result != 'failure' }}
+    needs: [verify-version, dcm4che-gate]
+    # タグのときは版数の検証と dcm4che 関門が通ったものだけ。予行演習（verify-version が skipped）でも走らせる。
+    # 関門が落ちるとタグでは verify-version が skipped になるので、関門の失敗も明示して止める。
+    # backfill では関門を回さない（skipped）ので、そのまま進む。
+    if: ${{ !cancelled() && needs.verify-version.result != 'failure' && needs.dcm4che-gate.result != 'failure' }}
     strategy:
       # 1 つの OS が落ちても他の OS の結果は最後まで見る（OS ごとに落ち方が違うので）。
       fail-fast: false
@@ -185,6 +231,13 @@ jobs:
           [ -d node_modules/esbuild ] || npm ci
           npm run build:batch-cli
           test -s ../desktop/batch-cli/run.cjs
+      # MCP の中継 graphy-mcp（desktop/mcpCli.js が読む mcp/run.cjs。build.files に入る生成物）。
+      - name: Bundle MCP relay (desktop/mcp/run.cjs)
+        working-directory: frontend
+        shell: bash
+        run: |
+          npm run build:mcp
+          test -s ../desktop/mcp/run.cjs
       - name: Bundle Java 21 runtime (jlink, このOS向け)
         shell: bash
         run: |

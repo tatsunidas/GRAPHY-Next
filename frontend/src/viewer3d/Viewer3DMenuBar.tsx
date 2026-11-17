@@ -9,6 +9,7 @@
  */
 import { useEffect, useState } from "react";
 import { useI18n } from "../i18n/i18n";
+import { useWindowMenu } from "../window/windowMenuItems";
 
 export function Viewer3DMenuBar({
   onOpenCinematic,
@@ -23,20 +24,24 @@ export function Viewer3DMenuBar({
 }) {
   const { t } = useI18n();
   const [open, setOpen] = useState(false);
+  const [winOpen, setWinOpen] = useState(false);
   const [subOpen, setSubOpen] = useState<"repr" | "rotate" | null>(null);
+  const windowItems = useWindowMenu(t);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open && !winOpen) return;
     const close = () => {
       setOpen(false);
+      setWinOpen(false);
       setSubOpen(null);
     };
     window.addEventListener("click", close);
     return () => window.removeEventListener("click", close);
-  }, [open]);
+  }, [open, winOpen]);
 
   const run = (fn: () => void) => {
     setOpen(false);
+    setWinOpen(false);
     setSubOpen(null);
     fn();
   };
@@ -48,6 +53,7 @@ export function Viewer3DMenuBar({
           style={{ ...menuBtn, background: open ? "#1f2937" : "transparent" }}
           onClick={(e) => {
             e.stopPropagation();
+            setWinOpen(false);
             setOpen((v) => !v);
           }}
         >
@@ -98,6 +104,37 @@ export function Viewer3DMenuBar({
           </div>
         )}
       </div>
+      {windowItems && (
+        <div style={{ position: "relative" }}>
+          <button
+            data-testid="viewer3d-menu-window"
+            style={{ ...menuBtn, background: winOpen ? "#1f2937" : "transparent" }}
+            onClick={(e) => {
+              e.stopPropagation();
+              setOpen(false);
+              setSubOpen(null);
+              setWinOpen((v) => !v);
+            }}
+          >
+            {t("main.menu.window")}
+          </button>
+          {winOpen && (
+            <div style={dropdown} onClick={(e) => e.stopPropagation()}>
+              {windowItems.map((it) => (
+                <button
+                  key={it.testId}
+                  data-testid={it.testId}
+                  disabled={it.disabled}
+                  style={it.disabled ? { ...item, color: "#5d6a76", cursor: "default" } : item}
+                  onClick={() => run(it.onClick)}
+                >
+                  {it.label}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

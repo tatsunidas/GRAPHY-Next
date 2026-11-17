@@ -31,7 +31,6 @@ import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 /**
  * 実機にインストールされた dcm4che ツール（storescu / dcmqrscp）との相互運用テスト。
@@ -75,7 +74,7 @@ class DicomInteropTest {
 
     @Test
     void stockStorescu_to_ourScp_storesAndIndexes() throws Exception {
-        assumeTrue(storescu != null, "dcm4che storescu が見つからないためスキップ");
+        Dcm4cheToolsGate.require(storescu != null, "dcm4che storescu が見つからないためスキップ");
 
         int port = freePort();
         DicomScpServer scp = new DicomScpServer("GRAPHYSTORE", "127.0.0.1", port);
@@ -105,7 +104,7 @@ class DicomInteropTest {
 
     @Test
     void ourEchoScu_to_stockDcmqrscp_succeeds() throws Exception {
-        assumeTrue(dcmqrscp != null, "dcm4che dcmqrscp が見つからないためスキップ");
+        Dcm4cheToolsGate.require(dcmqrscp != null, "dcm4che dcmqrscp が見つからないためスキップ");
 
         int port = freePort();
         Path dicomdir = tmp.resolve("peer").resolve("DICOMDIR");

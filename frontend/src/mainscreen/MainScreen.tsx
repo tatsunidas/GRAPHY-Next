@@ -19,6 +19,9 @@ import { Toolbar, type ToolKind } from "./Toolbar";
 import { SearchPanel } from "./SearchPanel";
 import { StatusBar } from "./StatusBar";
 import { useImportWatchStatus } from "./useImportWatchStatus";
+import { useEmrStatus } from "./useEmrStatus";
+import { EMR_OPEN_EVENT } from "../externalOpen/ExternalOpenHost";
+import { refetchEmrPatient } from "../settings/emrApi";
 import { useStoreVersion } from "./useStoreVersion";
 import { isIdle } from "./storeRefreshView";
 import { useReceiveAnonStatus } from "./useReceiveAnonStatus";
@@ -91,6 +94,7 @@ export function MainScreen({
   // 上下 2 ペインの下のペイン（シリーズ一覧の描画先）。split・side でないときは存在しない。
   const [seriesPane, setSeriesPane] = useState<HTMLElement | null>(null);
   const importWatch = useImportWatchStatus(isStandalone);
+  const emr = useEmrStatus(isStandalone && !isDemo);
   const receiveAnon = useReceiveAnonStatus(isStandalone);
   const computeJobsStatus = useComputeJobsStatus(isStandalone);
   // 取り込み直後は、一覧を「いま取り込んだ検査」に絞る（既定の検索条件「今日」では過去の検査が出ないため）。
@@ -464,6 +468,18 @@ export function MainScreen({
       }
     : {};
 
+  /** 電子カルテの患者の直近の検査を開く。まだ取り込みが済んでいなければ、取りに行ってから開く（開く側が待つ）。 */
+  const handleOpenEmr = () => {
+    const st = emr.status;
+    const patient = st?.patient ?? null;
+    if (patient) {
+      const f = st?.fetch;
+      const fresh = f != null && f.patientId === patient.id && f.latestReady;
+      if (!fresh) void refetchEmrPatient().catch(() => undefined);
+    }
+    window.dispatchEvent(new CustomEvent(EMR_OPEN_EVENT, { detail: { patientId: patient?.id ?? "" } }));
+  };
+  const emrOpenProps = isStandalone && !isDemo && emr.status?.enabled && emr.status.valid ? { onClick: handleOpenEmr } : undefined;
   const niftiAvail = niftiExportAvailability({ series: selectedSeries, isStandalone, busy: niftiBusy });
   const handleExportNifti = async () => {
     if (!selectedStudy || !selectedSeries || !niftiAvail.enabled) return;
@@ -496,6 +512,7 @@ export function MainScreen({
         onOpenHelp={onOpenHelp}
         onOpenMobileUi={onOpenMobileUi}
         niftiExport={isDemo ? undefined : { onClick: () => void handleExportNifti(), disabledReason: niftiAvail.enabled ? null : t(niftiAvail.reasonKey) }}
+        emrOpen={emrOpenProps}
       />
       <Toolbar
         isStandalone={isStandalone}
@@ -508,6 +525,7 @@ export function MainScreen({
         onOpenViewer={handleOpenViewer}
         onOpenSettings={onOpenSettings}
         onOpenHelp={onOpenHelp}
+        emrOpen={emrOpenProps}
       />
       {importJob && (
         <ImportProgressBanner
@@ -582,6 +600,7 @@ export function MainScreen({
         status={status}
         error={error}
         importWatch={importWatch.view}
+        emr={emr.bar}
         storeChanged={storeRefresh.notify}
         receiveAnon={receiveAnon}
         computeJobs={computeJobsStatus.counts}

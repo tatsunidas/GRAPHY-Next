@@ -81,6 +81,68 @@ class DimseOutcomeTest {
     }
 
     @Test
+    void qrContextRefusedInTheAssociation_thenTheyCloseTheSocket_isRefusedNotDropped() throws IOException {
+        // 実機（PSP）: A-ASSOCIATE-AC で Q/R の SOP クラスが result: 3 で拒否され、そのあと EOF。切断ではなく、サービスの拒否
+        DimseOutcome o = parse("find-pc-refused-then-eof");
+        assertEquals(Kind.SERVICE_REFUSED, o.kind());
+        assertEquals("abstract-syntax-not-supported", o.reason());
+        // 転送構文の拒否（result: 4）は、理由を区別して返す
+        DimseOutcome t = parse("get-pc-ts-refused");
+        assertEquals(Kind.SERVICE_REFUSED, t.kind());
+        assertEquals("transfer-syntaxes-not-supported", t.reason());
+    }
+
+    @Test
+    void storagePcRejectionsAlone_doNotMakeItARefusal_andAcceptedQrPcThenEofIsStillDropped() throws IOException {
+        // GET の成功: Q/R の PC は受理（result: 0）、保存用の PC は多数が拒否（result: 3）。これは拒否ではない
+        assertEquals(Kind.OK, parse("get-ok").kind());
+        // Q/R の PC は受理されたうえで、要求を送ったあとに切られた: 従来どおり「切断」
+        assertEquals(Kind.DROPPED, parse("find-drop").kind());
+    }
+
+    private static Dcm4cheTools.Result timedOut(String out) {
+        return new Dcm4cheTools.Result(-1, out, true);
+    }
+
+    @Test
+    void timedOut_withTheFinalStatusAlreadyReceived_isOk_becauseOnlyTheReleaseHung() {
+        // 実機（PSP）: C-FIND-RSP status 0H を受け取ったあと、A-RELEASE-RP を待って止まり、強制終了した
+        String out = "... >> 1:C-FIND-RSP[pcid=1, status=0H\n11:00:00.000 DEBUG - GN->PEER(1): enter state: Sta7 - Awaiting A-RELEASE-RP PDU\n";
+        DimseOutcome o = DimseOutcome.parse(timedOut(out));
+        assertEquals(Kind.OK, o.kind());
+        assertEquals(0, o.status());
+        // 受け取った status がエラーなら、時間切れでなくそのエラー
+        DimseOutcome e = DimseOutcome.parse(timedOut(">> 1:C-FIND-RSP[pcid=1, status=a900H, errorComment=x\n"));
+        assertEquals(Kind.STATUS_ERROR, e.kind());
+    }
+
+    @Test
+    void timedOut_withoutAStatus_isATimeout_andSaysWhereItStopped() {
+        for (String[] c : new String[][] {
+                {"Sta5 - Awaiting A-ASSOCIATE-AC or A-ASSOCIATE-RJ PDU", "Sta5"},
+                {"Sta6 - Association established and ready for data transfer", "Sta6"},
+                {"Sta7 - Awaiting A-RELEASE-RP PDU", "Sta7"}}) {
+            DimseOutcome o = DimseOutcome.parse(timedOut("11:00:00.000 DEBUG - GN->PEER(1): enter state: " + c[0] + "\n"));
+            assertEquals(Kind.TIMEOUT, o.kind(), c[1]);
+            assertTrue(o.reason().startsWith(c[1]), o.reason());
+        }
+        // 最後の状態が使われる（途中の状態でなく）
+        DimseOutcome last = DimseOutcome.parse(timedOut("enter state: Sta5 - a\nenter state: Sta6 - b\nenter state: Sta7 - c\n"));
+        assertEquals("Sta7 - c", last.reason());
+        // 何も出ていないなら、理由は無し
+        DimseOutcome none = DimseOutcome.parse(timedOut(""));
+        assertEquals(Kind.TIMEOUT, none.kind());
+        assertNull(none.reason());
+    }
+
+    @Test
+    void timedOut_afterTheQrContextWasRefused_staysAServiceRefusal() throws IOException {
+        // 拒否されたあとに止まった（切断でも時間切れでもなく、サービスの拒否が原因）
+        String txt = Files.readString(Path.of("src/test/resources/findscu-output/find-pc-refused-then-eof.txt"));
+        assertEquals(Kind.SERVICE_REFUSED, DimseOutcome.parse(timedOut(txt.substring(txt.indexOf('\n') + 1))).kind());
+    }
+
+    @Test
     void unreachable() throws IOException {
         assertEquals(Kind.UNREACHABLE, parse("find-refused").kind());
     }

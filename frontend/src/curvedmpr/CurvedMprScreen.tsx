@@ -18,7 +18,6 @@
  * 起動: `localStorage("graphy-curvedmpr-ctx")`（2D ビューアの View メニュー）。standalone のみ。
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { imageLoader, metaData, cache } from "@cornerstonejs/core";
 import { fetchSeries, fetchInstances, fetchSeriesLayout, prefetchSeries, type AppStatus, type SeriesLayoutDto } from "../api";
 import { ensureCornerstoneInitialized } from "../viewer/cornerstoneSetup";
 import { imageIdForInstance, imageIdForCell } from "../viewer/imageId";
@@ -37,6 +36,9 @@ import {
   type CurvedMprProvenance,
 } from "./curvedMprContext";
 import { countOutOfBounds, toVoxelIndex, type OutOfBoundsSummary } from "./curveBounds";
+import { buildDicomResliceVolume } from "./curvedMprVolume";
+import { SliceDuplicatesError, type VolumeDepthNote } from "../viewer/depthVolume";
+import { VolumeDepthChip } from "../viewer/VolumeDepthChip";
 
 const FRAME_MODES: FrameMode[] = ["FIXED_Z", "ROTATION_MINIMIZING"];
 const PROJECTION_MODES: ProjectionMode[] = ["CENTERLINE_ONLY", "AVERAGE", "MIP", "MINIP"];
@@ -61,17 +63,6 @@ interface WL {
   width: number;
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-type AnyObj = Record<string, any>;
-
-// ── ベクトル小道具 ─────────────────────────────────────────────
-const dot = (a: Vec3, b: Vec3): number => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
-const sub = (a: Vec3, b: Vec3): Vec3 => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
-const cross = (a: Vec3, b: Vec3): Vec3 => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
-const normalize = (a: Vec3): Vec3 => {
-  const n = Math.hypot(a[0], a[1], a[2]) || 1;
-  return [a[0] / n, a[1] / n, a[2] / n];
-};
 const clampInt = (v: number, lo: number, hi: number): number => Math.max(lo, Math.min(hi, Math.round(v)));
 
 // ── VolumeSampler 相当（純関数・direction は正規直交前提） ──
@@ -113,78 +104,6 @@ function imageIdsForCT(
     .map((cell) => imageIdForCell(mode, cell.sopInstanceUid, cell.frame, studyUid, seriesUid));
 }
 
-/**
- * DICOM 実 IPP/IOP から患者座標系(LPS mm) の 3D ボリュームを構築（≒ GRAPHY `VolumeLoader.loadVolumeData`）。
- * origin=法線ソート先頭スライスの IPP、dirK=IPP 進行方向、spacing_z=IPP 間隔。値は実ピクセル
- * （未 prescale のみ rescale→HU。getPixelData が既に HU を返す設定での二重適用＝空気値化を防ぐ）。
- */
-async function buildDicomResliceVolume(imageIds: string[]): Promise<ResliceVolume | null> {
-  try {
-    await Promise.all(imageIds.map((id) => imageLoader.loadAndCacheImage(id).catch(() => null)));
-    const plane0: AnyObj = metaData.get("imagePlaneModule", imageIds[0]) ?? {};
-    const iopRaw = plane0.imageOrientationPatient;
-    if (!Array.isArray(iopRaw) || iopRaw.length < 6) return null;
-    const iop = iopRaw.map(Number);
-    const rowCos: Vec3 = [iop[0], iop[1], iop[2]];
-    const colCos: Vec3 = [iop[3], iop[4], iop[5]];
-    const normal = normalize(cross(rowCos, colCos));
-    const cols = Number(plane0.columns);
-    const rows = Number(plane0.rows);
-    if (!cols || !rows) return null;
-    const ps = plane0.pixelSpacing ?? [1, 1];
-    const psY = Number(ps[0]) || 1;
-    const psX = Number(ps[1]) || 1;
-
-    const recs: Array<{ id: string; ipp: Vec3 }> = [];
-    for (const id of imageIds) {
-      const p: AnyObj = metaData.get("imagePlaneModule", id) ?? {};
-      const ipp = p.imagePositionPatient;
-      if (!Array.isArray(ipp) || ipp.length < 3) continue;
-      recs.push({ id, ipp: [Number(ipp[0]), Number(ipp[1]), Number(ipp[2])] });
-    }
-    if (recs.length < 2) return null;
-    recs.sort((a, b) => dot(a.ipp, normal) - dot(b.ipp, normal));
-
-    const D = recs.length;
-    const origin = recs[0].ipp;
-    const spanVec = sub(recs[D - 1].ipp, origin);
-    const span = Math.hypot(spanVec[0], spanVec[1], spanVec[2]);
-    const sliceSpacing = span / (D - 1) || Number(plane0.sliceThickness) || 1;
-    const dirK: Vec3 = span > 1e-6 ? normalize(spanVec) : normal;
-
-    const sliceLen = cols * rows;
-    const out = new Int16Array(sliceLen * D);
-    let filled = 0;
-    let min = Infinity;
-    for (let k = 0; k < D; k++) {
-      const id = recs[k].id;
-      const plane: AnyObj = metaData.get("imagePlaneModule", id) ?? {};
-      if (Number(plane.columns || cols) !== cols || Number(plane.rows || rows) !== rows) continue;
-      const img = cache.getImage(id) as AnyObj | undefined;
-      if (!img?.getPixelData) continue;
-      const px = img.getPixelData() as ArrayLike<number>;
-      if (!px || px.length < sliceLen) continue;
-      const preScaled = !!(img.preScale && img.preScale.scaled);
-      const lut: AnyObj = metaData.get("modalityLutModule", id) ?? {};
-      const slope = preScaled ? 1 : Number((lut.rescaleSlope ?? img.slope) ?? 1);
-      const intercept = preScaled ? 0 : Number((lut.rescaleIntercept ?? img.intercept) ?? 0);
-      const base = k * sliceLen;
-      for (let i = 0; i < sliceLen; i++) {
-        const v = Math.round(px[i] * slope + intercept);
-        out[base + i] = v;
-        if (v < min) min = v;
-      }
-      filled++;
-    }
-    if (filled < 2) return null;
-    if (!Number.isFinite(min)) min = 0;
-    const direction = [rowCos[0], rowCos[1], rowCos[2], colCos[0], colCos[1], colCos[2], dirK[0], dirK[1], dirK[2]];
-    return { data: out, dimensions: [cols, rows, D], spacing: [psX, psY, sliceSpacing], origin, direction, airValue: min };
-  } catch {
-    return null;
-  }
-}
-
 /** ボリューム中央スライスから妥当な W/L 既定を推定（CT は HU 窓、その他はデータ範囲）。 */
 function defaultWL(vol: ResliceVolume, modality: string | null): WL {
   if ((modality ?? "").toUpperCase() === "CT") return { center: 40, width: 400 };
@@ -222,6 +141,7 @@ export function CurvedMprScreen({ status }: { status: AppStatus | null }) {
   const [message, setMessage] = useState("");
   const [title, setTitle] = useState("");
   const [sliceZ, setSliceZ] = useState(0);
+  const [depthNote, setDepthNote] = useState<VolumeDepthNote | null>(null);
   const [wl, setWl] = useState<WL>({ center: 40, width: 400 });
   const [params, setParams] = useState<CurveParamsUi>({
     frameMode: "FIXED_Z",
@@ -528,12 +448,14 @@ export function CurvedMprScreen({ status }: { status: AppStatus | null }) {
         }
       }
 
-      const vol = await buildDicomResliceVolume(imageIds);
-      if (!vol) {
+      const built = await buildDicomResliceVolume(imageIds);
+      if (!built) {
         setPhase("error");
         setMessage(t("curvedMpr.needVolume"));
         return;
       }
+      const vol = built.volume;
+      setDepthNote(built.depthNote);
       volRef.current = vol;
       const inPlane = (vol.spacing[0] + vol.spacing[1]) / 2;
       outSpacingRef.current = Math.max(0.1, inPlane);
@@ -571,7 +493,9 @@ export function CurvedMprScreen({ status }: { status: AppStatus | null }) {
       setMessage(
         isCacheSizeExceeded(e)
           ? t("common.volumeMemExceeded", { budgetMb: String(getAppliedVolumeMaxMb()) })
-          : `${t("curvedMpr.error")}: ${String(e)}`,
+          : e instanceof SliceDuplicatesError
+            ? t("volumeDepth.duplicates")
+            : `${t("curvedMpr.error")}: ${String(e)}`,
       );
     }
   }, [mode, t, redrawAll, recomputePreview, applyContextCurve]);
@@ -836,6 +760,7 @@ export function CurvedMprScreen({ status }: { status: AppStatus | null }) {
       <div style={header}>
         <span style={hTitle}>{t("curvedMpr.title")}</span>
         {title && <span style={hSeries}>{title}</span>}
+        <VolumeDepthChip note={depthNote} style={dimChip} />
         {dimInfo && (dimInfo.nC > 1 || dimInfo.nT > 1) && (
           <span style={dimChip}>{t("curvedMpr.dimUsed", { c: String(dimInfo.c), tt: String(dimInfo.t) })}</span>
         )}

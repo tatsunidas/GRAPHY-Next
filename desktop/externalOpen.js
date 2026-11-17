@@ -30,12 +30,12 @@ function isUid(v) {
 
 /**
  * 許可したキーの値を検証して、要求にする。
- * @param {{studyInstanceUid?: string, seriesInstanceUid?: string, patientId?: string, studyDate?: string}} raw
+ * @param {{studyInstanceUid?: string, seriesInstanceUid?: string, patientId?: string, studyDate?: string, latest?: boolean|string}} raw
  * @returns {{ok:true, req:object}|{ok:false, reason:string}}
  */
 function validate(raw) {
   const req = {};
-  const { studyInstanceUid, seriesInstanceUid, patientId, studyDate } = raw;
+  const { studyInstanceUid, seriesInstanceUid, patientId, studyDate, latest } = raw;
   const hasStudy = studyInstanceUid !== undefined;
   const hasPatient = patientId !== undefined;
   if (!hasStudy && !hasPatient) {
@@ -55,6 +55,17 @@ function validate(raw) {
       return { ok: false, reason: `patientId の形式が正しくありません（1〜${PATIENT_ID_MAX} 文字、制御文字なし）。` };
     }
     req.patientId = patientId;
+  }
+  if (latest !== undefined) {
+    // 患者 ID だけで、その患者の直近の検査を開く（電子カルテ連携）。検査・日付と一緒だと、どちらを開くか曖昧になるので断る。
+    if (!(latest === true || latest === "1" || latest === "true")) {
+      return { ok: false, reason: "latest の形式が正しくありません（1 または true）。" };
+    }
+    if (!hasPatient || hasStudy || seriesInstanceUid !== undefined || studyDate !== undefined) {
+      return { ok: false, reason: "latest は patientId だけで指定してください（検査・シリーズ・検査日とは組み合わせられません）。" };
+    }
+    req.latest = true;
+    return { ok: true, req };
   }
   if (studyDate !== undefined) {
     if (typeof studyDate !== "string" || !DATE_RE.test(studyDate) || !validYmd(studyDate)) {
@@ -92,7 +103,7 @@ function parseUrl(arg) {
   }
   if (u.hostname.toLowerCase() !== "open") return { ok: false, reason: "対応していない操作です（graphynext://open だけが使えます）。" };
   const raw = {};
-  for (const key of ["studyInstanceUid", "seriesInstanceUid", "patientId", "studyDate"]) {
+  for (const key of ["studyInstanceUid", "seriesInstanceUid", "patientId", "studyDate", "latest"]) {
     const all = u.searchParams.getAll(key);
     if (all.length > 1) return { ok: false, reason: `${key} が複数指定されています。` };
     if (all.length === 1) raw[key] = all[0];

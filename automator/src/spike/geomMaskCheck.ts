@@ -45,6 +45,7 @@ import { openFirstSeriesInViewer } from "../checklist/items/shared/helpers.js";
 import { dragOnCanvasHost } from "../common/pointerDrag.js";
 import { createStepRecorder } from "../checklist/types.js";
 import { AUTOMATOR_ROOT } from "../fixtures/manifest.js";
+import { exitWithSummary, exitWithGeomError } from "./computeSpikeShared.js";
 
 const OUT_DIR = path.join(AUTOMATOR_ROOT, ".results", "geom-mask-check");
 const HOST = "viewer2d-canvas-host";
@@ -102,7 +103,7 @@ function makePhantom(): { dir: string; truth: Truth } {
   fs.mkdirSync(dir, { recursive: true });
   const seed = String(Date.now() % 1_000_000_000); // UID は実行ごとに変える
   const r = spawnSync(
-    "python3",
+    process.env.GRAPHY_TEST_PYTHON ?? "python3",
     ["-I", path.join(AUTOMATOR_ROOT, "scripts", "make-geom-verify-phantom.py"), dir, "--uid-seed", seed],
     { encoding: "utf8" },
   );
@@ -291,16 +292,18 @@ async function main(): Promise<void> {
   } finally {
     await d.stop().catch(() => {});
   }
-  let nf = 0;
+  let pass = 0;
+  const allFail: string[] = [], allUnmet: string[] = [];
   console.log("\n==== 集計（幾何: 合格 / 失敗 / 未達）====");
   for (const [g, t] of tallies) {
     console.log(`${g}: 合格 ${t.pass} / 失敗 ${t.fail.length} / 未達 ${t.unmet.length}`);
-    nf += t.fail.length;
+    pass += t.pass;
+    allFail.push(...t.fail);
+    allUnmet.push(...t.unmet);
     for (const f of t.fail) console.log(`  [失敗] ${f}`);
     for (const u of t.unmet) console.log(`  [未達] ${u}`);
   }
-  // 負例では「落ちること」が合格。
-  process.exitCode = NEG ? (nf > 0 ? 0 : 1) : nf ? 1 : 0;
+  exitWithSummary({ name: "Mask", passed: pass, failures: allFail, unreached: allUnmet, neg: !!NEG });
 }
 
 async function runOne(d: DesktopDriver, dir: string, truth: Truth, s: SeriesTruth): Promise<void> {
@@ -760,7 +763,4 @@ async function runOne(d: DesktopDriver, dir: string, truth: Truth, s: SeriesTrut
   await v.close().catch(() => {});
 }
 
-main().catch((e) => {
-  console.error(e);
-  process.exit(2);
-});
+main().catch((e) => exitWithGeomError("Mask", e));

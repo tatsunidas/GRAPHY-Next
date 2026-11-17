@@ -4,6 +4,8 @@
  */
 package com.vis.graphynext.plugin;
 
+import com.vis.graphynext.activity.ActiveWork;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -48,7 +50,7 @@ import java.util.function.BooleanSupplier;
  * {@code GET /api/plugin-jobs/{jobId}/artifact} で配る。
  */
 @Service
-public class PluginJobService {
+public class PluginJobService implements ActiveWork {
 
     private static final Logger log = LoggerFactory.getLogger(PluginJobService.class);
 
@@ -110,11 +112,14 @@ public class PluginJobService {
         volatile String error;
         final AtomicBoolean cancelled = new AtomicBoolean();
         final Task task;
+        /** 計算機ごとの列に載るジョブ（計算ジョブ）。終了前の一覧では compute 側が数えるので、plugin では数えない。 */
+        final boolean serial;
 
-        Job(String id, String pluginId, Task task) {
+        Job(String id, String pluginId, Task task, boolean serial) {
             this.id = id;
             this.pluginId = pluginId;
             this.task = task;
+            this.serial = serial;
         }
 
         long elapsedMs() {
@@ -253,7 +258,7 @@ public class PluginJobService {
      * 順番待ちの間のジョブは {@link State#QUEUED} のまま。
      */
     public Status submitSerialTask(String laneKey, String pluginId, Task task) {
-        return enqueue(serialLanes.computeIfAbsent(laneKey, k -> new SerialLane(computePool)), pluginId, task);
+        return enqueue(serialLanes.computeIfAbsent(laneKey, k -> new SerialLane(computePool)), pluginId, task, true);
     }
 
     /**
@@ -262,7 +267,7 @@ public class PluginJobService {
      */
     public Status submitSerialTaskLow(String laneKey, String pluginId, Task task) {
         SerialLane lane = serialLanes.computeIfAbsent(laneKey, k -> new SerialLane(computePool));
-        return enqueue(lane::executeLow, pluginId, task);
+        return enqueue(lane::executeLow, pluginId, task, true);
     }
 
     /** 1 本ずつ順に走らせる列。順番が来たときだけ土台のスレッドを借りる。 */
@@ -316,8 +321,12 @@ public class PluginJobService {
     }
 
     private Status enqueue(Executor lane, String pluginId, Task task) {
+        return enqueue(lane, pluginId, task, false);
+    }
+
+    private Status enqueue(Executor lane, String pluginId, Task task, boolean serial) {
         sweep();
-        Job job = new Job(UUID.randomUUID().toString(), pluginId, task);
+        Job job = new Job(UUID.randomUUID().toString(), pluginId, task, serial);
         jobs.put(job.id, job);
         BiConsumer<Double, String> progress = (p, msg) -> {
             if (p != null && Double.isFinite(p)) job.progress = Math.max(0, Math.min(1, p));
@@ -391,5 +400,24 @@ public class PluginJobService {
             finished.sort(Comparator.comparingLong(j -> j.finishedAt));
             for (int i = 0; i < finished.size() - MAX_FINISHED_JOBS; i++) jobs.remove(finished.get(i).id);
         }
+    }
+
+    @Override
+    public String kind() {
+        return "plugin";
+    }
+
+    @Override
+    public int activeCount() {
+        return (int) jobs.values().stream().filter(PluginJobService::activeNonSerial).count();
+    }
+
+    @Override
+    public void cancelAll() {
+        jobs.values().stream().filter(PluginJobService::activeNonSerial).map(j -> j.id).toList().forEach(this::cancel);
+    }
+
+    private static boolean activeNonSerial(Job j) {
+        return !j.serial && (j.state == State.QUEUED || j.state == State.RUNNING);
     }
 }
