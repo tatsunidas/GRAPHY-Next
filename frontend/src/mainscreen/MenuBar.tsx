@@ -18,6 +18,7 @@ import { runUpdateCheck } from "../help/UpdateNotice";
 import { useUpdateState } from "../help/updateState";
 import { updateMenuLabel } from "../help/updateLabel";
 import { isDesktop } from "../desktopBridge";
+import { useWindowMenu } from "../window/windowMenuItems";
 
 interface MenuItem {
   label: string;
@@ -86,6 +87,7 @@ export function MenuBar({
     saveStore: (json, opts) => savePluginStore(m.id, opts.patientKey, json, opts.version ?? null),
     deleteStore: (patientKey) => deletePluginStore(m.id, patientKey),
   }));
+  const windowItems = useWindowMenu(t);
   const [open, setOpen] = useState<string | null>(null);
 
   useEffect(() => {
@@ -177,6 +179,8 @@ export function MenuBar({
           : []),
       ],
     },
+    // Window メニューはデスクトップのみ（web ではブラウザが窓を管理する）
+    ...(windowItems ? [{ id: "window", label: t("main.menu.window"), items: windowItems }] : []),
     {
       id: "help",
       label: t("main.menu.help"),

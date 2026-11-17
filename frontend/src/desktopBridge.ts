@@ -46,6 +46,12 @@ export interface GpuStatus {
 /** 描画に使う GPU の選択。auto＝OS の既定、high＝高性能 GPU。 */
 export type RenderGpuChoice = "auto" | "high";
 
+/** Window メニューの操作。fullscreen はフレームレス最大化の切り替え、maximize は枠つきの最大化、restore は通常の大きさへ戻す。 */
+export type WindowAction = "fullscreen" | "maximize" | "minimize" | "restore";
+export type WindowStateResult =
+  | { ok: true; maximized: boolean; fullscreen: boolean; minimized: boolean }
+  | { ok: false };
+
 /** GPU 1 つ分の搭載メモリ。 */
 export interface GpuMemoryEntry {
   name: string;
@@ -426,6 +432,9 @@ export interface GraphyDesktop {
   /** 常駐の設定（閉じてもトレイに残る・ログイン時に起動する）。メインの窓以外では null / forbidden。 */
   getBackground?: () => Promise<BackgroundState | null>;
   setBackground?: (patch: Partial<Pick<BackgroundState, "keepInTray" | "launchAtLogin">>) => Promise<{ ok: boolean; error?: string; state?: BackgroundState }>;
+  /** 外部 AI クライアント（MCP）の接続の設定。メインの窓以外では null / forbidden。オンにするときの確認は main が描く。 */
+  getMcp?: () => Promise<McpState | null>;
+  setMcp?: (patch: Partial<McpPrefs>) => Promise<{ ok: boolean; error?: string; state?: McpState }>;
   /** 2d/3d/mpr/slicer 等の独立ビューアを新規ウィンドウで開く。 */
   openViewer?: (screen: string) => Promise<void>;
   /** 外部（RIS など）から「この検査を開く」を受ける（main が検証した要求だけ）。購読を外す関数を返す。メインウィンドウだけが使う。 */
@@ -512,6 +521,10 @@ export interface GraphyDesktop {
   ) => Promise<{ ok: true; folder: string; mode?: GdriveMode } | { ok: false; error?: string; canceled?: boolean }>;
   /** ネイティブダイアログ（confirm/alert/prompt）後にレンダラのキーボードフォーカスを復帰させる。 */
   refocus?: () => void;
+  /** Window メニュー: この窓を操作する（フルスクリーンは切り替え。restore は通常の大きさへ）。デスクトップのみ。 */
+  windowControl?: (action: WindowAction) => Promise<WindowStateResult>;
+  /** この窓の今の表示状態。 */
+  windowState?: () => Promise<WindowStateResult>;
   /** 秘密情報を OS のキーチェーンで暗号化して保存する（デスクトップのみ）。 */
   secretSet?: (key: string, value: string) => Promise<SecretSetResult>;
   /** 秘密情報の「有無」だけを問い合わせる。**値は返らない。** */
@@ -867,6 +880,21 @@ export function desktop(): GraphyDesktop | undefined {
 }
 
 export const isDesktop = (): boolean => !!desktop();
+
+/** MCP の設定（既定はすべてオフ）。desktop/mcpPrefs.js と同じ 3 つ。 */
+export interface McpPrefs {
+  enabled: boolean;
+  includePhi: boolean;
+  allowAnalysis: boolean;
+}
+
+/** `graphy:mcp-get` の結果。readError は設定ファイルが読めなかった理由（すべてオフに戻してある）、relayCommand はパッケージ版だけ。 */
+export interface McpState {
+  prefs: McpPrefs;
+  readError: "unreadable" | "corrupt" | null;
+  listening: boolean;
+  relayCommand?: string;
+}
 
 /** 常駐の設定と、この環境で使えるか（ログイン時の起動は、パッケージ版の Windows・macOS だけ。トレイは macOS 以外）。 */
 export interface BackgroundState {

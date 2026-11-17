@@ -815,6 +815,14 @@ export const SETTINGS_REGISTRY: CategoryDef[] = [
     sections: [],
   },
   {
+    // 外部 AI クライアント（MCP）の接続も専用パネル。設定は main の userData/mcp.json（backend に載せない）。
+    // オンにするときの確認は main が描く。メインの窓以外からは読み書きできない。
+    id: "mcp",
+    labelKey: "settings.cat.mcp",
+    icon: "🔌",
+    sections: [],
+  },
+  {
     // プラグイン（導入・有効無効・削除）は専用パネル（/api/plugin-manager/*）。SettingsDialog で特別扱い。
     id: "plugins",
     labelKey: "settings.cat.plugins",

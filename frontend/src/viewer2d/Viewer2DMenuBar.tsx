@@ -38,6 +38,7 @@ import { runUpdateCheck } from "../help/UpdateNotice";
 import { useUpdateState } from "../help/updateState";
 import { updateMenuLabel } from "../help/updateLabel";
 import { isDesktop } from "../desktopBridge";
+import { useWindowMenu } from "../window/windowMenuItems";
 import { openThreshold } from "../viewer/thresholdTool";
 
 interface MenuItem {
@@ -53,6 +54,7 @@ interface MenuItem {
   render?: (close: () => void) => React.ReactNode;
   /** E2E検証(automator)用の安定セレクタ。翻訳テキストに依存させたくない項目にのみ付与する。 */
   testId?: string;
+  disabled?: boolean;
 }
 
 /** レイアウトのプリセット（行 × 列）。 */
@@ -273,6 +275,7 @@ export function Viewer2DMenuBar({
   );
   /** `category: "ai"` は「解析 ＞ AI ▸」にまとめる（どちらのサーフェスに宣言しても）。 */
   const pluginGroups = groupViewerPluginItems(pluginItems, analysisPluginItems);
+  const windowItems = useWindowMenu(t);
   const [open, setOpen] = useState<string | null>(null);
   useEffect(() => {
     const close = () => setOpen(null);
@@ -548,6 +551,7 @@ export function Viewer2DMenuBar({
             { label: t("system.memoryMonitor"), onClick: () => void openMemoryMonitor(t) },
           ],
     },
+    { id: "window", label: t("main.menu.window"), items: windowItems ?? [] },
     {
       id: "help",
       label: t("main.menu.help"),
@@ -633,7 +637,12 @@ function MenuRow({ it, onClose }: { it: MenuItem; onClose: () => void }) {
   return (
     <>
       {sep}
-      <button data-testid={it.testId} onClick={() => { onClose(); it.onClick?.(); }} style={item}>
+      <button
+        data-testid={it.testId}
+        disabled={it.disabled}
+        onClick={() => { onClose(); if (!it.disabled) it.onClick?.(); }}
+        style={it.disabled ? { ...item, color: "#aab2bb", cursor: "default" } : item}
+      >
         {it.checked ? "✓ " : ""}{it.label}
       </button>
     </>
