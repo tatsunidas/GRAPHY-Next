@@ -8,7 +8,7 @@
 1. 起動時の同期で `GRAPHY-Next` と `graphy-next-roadmap` を最新にする。`git fetch && git merge origin/main`（rebase の pull は使わない）。
 2. 実装の前に、機能ごとにプランモードで計画を立て、承認を得る（全体の計画は roadmap の設計にある）。
 3. **段 4c（持ち越し）**: 表示操作（窓幅・スライス・レイアウトなど可逆なもの）とプラグインの AI ツール（`write` は毎回 main で確認）。`viewerRelay.relay` を main 内から呼ぶ道は 4b で作ってある（`mcpViewer`）。`mcpTools.VIEWER_KINDS` に `action`・`pluginTool` を足す前に、確認ダイアログと安全上の面を計画で承認してもらう。画素（`captureView`）は返さない方針のまま（患者情報オンでも返すかは段 5 の後）。
-4. **段 5**: 実機検証（Radiomics の値を本体の画面と突き合わせる、表示操作はスクリーンショット）、配布物を GitHub Actions の Windows・macOS の実ランナーで「インストール → `graphy-mcp` の起動 → `get_status`」、`docs/mcp.md` と `mkdocs.yml` の nav（`cli/graphy-mcp` のコメントが「段 5 で作成」と指している）。
+4. **段 5 の残り**: 配布物の起動検査（installedSmoke [14]）の予行演習の結果（release.yml を `gh workflow run release.yml --ref feat/mcp-stage5 -f local_ai_smoke=false` で起動。Windows・macOS（arm64・intel）・Linux deb の `mcp-output.log` と [14] の合格）を確かめてから、段 5 を閉じる。
 
 ## 1. 現在の状態
 - **完了・マージ済み**: 段 1 = #708、段 2 = #709、段 3 = 中継 `graphy-mcp`（`frontend/src/mcp/{relay,server}.ts` を `npm run build:mcp` で `desktop/mcp/run.cjs` に束ねる。`desktop/mcpCli.js`・`desktop/cli/graphy-mcp(.cmd)`・配布の一覧・CI/release の束ね）。SDK は `@modelcontextprotocol/sdk` 1.32.2（exact、frontend の devDependencies）。束ねは stdio だけ（express・hono・cors・jose などが入ると `build:mcp` が落ちる）。
@@ -17,6 +17,8 @@
 - 中継の挙動: 発見用ファイルを要求ごとに読み直す／最初の接続の同意待ちで一覧が時間切れ（30 秒）になったら空を返し、取れるまで再試行して `tools/list_changed` を送る（拒否なら送らない）／stderr は固定文のみ。
 - 実機（実 Electron・専用ポート・Xvfb）で確認済み: 同意（許可・拒否・遅れて許可）、患者情報オフの出力に患者名・ID・生 UID が 0 件（オンでは出る）、Origin 付き・トークン違い・Host 違い・無効時は 404、Claude Code を実クライアントにした `get_status`、Electron 同梱の Node 20.18 での `graphy-mcp`（sh）起動。段 4 の実機（画面だけでオン → 確認 → 接続、2D 窓に開いた MR の `get_viewer_state` が画面の W/L・スライス・倍率と一致、Length ROI の 75.74 mm が `get_measurements` の `lengthMm` と一致、患者情報オンで `seriesLabel` が出てオフで消える、2D 窓を閉じると `no-viewer`）も確認済み。**Windows・macOS の配布物での起動は未確認（段 5）。**
 - 開発起動の userData は `graphy-next-desktop`、インストール版は `GRAPHY-Next`。`mcpCli.js` の既定はインストール版なので、開発では `GRAPHY_MCP_ENDPOINT=<userData>/mcp-endpoint.json` で指す。
+- 段 5: 患者情報 0 件の実機検査 `automator/src/spike/mcpPhiSweep.ts`（実名入りの検査 HCC_001・全ツール・オン→オフ・拒否の経路。27 件合格）、画面と MCP の Radiomics の突き合わせ `mcpRadiomicsCheck.ts`（設定の SHA-256 が同じで、230 列すべて差 0。MCP は `fromCache=false` の独立計算）、配布物の節 `src/smoke/mcpSection.ts`（開発ツリーでは `spike/mcpSectionLocal.ts`。userData の名前を変えると落ちる負例つき）、`docs/mcp.md`。
+- 見つけて直した穴: `list_compute_jobs` の message・errorValue・env などの自由文（プラグイン・計算が書く）に患者名が入ると、先に患者を通していない呼び出しでは `guard` が止められず漏れた（`mcpProjection.PHI_KEYS` に message・errorvalue・env・error を追加）。
 - 作業コピーの名前は `GRAPHY-Next-wt-mcp`（worktree）。次の段はブランチを `origin/main` から切り直す。
 
 ## 2. 決めたこと・理由
