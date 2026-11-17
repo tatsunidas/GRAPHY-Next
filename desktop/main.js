@@ -782,6 +782,30 @@ async function mcpConfirmClient(client) {
   return r.response === 0;
 }
 
+// ROI の計測値を外部 AI クライアントへ返す前の確認（クライアントごと・起動ごとに最初の 1 回。viewerRelay が数える）。
+async function mcpConfirmMeasurements(client, preview) {
+  const parent = mainWin && !mainWin.isDestroyed() ? mainWin : undefined;
+  const r = await dialog.showMessageBox(parent, {
+    type: "warning",
+    buttons: ["返す", "取り消す"],
+    defaultId: 1,
+    cancelId: 1,
+    title: "外部 AI クライアントの接続",
+    message: `2D ビューアの ROI の計測値を、外部 AI クライアント「${client}」へ返します。`,
+    detail: `結果の先頭: ${preview}\n\n返した内容は、そのクライアントを通じてクラウドの AI へ送られる可能性があります。患者情報が含まれていないか確認してください。返しますか？`,
+  });
+  return r.response === 0;
+}
+
+// 外部 AI クライアントが 2D ビューアの状態・ROI を読む。同じプロセス内の viewerRelay を直接呼ぶ（`graphy:assistant-viewer-cmd` の
+// 「チャット窓だけ」の関門は ipcMain の handler にあり、そのまま。2D 窓への送信 graphy:viewer-cmd は main→窓の一方向）。
+// kind は mcpTools.VIEWER_KINDS（getState・getMeasurements）だけ。ジャーナルの sessionId は `mcp:<クライアント名>`。
+// ラベル（SeriesDescription など自由記述）は、患者情報を返す設定のときだけ。画素（captureView）・操作（action・pluginTool）は中継しない。
+function mcpViewer(kind, { client, includePhi }) {
+  const opts = kind === "getMeasurements" ? { measurements: { external: true, confirmSend: (preview) => mcpConfirmMeasurements(client, preview) } } : {};
+  return viewerRelay.relay(`mcp:${client}`, { kind, includeLabels: includePhi === true }, opts);
+}
+
 function mcpBridge() {
   if (!mcpBridgeInst) {
     mcpBridgeInst = createMcpBridge({
@@ -789,6 +813,7 @@ function mcpBridge() {
       audit: createMcpAudit({ file: path.join(app.getPath("userData"), "mcp-audit.jsonl") }),
       backend: mcpBackend,
       confirmClient: mcpConfirmClient,
+      viewer: mcpViewer,
       discoveryFile: path.join(app.getPath("userData"), "mcp-endpoint.json"),
     });
   }

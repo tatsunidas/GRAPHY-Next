@@ -44,7 +44,13 @@ const str = (description, max = 128) => ({ type: "string", description, maxLengt
 const int = (description, min = 0, max = 1_000_000_000) => ({ type: "integer", description, minimum: min, maximum: max });
 const HANDLE = "（list/search の結果に出た値をそのまま渡す）";
 
-/** effect: read | analysis。`phiOnly` の引数は includePhi=false では受けない。 */
+/**
+ * 2D ビューア窓（renderer）へ main が中継して読む種類（固定リスト）。`via: "viewer"` のツールはここにある kind しか作れない。
+ * 🔴 画素を返す `captureView` と、窓を操作する `action`・`pluginTool` はここに入れない（段 4c 以降）。
+ */
+const VIEWER_KINDS = ["getState", "getMeasurements"];
+
+/** effect: read | analysis。`phiOnly` の引数は includePhi=false では受けない。`via: "viewer"` は backend でなく 2D ビューア窓から読む。 */
 const TOOLS = [
   { name: "get_status", effect: "read", description: "GRAPHY-Next の稼働状況（版・モード）。", inputSchema: obj({}) },
   { name: "list_albums", effect: "read", description: "アルバムの一覧（id と件数。名前は患者情報の設定がオンのときだけ）。", inputSchema: obj({}) },
@@ -61,6 +67,22 @@ const TOOLS = [
   { name: "list_instances", effect: "read", description: `シリーズの画像（インスタンス）一覧。${HANDLE}`, inputSchema: obj({ study: str("検査の札", 80), series: str("シリーズの札", 80) }, ["study", "series"]) },
   { name: "get_tags", effect: "read", description: `画像の DICOM タグ（撮像条件など）。患者情報のタグは設定がオンのときだけ。${HANDLE}`, inputSchema: obj({ instance: str("画像の札", 80) }, ["instance"]) },
   { name: "list_compute_jobs", effect: "read", description: "計算ジョブの一覧と状態。", inputSchema: obj({}) },
+  {
+    name: "get_viewer_state",
+    effect: "read",
+    via: "viewer",
+    viewerKind: "getState",
+    description: "開いている 2D ビューアの表示状態（タイルごとのモダリティ・スライス位置と枚数・窓幅/窓位・向き・倍率）。2D ビューアが開いていなければ no-viewer。画像そのものは返さない。",
+    inputSchema: obj({}),
+  },
+  {
+    name: "get_measurements",
+    effect: "read",
+    via: "viewer",
+    viewerKind: "getMeasurements",
+    description: "2D ビューアに描かれた ROI の計測値（長さ・面積・平均・標準偏差など。頂点や UID は返さない。最大 50 件）。クライアントごとに最初の 1 回、利用者の確認が出る。",
+    inputSchema: obj({}),
+  },
   {
     name: "radiomics_submit",
     effect: "analysis",
@@ -106,7 +128,7 @@ function validateArgs(schema, args) {
 
 /**
  * ツール呼び出し → backend への要求。落とすときは { error } を返す（要求を作らない）。
- * @returns {{ error: string } | { method: string, path: string, query?: object, limit?: number, body?: object }}
+ * @returns {{ error: string } | { viewer: { kind: string } } | { method: string, path: string, query?: object, limit?: number, body?: object }}
  */
 function buildRequest(name, args, { projector, prefs }) {
   const tool = BY_NAME.get(name);
@@ -116,6 +138,10 @@ function buildRequest(name, args, { projector, prefs }) {
   if (bad) return { error: bad };
   const a = args ?? {};
   for (const k of prefs.includePhi ? [] : tool.phiOnly ?? []) if (a[k] !== undefined) return { error: `phi-disabled:${k}` };
+  if (tool.via === "viewer") {
+    if (!VIEWER_KINDS.includes(tool.viewerKind)) return { error: "unknown-tool" };
+    return { viewer: { kind: tool.viewerKind } };
+  }
   const uid = (kind, v) => projector.resolve(kind, v);
   let req;
   switch (name) {
@@ -207,9 +233,9 @@ function projectResult(name, data, projector) {
       out = P.tags(data);
       break;
     default:
-      out = P.deep(data); // get_series_layout・list_compute_jobs・radiomics_*：形が一定でないので構造ごと射影
+      out = P.deep(data); // get_series_layout・list_compute_jobs・radiomics_*・get_viewer_state・get_measurements：形が一定でないので構造ごと射影
   }
   return P.guard(out);
 }
 
-module.exports = { TOOLS, listTools, validateArgs, buildRequest, projectResult, checkBackendCall, ALLOWED, DENIED, UID_RE };
+module.exports = { TOOLS, VIEWER_KINDS, listTools, validateArgs, buildRequest, projectResult, checkBackendCall, ALLOWED, DENIED, UID_RE };
