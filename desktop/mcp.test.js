@@ -263,3 +263,49 @@ test("tools: projectResult — 患者情報オフで、全ツールの出力に�
     for (const v of [...PHI_VALUES, "1.2.840.113619.2.55.3.1.7", "経過"]) assert.equal(s.includes(v), false, `${n}: ${v}`);
   }
 });
+
+// ---- 段 5: 実際の応答の形（backend の controller の戻り型）で、残りのツールも患者情報 0 件を確かめる ----
+const SU = "1.2.840.113619.2.55.3.1"; // STUDY の Study UID
+const SE = "1.2.840.113619.2.55.3.1.7";
+const SOP = "1.2.840.113619.2.55.3.1.7.1";
+const FOR = "1.2.840.113619.2.55.3.1.99";
+const REAL = {
+  get_status: { activeProfiles: ["standalone"], javaVersion: "21", demo: false, app: "GRAPHY-Next", version: "0.6.3", mode: "standalone" },
+  list_album_studies: [SU], // AlbumController: List<String>
+  get_series_layout: { nZ: 1, nC: 1, nT: 1, cells: [{ c: 0, z: 0, t: 0, sopInstanceUid: SOP, frame: 0 }], imageOrientationPatient: [1, 0, 0, 0, 1, 0], pixelSpacing: [0.5, 0.5], frameOfReferenceUID: FOR, pixelFormat: "int16", axes: ["Z"] },
+  get_tags: [{ depth: 0, tag: "(0010,0010)", name: "PatientName", vr: "PN", value: "YAMADA^TARO" }, { depth: 0, tag: "(0028,0010)", name: "Rows", vr: "US", value: "512" }],
+  // ComputeJobLedger.view(): message・errorValue・env はプラグイン由来の自由文・任意 JSON
+  list_compute_jobs: [{ id: "j1", batchId: "b1", state: "failed", phase: "run", progress: 0.4, message: "failed for YAMADA^TARO (MRN12345)", reason: "plugin-error", errorName: "ValueError", errorValue: "bad value for ACC9981", attempt: 1, itemKey: "k1", inputs: [{ studyUid: SU, seriesUid: SE, format: "dicom", deleted: false }], requestId: "r1", pluginJobId: "pj1", env: { note: "run by YAMADA^TARO", python: "3.11" }, queuedAt: "2026-01-01T00:00:00Z", pluginId: "p1", pluginName: "demo" }],
+  radiomics_submit: { jobId: "r-1", state: "RUNNING", elapsedMs: 5, result: null, error: null },
+  // RoiFeatureResult（frontend/src/api.ts）: rows は { family, feature, ibsi, value, notes }、settingsProperties は RadiomicsJ の .properties（文字列）
+  radiomics_status: { jobId: "r-1", state: "DONE", error: "failed reading /data/YAMADA^TARO/a.dcm", result: { label: 1, rows: [{ family: "firstorder", feature: "Mean", ibsi: "Q4LE", value: 1.5, notes: [] }], provenance: { settingsSha256: "ab" }, settingsProperties: "INT_binCount=32\n" } },
+};
+
+test("tools: 残りのツール（実データの形）— 患者情報オンでは出て、オフでは 0 件。先に患者を観測していなくても漏れない", () => {
+  const VALUES = [...PHI_VALUES, SU, SE, SOP, FOR, "YAMADA"];
+  const run = (includePhi, observe) => {
+    const P = createProjector({ includePhi });
+    if (observe) P.study(STUDY);
+    // guard が止めた（phi-leak）ものは返らない＝漏れない。その印を文字列にして、他の検査と同じ形で扱う
+    return Object.fromEntries(Object.entries(REAL).map(([n, d]) => [n, (() => { try { return JSON.stringify(T.projectResult(n, d, P)); } catch (e) { return e.message === "phi-leak" ? "BLOCKED" : (() => { throw e; })(); } })()]));
+  };
+  const on = run(true, true);
+  // 先にオンで出ることを確かめる（検査が空振りでない証拠）
+  assert.ok(on.list_album_studies.includes(SU) && on.get_series_layout.includes(SOP) && on.list_compute_jobs.includes("YAMADA") && on.get_tags.includes("YAMADA"));
+  for (const observe of [true, false]) {
+    for (const [n, s] of Object.entries(run(false, observe))) {
+      for (const v of VALUES) assert.equal(s.includes(v), false, `${n} (観測${observe ? "あり" : "なし"}): ${v}`);
+    }
+  }
+  // 数値・状態は残る（全部落として 0 件にしただけの射影を許さない）
+  const off = run(false, false);
+  assert.ok(off.get_series_layout.includes('"pixelSpacing":[0.5,0.5]') && off.list_compute_jobs.includes('"state":"failed"') && off.list_compute_jobs.includes('"progress":0.4'));
+  assert.ok(off.radiomics_status.includes('"feature":"Mean"') && off.radiomics_status.includes('"value":1.5') && off.radiomics_status.includes("INT_binCount=32"));
+  assert.ok(off.get_status.includes("0.6.3"));
+});
+
+test("tools: guard の誤検出 — 3 文字以上の患者の値が数値と偶然一致したら止まる（安全側に倒れる。仕様として固定）", () => {
+  const P = createProjector({ includePhi: false });
+  P.study({ ...STUDY, patientId: "1234", accessionNumber: "" });
+  assert.throws(() => T.projectResult("list_compute_jobs", [{ id: "j1", state: "done", progress: 1, outputsBytes: 1234 }], P), /phi-leak/);
+});
