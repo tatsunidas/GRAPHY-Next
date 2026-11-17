@@ -620,17 +620,22 @@ class RadiomicsBatchServiceTest {
     // ---- 種類（kind）----
 
     private static RadiomicsBatchService.BatchRequest requestKind(List<BatchPair> pairs, String kind) {
+        return requestKind(pairs, kind, null);
+    }
+
+    private static RadiomicsBatchService.BatchRequest requestKind(List<BatchPair> pairs, String kind, String calibration) {
         return new RadiomicsBatchService.BatchRequest(pairs, new HashMap<>(), null, null, null, null, null, null, 0,
-                0, false, null, null, null, kind);
+                0, false, null, null, null, kind, calibration);
     }
 
     @Test
-    void voiStatsRefusesPetPairsOnlyAndKeepsGoing() throws Exception {
-        // src1 だけ PET。その組は入力固有の失敗で記録され、残りは続く（黙って値を出さない・落とさない）
+    void voiStatsRefusesUncalibratedPetPairsOnlyAndKeepsGoing() throws Exception {
+        // src1 だけ PET。校正しない（Bq/mL のまま）と明示した VOI 統計では、その組は入力固有の失敗で記録され、
+        // 残りは続く（黙って値を出さない・落とさない）
         RadiomicsBatchService svc = new RadiomicsBatchService(
                 (req, cancelled) -> stub(false), r -> { }, null, null,
                 (study, series) -> "src1".equals(series) ? "PT" : "CT");
-        Status s = await(svc, svc.submit(requestKind(List.of(auto(0), auto(1), auto(2)), "voiStats")));
+        Status s = await(svc, svc.submit(requestKind(List.of(auto(0), auto(1), auto(2)), "voiStats", "none")));
         assertEquals(RadiomicsBatchService.JobState.DONE, s.state());
         assertEquals(RadiomicsBatchService.PairState.DONE, s.pairs().get(0).state());
         assertEquals(RadiomicsBatchService.PairState.FAILED, s.pairs().get(1).state());
@@ -639,6 +644,28 @@ class RadiomicsBatchServiceTest {
         assertEquals(RadiomicsBatchService.PairState.DONE, s.pairs().get(2).state());
         assertEquals(List.of(0, 2), svc.results(s.jobId()).stream().map(RadiomicsBatchService.PairResult::index).toList(),
                 "PET の組は結果を持たない");
+    }
+
+    @Test
+    void voiStatsDoesNotRefuseAPetThatIsCalibrated() throws Exception {
+        // 校正する（auto・SUV の種類）なら、PET の VOI 統計も出せる。校正はエンジンの読み込みが行う
+        for (String calibration : new String[] { null, "auto", "bw", "sul-james" }) {
+            RadiomicsBatchService svc = new RadiomicsBatchService(
+                    (req, cancelled) -> stub(false), r -> { }, null, null, (study, series) -> "PT");
+            Status s = await(svc, svc.submit(requestKind(List.of(auto(0)), "voiStats", calibration)));
+            assertEquals(RadiomicsBatchService.PairState.DONE, s.pairs().get(0).state(), "calibration=" + calibration);
+        }
+    }
+
+    @Test
+    void anUncalibratedPetIsFlaggedInTheResult() throws Exception {
+        // 利用者が明示して Bq/mL のまま計算した PET は、行に旗（UNCALIBRATED_PT）が付く（黙って混ざらない）
+        RoiFeatureResult.Provenance prov = new RoiFeatureResult.Provenance("dev", "rj", java.time.Instant.EPOCH, "sha",
+                "BQML（未校正）", "none;scale=1.0;uncalibratedPet", true);
+        RoiFeatureResult uncal = new RoiFeatureResult("rj", java.time.Instant.EPOCH, false, 1, List.of(), null, prov, null,
+                new RoiFeatureResult.RoiSize(100L, 100L, 100L, 50.0, 1000, false), false);
+        assertEquals(List.of(RadiomicsBatchService.FLAG_UNCALIBRATED_PT), RadiomicsBatchService.qcFlagsOf(uncal));
+        assertEquals(List.of(), RadiomicsBatchService.qcFlagsOf(stub(false)), "校正した・PET でない結果には旗が付かない");
     }
 
     @Test

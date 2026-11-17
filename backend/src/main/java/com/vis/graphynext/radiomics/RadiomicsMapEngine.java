@@ -116,8 +116,26 @@ public class RadiomicsMapEngine {
             String[] sopPerZ,
             String frameOfReferenceUid,
             TextureResampling.Grid resampling,
-            boolean lossyCompressed) {
+            boolean lossyCompressed,
+            ValueCalibration valueCalibration) {
+
+        /** 校正の記録なし（従来の呼び出し元・試験用）。 */
+        public LoadedVolume(ImagePlus image, ImagePlus mask, int width, int height, int slices, int label,
+                            boolean hasMask, Calibration calibration, double[] imageOrientationPatient,
+                            double pixelSpacingRow, double pixelSpacingCol, Map<Integer, double[]> ippByZ,
+                            String[] sopPerZ, String frameOfReferenceUid, TextureResampling.Grid resampling,
+                            boolean lossyCompressed) {
+            this(image, mask, width, height, slices, label, hasMask, calibration, imageOrientationPatient,
+                    pixelSpacingRow, pixelSpacingCol, ippByZ, sopPerZ, frameOfReferenceUid, resampling,
+                    lossyCompressed, ValueCalibration.UNSET);
+        }
     }
+
+    /**
+     * {@link #load} の {@code settings} に入れる、PET の校正の指定のキー（{@link RoiFeatureRequest#calibration}）。
+     * 無いときは校正を扱わない（従来の経路。テクスチャのマップなどは今も Bq/mL のまま）。
+     */
+    public static final String CALIBRATION_SETTING = "graphy.calibration";
 
     /** ターゲット（＋任意マスク）から 1 特徴のマップを計算する。 */
     public MapResult compute(TextureSeriesRequest req, TextureProgress progress) throws IOException {
@@ -192,6 +210,8 @@ public class RadiomicsMapEngine {
             if (ipp != null) ippByZ.put(k, ipp);
         }
 
+        ValueCalibration valueCal = resolveCalibration(settings, sopPerZ);
+
         // ターゲットボリュームを積む（dcm4che で画素をデコード。圧縮なら PixelCodec で伸長）。
         int w = 0, h = 0;
         boolean lossy = false;
@@ -210,7 +230,7 @@ public class RadiomicsMapEngine {
                 throw new IllegalArgumentException("値の無い画素（NaN）を含むシリーズはテクスチャを計算できません"
                         + "（z=" + z + " に " + nan + " 画素）。Parametric Map の NaN は背景などの「値なし」です。");
             }
-            procs.add(loaded.ip());
+            procs.add(valueCal.scales() ? scaled(loaded.ip(), valueCal.scale()) : loaded.ip());
             if (cal == null && loaded.cal() != null && loaded.cal().calibrated()) cal = loaded.cal();
             w = loaded.ip().getWidth();
             h = loaded.ip().getHeight();
@@ -324,7 +344,48 @@ public class RadiomicsMapEngine {
 
         return new LoadedVolume(img, mask, w, h, nZ, label, hasMask, finalCal,
                 layout.imageOrientationPatient(), layout.pixelSpacingRow(), layout.pixelSpacingCol(),
-                ippByZ, sopPerZ, layout.frameOfReferenceUID(), grid, lossy);
+                ippByZ, sopPerZ, layout.frameOfReferenceUID(), grid, lossy, valueCal);
+    }
+
+    /** 画素値に係数を掛ける（float のまま。NaN は NaN のまま）。PET の SUV 校正だけが使う。 */
+    private static ImageProcessor scaled(ImageProcessor ip, double scale) {
+        FloatProcessor fp = ip instanceof FloatProcessor f ? f : ip.convertToFloatProcessor();
+        float[] px = (float[]) fp.getPixels();
+        for (int i = 0; i < px.length; i++) {
+            px[i] = (float) (px[i] * scale);
+        }
+        return fp;
+    }
+
+    /** 1 インスタンスの DICOM ヘッダ（画素の前まで）。読めなければ null。 */
+    private Attributes headerOf(String sop) throws IOException {
+        Path path = storage.resolveInstanceFile(sop);
+        if (path == null) {
+            return null;
+        }
+        try (DicomInputStream in = new DicomInputStream(path.toFile())) {
+            return in.readDatasetUntilPixelData();
+        }
+    }
+
+    /**
+     * 読み込みで画素値に掛ける校正を決める。{@code settings} に {@link #CALIBRATION_SETTING} が無ければ何もしない（従来）。
+     * 決め方は {@link ValueCalibration#resolve}（ヘッダだけから決める純粋な関数）。
+     */
+    private ValueCalibration resolveCalibration(Map<String, String> settings, String[] sopPerZ) throws IOException {
+        String req = settings == null ? null : settings.get(CALIBRATION_SETTING);
+        if (req == null) {
+            return ValueCalibration.UNSET;
+        }
+        Attributes first = headerOf(sopPerZ[0]);
+        if (first == null) {
+            throw new IllegalArgumentException("校正に必要な DICOM ヘッダを読めません（sop=" + sopPerZ[0] + "）");
+        }
+        Attributes last = null;
+        if (sopPerZ.length > 1 && !sopPerZ[0].equals(sopPerZ[sopPerZ.length - 1])) {
+            last = headerOf(sopPerZ[sopPerZ.length - 1]);
+        }
+        return ValueCalibration.resolve(req, first, last);
     }
 
     /** {@link #load} で揃えた材料からマップを計算する（compute の後半）。 */

@@ -33,6 +33,8 @@ export const ROI_FEATURE_RECORD_COLUMNS = [
   "Provenance_RadiomicsJVersion",
   "Provenance_ExtractedAt",
   "Provenance_SettingsSha256",
+  "Provenance_ValueUnit",
+  "Provenance_Calibration",
 ] as const;
 
 /** 記録の列の後に置く、ROI の大きさの列。 */
@@ -47,7 +49,8 @@ export const ROI_FEATURE_SIZE_COLUMNS = [
 
 /** 記録の 5 列の値（2D の CSV も同じ並びで使う）。 */
 export function recordValuesOf(p: RoiFeatureProvenance, caseLabel: string): string[] {
-  return [caseLabel, p.graphyNextVersion, p.radiomicsjVersion ?? "", p.extractedAt, p.settingsSha256].map(cell);
+  return [caseLabel, p.graphyNextVersion, p.radiomicsjVersion ?? "", p.extractedAt, p.settingsSha256,
+    p.valueUnit ?? "", p.calibration ?? ""].map(cell);
 }
 
 /** ROI の大きさの 6 列の値（2D の CSV も同じ並びで使う）。 */

@@ -1,0 +1,746 @@
+{
+ "description": "SUV の係数の共通のテスト値。参照: automator/src/spike/suvGoldenReference.py。許容差は相対 1e-12。",
+ "tolerance": 1e-12,
+ "cases": [
+  {
+   "name": "bw 標準（70kg・370MBq・1 時間後）",
+   "type": "bw",
+   "params": {
+    "patientWeight": 70.0,
+    "patientHeight": 1.75,
+    "patientSex": "M",
+    "totalDoseBq": 370000000.0,
+    "halfLifeSec": 6586.2,
+    "injectionTimeMs": 1785142800000,
+    "scanTimeMs": 1785146400000,
+    "units": "BQML",
+    "decayCorrection": "START",
+    "alreadySuv": false,
+    "philipsSuvScaleFactor": null,
+    "philipsActivityConcScaleFactor": null
+   },
+   "expected": {
+    "scale": 0.00027633668171764324,
+    "unit": "SUVbw",
+    "type": "bw",
+    "warnings": []
+   }
+  },
+  {
+   "name": "SUL James 男性",
+   "type": "sul-james",
+   "params": {
+    "patientWeight": 70.0,
+    "patientHeight": 1.75,
+    "patientSex": "M",
+    "totalDoseBq": 370000000.0,
+    "halfLifeSec": 6586.2,
+    "injectionTimeMs": 1785142800000,
+    "scanTimeMs": 1785146400000,
+    "units": "BQML",
+    "decayCorrection": "START",
+    "alreadySuv": false,
+    "philipsSuvScaleFactor": null,
+    "philipsActivityConcScaleFactor": null
+   },
+   "expected": {
+    "scale": 0.00022312213215258848,
+    "unit": "SUVlbm",
+    "type": "sul-james",
+    "warnings": []
+   }
+  },
+  {
+   "name": "SUL James 女性",
+   "type": "sul-james",
+   "params": {
+    "patientWeight": 58.0,
+    "patientHeight": 1.62,
+    "patientSex": "F",
+    "totalDoseBq": 370000000.0,
+    "halfLifeSec": 6586.2,
+    "injectionTimeMs": 1785142800000,
+    "scanTimeMs": 1785146400000,
+    "units": "BQML",
+    "decayCorrection": "START",
+    "alreadySuv": false,
+    "philipsSuvScaleFactor": null,
+    "philipsActivityConcScaleFactor": null
+   },
+   "expected": {
+    "scale": 0.0001701014580977632,
+    "unit": "SUVlbm",
+    "type": "sul-james",
+    "warnings": []
+   }
+  },
+  {
+   "name": "SUL Janmahasatian 男性",
+   "type": "sul-janma",
+   "params": {
+    "patientWeight": 70.0,
+    "patientHeight": 1.75,
+    "patientSex": "M",
+    "totalDoseBq": 370000000.0,
+    "halfLifeSec": 6586.2,
+    "injectionTimeMs": 1785142800000,
+    "scanTimeMs": 1785146400000,
+    "units": "BQML",
+    "decayCorrection": "START",
+    "alreadySuv": false,
+    "philipsSuvScaleFactor": null,
+    "philipsActivityConcScaleFactor": null
+   },
+   "expected": {
+    "scale": 0.00022050525426288575,
+    "unit": "SUVlbm",
+    "type": "sul-janma",
+    "warnings": []
+   }
+  },
+  {
+   "name": "SUL Janmahasatian 女性",
+   "type": "sul-janma",
+   "params": {
+    "patientWeight": 58.0,
+    "patientHeight": 1.62,
+    "patientSex": "F",
+    "totalDoseBq": 370000000.0,
+    "halfLifeSec": 6586.2,
+    "injectionTimeMs": 1785142800000,
+    "scanTimeMs": 1785146400000,
+    "units": "BQML",
+    "decayCorrection": "START",
+    "alreadySuv": false,
+    "philipsSuvScaleFactor": null,
+    "philipsActivityConcScaleFactor": null
+   },
+   "expected": {
+    "scale": 0.00014976235453433183,
+    "unit": "SUVlbm",
+    "type": "sul-janma",
+    "warnings": []
+   }
+  },
+  {
+   "name": "SUVbsa",
+   "type": "bsa",
+   "params": {
+    "patientWeight": 70.0,
+    "patientHeight": 1.75,
+    "patientSex": "M",
+    "totalDoseBq": 370000000.0,
+    "halfLifeSec": 6586.2,
+    "injectionTimeMs": 1785142800000,
+    "scanTimeMs": 1785146400000,
+    "units": "BQML",
+    "decayCorrection": "START",
+    "alreadySuv": false,
+    "philipsSuvScaleFactor": null,
+    "philipsActivityConcScaleFactor": null
+   },
+   "expected": {
+    "scale": 7.2958529852469e-05,
+    "unit": "SUVbsa",
+    "type": "bsa",
+    "warnings": []
+   }
+  },
+  {
+   "name": "Units=GML は scale=1",
+   "type": "bw",
+   "params": {
+    "patientWeight": 70.0,
+    "patientHeight": 1.75,
+    "patientSex": "M",
+    "totalDoseBq": 370000000.0,
+    "halfLifeSec": 6586.2,
+    "injectionTimeMs": 1785142800000,
+    "scanTimeMs": 1785146400000,
+    "units": "GML",
+    "decayCorrection": "START",
+    "alreadySuv": false,
+    "philipsSuvScaleFactor": null,
+    "philipsActivityConcScaleFactor": null
+   },
+   "expected": {
+    "scale": 1.0,
+    "unit": "SUVbw",
+    "type": "bw",
+    "warnings": [
+     "alreadySuv"
+    ]
+   }
+  },
+  {
+   "name": "alreadySuv は Units によらず scale=1",
+   "type": "sul-james",
+   "params": {
+    "patientWeight": 70.0,
+    "patientHeight": 1.75,
+    "patientSex": "M",
+    "totalDoseBq": 370000000.0,
+    "halfLifeSec": 6586.2,
+    "injectionTimeMs": 1785142800000,
+    "scanTimeMs": 1785146400000,
+    "units": "BQML",
+    "decayCorrection": "START",
+    "alreadySuv": true,
+    "philipsSuvScaleFactor": null,
+    "philipsActivityConcScaleFactor": null
+   },
+   "expected": {
+    "scale": 1.0,
+    "unit": "SUVlbm",
+    "type": "sul-james",
+    "warnings": [
+     "alreadySuv"
+    ]
+   }
+  },
+  {
+   "name": "Philips CNTS 私設 SUV 係数あり",
+   "type": "bw",
+   "params": {
+    "patientWeight": 70.0,
+    "patientHeight": 1.75,
+    "patientSex": "M",
+    "totalDoseBq": 370000000.0,
+    "halfLifeSec": 6586.2,
+    "injectionTimeMs": 1785142800000,
+    "scanTimeMs": 1785146400000,
+    "units": "CNTS",
+    "decayCorrection": "START",
+    "alreadySuv": false,
+    "philipsSuvScaleFactor": 0.00037,
+    "philipsActivityConcScaleFactor": null
+   },
+   "expected": {
+    "scale": 0.00037,
+    "unit": "SUVbw",
+    "type": "bw",
+    "warnings": []
+   }
+  },
+  {
+   "name": "Philips CNTS 私設 SUV 係数ありで SUL を選ぶと bw だけ（警告）",
+   "type": "sul-james",
+   "params": {
+    "patientWeight": 70.0,
+    "patientHeight": 1.75,
+    "patientSex": "M",
+    "totalDoseBq": 370000000.0,
+    "halfLifeSec": 6586.2,
+    "injectionTimeMs": 1785142800000,
+    "scanTimeMs": 1785146400000,
+    "units": "CNTS",
+    "decayCorrection": "START",
+    "alreadySuv": false,
+    "philipsSuvScaleFactor": 0.00037,
+    "philipsActivityConcScaleFactor": null
+   },
+   "expected": {
+    "scale": 0.00037,
+    "unit": "SUVbw",
+    "type": "bw",
+    "warnings": [
+     "philipsBwOnly"
+    ]
+   }
+  },
+  {
+   "name": "Philips CNTS 濃度係数のみ",
+   "type": "bw",
+   "params": {
+    "patientWeight": 70.0,
+    "patientHeight": 1.75,
+    "patientSex": "M",
+    "totalDoseBq": 370000000.0,
+    "halfLifeSec": 6586.2,
+    "injectionTimeMs": 1785142800000,
+    "scanTimeMs": 1785146400000,
+    "units": "CNTS",
+    "decayCorrection": "START",
+    "alreadySuv": false,
+    "philipsSuvScaleFactor": null,
+    "philipsActivityConcScaleFactor": 2.5
+   },
+   "expected": {
+    "scale": 0.000690841704294108,
+    "unit": "SUVbw",
+    "type": "bw",
+    "warnings": [
+     "philipsActivityConc"
+    ]
+   }
+  },
+  {
+   "name": "Philips CNTS 係数なし（負例）",
+   "type": "bw",
+   "params": {
+    "patientWeight": 70.0,
+    "patientHeight": 1.75,
+    "patientSex": "M",
+    "totalDoseBq": 370000000.0,
+    "halfLifeSec": 6586.2,
+    "injectionTimeMs": 1785142800000,
+    "scanTimeMs": 1785146400000,
+    "units": "CNTS",
+    "decayCorrection": "START",
+    "alreadySuv": false,
+    "philipsSuvScaleFactor": null,
+    "philipsActivityConcScaleFactor": null
+   },
+   "expected": {
+    "error": "philipsInvalid"
+   }
+  },
+  {
+   "name": "Philips CNTS 濃度係数が 0（負例）",
+   "type": "bw",
+   "params": {
+    "patientWeight": 70.0,
+    "patientHeight": 1.75,
+    "patientSex": "M",
+    "totalDoseBq": 370000000.0,
+    "halfLifeSec": 6586.2,
+    "injectionTimeMs": 1785142800000,
+    "scanTimeMs": 1785146400000,
+    "units": "CNTS",
+    "decayCorrection": "START",
+    "alreadySuv": false,
+    "philipsSuvScaleFactor": null,
+    "philipsActivityConcScaleFactor": 0.0
+   },
+   "expected": {
+    "error": "philipsInvalid"
+   }
+  },
+  {
+   "name": "崩壊補正 ADMIN は投与量を崩壊させない",
+   "type": "bw",
+   "params": {
+    "patientWeight": 70.0,
+    "patientHeight": 1.75,
+    "patientSex": "M",
+    "totalDoseBq": 370000000.0,
+    "halfLifeSec": 6586.2,
+    "injectionTimeMs": 1785142800000,
+    "scanTimeMs": 1785146400000,
+    "units": "BQML",
+    "decayCorrection": "ADMIN",
+    "alreadySuv": false,
+    "philipsSuvScaleFactor": null,
+    "philipsActivityConcScaleFactor": null
+   },
+   "expected": {
+    "scale": 0.0001891891891891892,
+    "unit": "SUVbw",
+    "type": "bw",
+    "warnings": [
+     "decayAdmin"
+    ]
+   }
+  },
+  {
+   "name": "崩壊補正 NONE は警告つきで標準式",
+   "type": "bw",
+   "params": {
+    "patientWeight": 70.0,
+    "patientHeight": 1.75,
+    "patientSex": "M",
+    "totalDoseBq": 370000000.0,
+    "halfLifeSec": 6586.2,
+    "injectionTimeMs": 1785142800000,
+    "scanTimeMs": 1785146400000,
+    "units": "BQML",
+    "decayCorrection": "NONE",
+    "alreadySuv": false,
+    "philipsSuvScaleFactor": null,
+    "philipsActivityConcScaleFactor": null
+   },
+   "expected": {
+    "scale": 0.00027633668171764324,
+    "unit": "SUVbw",
+    "type": "bw",
+    "warnings": [
+     "decayNone"
+    ]
+   }
+  },
+  {
+   "name": "崩壊補正の欠損は標準式",
+   "type": "bw",
+   "params": {
+    "patientWeight": 70.0,
+    "patientHeight": 1.75,
+    "patientSex": "M",
+    "totalDoseBq": 370000000.0,
+    "halfLifeSec": 6586.2,
+    "injectionTimeMs": 1785142800000,
+    "scanTimeMs": 1785146400000,
+    "units": "BQML",
+    "decayCorrection": null,
+    "alreadySuv": false,
+    "philipsSuvScaleFactor": null,
+    "philipsActivityConcScaleFactor": null
+   },
+   "expected": {
+    "scale": 0.00027633668171764324,
+    "unit": "SUVbw",
+    "type": "bw",
+    "warnings": []
+   }
+  },
+  {
+   "name": "日付またぎ（撮像時刻が投与時刻より前）",
+   "type": "bw",
+   "params": {
+    "patientWeight": 70.0,
+    "patientHeight": 1.75,
+    "patientSex": "M",
+    "totalDoseBq": 370000000.0,
+    "halfLifeSec": 6586.2,
+    "injectionTimeMs": 1785195000000,
+    "scanTimeMs": 1785112200000,
+    "units": "BQML",
+    "decayCorrection": "START",
+    "alreadySuv": false,
+    "philipsSuvScaleFactor": null,
+    "philipsActivityConcScaleFactor": null
+   },
+   "expected": {
+    "scale": 0.00027633668171764324,
+    "unit": "SUVbw",
+    "type": "bw",
+    "warnings": [
+     "midnightAdjust"
+    ]
+   }
+  },
+  {
+   "name": "1 日以上さかのぼる（負例）",
+   "type": "bw",
+   "params": {
+    "patientWeight": 70.0,
+    "patientHeight": 1.75,
+    "patientSex": "M",
+    "totalDoseBq": 370000000.0,
+    "halfLifeSec": 6586.2,
+    "injectionTimeMs": 1785315600000,
+    "scanTimeMs": 1785142800000,
+    "units": "BQML",
+    "decayCorrection": "START",
+    "alreadySuv": false,
+    "philipsSuvScaleFactor": null,
+    "philipsActivityConcScaleFactor": null
+   },
+   "expected": {
+    "error": "negativeDecay"
+   }
+  },
+  {
+   "name": "投与量なし（負例）",
+   "type": "bw",
+   "params": {
+    "patientWeight": 70.0,
+    "patientHeight": 1.75,
+    "patientSex": "M",
+    "totalDoseBq": null,
+    "halfLifeSec": 6586.2,
+    "injectionTimeMs": 1785142800000,
+    "scanTimeMs": 1785146400000,
+    "units": "BQML",
+    "decayCorrection": "START",
+    "alreadySuv": false,
+    "philipsSuvScaleFactor": null,
+    "philipsActivityConcScaleFactor": null
+   },
+   "expected": {
+    "error": "missingDose"
+   }
+  },
+  {
+   "name": "投与量が 0 以下（負例）",
+   "type": "bw",
+   "params": {
+    "patientWeight": 70.0,
+    "patientHeight": 1.75,
+    "patientSex": "M",
+    "totalDoseBq": 0.0,
+    "halfLifeSec": 6586.2,
+    "injectionTimeMs": 1785142800000,
+    "scanTimeMs": 1785146400000,
+    "units": "BQML",
+    "decayCorrection": "START",
+    "alreadySuv": false,
+    "philipsSuvScaleFactor": null,
+    "philipsActivityConcScaleFactor": null
+   },
+   "expected": {
+    "error": "missingDose"
+   }
+  },
+  {
+   "name": "半減期なし（負例）",
+   "type": "bw",
+   "params": {
+    "patientWeight": 70.0,
+    "patientHeight": 1.75,
+    "patientSex": "M",
+    "totalDoseBq": 370000000.0,
+    "halfLifeSec": null,
+    "injectionTimeMs": 1785142800000,
+    "scanTimeMs": 1785146400000,
+    "units": "BQML",
+    "decayCorrection": "START",
+    "alreadySuv": false,
+    "philipsSuvScaleFactor": null,
+    "philipsActivityConcScaleFactor": null
+   },
+   "expected": {
+    "error": "missingHalfLife"
+   }
+  },
+  {
+   "name": "投与時刻なし（負例）",
+   "type": "bw",
+   "params": {
+    "patientWeight": 70.0,
+    "patientHeight": 1.75,
+    "patientSex": "M",
+    "totalDoseBq": 370000000.0,
+    "halfLifeSec": 6586.2,
+    "injectionTimeMs": null,
+    "scanTimeMs": 1785146400000,
+    "units": "BQML",
+    "decayCorrection": "START",
+    "alreadySuv": false,
+    "philipsSuvScaleFactor": null,
+    "philipsActivityConcScaleFactor": null
+   },
+   "expected": {
+    "error": "missingTime"
+   }
+  },
+  {
+   "name": "撮像時刻なし（負例）",
+   "type": "bw",
+   "params": {
+    "patientWeight": 70.0,
+    "patientHeight": 1.75,
+    "patientSex": "M",
+    "totalDoseBq": 370000000.0,
+    "halfLifeSec": 6586.2,
+    "injectionTimeMs": 1785142800000,
+    "scanTimeMs": null,
+    "units": "BQML",
+    "decayCorrection": "START",
+    "alreadySuv": false,
+    "philipsSuvScaleFactor": null,
+    "philipsActivityConcScaleFactor": null
+   },
+   "expected": {
+    "error": "missingTime"
+   }
+  },
+  {
+   "name": "体重なし（負例）",
+   "type": "bw",
+   "params": {
+    "patientWeight": null,
+    "patientHeight": 1.75,
+    "patientSex": "M",
+    "totalDoseBq": 370000000.0,
+    "halfLifeSec": 6586.2,
+    "injectionTimeMs": 1785142800000,
+    "scanTimeMs": 1785146400000,
+    "units": "BQML",
+    "decayCorrection": "START",
+    "alreadySuv": false,
+    "philipsSuvScaleFactor": null,
+    "philipsActivityConcScaleFactor": null
+   },
+   "expected": {
+    "error": "missingWeight"
+   }
+  },
+  {
+   "name": "身長なしでも bw は計算できる",
+   "type": "bw",
+   "params": {
+    "patientWeight": 70.0,
+    "patientHeight": null,
+    "patientSex": "M",
+    "totalDoseBq": 370000000.0,
+    "halfLifeSec": 6586.2,
+    "injectionTimeMs": 1785142800000,
+    "scanTimeMs": 1785146400000,
+    "units": "BQML",
+    "decayCorrection": "START",
+    "alreadySuv": false,
+    "philipsSuvScaleFactor": null,
+    "philipsActivityConcScaleFactor": null
+   },
+   "expected": {
+    "scale": 0.00027633668171764324,
+    "unit": "SUVbw",
+    "type": "bw",
+    "warnings": []
+   }
+  },
+  {
+   "name": "身長なしの SUL James（負例）",
+   "type": "sul-james",
+   "params": {
+    "patientWeight": 70.0,
+    "patientHeight": null,
+    "patientSex": "M",
+    "totalDoseBq": 370000000.0,
+    "halfLifeSec": 6586.2,
+    "injectionTimeMs": 1785142800000,
+    "scanTimeMs": 1785146400000,
+    "units": "BQML",
+    "decayCorrection": "START",
+    "alreadySuv": false,
+    "philipsSuvScaleFactor": null,
+    "philipsActivityConcScaleFactor": null
+   },
+   "expected": {
+    "error": "missingHeight"
+   }
+  },
+  {
+   "name": "身長なしの SUL Janmahasatian（負例）",
+   "type": "sul-janma",
+   "params": {
+    "patientWeight": 70.0,
+    "patientHeight": null,
+    "patientSex": "M",
+    "totalDoseBq": 370000000.0,
+    "halfLifeSec": 6586.2,
+    "injectionTimeMs": 1785142800000,
+    "scanTimeMs": 1785146400000,
+    "units": "BQML",
+    "decayCorrection": "START",
+    "alreadySuv": false,
+    "philipsSuvScaleFactor": null,
+    "philipsActivityConcScaleFactor": null
+   },
+   "expected": {
+    "error": "missingHeight"
+   }
+  },
+  {
+   "name": "身長なしの SUVbsa（負例）",
+   "type": "bsa",
+   "params": {
+    "patientWeight": 70.0,
+    "patientHeight": null,
+    "patientSex": "M",
+    "totalDoseBq": 370000000.0,
+    "halfLifeSec": 6586.2,
+    "injectionTimeMs": 1785142800000,
+    "scanTimeMs": 1785146400000,
+    "units": "BQML",
+    "decayCorrection": "START",
+    "alreadySuv": false,
+    "philipsSuvScaleFactor": null,
+    "philipsActivityConcScaleFactor": null
+   },
+   "expected": {
+    "error": "missingHeight"
+   }
+  },
+  {
+   "name": "性別なしの SUL James（負例）",
+   "type": "sul-james",
+   "params": {
+    "patientWeight": 70.0,
+    "patientHeight": 1.75,
+    "patientSex": null,
+    "totalDoseBq": 370000000.0,
+    "halfLifeSec": 6586.2,
+    "injectionTimeMs": 1785142800000,
+    "scanTimeMs": 1785146400000,
+    "units": "BQML",
+    "decayCorrection": "START",
+    "alreadySuv": false,
+    "philipsSuvScaleFactor": null,
+    "philipsActivityConcScaleFactor": null
+   },
+   "expected": {
+    "error": "missingSex"
+   }
+  },
+  {
+   "name": "性別なしでも SUVbsa は計算できる",
+   "type": "bsa",
+   "params": {
+    "patientWeight": 70.0,
+    "patientHeight": 1.75,
+    "patientSex": null,
+    "totalDoseBq": 370000000.0,
+    "halfLifeSec": 6586.2,
+    "injectionTimeMs": 1785142800000,
+    "scanTimeMs": 1785146400000,
+    "units": "BQML",
+    "decayCorrection": "START",
+    "alreadySuv": false,
+    "philipsSuvScaleFactor": null,
+    "philipsActivityConcScaleFactor": null
+   },
+   "expected": {
+    "scale": 7.2958529852469e-05,
+    "unit": "SUVbsa",
+    "type": "bsa",
+    "warnings": []
+   }
+  },
+  {
+   "name": "除脂肪体重が負になる（負例）",
+   "type": "sul-james",
+   "params": {
+    "patientWeight": 200.0,
+    "patientHeight": 1.0,
+    "patientSex": "M",
+    "totalDoseBq": 370000000.0,
+    "halfLifeSec": 6586.2,
+    "injectionTimeMs": 1785142800000,
+    "scanTimeMs": 1785146400000,
+    "units": "BQML",
+    "decayCorrection": "START",
+    "alreadySuv": false,
+    "philipsSuvScaleFactor": null,
+    "philipsActivityConcScaleFactor": null
+   },
+   "expected": {
+    "error": "invalidNormBase"
+   }
+  },
+  {
+   "name": "F-18 以外（Ga-68、20 分後）",
+   "type": "bw",
+   "params": {
+    "patientWeight": 70.0,
+    "patientHeight": 1.75,
+    "patientSex": "M",
+    "totalDoseBq": 150000000.0,
+    "halfLifeSec": 4062.6,
+    "injectionTimeMs": 1785142800000,
+    "scanTimeMs": 1785144000000,
+    "units": "BQML",
+    "decayCorrection": "START",
+    "alreadySuv": false,
+    "philipsSuvScaleFactor": null,
+    "philipsActivityConcScaleFactor": null
+   },
+   "expected": {
+    "scale": 0.0005726960948389417,
+    "unit": "SUVbw",
+    "type": "bw",
+    "warnings": []
+   }
+  }
+ ]
+}

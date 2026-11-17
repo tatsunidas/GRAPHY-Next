@@ -128,6 +128,10 @@ public class RoiFeatureService {
             throw new IllegalArgumentException("Radiomics 特徴量には ROI マスクシリーズが必要です。");
         }
         effectiveSettings(req.settings(), labelOf(req.settings()));
+        if (!RoiFeatureRequest.CALIBRATIONS.contains(req.calibrationOrAuto())) {
+            throw new IllegalArgumentException("calibration は auto・none・bw・sul-james・sul-janma・bsa のどれかです: "
+                    + req.calibration());
+        }
         smallRoiThreshold(req);
         threshold(smallRoiSetting2d, "小さい ROI の警告（画素数、2D）");
     }
@@ -277,8 +281,11 @@ public class RoiFeatureService {
 
         phase.accept(Phase.LOADING);
         // Next のテクスチャ設定は渡さない（Next 側のリサンプリングを掛けない。RadiomicsJ の設定に一本化）。
+        // PET の校正（SUV）。読み込みで画素値に掛けるので、離散化・範囲・特徴量はすべて校正後の値に対して働く。
+        Map<String, String> loadSettings = new HashMap<>();
+        loadSettings.put(RadiomicsMapEngine.CALIBRATION_SETTING, req.calibrationOrAuto());
         RadiomicsMapEngine.LoadedVolume vol = engine.load(req.studyInstanceUid(), req.sourceSeriesUid(),
-                req.channel(), req.timePoint(), req.maskSeriesUid(), req.maskChannel(), label, new HashMap<>(), true);
+                req.channel(), req.timePoint(), req.maskSeriesUid(), req.maskChannel(), label, loadSettings, true);
 
         if (inputs == null) {
             return computeUnits(req, vol, label, settings, settings, phase, progress, cancelled);
@@ -435,7 +442,7 @@ public class RoiFeatureService {
             if (hit.isPresent()) {
                 log.info("[roi-features] cache hit key={}", key.substring(0, 12));
                 RoiFeatureResult cached = hit.get().asCached();
-                return cached.withPerRequest(roiSizeOf(cached.rows(), threshold), vol.lossyCompressed());
+                return cached.withPerRequest(roiSizeOf(cached.rows(), threshold), vol.lossyCompressed(), vol.valueCalibration());
             }
         }
 
@@ -454,7 +461,7 @@ public class RoiFeatureService {
         if (key != null) {
             cache.saveFeatures(key, json.writeValueAsBytes(result));
         }
-        return result.withPerRequest(roiSizeOf(result.rows(), threshold), vol.lossyCompressed());
+        return result.withPerRequest(roiSizeOf(result.rows(), threshold), vol.lossyCompressed(), vol.valueCalibration());
     }
 
     // ───────────── 2D の単位（最大断面・スライス別） ─────────────

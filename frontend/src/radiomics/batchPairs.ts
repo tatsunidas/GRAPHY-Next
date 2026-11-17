@@ -165,6 +165,7 @@ export function buildBatchRequest(pairs: readonly BatchPair[], form: RoiFeatureF
     qcAcknowledged: opts.acknowledged ? [...opts.acknowledged] : null,
     smallRoiWarnVoxels: opts.smallRoiVoxels ?? null,
     kind: opts.kind === "voiStats" ? "voiStats" : null,
+    calibration: form.calibration,
   };
 }
 

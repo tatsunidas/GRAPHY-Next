@@ -309,6 +309,7 @@ export function RoiFeatureScreen() {
         channel,
         timePoint,
         settings: roiFeatureSettings(form),
+        calibration: form.calibration,
         recompute,
         ...roiFeatureScaleRequest(form),
         roiModes: [

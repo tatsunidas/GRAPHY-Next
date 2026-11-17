@@ -130,6 +130,21 @@ describe("case labels", () => {
   });
 });
 
+describe("buildBatchRequest: PET の校正", () => {
+  it("校正の指定（既定は auto）を要求に載せる。VOI 統計でも載る", () => {
+    expect(buildBatchRequest([pair()], defaultRoiFeatureForm()).calibration).toBe("auto");
+    const sul = { ...defaultRoiFeatureForm(), calibration: "sul-james" as const };
+    expect(buildBatchRequest([pair()], sul).calibration).toBe("sul-james");
+    expect(buildBatchRequest([pair()], sul, { kind: "voiStats" }).calibration).toBe("sul-james");
+    expect(buildBatchRequest([pair()], { ...defaultRoiFeatureForm(), calibration: "none" as const }).calibration).toBe("none");
+  });
+
+  it("校正は RadiomicsJ の設定には入らない（backend が読み込みで使う）", () => {
+    const req = buildBatchRequest([pair()], { ...defaultRoiFeatureForm(), calibration: "bw" as const });
+    expect(Object.keys(req.settings).filter((k) => /calib|suv/i.test(k))).toEqual([]);
+  });
+});
+
 describe("buildBatchRequest", () => {
   it("is 3D only, no scales, C/T 0 — even when LoG is on in the form", () => {
     const form = { ...defaultRoiFeatureForm(), logOn: true, logByRadius: true, scalesText: "0,2,3" };

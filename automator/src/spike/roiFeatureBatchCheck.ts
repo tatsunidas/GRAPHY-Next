@@ -599,7 +599,9 @@ async function main(): Promise<void> {
     check(await bincount.inputValue() === "32" && (await page.getByTestId("batch-labels").inputValue()) === "", "開き直すと欄は既定");
     const shaDefault = await page.getByTestId("batch-spec-sha").getAttribute("title");
     check(shaDefault !== shownA, "既定の定義の SHA-256 は保存した定義と違う");
-    check(shaDefault === "9e08bec6fc61105a4113e5ea626ac8640c405c1b7ec31343b0b928419e43dced", "基準値の無い既定の定義の SHA-256 は、基準値の項目を足す前の値と同じ（実アプリ）", shaDefault);
+    // 校正（PET）の項目が増えたので、新しい既定の定義は calibration=auto を含む。正準 JSON を別（Python）で組み立てた SHA-256 と同じ。
+    // 校正の項目が無い従来の定義の値 9e08bec6… は、batchSpec.test.ts が固定値で守る（読み込んでも変わらない）。
+    check(shaDefault === "f54302dd56d8504990b9668e2ce2a2724c71476b4e7ebbf31e76eb1b5f1af659", "既定の定義の SHA-256 は、校正（auto）を含む正準 JSON を独立に求めた値と同じ（実アプリ）", shaDefault);
     await page.getByTestId("batch-spec-file").setInputFiles(path.join(OUT_DIR, savedSpec.name));
     await waitText(page, "batch-info", /読み込みました/, 20_000);
     await page.waitForTimeout(400);

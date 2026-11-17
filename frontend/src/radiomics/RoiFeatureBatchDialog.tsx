@@ -335,7 +335,9 @@ export function RoiFeatureBatchDialog({
     setLabelsText(r.spec.selection.segmentLabels.join(", "));
     setPrefix(r.spec.output.prefix);
     setInfo(t("roiFeat.batch.spec.loaded", { sha: r.spec.sha256.slice(0, 8) })
-      + (r.ignoredFamilies > 0 ? ` ${t("roiFeat.batch.spec.ignored", { n: r.ignoredFamilies })}` : ""));
+      + (r.ignoredFamilies > 0 ? ` ${t("roiFeat.batch.spec.ignored", { n: r.ignoredFamilies })}` : "")
+      // 校正の項目が無い従来の定義は、PET を校正しない（従来の結果の再現）。黙って SUV にしないことを知らせる
+      + (r.spec.form.calibration == null ? ` ${t("roiFeat.batch.spec.legacyCalibration")}` : ""));
   };
 
   /** QC で止まった組（全件実行のとき）。 */

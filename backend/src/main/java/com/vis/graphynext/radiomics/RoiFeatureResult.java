@@ -84,7 +84,20 @@ public record RoiFeatureResult(
      * @param settingsSha256    {@code settingsProperties} の SHA-256（16 進小文字）
      */
     public record Provenance(String graphyNextVersion, String radiomicsjVersion, Instant extractedAt,
-                             String settingsSha256) {}
+                             String settingsSha256, String valueUnit, String calibration, boolean uncalibratedPet) {
+
+        /** 校正の記録なし（従来の記録。キャッシュに残っている古い結果もこの形で読める）。 */
+        public Provenance(String graphyNextVersion, String radiomicsjVersion, Instant extractedAt,
+                          String settingsSha256) {
+            this(graphyNextVersion, radiomicsjVersion, extractedAt, settingsSha256, null, null, false);
+        }
+
+        /** 返すたびに付け直す校正の記録（同じ画素値でも、要求の校正の指定で単位の表示が変わりうる）。 */
+        Provenance withCalibration(ValueCalibration vc) {
+            return new Provenance(graphyNextVersion, radiomicsjVersion, extractedAt, settingsSha256,
+                    vc.valueUnit(), vc.text(), vc.uncalibratedPet());
+        }
+    }
 
     /**
      * ボクセル数は RadiomicsJ の Diagnostics の値。
@@ -153,5 +166,12 @@ public record RoiFeatureResult(
     RoiFeatureResult withPerRequest(RoiSize size, boolean lossy) {
         return new RoiFeatureResult(radiomicsjVersion, computedAt, fromCache, label, rows, discretisation,
                 provenance, settingsProperties, size, lossy, section, slices, scales);
+    }
+
+    /** {@link #withPerRequest(RoiSize, boolean)} に、読み込みで掛けた校正の記録を付ける。 */
+    RoiFeatureResult withPerRequest(RoiSize size, boolean lossy, ValueCalibration vc) {
+        return new RoiFeatureResult(radiomicsjVersion, computedAt, fromCache, label, rows, discretisation,
+                provenance == null ? null : provenance.withCalibration(vc), settingsProperties, size, lossy,
+                section, slices, scales);
     }
 }
