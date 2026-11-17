@@ -39,10 +39,10 @@ if [ "$latest" != "$pom_v" ] && [ "$newest" = "$latest" ]; then
   sf_code="$(curl -s -o /dev/null -w '%{http_code}' --retry 3 -IL \
     "https://sourceforge.net/projects/dcm4che/files/dcm4che3/$latest/dcm4che-$latest-bin.zip/download")"
   if [ "$maven_code" = "200" ] && [ "$sf_code" = "200" ]; then
-    echo "::error::dcm4che $latest が公開されています（pom は $pom_v）。backend/pom.xml の dcm4che.version と THIRD-PARTY-NOTICES.md を $latest に上げてください。" >&2
+    echo "::error::dcm4che $latest が公開されています（pom は ${pom_v}）。backend/pom.xml の dcm4che.version と THIRD-PARTY-NOTICES.md を $latest に上げてください。" >&2
     fail=1
   else
-    echo "::warning::dcm4che $latest は GitHub にありますが、取り込めません（Maven=$maven_code, SourceForge=$sf_code）。pom は $pom_v のまま通します。" >&2
+    echo "::warning::dcm4che $latest は GitHub にありますが、取り込めません（Maven=$maven_code, SourceForge=${sf_code}）。pom は $pom_v のまま通します。" >&2
   fi
 fi
 
