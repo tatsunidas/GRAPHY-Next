@@ -95,6 +95,11 @@ export const ja: Record<string, string> = {
   "main.menu.plugins": "プラグイン",
   "main.menu.pluginsNone": "（プラグインなし）",
   "main.menu.help": "ヘルプ",
+  "main.menu.window": "ウィンドウ",
+  "window.fullscreen": "フルスクリーン（枠なし最大化）",
+  "window.maximize": "最大化",
+  "window.minimize": "最小化",
+  "window.restore": "元に戻す（最大化・フルスクリーンを解除）",
   // System メニュー: Log / MemoryMonitor
   "system.log": "ログ",
   "system.memoryMonitor": "メモリモニタ",

@@ -95,6 +95,11 @@ export const en: Record<string, string> = {
   "main.menu.plugins": "Plug-ins",
   "main.menu.pluginsNone": "(no plug-ins)",
   "main.menu.help": "Help",
+  "main.menu.window": "Window",
+  "window.fullscreen": "Full screen",
+  "window.maximize": "Maximize",
+  "window.minimize": "Minimize",
+  "window.restore": "Restore (leave maximized / full screen)",
   // System menu: Log / MemoryMonitor
   "system.log": "Log",
   "system.memoryMonitor": "Memory Monitor",
