@@ -140,10 +140,18 @@ public class DimseQrService {
                 "-L", "STUDY",
                 "-m", "StudyInstanceUID=" + studyUid,
                 "--directory", outDir.toString()));
+        cmd.addAll(FindArgs.releaseTimeoutArgs());
         cmd.addAll(tlsArgs(tls));
-        Dcm4cheTools.Result r = tools.run(cmd, timeoutMs);
-        if (!r.ok()) {
-            throw new IOException("getscu 失敗 (exit=" + r.exitCode() + "): " + tail(r.output()));
+        Dcm4cheTools.Result r;
+        try {
+            r = tools.run(cmd, timeoutMs);
+        } catch (IOException e) {
+            deleteQuietly(outDir);
+            throw e;
+        }
+        if (!succeeded(r, "C-GET")) {
+            deleteQuietly(outDir);
+            throw new IOException(failure("getscu", r));
         }
         int count = 0;
         try (Stream<Path> walk = Files.walk(outDir)) {
@@ -191,13 +199,14 @@ public class DimseQrService {
                 "--dest", destAet,
                 "-L", "STUDY",
                 "-m", "StudyInstanceUID=" + studyUid));
+        cmd.addAll(FindArgs.releaseTimeoutArgs());
         cmd.addAll(tlsArgs(tls));
         Dcm4cheTools.Result r = tools.run(cmd, timeoutMs);
-        if (!r.ok()) {
-            throw new IOException("movescu 失敗 (exit=" + r.exitCode() + "): " + tail(r.output()));
+        if (!succeeded(r, "C-MOVE")) {
+            throw new IOException(failure("movescu", r));
         }
         log.info("C-MOVE 完了: study={} -> dest={}", studyUid, destAet);
-        return r.exitCode();
+        return r.timedOut() ? 0 : r.exitCode();
     }
 
     /**
@@ -329,6 +338,7 @@ public class DimseQrService {
         cmd.add(outDir.toString());
         cmd.add("--out-file");
         cmd.add("rsp-0000.dcm");
+        cmd.addAll(FindArgs.releaseTimeoutArgs());
         cmd.addAll(tlsArgs(tls));
         Dcm4cheTools.Result r;
         try {
@@ -337,9 +347,9 @@ public class DimseQrService {
             deleteQuietly(outDir);
             throw e;
         }
-        if (!r.ok()) {
+        if (!succeeded(r, "C-FIND(MWL)")) {
             deleteQuietly(outDir);
-            throw new IOException("findscu(MWL) 失敗 (exit=" + r.exitCode() + "): " + tail(r.output()));
+            throw new IOException(failure("findscu(MWL)", r));
         }
         List<WorklistEntry> out = new ArrayList<>();
         try (Stream<Path> walk = Files.walk(outDir)) {
@@ -413,13 +423,42 @@ public class DimseQrService {
                 "-L", "SERIES",
                 "-m", "StudyInstanceUID=" + studyUid,
                 "-m", "SeriesInstanceUID=" + seriesUid));
+        cmd.addAll(FindArgs.releaseTimeoutArgs());
         cmd.addAll(tlsArgs(tls));
         Dcm4cheTools.Result r = tools.run(cmd, TOOL_TIMEOUT_MS);
-        if (!r.ok()) {
-            throw new IOException("movescu(SERIES) 失敗 (exit=" + r.exitCode() + "): " + tail(r.output()));
+        if (!succeeded(r, "C-MOVE(SERIES)")) {
+            throw new IOException(failure("movescu(SERIES)", r));
         }
         log.info("C-MOVE(SERIES) 完了: study={} series={} -> dest={}", studyUid, seriesUid, destAet);
-        return r.exitCode();
+        return r.timedOut() ? 0 : r.exitCode();
+    }
+
+    /**
+     * 取得・移動の実行が成功か。時間切れ（強制終了）でも、<b>最終の応答 status（0000H／B000H）を受け取れていれば成功</b>
+     * とする（応答のあと、解放に応じない相手を待ち続けて強制終了した場合）。status が無い時間切れは失敗
+     * （受け取りが途中の取得を、成功と偽らない）。
+     */
+    private boolean succeeded(Dcm4cheTools.Result r, String what) {
+        if (r.ok()) {
+            return true;
+        }
+        if (r.timedOut()) {
+            DimseOutcome o = DimseOutcome.parse(r);
+            if (o.ok()) {
+                log.warn("{}: 応答の後に相手が解放に応じなかったため、ツールを強制終了しました（応答は受け取れています）", what);
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** 失敗の説明（時間切れなら、どこで止まったか）。患者情報を含みうる出力は、末尾だけ。 */
+    private static String failure(String tool, Dcm4cheTools.Result r) {
+        if (r.timedOut()) {
+            String st = DimseOutcome.lastState(r.output());
+            return tool + " 失敗 (時間切れ" + (st == null ? "" : ": " + st) + "): " + tail(r.output());
+        }
+        return tool + " 失敗 (exit=" + r.exitCode() + "): " + tail(r.output());
     }
 
     /** 通信先（AE タイトル・ホスト・ポートが一致する登録）の検索方式。登録が無い・未指定なら既定。 */
@@ -447,15 +486,17 @@ public class DimseQrService {
             r = tools.run(cmd, TOOL_TIMEOUT_MS);
         } catch (IOException e) {
             deleteQuietly(outDir);
-            if (e.getMessage() != null && e.getMessage().contains("タイムアウト")) {
-                throw new QrFindException(what, new DimseOutcome(DimseOutcome.Kind.TIMEOUT, null, null, null), null);
-            }
             throw e;
         }
-        DimseOutcome outcome = DimseOutcome.parse(r.exitCode(), r.output());
+        // 時間切れでも、応答の status を受け取れていれば成功（解放に応じない相手）。受け取れていなければ時間切れ
+        // （理由に最後の状態遷移＝どこで止まったか）。
+        DimseOutcome outcome = DimseOutcome.parse(r);
         if (!outcome.ok()) {
             deleteQuietly(outDir);
             throw new QrFindException(what, outcome, DimseOutcome.evidence(r.output()));
+        }
+        if (r.timedOut()) {
+            log.warn("{}: 応答の後に相手が解放に応じなかったため、ツールを強制終了しました（応答は受け取れています）", what);
         }
         return outDir;
     }

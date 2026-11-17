@@ -186,11 +186,7 @@ public class QrProbeService {
             List<String> cmd = FindArgs.build(tool.toString(), localAe.aeTitle(), req.calledAet(), req.host(),
                     req.port(), c.level(), p, leading, c.keys(), match, outDir.toString(), qr.tlsArgs(req.tls()));
             Dcm4cheTools.Result r = runTool(cmd);
-            if (r == null) {
-                return new Result(c.id(), "find", c.label(), "ng", Kind.TIMEOUT.name(), null, null, null, null,
-                        List.of(), ms(t0), mask(cmd), null, null, null);
-            }
-            DimseOutcome o = DimseOutcome.parse(r.exitCode(), r.output());
+            DimseOutcome o = DimseOutcome.parse(r); // 時間切れでも、応答の status を受け取れていれば OK／無ければ TIMEOUT（最後の状態つき）
             List<Attributes> rsp = o.ok() ? readResponses(outDir) : List.of();
             List<String> returned = new ArrayList<>();
             String sample = null;
@@ -227,17 +223,14 @@ public class QrProbeService {
                 cmd.add(localAe.aeTitle());
             }
             cmd.addAll(List.of("-L", "STUDY", "-m", "StudyInstanceUID=" + uid));
+            cmd.addAll(FindArgs.releaseTimeoutArgs());
             if (get) {
                 cmd.add("--directory");
                 cmd.add(outDir.toString());
             }
             cmd.addAll(qr.tlsArgs(req.tls()));
             Dcm4cheTools.Result r = runTool(cmd);
-            if (r == null) {
-                return new Result(stage, stage, label, "ng", Kind.TIMEOUT.name(), null, null, null, null,
-                        List.of(), ms(t0), mask(cmd), null, null, null);
-            }
-            DimseOutcome o = DimseOutcome.parse(r.exitCode(), r.output());
+            DimseOutcome o = DimseOutcome.parse(r);
             // 受け付けたうえで status を返した（存在しない UID なので、エラー status になることがある）
             String verdict = o.ok() ? "ok" : o.kind() == Kind.STATUS_ERROR ? "warn" : "ng";
             return new Result(stage, stage, label, verdict, o.kind().name(), o.status(), o.errorComment(),
@@ -247,16 +240,9 @@ public class QrProbeService {
         }
     }
 
-    /** 時間切れのとき null。 */
+    /** 時間切れでも、それまでの出力を {@code timedOut} 付きで返す（呼び出し側が、受け取れていた status を読む）。 */
     private Dcm4cheTools.Result runTool(List<String> cmd) throws IOException {
-        try {
-            return tools.run(cmd, RUN_TIMEOUT_MS);
-        } catch (IOException e) {
-            if (e.getMessage() != null && e.getMessage().contains("タイムアウト")) {
-                return null;
-            }
-            throw e;
-        }
+        return tools.run(cmd, RUN_TIMEOUT_MS);
     }
 
     private static List<Attributes> readResponses(Path outDir) {

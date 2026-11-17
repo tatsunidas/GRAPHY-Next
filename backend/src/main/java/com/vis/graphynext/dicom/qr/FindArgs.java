@@ -18,6 +18,18 @@ public final class FindArgs {
     }
 
     /**
+     * 解放（A-RELEASE）の応答を待つ上限（ミリ秒）。dcm4che のツールは既定で無期限に待つので、解放に応じない相手
+     * （応答は返すのに A-RELEASE-RQ を無視する中継サーバーなど）では、結果を受け取ったあとも終わらない。
+     * 3 秒は PSP 実機の実測（3 秒で A-ABORT して終了、終了コード 0）。解放の応答は、通常は即座に返る。
+     */
+    public static final String RELEASE_TIMEOUT_MS = "3000";
+
+    /** findscu・getscu・movescu に既定で付ける引数。 */
+    public static List<String> releaseTimeoutArgs() {
+        return List.of("--release-timeout", RELEASE_TIMEOUT_MS);
+    }
+
+    /**
      * @param level        {@code PATIENT} / {@code STUDY} / {@code SERIES}
      * @param leadingMatch 返却キーより前に置く照合キー（SERIES 段の StudyInstanceUID など）。null 可
      * @param returnKeys   返却キー（プロファイルの指定があれば呼び出し側で解決済みのもの）
@@ -33,6 +45,7 @@ public final class FindArgs {
                 "-b", localAet,
                 "-c", calledAet + "@" + host + ":" + port,
                 "-L", level));
+        cmd.addAll(releaseTimeoutArgs());
         if (p.patientRoot()) {
             cmd.add("-M");
             cmd.add("PatientRoot");
