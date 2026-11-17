@@ -22,6 +22,9 @@ import { ROI_FEATURE_FAMILIES, defaultRoiFeatureForm } from "./roiFeatureSetting
 
 const content = (over: Partial<SpecContent> = {}): SpecContent => ({ ...defaultSpecContent(), ...over });
 
+/** 校正の項目が無い従来の定義の内容（`calibration: null`。正準 JSON にキーを出さず、SHA-256 は項目が増える前のまま）。 */
+const legacy = (c: SpecContent = defaultSpecContent()): SpecContent => ({ ...c, form: { ...c.form, calibration: null } });
+
 /** 検証を通る定義のテキストを作り、1 か所だけ書き換えたものを返す（SHA-256 は書き換え前のまま）。 */
 async function text(mutate: (o: Record<string, any>) => void = () => undefined, c: SpecContent = content()): Promise<string> {
   const o = JSON.parse(specText(await buildSpec(c, "p")));
@@ -42,8 +45,8 @@ describe("small-ROI threshold in the definition", () => {
   const withVoxels = (n: number | null): SpecContent => content({ qc: { smallRoi: "STOP", lossy: "FLAG", smallRoiVoxels: n } });
 
   it("a definition without a threshold keeps the SHA-256 it had before the field existed", async () => {
-    expect(await contentSha256(defaultSpecContent())).toBe(BASE_DEFAULT);
-    expect(await contentSha256(content({ qc: { smallRoi: "STOP", lossy: "FLAG", smallRoiVoxels: null }, selection: { segmentLabels: ["GTV", "tumor"] } }))).toBe(BASE_STOP_LABELS);
+    expect(await contentSha256(legacy())).toBe(BASE_DEFAULT);
+    expect(await contentSha256(legacy(content({ qc: { smallRoi: "STOP", lossy: "FLAG", smallRoiVoxels: null }, selection: { segmentLabels: ["GTV", "tumor"] } })))).toBe(BASE_STOP_LABELS);
   });
   it("null leaves the key out of the canonical JSON and the saved file; a value writes it", async () => {
     expect(canonicalContentJson(withVoxels(null))).not.toContain("smallRoiVoxels");
@@ -308,9 +311,9 @@ describe("kind in the definition", () => {
 
   it("a definition without a kind keeps the SHA-256 it had before the field existed", async () => {
     // 種類を足す前に取った固定値（上の「基準値」の節と同じ値）。radiomics のときはキーを出さない
-    expect(await contentSha256(defaultSpecContent())).toBe("9e08bec6fc61105a4113e5ea626ac8640c405c1b7ec31343b0b928419e43dced");
-    expect(canonicalContentJson(defaultSpecContent())).not.toContain("kind");
-    expect(specText(await buildSpec(defaultSpecContent(), "p"))).not.toContain("kind");
+    expect(await contentSha256(legacy())).toBe("9e08bec6fc61105a4113e5ea626ac8640c405c1b7ec31343b0b928419e43dced");
+    expect(canonicalContentJson(legacy())).not.toContain("kind");
+    expect(specText(await buildSpec(legacy(), "p"))).not.toContain("kind");
   });
 
   it("the kind changes the SHA-256, and is written to the file only when it is voiStats", async () => {
@@ -360,3 +363,67 @@ describe("kind in the definition", () => {
   });
 });
 
+
+describe("calibration (PET) in the definition", () => {
+  const LEGACY_SHA = "9e08bec6fc61105a4113e5ea626ac8640c405c1b7ec31343b0b928419e43dced";
+
+  it("a new definition writes the calibration (default auto) and its SHA-256 differs from a legacy definition", async () => {
+    const c = defaultSpecContent();
+    expect(c.form.calibration).toBe("auto");
+    expect(canonicalContentJson(c)).toContain('"calibration":"auto"');
+    expect(await contentSha256(c)).not.toBe(LEGACY_SHA);
+    expect(JSON.parse(specText(await buildSpec(c, "p"))).form.calibration).toBe("auto");
+  });
+
+  it("every choice changes the hash, and survives save and load", async () => {
+    const seen = new Set<string>();
+    for (const cal of ["auto", "bw", "sul-james", "sul-janma", "bsa", "none"] as const) {
+      const c = content({ form: { ...defaultSpecContent().form, calibration: cal } });
+      const sha = await contentSha256(c);
+      expect(seen.has(sha)).toBe(false);
+      seen.add(sha);
+      const r = await parseSpec(specText(await buildSpec(c, "p")));
+      expect(r.ok).toBe(true);
+      if (r.ok) expect(r.spec.form.calibration).toBe(cal);
+    }
+  });
+
+  it("a legacy definition (no calibration item) still loads with its old SHA-256 and means 'no calibration'", async () => {
+    const t = specText(await buildSpec(legacy(), "p"));
+    expect(JSON.parse(t).form.calibration).toBeUndefined();
+    const r = await parseSpec(t);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.spec.sha256).toBe(LEGACY_SHA);
+    expect(r.spec.form.calibration).toBeNull();
+    // 従来の結果を再現するため、PET は校正しない
+    expect(applySpecToForm(defaultRoiFeatureForm(), r.spec).calibration).toBe("none");
+  });
+
+  it("an unknown calibration value is refused and nothing is loaded (negative)", async () => {
+    const t = await text((o) => { o.form.calibration = "suv-magic"; });
+    const r = await parseSpec(t);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.detail).toBe("form.calibration");
+  });
+
+  it("a rewritten calibration is refused by the SHA-256 (negative)", async () => {
+    const t = await text((o) => { o.form.calibration = "none"; });
+    const r = await parseSpec(t);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toBe("sha_mismatch");
+  });
+
+  it("the VOI statistics keep the calibration (it is not reset to the default with the hidden fields)", async () => {
+    const a = await contentSha256(content({ kind: "voiStats", form: { ...defaultSpecContent().form, calibration: "bw" } }));
+    const b = await contentSha256(content({ kind: "voiStats", form: { ...defaultSpecContent().form, calibration: "sul-james" } }));
+    expect(a).not.toBe(b);
+  });
+
+  it("the form's calibration goes into the definition and back", () => {
+    const form = { ...defaultRoiFeatureForm(), calibration: "sul-janma" as const };
+    const c = specContentFrom(form, defaultSpecContent().qc, []);
+    expect(c.form.calibration).toBe("sul-janma");
+    expect(applySpecToForm(defaultRoiFeatureForm(), c).calibration).toBe("sul-janma");
+  });
+});

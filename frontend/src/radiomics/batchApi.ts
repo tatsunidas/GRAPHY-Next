@@ -61,6 +61,8 @@ export interface BatchRequest {
   smallRoiWarnVoxels: number | null;
   /** 抽出の種類。null は `radiomics`（従来）。`voiStats` は一次統計だけ（PET の組は断られる）。 */
   kind: "radiomics" | "voiStats" | null;
+  /** PET の校正（auto・none・bw・sul-james・sul-janma・bsa）。null は auto。 */
+  calibration: string | null;
 }
 
 export type BatchJobState = "QUEUED" | "RUNNING" | "DONE" | "STOPPED" | "CANCELLED";

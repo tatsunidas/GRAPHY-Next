@@ -5,7 +5,7 @@
 import { useEffect, useState } from "react";
 import { useI18n } from "../i18n/i18n";
 import { SMALL_ROI_VOXELS_MAX, type SpecKind, type SpecQc, type SpecQcMode } from "./batchSpec";
-import { RoiFeatureSettingsFields } from "./RoiFeatureSettingsFields";
+import { CalibrationField, RoiFeatureSettingsFields } from "./RoiFeatureSettingsFields";
 import type { RoiFeatureForm } from "./roiFeatureSettings";
 
 /**
@@ -71,6 +71,8 @@ export function BatchSettingsPanel({
       {kind === "voiStats" ? (
         <>
           <div style={hint} data-testid="batch-kind-voi-help">{t("roiFeat.batch.kind.voiHelp")}</div>
+          <CalibrationField form={form} setForm={setForm} disabled={disabled} testIdPrefix="batch"
+            layout={{ labelMinWidth: 110, align: "left" }} />
           {labelsAndQc}
         </>
       ) : (

@@ -12,7 +12,9 @@
  *
  * <p>画像フィルタ（LoG・スケール）は定義に入れない（一括抽出が対象にしていない）。
  */
-import { ROI_FEATURE_FAMILIES, defaultRoiFeatureForm, rangeBounds, type RoiFeatureForm } from "./roiFeatureSettings";
+import {
+  CALIBRATION_CHOICES, ROI_FEATURE_FAMILIES, defaultRoiFeatureForm, rangeBounds, type CalibrationChoice, type RoiFeatureForm,
+} from "./roiFeatureSettings";
 
 export const SPEC_FORMAT = "graphy-next.roi-batch-spec";
 export const SPEC_VERSION = 1;
@@ -38,6 +40,11 @@ export const SPEC_KINDS: readonly SpecKind[] = ["radiomics", "voiStats"];
 export type SpecForm = Pick<RoiFeatureForm, "fixedBinNumber" | "binCount" | "binWidth" | "resampleMm" | "families"> & {
   rangeMin: number | null;
   rangeMax: number | null;
+  /**
+   * PET の校正。新しい定義は常に書く（既定は `auto`）。**null は、校正の項目が無い従来の定義**で、正準 JSON にキーを出さず
+   * （従来の定義の SHA-256 を変えない）、PET は校正されない（`none`）ものとして読む（従来の結果を再現する）。
+   */
+  calibration: CalibrationChoice | null;
 };
 
 /**
@@ -79,7 +86,7 @@ export function defaultSpecContent(): SpecContent {
   const f = defaultRoiFeatureForm();
   return {
     kind: "radiomics",
-    form: { fixedBinNumber: f.fixedBinNumber, binCount: f.binCount, binWidth: f.binWidth, resampleMm: f.resampleMm, families: f.families, rangeMin: null, rangeMax: null },
+    form: { fixedBinNumber: f.fixedBinNumber, binCount: f.binCount, binWidth: f.binWidth, resampleMm: f.resampleMm, families: f.families, rangeMin: null, rangeMax: null, calibration: f.calibration },
     qc: { smallRoi: "FLAG", lossy: "FLAG", smallRoiVoxels: null },
     selection: { segmentLabels: [] },
   };
@@ -111,13 +118,15 @@ const formJson = (f: SpecForm) => ({
   families: Object.fromEntries(ROI_FEATURE_FAMILIES.map((fam) => [fam.key, !!f.families[fam.key]])),
   ...(f.rangeMin == null ? {} : { rangeMin: f.rangeMin }),
   ...(f.rangeMax == null ? {} : { rangeMax: f.rangeMax }),
+  ...(f.calibration == null ? {} : { calibration: f.calibration }),
 });
 
 /**
  * VOI 統計では族・ビン・再標本化・範囲の欄を使わない（隠れた欄の値でハッシュが変わらないよう、既定値に固定する）。
  * 通常の特徴量抽出はそのまま。
  */
-const effectiveForm = (c: SpecContent): SpecForm => (c.kind === "voiStats" ? defaultSpecContent().form : c.form);
+const effectiveForm = (c: SpecContent): SpecForm =>
+  c.kind === "voiStats" ? { ...defaultSpecContent().form, calibration: c.form.calibration } : c.form; // 校正は VOI 統計でも選ぶ
 
 /** 正準な JSON。キーの並びを固定して組み立てる（族は `ROI_FEATURE_FAMILIES` の順）。 */
 export function canonicalContentJson(c: SpecContent): string {
@@ -209,6 +218,12 @@ export async function parseSpec(text: string): Promise<SpecParse> {
   if (rangeMax === undefined) return fail("type", "form.rangeMax");
   if (rangeMin !== null && rangeMax !== null && rangeMin > rangeMax) return fail("range", "form.range");
 
+  const calRaw = own(form, "calibration");
+  if (calRaw !== undefined && calRaw !== null && !CALIBRATION_CHOICES.includes(calRaw as CalibrationChoice)) {
+    return fail("type", "form.calibration");
+  }
+  const calibration: CalibrationChoice | null = calRaw === undefined || calRaw === null ? null : (calRaw as CalibrationChoice);
+
   const famRaw = own(form, "families");
   if (!isObj(famRaw)) return fail("type", "form.families");
   const known = new Set(ROI_FEATURE_FAMILIES.map((f) => f.key));
@@ -252,7 +267,7 @@ export async function parseSpec(text: string): Promise<SpecParse> {
 
   const content: SpecContent = {
     kind,
-    form: { fixedBinNumber, binCount, binWidth, resampleMm: resampleMm as number | null, families, rangeMin, rangeMax },
+    form: { fixedBinNumber, binCount, binWidth, resampleMm: resampleMm as number | null, families, rangeMin, rangeMax, calibration },
     qc: { smallRoi, lossy, smallRoiVoxels },
     selection: { segmentLabels: normalizeLabels(labels) },
   };
@@ -263,9 +278,11 @@ export async function parseSpec(text: string): Promise<SpecParse> {
 
 /** 定義の中身を ROI 特徴量の入力欄の値に反映する（LoG・スケールは既定のまま）。 */
 export function applySpecToForm(base: RoiFeatureForm, spec: SpecContent): RoiFeatureForm {
-  const { rangeMin, rangeMax, ...rest } = spec.form;
+  const { rangeMin, rangeMax, calibration, ...rest } = spec.form;
   return {
     ...base, ...rest, families: { ...spec.form.families },
+    // 校正の項目が無い従来の定義は、PET を校正しない（従来の結果の再現）。画面は、そのことを知らせる
+    calibration: calibration ?? "none",
     rangeMinText: rangeMin == null ? "" : String(rangeMin),
     rangeMaxText: rangeMax == null ? "" : String(rangeMax),
   };
@@ -282,6 +299,7 @@ export function specContentFrom(
     form: {
       fixedBinNumber: form.fixedBinNumber, binCount: form.binCount, binWidth: form.binWidth, resampleMm: form.resampleMm, families: form.families,
       rangeMin: ok ? range.min : null, rangeMax: ok ? range.max : null,
+      calibration: form.calibration,
     },
     qc,
     selection: { segmentLabels: normalizeLabels(labels) },

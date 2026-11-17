@@ -2244,6 +2244,11 @@ export interface RoiFeatureRequest {
   scaleConversion?: "SQRT_D" | "IDENTITY" | "COEFFICIENT";
   /** COEFFICIENT の k（σ = k·r）。 */
   scaleCoefficient?: number;
+  /**
+   * PET の校正（auto・none・bw・sul-james・sul-janma・bsa）。省略は auto（PET を SUVbw に校正し、CT・MR は何もしない）。
+   * none は Bq/mL のまま（結果に旗 UNCALIBRATED_PT が付く）。
+   */
+  calibration?: string;
 }
 
 export type RoiMode = "WHOLE_3D" | "MAX_SECTION_2D" | "SLICES_2D";
@@ -2384,6 +2389,12 @@ export interface RoiFeatureProvenance {
   extractedAt: string;
   /** settingsProperties の UTF-8 の SHA-256（16 進）。 */
   settingsSha256: string;
+  /** 計算に使った値の単位（HU・SUVbw・SUVlbm・SUVbsa・BQML（未校正）・SUV（元の値））。単位が分からないときは空。古い記録は無い。 */
+  valueUnit?: string | null;
+  /** 校正の記録（種類;scale=係数;警告）。校正しなかったときは空。古い記録は無い。 */
+  calibration?: string | null;
+  /** PET を、明示して校正せずに（Bq/mL のまま）計算した。 */
+  uncalibratedPet?: boolean;
 }
 
 export type RoiFeatureJobState = "QUEUED" | "LOADING" | "EXTRACTING" | "DONE" | "FAILED" | "CANCELLED";

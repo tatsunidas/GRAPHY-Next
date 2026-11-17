@@ -84,7 +84,16 @@ export const DISCRETISED_FAMILIES: ReadonlySet<string> = new Set([
 ]);
 export const IVH_FAMILY = "IntensityVolumeHistogram";
 
+/**
+ * PET の校正（backend `RoiFeatureRequest.calibration`）。`auto` は PET を SUVbw に校正し、CT・MR などは何もしない。
+ * `none` は PET を Bq/mL のまま計算する（明示したときだけ。結果の行に旗が付く）。
+ */
+export const CALIBRATION_CHOICES = ["auto", "bw", "sul-james", "sul-janma", "bsa", "none"] as const;
+export type CalibrationChoice = (typeof CALIBRATION_CHOICES)[number];
+
 export interface RoiFeatureForm {
+  /** PET の校正。範囲・離散化・特徴量は、校正後の値に対して働く。 */
+  calibration: CalibrationChoice;
   fixedBinNumber: boolean;
   binCount: number;
   binWidth: number;
@@ -135,6 +144,7 @@ export function splitFilteredFamily(family: string): { sigma: string; base: stri
 /** RadiomicsJ の既定（ビン数 32・ビン幅 25・リサンプリングなし・GLAM と Shape2D はオフ）。 */
 export function defaultRoiFeatureForm(): RoiFeatureForm {
   return {
+    calibration: "auto",
     fixedBinNumber: true,
     binCount: 32,
     binWidth: 25,

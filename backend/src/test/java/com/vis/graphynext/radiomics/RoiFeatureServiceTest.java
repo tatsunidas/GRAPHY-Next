@@ -92,14 +92,18 @@ class RoiFeatureServiceTest {
         @Override
         public LoadedVolume load(String study, String series, int channel, int timePoint, String maskSeries,
                                  int maskChannel, int label, Map<String, String> settings) {
-            assertTrue(settings.isEmpty(), "Next のテクスチャ設定は渡さない");
+            // Next のテクスチャ設定は渡さない。渡してよいのは PET の校正の指定（既定の auto）だけ
+            assertEquals(java.util.Set.of(RadiomicsMapEngine.CALIBRATION_SETTING), settings.keySet(), "Next のテクスチャ設定は渡さない");
+            assertEquals("auto", settings.get(RadiomicsMapEngine.CALIBRATION_SETTING));
             return vol;
         }
 
         @Override
         public LoadedVolume load(String study, String series, int channel, int timePoint, String maskSeries,
                                  int maskChannel, int label, Map<String, String> settings, boolean allowRectify) {
-            assertTrue(settings.isEmpty(), "Next のテクスチャ設定は渡さない");
+            // Next のテクスチャ設定は渡さない。渡してよいのは PET の校正の指定（既定の auto）だけ
+            assertEquals(java.util.Set.of(RadiomicsMapEngine.CALIBRATION_SETTING), settings.keySet(), "Next のテクスチャ設定は渡さない");
+            assertEquals("auto", settings.get(RadiomicsMapEngine.CALIBRATION_SETTING));
             return vol;
         }
     }

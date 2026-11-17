@@ -59,6 +59,8 @@ public class RadiomicsBatchService {
     /** 旗。{@code SMALL_ROI}＝強度マスクのボクセル数が基準値（要求の値、無ければ環境設定）より少ない。基準値が無ければ立たない。 */
     public static final String FLAG_SMALL_ROI = "SMALL_ROI";
     public static final String FLAG_LOSSY = "LOSSY_COMPRESSION";
+    /** PET を、利用者の明示で SUV に校正せずに（Bq/mL のまま）計算した。 */
+    public static final String FLAG_UNCALIBRATED_PT = "UNCALIBRATED_PT";
 
     /** 停止の種類。QC＝利用者の確認待ち、ENVIRONMENT＝IO・メモリの障害。 */
     public enum StopKind { QC, ENVIRONMENT }
@@ -70,13 +72,25 @@ public class RadiomicsBatchService {
      * @param smallRoiWarnVoxels 小さい ROI の基準値（ボクセル数）。null は環境設定の値。{@code qc} とは別の項目
      *                       （試行は {@code qc} を送らないが、基準値は効かせる）
      * @param kind           抽出の種類。null・{@code radiomics}＝従来の特徴量抽出、{@code voiStats}＝一次統計だけ
-     *                       （設定はフロントが一次統計の族だけを有効にして送る。PET は SUV を扱えないので組ごとに断る）
+     *                       （設定はフロントが一次統計の族だけを有効にして送る）
+     * @param calibration    PET の校正（{@link RoiFeatureRequest#calibration}）。null は {@code auto}（PET を SUVbw に校正）。
+     *                       VOI 統計は、{@code none}（Bq/mL のまま）の PET だけを断る
      */
     public record BatchRequest(List<BatchPair> pairs, Map<String, String> settings,
                                Set<RoiFeatureRequest.RoiMode> roiModes, List<Double> scales, String scaleNotation,
                                List<String> scaleLabels, String scaleConversion, Double scaleCoefficient,
                                int channel, int timePoint, boolean recompute, Qc qc, List<String> qcAcknowledged,
-                               Integer smallRoiWarnVoxels, String kind) {
+                               Integer smallRoiWarnVoxels, String kind, String calibration) {
+        /** PET の校正を指定しない（従来の要求。{@code auto}）。 */
+        public BatchRequest(List<BatchPair> pairs, Map<String, String> settings,
+                            Set<RoiFeatureRequest.RoiMode> roiModes, List<Double> scales, String scaleNotation,
+                            List<String> scaleLabels, String scaleConversion, Double scaleCoefficient,
+                            int channel, int timePoint, boolean recompute, Qc qc, List<String> qcAcknowledged,
+                            Integer smallRoiWarnVoxels, String kind) {
+            this(pairs, settings, roiModes, scales, scaleNotation, scaleLabels, scaleConversion, scaleCoefficient,
+                    channel, timePoint, recompute, qc, qcAcknowledged, smallRoiWarnVoxels, kind, null);
+        }
+
         /** 種類を指定しない（従来の要求）。 */
         public BatchRequest(List<BatchPair> pairs, Map<String, String> settings,
                             Set<RoiFeatureRequest.RoiMode> roiModes, List<Double> scales, String scaleNotation,
@@ -299,7 +313,7 @@ public class RadiomicsBatchService {
         return new RoiFeatureRequest(p.studyUid(), p.sourceSeriesUid(), p.maskSeriesUid(), p.maskChannel(),
                 req.channel(), req.timePoint(), req.settings(), req.recompute(), req.roiModes(), req.scales(),
                 req.scaleNotation(), req.scaleLabels(), req.scaleConversion(), req.scaleCoefficient(),
-                req.smallRoiWarnVoxels());
+                req.smallRoiWarnVoxels(), req.calibration());
     }
 
     private void set(Job job, int i, PairState state, FailureKind kind, String error, boolean fromCache, long ms) {
@@ -320,6 +334,9 @@ public class RadiomicsBatchService {
         }
         if (r.lossyCompressed()) {
             flags.add(FLAG_LOSSY);
+        }
+        if (r.provenance() != null && r.provenance().uncalibratedPet()) {
+            flags.add(FLAG_UNCALIBRATED_PT);
         }
         return flags;
     }
@@ -390,13 +407,18 @@ public class RadiomicsBatchService {
         }
     }
 
-    /** VOI 統計は PET の SUV を扱えない（保存値のまま Bq/mL を SUV と取り違えないよう、その組は断る）。 */
+    /**
+     * VOI 統計は、PET を校正せずに（Bq/mL のまま、{@code calibration=none}）出す組を断る（保存値の単位を SUV と
+     * 取り違えないため）。校正する（既定の {@code auto} を含む）なら、PET も出せる。
+     */
     private void rejectUnsupportedModality(BatchRequest req, BatchPair p) {
         if (!KIND_VOI_STATS.equals(req.kind()) || modalityOf == null) {
             return;
         }
-        if ("PT".equals(modalityOf.apply(p.studyUid(), p.sourceSeriesUid()))) {
-            throw new IllegalArgumentException("PET は SUV に未対応のため、VOI 統計を出しません（保存値の単位のままになるため）");
+        if (RoiFeatureRequest.CALIBRATION_NONE.equalsIgnoreCase(req.calibration())
+                && "PT".equals(modalityOf.apply(p.studyUid(), p.sourceSeriesUid()))) {
+            throw new IllegalArgumentException(
+                    "PET を校正せずに（Bq/mL のまま）VOI 統計は出しません。SUV に校正してください");
         }
     }
 

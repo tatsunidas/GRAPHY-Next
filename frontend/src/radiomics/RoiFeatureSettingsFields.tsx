@@ -6,9 +6,40 @@ import type { CSSProperties, ReactNode } from "react";
 import { NumberField } from "../hooks/NumberField";
 import { useI18n } from "../i18n/i18n";
 import {
-  ROI_FEATURE_FAMILIES, applyScale36, applySixStatistics, isScale36, isSixStatistics, rangeBounds,
-  type RoiFeatureForm,
+  CALIBRATION_CHOICES, ROI_FEATURE_FAMILIES, applyScale36, applySixStatistics, isScale36, isSixStatistics, rangeBounds,
+  type CalibrationChoice, type RoiFeatureForm,
 } from "./roiFeatureSettings";
+
+/**
+ * PET の校正（SUV・SUL）の選択。範囲・離散化・特徴量は、校正後の値に対して働く。
+ * 一括抽出の「VOI 統計」でも使うので、別の部品にしてある。
+ */
+export function CalibrationField({ form, setForm, disabled, testIdPrefix, layout }: {
+  form: RoiFeatureForm;
+  setForm: (f: (prev: RoiFeatureForm) => RoiFeatureForm) => void;
+  disabled: boolean;
+  testIdPrefix: "roifeat" | "batch";
+  layout: { labelMinWidth: number; align: "left" | "right" };
+}) {
+  const { t } = useI18n();
+  return (
+    <>
+      <Row label={t("roiFeat.field.calibration")} layout={layout} gap={8}>
+        <select value={form.calibration} disabled={disabled} style={{ ...input, width: 320, maxWidth: "100%" }}
+          data-testid={`${testIdPrefix}-calibration`} title={t("roiFeat.calibration.tooltip")}
+          onChange={(e) => setForm((f) => ({ ...f, calibration: e.target.value as CalibrationChoice }))}>
+          {CALIBRATION_CHOICES.map((c) => <option key={c} value={c}>{t(`roiFeat.calibration.${c}`)}</option>)}
+        </select>
+      </Row>
+      <div style={{ color: "#5a6672", fontSize: 11, margin: "0 0 4px" }} data-testid={`${testIdPrefix}-calibration-help`}>
+        {t("roiFeat.calibration.help")}
+      </div>
+      {form.calibration === "none" && (
+        <div style={warnBand} data-testid={`${testIdPrefix}-calibration-none-warn`}>{t("roiFeat.calibration.noneWarn")}</div>
+      )}
+    </>
+  );
+}
 
 /**
  * ROI 特徴量の設定欄の共通部分（離散化・リサンプリング・範囲・プリセット・特徴量の族）。
@@ -53,6 +84,7 @@ export function RoiFeatureSettingsFields({
   );
   return (
     <>
+      <CalibrationField form={form} setForm={setForm} disabled={disabled} testIdPrefix={testIdPrefix} layout={layout} />
       {row(t("roiFeat.field.discretisation"), 8, (
         <>
           <label>
@@ -101,6 +133,7 @@ export function RoiFeatureSettingsFields({
               <input value={form.rangeMaxText} disabled={disabled} style={{ ...input, width: 72 }} inputMode="decimal"
                 placeholder={t("roiFeat.range.max")} data-testid={`${p}-range-max`}
                 onChange={(e) => setForm((f) => ({ ...f, rangeMaxText: e.target.value }))} />
+              <span style={{ color: "#5a6672", fontSize: 11 }} data-testid={`${p}-range-unit`}>{t("roiFeat.range.unit")}</span>
             </>
           ))}
           {rangeProblem && (
