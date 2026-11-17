@@ -1,0 +1,22 @@
+#!/bin/sh
+# GRAPHY-Next の MCP 中継 graphy-mcp（インストール版の macOS・Linux deb。外部 AI クライアントが起動する）。resources/cli/ から実行ファイルと app.asar を探し、
+# ELECTRON_RUN_AS_NODE=1 で mcpCli.js を動かす。使い方は docs/mcp.md（段 5 で作成）。
+src="$0"
+while [ -L "$src" ]; do
+  link=$(readlink "$src")
+  case "$link" in
+    /*) src="$link" ;;
+    *) src="$(dirname "$src")/$link" ;;
+  esac
+done
+here=$(cd "$(dirname "$src")" && pwd)
+res=$(dirname "$here")
+case "$(uname -s)" in
+  Darwin) exe="$res/../MacOS/GRAPHY-Next" ;;
+  *) exe="$res/../graphy-next-desktop" ;;
+esac
+if [ ! -x "$exe" ]; then
+  echo "GRAPHY-Next の実行ファイルが見つかりません: $exe" >&2
+  exit 4
+fi
+ELECTRON_RUN_AS_NODE=1 exec "$exe" "$res/app.asar/mcpCli.js" "$@"

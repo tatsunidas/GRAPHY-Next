@@ -107,13 +107,21 @@ jobs:
             src/viewer/roiStats.test.ts \
             src/viewer/roiCircleAnisotropic.test.ts \
             src/viewer/maskStatsCore.test.ts \
-            src/viewer/segSliceMeasures.test.ts
+            src/viewer/segSliceMeasures.test.ts \
+            src/mcp/relay.test.ts \
+            src/mcp/server.test.ts
       # 一括抽出の無人実行（desktop/batchCli.js）が使う束ね。壊れたら PR で気付く（リリースでも同じ手順で作る）。
       - name: Bundle batch CLI
         working-directory: frontend
         run: |
           npm run build:batch-cli
           test -s ../desktop/batch-cli/run.cjs
+      # MCP の中継 graphy-mcp（desktop/mcpCli.js）が使う束ね。stdio 以外の SDK（express など）が入ったらここで落ちる。
+      - name: Bundle MCP relay
+        working-directory: frontend
+        run: |
+          npm run build:mcp
+          test -s ../desktop/mcp/run.cjs
 
   automator:
     name: Automator (typecheck)

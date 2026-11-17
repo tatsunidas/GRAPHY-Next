@@ -39,6 +39,14 @@ test("一括抽出の無人実行（batchCli.js と束ねた batch-cli/run.cjs�
   }
 });
 
+test("MCP の中継（mcpCli.js と束ねた mcp/run.cjs）もインストーラに入る", () => {
+  const req = requiredFiles();
+  for (const f of ["mcpCli.js", "batchCli.js", "mcp/run.cjs"]) {
+    assert.ok(req.includes(f), `たどれていない: ${f}`);
+    assert.ok(included(f), `build.files に無い: ${f}`);
+  }
+});
+
 test("extraResources に起動ラッパー（cli）がある", () => {
   const pkg = JSON.parse(require("node:fs").readFileSync(require("node:path").join(__dirname, "package.json"), "utf8"));
   assert.ok(pkg.build.extraResources.some((r) => r.from === "cli" && r.to === "cli"));
