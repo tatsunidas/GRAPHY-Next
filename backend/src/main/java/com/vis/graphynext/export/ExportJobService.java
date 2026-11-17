@@ -4,6 +4,8 @@
  */
 package com.vis.graphynext.export;
 
+import com.vis.graphynext.activity.ActiveWork;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.annotation.Profile;
@@ -32,7 +34,7 @@ import java.util.zip.ZipOutputStream;
  */
 @Service
 @Profile("standalone")
-public class ExportJobService {
+public class ExportJobService implements ActiveWork {
 
     private static final Logger log = LoggerFactory.getLogger(ExportJobService.class);
 
@@ -180,5 +182,23 @@ public class ExportJobService {
                 jobs.remove(j.id);
             }
         }
+    }
+
+    @Override
+    public String kind() {
+        return "export";
+    }
+
+    @Override
+    public int activeCount() {
+        return (int) jobs.values().stream()
+                .filter(j -> j.state == State.QUEUED
+                        || j.state == State.RUNNING)
+                .count();
+    }
+
+    @Override
+    public void cancelAll() {
+        jobs.keySet().forEach(this::cancel);
     }
 }

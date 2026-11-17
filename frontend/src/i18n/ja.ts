@@ -96,6 +96,7 @@ export const ja: Record<string, string> = {
   "main.menu.pluginsNone": "（プラグインなし）",
   "main.menu.help": "ヘルプ",
   "main.menu.window": "ウィンドウ",
+  "main.menu.exit": "終了",
   "window.fullscreen": "フルスクリーン（枠なし最大化）",
   "window.maximize": "最大化",
   "window.minimize": "最小化",

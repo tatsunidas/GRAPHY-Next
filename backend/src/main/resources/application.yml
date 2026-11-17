@@ -1,6 +1,9 @@
 # GRAPHY-Next backend 共通設定
 # プロファイル未指定時は web で起動する。
 spring:
+  lifecycle:
+    # main.js の Colab・ローカル AI の停止待ち（10 秒）と揃えた値（計測から導いた数値ではない）
+    timeout-per-shutdown-phase: 10s
   application:
     name: graphy-next-backend
   profiles:
@@ -31,6 +34,9 @@ spring:
 
 server:
   port: 8080
+  # 停止時は、処理中の要求（DICOM 送信・DB の編集・レポート保存など）が終わるのを待つ。待ち時間の上限は
+  # spring.lifecycle.timeout-per-shutdown-phase。Electron main が「中止して終了」でこの停止を使う。
+  shutdown: graceful
   # リバースプロキシ配下（deploy/demo の nginx 等）で X-Forwarded-Proto/Host を信頼する。
   # 無いと Tomcat が自身のスキームを常に http と認識し、https 経由のブラウザからの Origin
   # ヘッダ（scheme 不一致）を同一オリジンと判定できず、CORS 未設定オリジン扱いで

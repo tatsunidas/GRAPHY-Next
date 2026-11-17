@@ -7,6 +7,7 @@ package com.vis.graphynext.compute;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.vis.graphynext.activity.ActiveWork;
 import com.vis.graphynext.compute.ComputeJobStateMachine.Reason;
 import com.vis.graphynext.compute.ComputeJobStateMachine.State;
 import com.vis.graphynext.plugin.PluginArtifacts;
@@ -53,7 +54,7 @@ import java.util.zip.ZipOutputStream;
  * プラグインから見た H59（{@code /api/plugin-jobs/{jobId}}・成果物の取り方）は変わらない。
  */
 @Service
-public class ComputeJobRunner {
+public class ComputeJobRunner implements ActiveWork {
 
     private static final Logger log = LoggerFactory.getLogger(ComputeJobRunner.class);
     /** 取り出す結果の上限（ファイル数・合計）。 */
@@ -705,5 +706,39 @@ public class ComputeJobRunner {
         CancelledByUser() {
             super("cancelled");
         }
+    }
+
+    @Override
+    public String kind() {
+        return "compute";
+    }
+
+    /** 順番待ち（QUEUED）と実行中（RUNNING）。AWAITING_USER は利用者の操作待ちで、アプリが動かしていないので数えない。 */
+    @Override
+    public int activeCount() {
+        try {
+            return (int) ledger.list().stream().filter(j -> isRunnable(j.state)).count();
+        } catch (RuntimeException e) {
+            log.warn("[compute] activeCount failed: {}", e.toString());
+            return 0;
+        }
+    }
+
+    @Override
+    public void cancelAll() {
+        try {
+            for (ComputeJobRecord j : ledger.list()) {
+                if (isRunnable(j.state) && !cancel(j.id)) {
+                    // プラグイン側の列から消えた待ちのジョブは、台帳だけ中止にする
+                    ledger.cancelIfQueued(j.id);
+                }
+            }
+        } catch (RuntimeException e) {
+            log.warn("[compute] cancelAll failed: {}", e.toString());
+        }
+    }
+
+    private static boolean isRunnable(String state) {
+        return State.QUEUED.name().equals(state) || State.RUNNING.name().equals(state);
     }
 }

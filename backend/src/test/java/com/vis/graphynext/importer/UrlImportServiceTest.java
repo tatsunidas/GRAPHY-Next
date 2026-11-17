@@ -227,6 +227,32 @@ class UrlImportServiceTest {
     }
 
     @Test
+    void activeWork_受信中を数え_cancelAllで止まり_終わったものは数えない() throws Exception {
+        UrlImportService s = service(Long.MAX_VALUE);
+        assertThat(s.kind()).isEqualTo("urlImport");
+        assertThat(s.cancellable()).isTrue();
+        assertThat(s.activeCount()).isZero(); // 何も無いとき
+        s.cancelAll();
+
+        String id = s.submit(base + "/slow").jobId();
+        for (int i = 0; i < 200 && s.get(id).receivedBytes() == 0; i++) {
+            Thread.sleep(10);
+        }
+        assertThat(s.get(id).receivedBytes()).isPositive();
+        assertThat(s.get(id).state()).isEqualTo(UrlImportService.State.DOWNLOADING);
+        assertThat(s.activeCount()).isEqualTo(1);
+
+        s.cancelAll();
+
+        assertThat(await(s, id).state()).isEqualTo(UrlImportService.State.CANCELLED);
+        assertThat(s.activeCount()).isZero();
+
+        // 負例: 完了したジョブは数えない
+        assertThat(await(s, s.submit(base + "/scan.dcm").jobId()).state()).isEqualTo(UrlImportService.State.DONE);
+        assertThat(s.activeCount()).isZero();
+    }
+
+    @Test
     void 保存名は拡張子を補い_危ない文字とパスを落とす() throws Exception {
         UrlImportService s = service(Long.MAX_VALUE);
         assertThat(await(s, s.submit(base + "/download").jobId()).filename()).isEqualTo("download.pdf");

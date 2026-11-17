@@ -209,6 +209,34 @@ class AnonymizeJobTest {
     }
 
     @Test
+    void activeWork_counts_unfinished_jobs_and_cancelAll_stops_them() throws Exception {
+        AnonymizeJobService s = jobs(1, 60_000);
+        assertEquals("anonymize", s.kind());
+        assertTrue(s.cancellable());
+        assertEquals(0, s.activeCount(), "何も無いとき");
+        s.cancelAll(); // 何も無くても落ちない
+
+        pacs.gate = new CountDownLatch(1);
+        String a = s.submit(List.of(STUDY), cfg(false), false, Map.of()).jobId();
+        s.submit(List.of(STUDY), cfg(false), false, Map.of()); // 上限 1 なので QUEUED で待つ
+        await(s, a, AnonymizeJobService.State.RUNNING);
+        assertEquals(2, s.activeCount(), "実行中 1 + 待ち 1");
+
+        s.cancelAll();
+        assertEquals(0, s.activeCount());
+        assertNull(s.status(a));
+        pacs.gate.countDown();
+        Thread.sleep(300);
+        assertTrue(isEmpty(root()), "中止後に一時ファイルが残らない");
+
+        // 負例: 完了したジョブは数えない
+        pacs.gate = null;
+        String done = s.submit(List.of(STUDY), cfg(false), false, Map.of()).jobId();
+        await(s, done, AnonymizeJobService.State.DONE);
+        assertEquals(0, s.activeCount());
+    }
+
+    @Test
     void jobs_beyond_the_limit_wait_in_the_queue() throws Exception {
         pacs.gate = new CountDownLatch(1);
         AnonymizeJobService s = jobs(1, 60_000);

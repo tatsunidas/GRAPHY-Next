@@ -4,6 +4,7 @@
  */
 package com.vis.graphynext.importer;
 
+import com.vis.graphynext.activity.ActiveWork;
 import com.vis.graphynext.dicom.store.StorageLayout;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -43,7 +44,7 @@ import java.util.regex.Pattern;
  */
 @Service
 @Profile("standalone")
-public class UrlImportService {
+public class UrlImportService implements ActiveWork {
 
     private static final Logger log = LoggerFactory.getLogger(UrlImportService.class);
 
@@ -370,5 +371,24 @@ public class UrlImportService {
                 jobs.remove(j.id);
             }
         }
+    }
+
+    @Override
+    public String kind() {
+        return "urlImport";
+    }
+
+    @Override
+    public int activeCount() {
+        return (int) jobs.values().stream()
+                .filter(j -> j.state == State.QUEUED
+                        || j.state == State.DOWNLOADING
+                        || j.state == State.IMPORTING)
+                .count();
+    }
+
+    @Override
+    public void cancelAll() {
+        jobs.keySet().forEach(this::cancel);
     }
 }

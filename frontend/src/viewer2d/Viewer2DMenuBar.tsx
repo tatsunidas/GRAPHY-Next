@@ -37,7 +37,7 @@ import { openResearchUseTerms } from "../help/ResearchUseConsent";
 import { runUpdateCheck } from "../help/UpdateNotice";
 import { useUpdateState } from "../help/updateState";
 import { updateMenuLabel } from "../help/updateLabel";
-import { isDesktop } from "../desktopBridge";
+import { desktop, isDesktop } from "../desktopBridge";
 import { useWindowMenu } from "../window/windowMenuItems";
 import { openThreshold } from "../viewer/thresholdTool";
 
@@ -290,6 +290,7 @@ export function Viewer2DMenuBar({
       items: [
         { label: t("viewer2d.copyImageMenu"), onClick: () => actions.copyImage() },
         { label: t("common.close"), onClick: onClose },
+        ...(isDesktop() ? [{ label: t("main.menu.exit"), onClick: () => void desktop()?.requestQuit?.(), testId: "menu-item-exit", separatorBefore: true }] : []),
       ],
     },
     {

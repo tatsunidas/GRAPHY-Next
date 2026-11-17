@@ -17,7 +17,7 @@ import { openResearchUseTerms } from "../help/ResearchUseConsent";
 import { runUpdateCheck } from "../help/UpdateNotice";
 import { useUpdateState } from "../help/updateState";
 import { updateMenuLabel } from "../help/updateLabel";
-import { isDesktop } from "../desktopBridge";
+import { desktop, isDesktop } from "../desktopBridge";
 import { useWindowMenu } from "../window/windowMenuItems";
 
 interface MenuItem {
@@ -119,6 +119,8 @@ export function MenuBar({
         { label: t("main.toolbar.send"), onClick: () => onOpenTool("send"), testId: "menu-item-send" },
         ...(isDemo ? [] : [{ label: t("qr.title"), onClick: () => onOpenViewer("qr") }]),
         { label: t("main.toolbar.nonDicomImport"), onClick: () => onOpenTool("nonDicomImport") },
+        // 終了はデスクトップのみ（web ではブラウザのタブを閉じる）。実行中の処理があれば main が確認する
+        ...(isDesktop() ? [{ label: t("main.menu.exit"), onClick: () => void desktop()?.requestQuit?.(), testId: "menu-item-exit" }] : []),
       ],
     },
     {
