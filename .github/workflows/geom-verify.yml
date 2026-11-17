@@ -67,6 +67,8 @@ jobs:
           # Electron の chrome-sandbox は SUID が付かない（ランナー専用。製品の起動オプションではない）。
           ELECTRON_DISABLE_SANDBOX: "1"
           GEOM_ONLY: Mpr,XaIo # TEMP-DEBUG（切り分け用。戻す）
+        # 画面は 2560x1440。XaIo の画素境界の検査は 1600x1000 だと画面縮尺が足りず、描いた図形が 0.2 画素を超えてずれる
+        # （2560x1440 で基準値と一致: run 44000943308）。release の配布物スモークの画面とは別。
         # ウィンドウマネージャが無いと BrowserWindow.maximize() が効かず、小さい既定サイズのまま検査が走る
         # （2026-11-16 の初回実行で XaIo・Mask・Mpr が画面縮尺の不足で落ちた）。openbox を先に立てる。
         run: |

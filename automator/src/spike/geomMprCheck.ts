@@ -384,6 +384,12 @@ async function setWindow(page: Page, w: Win): Promise<void> {
     }
   }, { max: w.type === "max", w: w.type === "size" ? w.w : 0, h: w.type === "size" ? w.h : 0 });
   await page.waitForTimeout(600);
+  // 診断（ランナーで 1280x800 が 1 面表示になる原因の特定用。判定・許容は変えない）
+  const bwInfo = await (drv as DesktopDriver).app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()
+    .filter((bw: { webContents: { getURL(): string } }) => bw.webContents.getURL().includes("mpr"))
+    .map((bw: any) => ({ size: bw.getSize(), content: bw.getContentSize(), bounds: bw.getBounds(), max: bw.isMaximized(), min: bw.getMinimumSize(), resizable: bw.isResizable(), fs: bw.isFullScreen() })));
+  const pg = await page.evaluate(`({iw:innerWidth,ih:innerHeight,ow:outerWidth,oh:outerHeight,dpr:devicePixelRatio,phone:matchMedia("(max-width: 768px)").matches,tablet:matchMedia("(max-width: 1024px)").matches,coarse:matchMedia("(pointer: coarse)").matches,mode:localStorage.getItem("graphy.ui.modeOverride")})`);
+  console.log(`  [診断 setWindow ${w.type}] BrowserWindow=${JSON.stringify(bwInfo)} page=${JSON.stringify(pg)}`);
 }
 /** 内側の高さを dh だけ変える（ready 後の変更）。 */
 async function resizeBy(page: Page, dw: number, dh: number): Promise<void> {
