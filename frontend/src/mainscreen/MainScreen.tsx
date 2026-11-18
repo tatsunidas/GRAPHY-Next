@@ -16,6 +16,7 @@ import { LIST_LAYOUT_STORAGE_KEY, isPaneLayout, parseListLayout, type ListLayout
 import { MenuBar } from "./MenuBar";
 import { downloadBlob, niftiExportAvailability, runNiftiExport } from "./niftiExport";
 import { Toolbar, type ToolKind } from "./Toolbar";
+import { ResourcePanel } from "./ResourcePanel";
 import { SearchPanel } from "./SearchPanel";
 import { StatusBar } from "./StatusBar";
 import { useImportWatchStatus } from "./useImportWatchStatus";
@@ -563,7 +564,7 @@ export function MainScreen({
       <div style={middle}>
         {/* status（isDemo）は非同期取得のため、確定後に isDemo が変わったら SearchPanel を
             再マウントして初期日付(1900/01/01〜当日)を再計算させる。 */}
-        <SearchPanel key={String(isDemo)} onSearch={onSearch} isDemo={isDemo} missingSupported={status?.mode !== "web"} />
+        <SearchPanel key={String(isDemo)} onSearch={onSearch} isDemo={isDemo} missingSupported={status?.mode !== "web"} footer={<ResourcePanel />} />
         <div style={centerColumn}>
         <div style={listArea(listLayout)}>
         <div style={treeArea}>
