@@ -44,3 +44,7 @@ Claude Desktop・Claude Code などの外部 AI クライアントが、起動�
 接続と呼び出しは、アプリのユーザーデータフォルダ（Windows は `%APPDATA%\graphy-next-desktop`、macOS は `~/Library/Application Support/graphy-next-desktop`、Linux は `~/.config/graphy-next-desktop`）の `mcp-audit.jsonl` に記録されます（引数と結果の本文は記録しません）。AI クライアントに登録するコマンドは、パッケージ版ではこの画面に表示されます。登録のしかたと使えるツールは[外部 AI クライアント（MCP）から使う](mcp.md)にあります。
 
 関連: [DICOM 通信](dicom-network.md) ／ [プラグイン](plugins.md)
+
+## 施設の資料
+
+施設が用意した資料（リンク集・参照カード）の設定ファイル（JSON）の場所を決め、読めているかを確かめます。内容はメイン画面の「資料」節に出ます。設定ファイルの形、上限、壊れたときの動きは [施設の資料パネル](resource-panel.md) を参照してください。
