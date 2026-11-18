@@ -38,6 +38,8 @@ Claude Desktop・Claude Code などの外部 AI クライアントが、起動�
 !!! warning "外部 AI クライアントは外部の送信先です"
     返した内容は、そのクライアントを通じてクラウドの AI へ送られる可能性があります。患者情報を返す設定は、そのことを理解したうえでオンにしてください。画像そのもの（画素）は返しません。削除・設定の変更・外部への送信はできません。
 
+**公開するプラグイン**{.ui}（同じ画面の下）では、プラグインが宣言した AI ツールを、外部 AI クライアントへ公開するかをプラグインごとに選びます（アシスタントの設定とは別です）。選ぶと、公開されるツールの一覧を示す確認が出ます。詳しくは[外部 AI クライアント（MCP）から使う](mcp.md)にあります。
+
 接続と呼び出しは、アプリのユーザーデータフォルダ（Windows は `%APPDATA%\graphy-next-desktop`、macOS は `~/Library/Application Support/graphy-next-desktop`、Linux は `~/.config/graphy-next-desktop`）の `mcp-audit.jsonl` に記録されます（引数と結果の本文は記録しません）。AI クライアントに登録するコマンドは、パッケージ版ではこの画面に表示されます。登録のしかたと使えるツールは[外部 AI クライアント（MCP）から使う](mcp.md)にあります。
 
 関連: [DICOM 通信](dicom-network.md) ／ [プラグイン](plugins.md)

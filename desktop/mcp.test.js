@@ -6,7 +6,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 
-const { createMcpPrefs, confirmationsFor } = require("./mcpPrefs");
+const { createMcpPrefs, confirmationsFor, pluginAdditions } = require("./mcpPrefs");
 const { buildRecord, createMcpAudit } = require("./mcpAudit");
 const { createProjector } = require("./mcpProjection");
 const T = require("./mcpTools");
@@ -17,16 +17,16 @@ const tmpDir = () => fs.mkdtempSync(path.join(os.tmpdir(), "graphy-mcp-"));
 test("prefs: 既定はすべてオフ。保存して読み戻せる", () => {
   const file = path.join(tmpDir(), "mcp.json");
   const p = createMcpPrefs({ file });
-  assert.deepEqual(p.get(), { enabled: false, includePhi: false, allowAnalysis: false, allowViewerControl: false, allowViewerEdit: false });
+  assert.deepEqual(p.get(), { enabled: false, includePhi: false, allowAnalysis: false, allowViewerControl: false, allowViewerEdit: false, pluginTools: [] });
   p.set({ enabled: true });
-  assert.deepEqual(createMcpPrefs({ file }).get(), { enabled: true, includePhi: false, allowAnalysis: false, allowViewerControl: false, allowViewerEdit: false });
+  assert.deepEqual(createMcpPrefs({ file }).get(), { enabled: true, includePhi: false, allowAnalysis: false, allowViewerControl: false, allowViewerEdit: false, pluginTools: [] });
 });
 
 test("prefs: 負例 — 壊れた保存・未知のキー・真偽値以外は、既定に戻す／例外", () => {
   const file = path.join(tmpDir(), "mcp.json");
   fs.writeFileSync(file, "{not json");
   const p = createMcpPrefs({ file });
-  assert.deepEqual(p.get(), { enabled: false, includePhi: false, allowAnalysis: false, allowViewerControl: false, allowViewerEdit: false });
+  assert.deepEqual(p.get(), { enabled: false, includePhi: false, allowAnalysis: false, allowViewerControl: false, allowViewerEdit: false, pluginTools: [] });
   assert.equal(p.readError(), "corrupt");
   fs.writeFileSync(file, JSON.stringify({ enabled: "yes" }));
   assert.equal(p.readError(), "corrupt");
@@ -230,7 +230,7 @@ test("tools: すべてのツールが、組み立てた要求を checkBackendCal
 });
 
 test("tools: ビューア系（読み取り 2 つ）— 引数なし。画素（captureView）・プラグイン（pluginTool）の kind は固定リストに無い", () => {
-  assert.deepEqual([...T.VIEWER_KINDS].sort(), ["action", "getMeasurements", "getState", "undo"]);
+  assert.deepEqual([...T.VIEWER_KINDS].sort(), ["action", "getMeasurements", "getState", "pluginTool", "undo"]);
   const read = T.TOOLS.filter((t) => t.via === "viewer" && t.effect === "read");
   assert.deepEqual(read.map((t) => t.name).sort(), ["get_measurements", "get_viewer_state"]);
   for (const t of read) {
@@ -448,4 +448,34 @@ test("tools: guard の誤検出 — 3 文字以上の患者の値が数値と偶
   const P = createProjector({ includePhi: false });
   P.study({ ...STUDY, patientId: "1234", accessionNumber: "" });
   assert.throws(() => T.projectResult("list_compute_jobs", [{ id: "j1", state: "done", progress: 1, outputsBytes: 1234 }], P), /phi-leak/);
+});
+
+// ---- 段 4c-2b: 公開するプラグイン（pluginTools） ----
+test("prefs: pluginTools — 既定は空。保存して読み戻せる。足される ID だけが確認の対象（外す変更は確認しない）", () => {
+  const file = path.join(tmpDir(), "mcp.json");
+  const p = createMcpPrefs({ file });
+  assert.deepEqual(p.get().pluginTools, []);
+  p.set({ pluginTools: ["ai-tools-demo", "vis-monai"] });
+  assert.deepEqual(createMcpPrefs({ file }).get().pluginTools, ["ai-tools-demo", "vis-monai"]);
+  assert.deepEqual(pluginAdditions({ pluginTools: ["a"] }, { pluginTools: ["a", "b", "c"] }), ["b", "c"]);
+  assert.deepEqual(pluginAdditions({ pluginTools: ["a", "b"] }, { pluginTools: ["a"] }), []); // 外すだけ
+  assert.deepEqual(pluginAdditions({}, { pluginTools: ["a"] }), ["a"]);
+  assert.deepEqual(pluginAdditions({ pluginTools: ["a"] }, { enabled: true }), []); // pluginTools を含まない変更
+  assert.deepEqual(pluginAdditions({ pluginTools: [] }, { pluginTools: "x" }), []);
+  // 真偽値のキーの確認（confirmationsFor）には影響しない
+  assert.deepEqual(confirmationsFor({ enabled: false, pluginTools: [] }, { pluginTools: ["a"] }), []);
+});
+
+test("prefs: pluginTools の負例 — 配列でない・不正な ID・重複・多すぎるものは、保存を拒否し、読み込みでは既定に戻す", () => {
+  const file = path.join(tmpDir(), "mcp.json");
+  const p = createMcpPrefs({ file });
+  for (const bad of ["x", [1], ["a b"], ["a/b"], ["../x"], [""], ["a", "a"], ["x".repeat(81)], Array.from({ length: 65 }, (_, i) => `p${i}`), [null]]) {
+    assert.throws(() => p.set({ pluginTools: bad }), /pluginTools/, JSON.stringify(bad).slice(0, 40));
+  }
+  for (const bad of ["x", [1], ["a/b"], ["a", "a"]]) {
+    fs.writeFileSync(file, JSON.stringify({ enabled: true, pluginTools: bad }));
+    assert.equal(p.readError(), "corrupt");
+    assert.deepEqual(p.get().pluginTools, []);
+    assert.equal(p.get().enabled, false); // 壊れていたら全部既定（黙って一部だけ採らない）
+  }
 });

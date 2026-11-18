@@ -50,11 +50,11 @@ const EDIT_NOTE = "対象は、利用者が今 2D ビューアで選んでいる
 
 /**
  * 2D ビューア窓（renderer）へ main が中継して読む種類（固定リスト）。`via: "viewer"` のツールはここにある kind しか作れない。
- * 🔴 画素を返す `captureView` はここに入れない。`pluginTool`（プラグインの AI ツール）は段 4c-2b で足す。
+ * 🔴 画素を返す `captureView` はここに入れない。`pluginTool` はプラグインの AI ツール（名前は main の一覧で引き直す。`pluginTools` で公開したプラグインだけ）。
  *    `action` は下の `VIEWER_ACTIONS`（表示操作）と `VIEWER_WRITE_ACTIONS`（allowViewerEdit のときだけ。実行のたびに確認）だけ、
  *    `undo` は main が持つ履歴を戻す操作（窓への kind ではない）。
  */
-const VIEWER_KINDS = ["getState", "getMeasurements", "action", "undo"];
+const VIEWER_KINDS = ["getState", "getMeasurements", "action", "undo", "pluginTool"];
 
 /**
  * 外部 AI クライアントが行える 2D ビューアの表示操作（固定リスト）。**すべて元に戻せる display の操作**（allowViewerControl）。

@@ -18,7 +18,7 @@ const RATE = { max: 20, windowMs: 10_000 };
 
 /** 2D 窓の ROI の作成の失敗の理由（frontend/src/viewer/roiCreate.ts の CreateRoiFailure。固定）。 */
 const ROI_REASONS = "bad-request|off-slice|no-geometry|too-large|no-image|thick-slab|self-intersecting|degenerate|bad-axes|failed";
-const SAFE_ERROR = new RegExp(`^(no-viewer|timeout|declined|no-tile|unknown-preset|not-removable|roi-(${ROI_REASONS})|(bad-param|out-of-range|missing-param|unknown-param|degenerate|self-intersecting):[A-Za-z]{1,24})$`);
+const SAFE_ERROR = new RegExp(`^(no-viewer|timeout|declined|no-tile|unknown-preset|not-removable|plugin-error|effect-violation|unknown-tool|bad-command|bad-result|roi-(${ROI_REASONS})|(bad-param|out-of-range|missing-param|unknown-param|degenerate|self-intersecting):[A-Za-z]{1,24})$`);
 /** main 自身が返す符号（履歴の空・連打）。窓の本文ではない。 */
 const OWN_ERRORS = new Set(["rate-limited", "nothing-to-undo", "edit-disabled"]);
 /** クライアントへ返してよい失敗の符号（許可リスト）。それ以外は viewer-failed。mcpBridge も使う。 */

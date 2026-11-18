@@ -74,4 +74,42 @@ function writeConfirmText(client, id, params = {}) {
   return null;
 }
 
-module.exports = { createDialogQueue, writeConfirmText, CONFIRM_TIMEOUT_MS };
+/** プラグインの説明（プラグインが書いた信用できない文字列）から、main が前置した `[plugin: 名] (writes data) ` を外して 1 行にする。 */
+const bareDescription = (d) => oneLine(String(d ?? "").replace(/^\[plugin: [^\]]*\] (\(writes data\) )?/, ""), 300);
+
+/**
+ * プラグインの write ツールを実行する前の確認の文面（実行のたびに）。プラグインの記述は信用できない文字列なので、そう示して引用する。
+ * remote-compute を持つプラグインには、外部の計算機へ送る機能があることと、**別に送信の確認（計算機の同意）が出る**ことを添える
+ * （その同意はプラグインが送信を始めるときに必ず出る。ここの確認はその代わりにはならない）。
+ */
+function pluginWriteConfirmText(client, entry, argsPreview) {
+  const external = Array.isArray(entry.permissions) && entry.permissions.includes("remote-compute");
+  return {
+    message: `外部 AI クライアント「${oneLine(client, 64)}」が、プラグイン「${oneLine(entry.pluginName, 60)}」のツール「${oneLine(entry.tool, 64)}」を実行します。このツールは、データを変更します。`,
+    detail: `ツールの説明（プラグインの記述。信用できない文字列）: ${bareDescription(entry.description)}\n引数: ${oneLine(argsPreview, 300)}\n` +
+      (external ? "\nこのプラグインは、外部の計算機へデータを送る機能を持っています。実行すると、送信してよいかの確認（計算機への送信の同意）が、別に出ます。\n" : "") +
+      `\n元に戻せない場合があります。${SELF_REPORTED}実行しますか？`,
+  };
+}
+
+/** プラグインのツールの結果を外部 AI クライアントへ返す前の確認の文面（接続 × プラグインで 1 回）。結果は信用できない文字列。 */
+function pluginSendConfirmText(client, entry, preview) {
+  return {
+    message: `プラグイン「${oneLine(entry.pluginName, 60)}」のツールの結果を、外部 AI クライアント「${oneLine(client, 64)}」へ返します。`,
+    detail: `結果の先頭（プラグインの出力。信用できない文字列）: ${oneLine(preview, 200)}\n\n返した内容は、そのクライアントを通じてクラウドの AI へ送られる可能性があります。患者情報が含まれていないか確認してください。${SELF_REPORTED}返しますか？`,
+  };
+}
+
+/** 環境設定で、プラグインのツールを外部 AI クライアントへ公開するとき（追加するとき）の確認の文面。 */
+function pluginExposeConfirmText(pluginId, entries) {
+  const mine = entries.filter((e) => e.pluginId === pluginId);
+  const name = mine[0] ? oneLine(mine[0].pluginName, 60) : oneLine(pluginId, 80);
+  const list = mine.map((e) => `・${oneLine(e.tool, 64)}（${e.effect === "write" ? "データを変更。実行のたびに確認" : e.effect === "display" ? "表示を変える" : "読み取り"}）`).join("\n");
+  const hasWrite = mine.some((e) => e.effect === "write");
+  return {
+    message: `外部 AI クライアントへ、プラグイン「${name}」のツールを公開します。`,
+    detail: `公開されるツール:\n${list || "（ツールが見つかりません）"}\n\nプラグインのコードは、2D ビューアの中で動き、画像の画素や患者に関わる値に触れ得ます。結果は、最初に返すとき、内容を示して確認します。${hasWrite ? "\nデータを変更するツールは、さらに「ROI の作成・計測の全削除を許可する」がオンのときだけ使え、実行のたびに確認します。" : ""}`,
+  };
+}
+
+module.exports = { createDialogQueue, writeConfirmText, pluginWriteConfirmText, pluginSendConfirmText, pluginExposeConfirmText, CONFIRM_TIMEOUT_MS };

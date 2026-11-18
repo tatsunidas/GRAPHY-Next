@@ -32,7 +32,8 @@ function oneLine(s, max) {
 
 /**
  * backend の /api/plugins の本文からツール一覧を作る。名前がモデル向けの規則に収まらない・合計の上限を超えるものは捨てる。
- * @returns {{name: string, pluginId: string, pluginName: string, tool: string, effect: string, description: string, parameters: object}[]}
+ * `permissions` はプラグインの宣言（remote-compute の有無など。MCP の確認の文面が使う）。
+ * @returns {{name: string, pluginId: string, pluginName: string, tool: string, effect: string, description: string, parameters: object, permissions: string[]}[]}
  */
 function buildEntries(plugins) {
   const out = [];
@@ -49,7 +50,7 @@ function buildEntries(plugins) {
       const description = `[plugin: ${pluginName}] ${t.effect === "write" ? "(writes data) " : ""}${oneLine(t.description, MAX_DESCRIPTION)}`;
       // 待ち時間は backend が範囲を検査した値。ここでも整数・範囲だけを通す（無ければ既定のまま）
       const timeoutMs = Number.isInteger(t.timeoutSec) && t.timeoutSec >= 5 && t.timeoutSec <= 900 ? t.timeoutSec * 1000 : undefined;
-      out.push({ name, pluginId: p.id, pluginName, tool: t.name, effect: t.effect, description, parameters: t.parameters, ...(timeoutMs ? { timeoutMs } : {}) });
+      out.push({ name, pluginId: p.id, pluginName, tool: t.name, effect: t.effect, description, parameters: t.parameters, permissions: p.permissions.filter((x) => typeof x === "string").slice(0, 32), ...(timeoutMs ? { timeoutMs } : {}) });
       if (out.length >= MAX_TOTAL_TOOLS) return out;
     }
   }
