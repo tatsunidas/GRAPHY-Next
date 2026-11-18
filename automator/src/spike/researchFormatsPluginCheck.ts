@@ -17,6 +17,8 @@
  *  5. 負例: チルト・モザイクは理由つきの文言が出て、フォルダに何も書かれない。同名のファイルがあるフォルダは警告が出る。
  *  6. 一時ファイル（host.nifti の置き場）が残らない。
  *  7. 実 CT（RF_REAL_CT）を書き出し、画素が pydicom の期待値とビット一致・向きを 1 枚描いて目視用の画像を作る。
+ *  8. BIDS データセット（ZIP）: シリーズを 1 本ずつ追加（既定のまま通す経路を含む）→ 書き出し → 展開して名前・中身・nibabel・公式の検証器
+ *     （RF_BIDS_VALIDATOR）で照合。負例: 4 次元・チルト・保存の取り消し・氏名らしいデータセット名。検証器の負例（順序を壊す）も確かめる。
  * 結果は 合格・失敗・未達 に分けて数える。患者情報を含まない合成データ（実 CT は手元のみ・画像はリポジトリに入れない）。
  */
 import { spawnSync } from "node:child_process";
@@ -277,6 +279,135 @@ async function main(): Promise<number> {
       const rr = py([RENDER, hdr, png, "axial", "auto"]);
       show(rr.out);
       check(rr.status === 0 && fs.existsSync(png), `実 CT: 目視用の画像を作った（${png}。A が上・肝臓が画像左であることを目で確かめる）`);
+    }
+
+    console.log("\n[8] BIDS データセット（ZIP）: シリーズを 1 本ずつ追加 → 書き出し → 展開して独立照合");
+    {
+      const zipPath = path.join(OUT_DIR, "bids-out", "dataset.zip");
+      fs.mkdirSync(path.dirname(zipPath), { recursive: true });
+      const mockSave = async (target: string | null) => {
+        await driver.app.evaluate(({ dialog }, p) => {
+          dialog.showSaveDialog = (async () => (p ? { canceled: false, filePath: p } : { canceled: true, filePath: undefined })) as unknown as typeof dialog.showSaveDialog;
+        }, target);
+      };
+      const addSeries = async (ids: { study: string; series: string }, o: { suffix?: string; subject?: string; session?: string } = {}) => {
+        if (o.suffix) await page.getByTestId("rf-bids-suffix").selectOption(o.suffix);
+        if (o.subject !== undefined) await page.getByTestId("rf-bids-subject").fill(o.subject);
+        if (o.session !== undefined) await page.getByTestId("rf-bids-session").fill(o.session);
+        await page.getByTestId("rf-bids-add").click();
+        await page.getByTestId("pickseries-dialog").waitFor({ state: "visible", timeout: 20_000 });
+        await page.getByTestId(`pickseries-expand-${ids.study}`).click();
+        await page.getByTestId(`pickseries-series-check-${ids.series}`).check();
+        await page.getByTestId("pickseries-ok").click();
+        await page.getByTestId("pickseries-dialog").waitFor({ state: "detached", timeout: 10_000 });
+      };
+      const rows = async () => page.getByTestId("rf-bids-list").locator('[data-testid^="rf-bids-row-"]').count();
+      const clearRows = async () => {
+        while ((await rows()) > 0) await page.getByTestId("rf-bids-remove-0").click();
+      };
+      await page.getByTestId("rf-format").selectOption("bids");
+      check(await page.getByTestId("rf-run").isDisabled(), "BIDS: シリーズ 0 本では［書き出す］が押せない（既定）", null);
+      check((await page.getByTestId("rf-bids-name").inputValue()) === "dataset", "BIDS: データセット名の既定は dataset", null);
+
+      // 既定のまま通す経路: 被験者・セッション・名前を触らない（種類だけ T1w の既定）
+      await mockSave(zipPath);
+      await addSeries(truth.axial);                                  // T1w・被験者 1・セッションなし（既定のまま）
+      await addSeries(truth.coronal);                                // T1w・被験者 1 → run-01/02 になる
+      await addSeries(truth.sagittal, { suffix: "T2w", subject: "2", session: "1" });
+      await addSeries(truth.oblique, { suffix: "FLAIR", subject: "2", session: "1" });
+      check((await rows()) === 4, "BIDS: 4 本が表に並ぶ", await rows());
+      await page.screenshot({ path: path.join(OUT_DIR, "8-bids-rows.png") });
+      await page.getByTestId("rf-run").click();
+      const t8 = await statusText(/書き出しました|作れませんでした|書き出せませんでした|失敗|保存できません|保存をやめました/, 120_000);
+      check(/書き出しました（4 シリーズ・被験者 2 人）/.test(t8), "BIDS: 成功の文言（4 シリーズ・被験者 2 人）", t8);
+      await page.screenshot({ path: path.join(OUT_DIR, "8-bids-done.png") });
+      check(fs.existsSync(zipPath), "BIDS: ZIP が保存された", null);
+      const ds = path.join(OUT_DIR, "bids-out", "ds");
+      fs.rmSync(ds, { recursive: true, force: true });
+      py(["-c", "import sys,zipfile;zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])", zipPath, ds]);
+      const listing = (function walk(d: string, rel = ""): string[] {
+        return fs.readdirSync(d, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? walk(path.join(d, e.name), `${rel}${e.name}/`) : [`${rel}${e.name}`])).sort();
+      })(ds);
+      const expected = [
+        "README", "dataset_description.json", "participants.tsv",
+        "sub-001/anat/sub-001_run-01_T1w.nii.gz", "sub-001/anat/sub-001_run-02_T1w.nii.gz",
+        "sub-002/ses-01/anat/sub-002_ses-01_FLAIR.nii.gz", "sub-002/ses-01/anat/sub-002_ses-01_T2w.nii.gz",
+      ].sort();
+      check(JSON.stringify(listing) === JSON.stringify(expected), "BIDS: ファイルの構成・名前が仕様どおり（sub・ses・run の順）", listing);
+      const desc = JSON.parse(fs.readFileSync(path.join(ds, "dataset_description.json"), "utf8")) as Record<string, string>;
+      check(desc.Name === "dataset" && desc.BIDSVersion === "1.10.1" && desc.DatasetType === "raw", "BIDS: dataset_description.json（Name・BIDSVersion・DatasetType）", desc);
+      check(fs.readFileSync(path.join(ds, "participants.tsv"), "utf8") === "participant_id\nsub-001\nsub-002\n", "BIDS: participants.tsv は連番の participant_id だけ");
+      const wholeText = listing.filter((f) => !f.endsWith(".nii.gz")).map((f) => fs.readFileSync(path.join(ds, f), "utf8")).join("\n") + listing.join("\n");
+      check(!/RF-|PH-NIFTI|PHANTOM|HCC|Round\^Trip/i.test(wholeText), "BIDS: 患者 ID・氏名らしき文字列がファイル名・中身に無い（合成データの ID・名前を検索）");
+      // 各 NIfTI を nibabel で独立照合（向き・画素。シリーズ名 → 期待の真値）
+      for (const [rel, name] of [
+        ["sub-001/anat/sub-001_run-01_T1w.nii.gz", "axial"], ["sub-001/anat/sub-001_run-02_T1w.nii.gz", "coronal"],
+        ["sub-002/ses-01/anat/sub-002_ses-01_T2w.nii.gz", "sagittal"], ["sub-002/ses-01/anat/sub-002_ses-01_FLAIR.nii.gz", "oblique"],
+      ] as const) {
+        const c = py([TOOL, "check", name, path.join(ds, rel), ph]);
+        check(c.status === 0, `BIDS: ${rel} が ${name} の真値と一致（形・画素のビット一致・印の RAS・軸の向き）`);
+      }
+      // 公式の検証器（npm の bids-validator）。正例: エラー 0。想定外の警告（NIFTI_UNIT など）が無いこと
+      const validator = process.env.RF_BIDS_VALIDATOR;
+      if (!validator || !fs.existsSync(validator)) {
+        console.log("  [未達] BIDS の検証器（RF_BIDS_VALIDATOR=bids-validator の実行ファイル）が無い。この項目は合格に数えません。");
+      } else {
+        const v = spawnSync(validator, [ds], { encoding: "utf8" });
+        const out = `${v.stdout ?? ""}${v.stderr ?? ""}`.replace(/\x1b\[[0-9;]*m/g, "");
+        fs.writeFileSync(path.join(OUT_DIR, "bids-validator.txt"), out);
+        const errs = (out.match(/\[ERR\]/g) ?? []).length;
+        const warnCodes = [...out.matchAll(/\[WARN\][^\n]*\(code: (\d+) - ([A-Z_]+)\)/g)].map((m) => m[2]);
+        check(errs === 0, `BIDS: 公式の検証器でエラー 0（警告: ${JSON.stringify(warnCodes)}）`, out.slice(0, 600));
+        const unexpected = warnCodes.filter((c) => !["INCONSISTENT_SUBJECTS", "MISSING_SESSION", "NO_AUTHORS"].includes(c));
+        check(unexpected.length === 0, `BIDS: 想定外の警告が無い（被験者ごとに構成が違う・Authors なしは想定どおり。本体の NIfTI は単位つきなので NIFTI_UNIT も出ない）`, unexpected);
+        // 検出器の負例: 同じデータセットの名前の順序を壊すと検証器が実際に落ちる
+        const bad = path.join(OUT_DIR, "bids-out", "ds-bad");
+        fs.rmSync(bad, { recursive: true, force: true });
+        fs.cpSync(ds, bad, { recursive: true });
+        fs.renameSync(path.join(bad, "sub-002/ses-01/anat/sub-002_ses-01_T2w.nii.gz"), path.join(bad, "sub-002/ses-01/anat/sub-002_run-01_ses-01_T2w.nii.gz"));
+        const vb = spawnSync(validator, [bad], { encoding: "utf8" });
+        check(((`${vb.stdout}${vb.stderr}`).match(/\[ERR\]/g) ?? []).length > 0, "BIDS（負例）: エンティティの順序を壊すと、同じ検証器がエラーを出す（検出器が効いている）");
+      }
+
+      // 負例: 4 次元は anat にできない。理由つきで断られ、保存ダイアログも出ない・ファイルも出ない
+      await clearRows();
+      const zip2 = path.join(OUT_DIR, "bids-out", "should-not-exist.zip");
+      await mockSave(zip2);
+      await addSeries(truth.dyn);
+      await page.getByTestId("rf-run").click();
+      const t9 = await statusText(/書き出しました|作れませんでした|書き出せませんでした|失敗|保存できません/, 120_000);
+      check(/4 次元/.test(t9), "BIDS（負例）: 4 次元（dyn）は anat にできないと理由つきで断る", t9);
+      check(!fs.existsSync(zip2), "BIDS（負例）: ZIP は保存されない", null);
+      await page.screenshot({ path: path.join(OUT_DIR, "8-bids-refused-4d.png") });
+      await clearRows();
+      // 負例: チルトは本体が断る
+      await addSeries(truth.tilt);
+      await page.getByTestId("rf-run").click();
+      const t10 = await statusText(/書き出しました|作れませんでした|書き出せませんでした|失敗|保存できません/, 120_000);
+      check(/ガントリーチルト/.test(t10), "BIDS（負例）: チルトは本体の理由で断る", t10);
+      check(!fs.existsSync(zip2), "BIDS（負例）: ZIP は保存されない（チルト）", null);
+      await clearRows();
+      // 負例: 保存ダイアログを取り消すと保存しない
+      await mockSave(null);
+      await addSeries(truth.axial);
+      await page.getByTestId("rf-run").click();
+      const t11 = await statusText(/書き出しました|作れませんでした|書き出せませんでした|失敗|保存できません|保存をやめました/, 120_000);
+      check(/保存をやめました/.test(t11), "BIDS（負例）: 保存ダイアログの取り消しは「保存をやめました」", t11);
+      // 不正なデータセット名では押せない（氏名の入力を防ぐ）
+      await page.getByTestId("rf-bids-name").fill("山田太郎");
+      check(await page.getByTestId("rf-run").isDisabled(), "BIDS（負例）: 英数字以外のデータセット名（氏名など）では押せない", null);
+      await page.getByTestId("rf-bids-name").fill("dataset");
+      await clearRows();
+      check((await page.getByTestId("rf-bids-list").innerText()).includes("まだありません"), "BIDS: 削除で表が空に戻る");
+      await page.screenshot({ path: path.join(OUT_DIR, "8-bids-empty.png") });
+    }
+    {
+      const left2 = fs.existsSync(hostTmp) ? fs.readdirSync(hostTmp) : [];
+      check(left2.length === 0, `BIDS 後も host.nifti の置き場にファイルが残らない`, left2);
+      const mine2 = path.join(os.tmpdir(), "graphy-plugin-research-formats");
+      const stray2: string[] = [];
+      if (fs.existsSync(mine2)) for (const d of fs.readdirSync(mine2)) for (const f of fs.readdirSync(path.join(mine2, d))) stray2.push(`${d}/${f}`);
+      check(stray2.length === 0, "BIDS 後もプラグインの一時フォルダにファイルが残らない（本体が成果物を預かって移す）", stray2);
     }
 
     console.log("\n【未達】実行中のジョブを［中止］で止める経路（小さい合成では一瞬で終わる）。JAR の取り消しは単体で確認。");
