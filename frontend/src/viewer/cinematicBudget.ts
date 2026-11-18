@@ -74,7 +74,7 @@ export function planCinematicGrid(a: {
   return { dims, spacingMm, targetMm: target, reason, texels, bytes: texels * TEXEL_BYTES };
 }
 
-export type BudgetSource = "user" | "shared" | "record" | "unknown";
+export type BudgetSource = "user" | "nvidia-free" | "shared" | "record" | "unknown";
 
 export interface GpuRecord {
   /** 描けた最大のテクスチャのバイト数。 */
@@ -92,12 +92,15 @@ export interface GpuBudget {
 /**
  * テクスチャの予算（バイト）。上から順に最初に決まったものを使う:
  *  1. `user`: 設定の GPU メモリ（MB）− vtk が持つ分 − パストレーサの内部バッファ。本人が知っている値。
- *  2. `shared`: 内蔵 GPU（テクスチャはシステムメモリに載る）。本体のボリューム構築の上限から、元ボリュームのコピー群を引いた残り。
- *  3. `unknown`: 予算なし（元の解像度で試す。失敗したら記録して次から下げる）。
+ *  2. `nvidia-free`: 描画に使っている NVIDIA の、開始の直前の空きメモリ − 内部バッファ（vtk が載せた分は空きに既に反映されている）。
+ *  3. `shared`: 内蔵 GPU（テクスチャはシステムメモリに載る）。本体のボリューム構築の上限から、元ボリュームのコピー群を引いた残り。
+ *  4. `unknown`: 予算なし（元の解像度で試す。失敗したら記録して次から下げる）。
  * 失敗の記録（この GPU で失敗した量）があれば、どの出どころでもその量未満に抑える。
  */
 export function gpuBudget(a: {
   userMb: number | null;
+  /** 描いている NVIDIA の今の空き（`matchNvidiaFree` の結果）。無ければ null。 */
+  nvidiaFreeBytes?: number | null;
   shared: boolean;
   /** 本体のボリューム構築の上限（バイト）。`shared` のときだけ使う。 */
   appliedVolumeMaxBytes: number | null;
@@ -116,6 +119,9 @@ export function gpuBudget(a: {
   if (a.userMb !== null && Number.isFinite(a.userMb) && a.userMb > 0) {
     bytes = Math.max(0, a.userMb * MIB - a.vtkBytes - a.internalBytes);
     source = "user";
+  } else if (a.nvidiaFreeBytes != null && Number.isFinite(a.nvidiaFreeBytes) && a.nvidiaFreeBytes > 0) {
+    bytes = Math.max(0, a.nvidiaFreeBytes - a.internalBytes);
+    source = "nvidia-free";
   } else if (a.shared && a.appliedVolumeMaxBytes !== null && a.appliedVolumeMaxBytes > 0) {
     bytes = Math.max(0, a.appliedVolumeMaxBytes - a.srcBytes * a.srcCopies - a.internalBytes);
     source = "shared";
@@ -132,6 +138,25 @@ export function gpuBudget(a: {
     }
   }
   return { textureBytes: bytes, source };
+}
+
+/**
+ * 実際に描いている GPU（WebGL の renderer 名）が NVIDIA で、`nvidia-smi` の行が名前で 1 つだけ一致したときだけ、その行を返す。
+ * 内蔵 GPU で描いているとき（nvidia-smi には使っていない NVIDIA の空きが出る）・名前が一致しない・複数一致のときは null（＝使わない）。
+ * 🔴 Chromium の `getGPUInfo('basic')` の `active` は、ハイブリッド機で内蔵 GPU が描いていても NVIDIA を指すことがある（実機で確認）ので、
+ * 描画の GPU の判定には使わない。
+ */
+export function matchNvidiaFree(
+  rendererName: string | null | undefined,
+  free: { name: string; freeBytes: number }[] | null | undefined,
+): { freeBytes: number } | null {
+  if (!rendererName || !free || !/NVIDIA/i.test(rendererName)) return null;
+  const r = rendererName.toLowerCase();
+  const hit = free.filter((f) => {
+    const n = f.name.replace(/^NVIDIA\s+/i, "").trim().toLowerCase();
+    return n.length > 0 && r.includes(n);
+  });
+  return hit.length === 1 ? { freeBytes: hit[0].freeBytes } : null;
 }
 
 /** 内蔵 GPU（システムメモリを使う）か。ANGLE の描画名で見る（`ANGLE (Intel, …)`・`Apple M…`）。Arc は専用メモリを持つので除く。 */

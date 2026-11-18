@@ -119,6 +119,7 @@ beforeEach(() => {
   root = createRoot(host);
 });
 afterEach(() => {
+  delete (window as unknown as { graphyDesktop?: unknown }).graphyDesktop;
   act(() => root.unmount());
   host.remove();
 });
@@ -160,6 +161,43 @@ describe("Viewer3DCinematicOverlay（煙テスト）", () => {
     const row = q("cine2-resolution")!;
     expect(row.getAttribute("data-budget-source")).toBe("shared");
     expect(row.getAttribute("data-reason")).toBe("full");
+  });
+
+  const R_NV = "ANGLE (NVIDIA Corporation, NVIDIA GeForce GTX 1050 Ti/PCIe/SSE2, OpenGL 4.5.0)";
+  const R_INTEL = "ANGLE (Intel, Mesa Intel(R) Graphics (ARL), OpenGL 4.6)";
+  function fakeDesktop(freeMb: number) {
+    (window as unknown as { graphyDesktop?: unknown }).graphyDesktop = {
+      getGpuMemoryFree: async () => [{ name: "NVIDIA GeForce GTX 1050 Ti", freeBytes: freeMb * MIB, totalBytes: 4096 * MIB }],
+    };
+  }
+
+  it("描画に使っている GPU が NVIDIA で空きが分かれば、予算は nvidia-free（空き − 内部バッファ）。小さいと間引く", async () => {
+    rendererName = R_NV;
+    fakeDesktop(0.3);
+    create.mockImplementation((_c, _i, _g, _p, dims) => ({ ok: true, engine: fakeEngine(dims) }));
+    await mount({ gpuMemoryMb: null });
+    const row = q("cine2-resolution")!;
+    expect(row.getAttribute("data-budget-source")).toBe("nvidia-free");
+    expect(row.getAttribute("data-reason")).toBe("budget");
+    // 予算 = 空き − 内部バッファ（2·W·H·16 + 1024。jsdom の canvas は 1×1）
+    expect(row.getAttribute("data-budget-bytes")).toBe(String(0.3 * MIB - (2 * 16 + 1024)));
+    expect(row.textContent).toContain("nvidia-smi");
+  });
+
+  it("負例: 内蔵 GPU で描いているとき（nvidia-smi に NVIDIA の空きが出ていても）nvidia-free にしない", async () => {
+    rendererName = R_INTEL;
+    fakeDesktop(0.3);
+    create.mockImplementation((_c, _i, _g, _p, dims) => ({ ok: true, engine: fakeEngine(dims) }));
+    await mount({ gpuMemoryMb: null });
+    expect(q("cine2-resolution")!.getAttribute("data-budget-source")).toBe("shared");
+  });
+
+  it("設定の GPU メモリ（user）は nvidia-free より優先", async () => {
+    rendererName = R_NV;
+    fakeDesktop(0.3);
+    create.mockImplementation((_c, _i, _g, _p, dims) => ({ ok: true, engine: fakeEngine(dims) }));
+    await mount({ gpuMemoryMb: 0.5 });
+    expect(q("cine2-resolution")!.getAttribute("data-budget-source")).toBe("user");
   });
 
   it("テクスチャの確保に失敗（out-of-memory）: 案内が出て、［間引いて再開］で失敗した量の半分以下で作り直す", async () => {

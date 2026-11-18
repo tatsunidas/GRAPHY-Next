@@ -3162,6 +3162,7 @@ export const ja: Record<string, string> = {
   "cine2.reason.budget": "GPU メモリの予算に合わせました（{{source}}）",
   "cine2.reason.max3d": "3D テクスチャの上限に合わせました",
   "cine2.source.user": "設定の値",
+  "cine2.source.nvidia-free": "NVIDIA の空きメモリ（nvidia-smi）",
   "cine2.source.shared": "内蔵 GPU の共有メモリの見積もり",
   "cine2.source.record": "前回の失敗の記録",
   "cine2.source.unknown": "不明",

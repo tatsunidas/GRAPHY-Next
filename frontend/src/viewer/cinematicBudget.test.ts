@@ -11,6 +11,7 @@ import {
   stepMm,
   stepsForChord,
   gpuBudget,
+  matchNvidiaFree,
   halfRound,
   halfUlp,
   isSharedMemoryGpu,
@@ -267,5 +268,38 @@ describe("不透明度の補正（歩数に依らない）", () => {
     expect(correctedAlpha(0.5, 0.25, 1)).toBeLessThan(correctedAlpha(0.5, 0.5, 1));
     expect(stepMm([0, 0, 1], 0.01, [100, 100, 80])).toBeCloseTo(0.8, 12);
     expect(stepMm([1, 0, 0], 0.01, [100, 100, 80])).toBeCloseTo(1.0, 12);
+  });
+});
+
+describe("nvidia-free の予算と matchNvidiaFree", () => {
+  const base = { userMb: null, shared: false, appliedVolumeMaxBytes: null, srcBytes: 1000, srcCopies: 1, vtkBytes: 1000, internalBytes: 100 };
+  const R_NV = "ANGLE (NVIDIA Corporation, NVIDIA GeForce GTX 1050 Ti/PCIe/SSE2, OpenGL 4.5.0)";
+  const R_INTEL = "ANGLE (Intel, Mesa Intel(R) Graphics (ARL), OpenGL 4.6)";
+  const free = [{ name: "NVIDIA GeForce GTX 1050 Ti", freeBytes: 5000 }];
+
+  it("予算 = 空き − 内部バッファ（vtk の分は引かない）。出どころは nvidia-free", () => {
+    expect(gpuBudget({ ...base, nvidiaFreeBytes: 5000 })).toEqual({ textureBytes: 4900, source: "nvidia-free" });
+  });
+  it("優先順: user > nvidia-free > shared。無ければ unknown", () => {
+    expect(gpuBudget({ ...base, userMb: 1, nvidiaFreeBytes: 5000 }).source).toBe("user");
+    expect(gpuBudget({ ...base, shared: true, appliedVolumeMaxBytes: 1e9, nvidiaFreeBytes: 5000 }).source).toBe("nvidia-free");
+    expect(gpuBudget({ ...base, nvidiaFreeBytes: null }).source).toBe("unknown");
+    expect(gpuBudget({ ...base, nvidiaFreeBytes: 0 }).source).toBe("unknown"); // 0 で埋めない
+  });
+  it("失敗の記録は nvidia-free にも掛かる（失敗量の半分まで）", () => {
+    const r = gpuBudget({ ...base, nvidiaFreeBytes: 5000, record: { failMinBytes: 2000 } });
+    expect(r).toEqual({ textureBytes: 1000, source: "nvidia-free" });
+  });
+  it("matchNvidiaFree: 描画の GPU が NVIDIA で、名前が 1 つだけ一致したときだけ返す", () => {
+    expect(matchNvidiaFree(R_NV, free)).toEqual({ freeBytes: 5000 });
+    expect(matchNvidiaFree(R_NV.toUpperCase(), free)).toEqual({ freeBytes: 5000 }); // 大文字小文字は問わない
+  });
+  it("matchNvidiaFree 負例: 内蔵で描いている・名前不一致・複数一致・入力なし", () => {
+    expect(matchNvidiaFree(R_INTEL, free)).toBeNull(); // nvidia-smi に NVIDIA の空きが出ていても、描いているのは内蔵
+    expect(matchNvidiaFree(R_NV, [{ name: "NVIDIA GeForce RTX 3090", freeBytes: 1 }])).toBeNull();
+    expect(matchNvidiaFree(R_NV, [...free, ...free])).toBeNull(); // 同じ名前が 2 枚: どちらか分からない
+    expect(matchNvidiaFree(R_NV, [])).toBeNull();
+    expect(matchNvidiaFree(null, free)).toBeNull();
+    expect(matchNvidiaFree(R_NV, null)).toBeNull();
   });
 });
