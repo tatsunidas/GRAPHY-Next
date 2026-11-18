@@ -17,16 +17,16 @@ const tmpDir = () => fs.mkdtempSync(path.join(os.tmpdir(), "graphy-mcp-"));
 test("prefs: 既定はすべてオフ。保存して読み戻せる", () => {
   const file = path.join(tmpDir(), "mcp.json");
   const p = createMcpPrefs({ file });
-  assert.deepEqual(p.get(), { enabled: false, includePhi: false, allowAnalysis: false });
+  assert.deepEqual(p.get(), { enabled: false, includePhi: false, allowAnalysis: false, allowViewerControl: false });
   p.set({ enabled: true });
-  assert.deepEqual(createMcpPrefs({ file }).get(), { enabled: true, includePhi: false, allowAnalysis: false });
+  assert.deepEqual(createMcpPrefs({ file }).get(), { enabled: true, includePhi: false, allowAnalysis: false, allowViewerControl: false });
 });
 
 test("prefs: 負例 — 壊れた保存・未知のキー・真偽値以外は、既定に戻す／例外", () => {
   const file = path.join(tmpDir(), "mcp.json");
   fs.writeFileSync(file, "{not json");
   const p = createMcpPrefs({ file });
-  assert.deepEqual(p.get(), { enabled: false, includePhi: false, allowAnalysis: false });
+  assert.deepEqual(p.get(), { enabled: false, includePhi: false, allowAnalysis: false, allowViewerControl: false });
   assert.equal(p.readError(), "corrupt");
   fs.writeFileSync(file, JSON.stringify({ enabled: "yes" }));
   assert.equal(p.readError(), "corrupt");
@@ -36,7 +36,7 @@ test("prefs: 負例 — 壊れた保存・未知のキー・真偽値以外は�
 });
 
 test("prefs: confirmationsFor — オンにするキーだけを、確認の順に返す（オフにする・変わらない変更は確認しない）", () => {
-  const off = { enabled: false, includePhi: false, allowAnalysis: false };
+  const off = { enabled: false, includePhi: false, allowAnalysis: false, allowViewerControl: false };
   assert.deepEqual(confirmationsFor(off, { enabled: true }), ["enabled"]);
   assert.deepEqual(confirmationsFor(off, { allowAnalysis: true, enabled: true, includePhi: true }), ["enabled", "includePhi", "allowAnalysis"]);
   assert.deepEqual(confirmationsFor({ ...off, enabled: true }, { enabled: true }), []); // すでにオン
@@ -140,8 +140,8 @@ test("projection: deep — 患者キーを落とし、UID を札にする（形�
 });
 
 // ---- ツール ----
-const OFF = { includePhi: false, allowAnalysis: false };
-const ON = { includePhi: true, allowAnalysis: true };
+const OFF = { includePhi: false, allowAnalysis: false, allowViewerControl: false };
+const ON = { includePhi: true, allowAnalysis: true, allowViewerControl: true };
 
 test("tools: listTools — 解析がオフなら analysis は出ない。患者情報がオフなら患者名の引数も出ない", () => {
   const names = (prefs) => T.listTools(prefs).map((t) => t.name);
@@ -211,7 +211,7 @@ test("tools: checkBackendCall — 許可リストの外・拒否リスト・経�
 test("tools: すべてのツールが、組み立てた要求を checkBackendCall に通す（登録表と許可リストの食い違いを検出）", () => {
   const P = createProjector({ includePhi: true });
   const U = "1.2.840.1.2.3.4";
-  const args = { study: U, series: U, instance: U, sourceSeries: U, maskSeries: U, albumId: 1, jobId: "j1" };
+  const args = { study: U, series: U, instance: U, sourceSeries: U, maskSeries: U, albumId: 1, jobId: "j1", center: 40, width: 400, name: "lung", index: 3, cols: 2, tool: "zoom" };
   for (const t of T.TOOLS) {
     const a = {};
     for (const k of t.inputSchema.required) a[k] = args[k];
@@ -221,27 +221,100 @@ test("tools: すべてのツールが、組み立てた要求を checkBackendCal
     if (t.via === "viewer") {
       assert.deepEqual(Object.keys(r), ["viewer"], t.name);
       assert.ok(T.VIEWER_KINDS.includes(r.viewer.kind), `${t.name}: ${r.viewer.kind}`);
+      if (r.viewer.kind === "action") assert.ok(T.VIEWER_ACTIONS.includes(r.viewer.id), `${t.name}: ${r.viewer.id}`);
     } else {
       assert.ok(r.method && r.path, t.name);
     }
   }
 });
 
-test("tools: ビューア系は 2 つだけ・読み取り・引数なし。画素（captureView）と操作（action・pluginTool）の kind は固定リストに無い", () => {
-  assert.deepEqual([...T.VIEWER_KINDS].sort(), ["getMeasurements", "getState"]);
-  const viewer = T.TOOLS.filter((t) => t.via === "viewer");
-  assert.deepEqual(viewer.map((t) => t.name).sort(), ["get_measurements", "get_viewer_state"]);
-  for (const t of viewer) {
-    assert.equal(t.effect, "read", t.name);
+test("tools: ビューア系（読み取り 2 つ）— 引数なし。画素（captureView）・プラグイン（pluginTool）の kind は固定リストに無い", () => {
+  assert.deepEqual([...T.VIEWER_KINDS].sort(), ["action", "getMeasurements", "getState", "undo"]);
+  const read = T.TOOLS.filter((t) => t.via === "viewer" && t.effect === "read");
+  assert.deepEqual(read.map((t) => t.name).sort(), ["get_measurements", "get_viewer_state"]);
+  for (const t of read) {
     assert.deepEqual(t.inputSchema.properties, {}, t.name);
     assert.ok(T.VIEWER_KINDS.includes(t.viewerKind), t.name);
   }
-  // 解析オフでも読み取りなので一覧に出る
-  const names = T.listTools({ allowAnalysis: false, includePhi: false }).map((t) => t.name);
+  // 解析も表示操作もオフでも、読み取りなので一覧に出る
+  const names = T.listTools({ allowAnalysis: false, includePhi: false, allowViewerControl: false }).map((t) => t.name);
   assert.ok(names.includes("get_viewer_state") && names.includes("get_measurements"));
   // 引数は受けない
   const P = createProjector({ includePhi: false });
-  assert.equal(T.buildRequest("get_viewer_state", { tile: "tile1" }, { projector: P, prefs: { includePhi: false, allowAnalysis: false } }).error, "unknown-arg:tile");
+  assert.equal(T.buildRequest("get_viewer_state", { tile: "tile1" }, { projector: P, prefs: OFF }).error, "unknown-arg:tile");
+});
+
+// ---- 段 4c-1: 2D ビューアの表示操作（元に戻せるものだけ）----
+const REGISTRY = require("node:fs").readFileSync(path.join(__dirname, "..", "frontend", "src", "assistant", "actions", "registry.ts"), "utf8");
+
+test("tools: VIEWER_ACTIONS は registry.ts の display の操作と一致する（write とアシスタント専用の removeAssistantRoi は入らない）", () => {
+  const block = REGISTRY.slice(REGISTRY.indexOf("export const ACTIONS"), REGISTRY.indexOf("const BY_ID"));
+  const parts = block.split(/\bid: "/).slice(1);
+  const display = parts.filter((p) => !p.includes('effect: "write"')).map((p) => p.slice(0, p.indexOf('"')));
+  const writes = parts.filter((p) => p.includes('effect: "write"')).map((p) => p.slice(0, p.indexOf('"')));
+  assert.ok(writes.includes("createRoi") && writes.includes("clearMeasurements") && writes.includes("createContourRoi")); // 先に: write が見つかっている（検査が空振りでない）
+  assert.deepEqual([...T.VIEWER_ACTIONS].sort(), display.filter((id) => id !== "removeAssistantRoi").sort());
+  for (const w of [...writes, "removeAssistantRoi"]) assert.equal(T.VIEWER_ACTIONS.includes(w), false, w);
+  // 制御ツールが指す操作は、すべて固定リストにある
+  for (const t of T.TOOLS.filter((x) => x.viewerKind === "action")) assert.ok(T.VIEWER_ACTIONS.includes(t.viewerAction), t.name);
+});
+
+test("tools: 表示操作の引数の範囲・ツール名は registry.ts（2D 窓の validateAction）と同じ", () => {
+  assert.match(REGISTRY, /center: \{ type: "number", min: -100000, max: 100000/);
+  assert.match(REGISTRY, /width: \{ type: "number", min: 1, max: 200000/);
+  assert.match(REGISTRY, /times: \{ type: "integer", min: 1, max: 3/);
+  assert.match(REGISTRY, /index: \{ type: "integer", min: 0, max: 1_000_000/);
+  assert.match(REGISTRY, /cols: \{ type: "integer", min: 1, max: 8/);
+  assert.match(REGISTRY, /name: \{ type: "string", maxLength: 60/);
+  const tool = (n) => T.TOOLS.find((t) => t.name === n).inputSchema.properties;
+  assert.deepEqual([tool("set_window_level").center.minimum, tool("set_window_level").center.maximum], [-100000, 100000]);
+  assert.deepEqual([tool("set_window_level").width.minimum, tool("set_window_level").width.maximum], [1, 200000]);
+  assert.deepEqual([tool("rotate_view").times.minimum, tool("rotate_view").times.maximum], [1, 3]);
+  assert.deepEqual([tool("go_to_slice").index.minimum, tool("go_to_slice").index.maximum], [0, 1_000_000]);
+  assert.deepEqual([tool("set_layout").cols.minimum, tool("set_layout").cols.maximum], [1, 8]);
+  assert.equal(tool("apply_window_preset").name.maxLength, 60);
+  const m = /export const DISPLAY_TOOLS = \[([^\]]*)\]/.exec(REGISTRY);
+  assert.ok(m, "DISPLAY_TOOLS が registry.ts にある");
+  assert.deepEqual([...T.DISPLAY_TOOLS], [...m[1].matchAll(/"([^"]+)"/g)].map((x) => x[1]));
+});
+
+test("tools: 制御ツールは allowViewerControl がオンのときだけ一覧に出て、オフなら control-disabled。解析の許可とは独立", () => {
+  const P = createProjector({ includePhi: false });
+  const control = T.TOOLS.filter((t) => t.effect === "control");
+  assert.equal(control.length, 11); // 表示操作 10 + undo
+  const none = T.listTools({ allowAnalysis: true, includePhi: false, allowViewerControl: false }).map((t) => t.name);
+  const on = T.listTools({ allowAnalysis: false, includePhi: false, allowViewerControl: true }).map((t) => t.name);
+  for (const t of control) {
+    assert.equal(none.includes(t.name), false, `オフで出ている: ${t.name}`);
+    assert.equal(on.includes(t.name), true, `オンで出ない: ${t.name}`);
+    assert.equal(T.buildRequest(t.name, {}, { projector: P, prefs: { includePhi: false, allowAnalysis: true, allowViewerControl: false } }).error, "control-disabled", t.name);
+  }
+  assert.equal(on.includes("radiomics_submit"), false); // 表示操作を許可しても解析は出ない
+});
+
+test("tools: 表示操作の要求 — 引数を検査して { viewer: { kind: action, id, params } } を作る。範囲外・未知の値・write は作れない", () => {
+  const P = createProjector({ includePhi: false });
+  const prefs = { includePhi: false, allowAnalysis: false, allowViewerControl: true };
+  const build = (n, a) => T.buildRequest(n, a, { projector: P, prefs });
+  assert.deepEqual(build("set_window_level", { center: 40, width: 400 }), { viewer: { kind: "action", id: "setWindowLevel", params: { center: 40, width: 400 } } });
+  assert.deepEqual(build("go_to_slice", { index: 7 }), { viewer: { kind: "action", id: "goToSlice", params: { index: 7 } } });
+  assert.deepEqual(build("flip_horizontal", {}), { viewer: { kind: "action", id: "flipH", params: {} } });
+  assert.deepEqual(build("undo_viewer_action", {}), { viewer: { kind: "undo" } });
+  // 負例（範囲外・型違い・未知）
+  assert.equal(build("set_window_level", { center: 1e9, width: 400 }).error, "bad-arg:center");
+  assert.equal(build("set_window_level", { center: 40, width: 0 }).error, "bad-arg:width");
+  assert.equal(build("set_window_level", { center: NaN, width: 400 }).error, "bad-arg:center");
+  assert.equal(build("set_window_level", { center: "40", width: 400 }).error, "bad-arg:center");
+  assert.equal(build("set_window_level", { center: 40 }).error, "missing-arg:width");
+  assert.equal(build("set_layout", { cols: 99 }).error, "bad-arg:cols");
+  assert.equal(build("set_layout", { cols: 2.5 }).error, "bad-arg:cols");
+  assert.equal(build("set_tool", { tool: "ruler" }).error, "bad-arg:tool");
+  assert.equal(build("set_tool", { tool: "zoom" }).viewer.params.tool, "zoom");
+  assert.equal(build("rotate_view", { times: 4 }).error, "bad-arg:times");
+  assert.equal(build("go_to_slice", { index: -1 }).error, "bad-arg:index");
+  assert.equal(build("flip_vertical", { id: "createRoi" }).error, "unknown-arg:id"); // id を引数で差し替えられない
+  // write・アシスタント専用の操作は、ツールとして存在しない
+  for (const n of ["create_roi", "createRoi", "clear_measurements", "clearMeasurements", "createContourRoi", "removeAssistantRoi", "plugin__x__y"]) assert.equal(build(n, {}).error, "unknown-tool", n);
 });
 
 test("tools: projectResult — 患者情報オフで、全ツールの出力に患者の値が 0 件（オンでは出る）", () => {

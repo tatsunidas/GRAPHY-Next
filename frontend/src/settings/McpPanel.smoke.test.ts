@@ -43,7 +43,7 @@ async function click(id: string) {
 
 /** main の mcp-get / mcp-set の偽物。confirm=false なら、オンにする変更で確認が取り消される。 */
 function fakeMain(o: { listenFails?: boolean; confirm?: boolean; readError?: McpState["readError"]; relayCommand?: string; forbidden?: boolean } = {}) {
-  let prefs: McpPrefs = { enabled: false, includePhi: false, allowAnalysis: false };
+  let prefs: McpPrefs = { enabled: false, includePhi: false, allowAnalysis: false, allowViewerControl: false };
   let listening = false;
   const sent: Partial<McpPrefs>[] = [];
   const state = (): McpState => ({ prefs, readError: o.readError ?? null, listening, ...(o.relayCommand ? { relayCommand: o.relayCommand } : {}) });
@@ -80,7 +80,7 @@ describe("McpPanel（実際に描画して操作する）", () => {
   it("既定はすべてオフ。オンにすると main へ送り、待ち受けの表示が変わる。注意書きは常に出る", async () => {
     const { sent } = fakeMain();
     await mount();
-    for (const k of ["enabled", "includePhi", "allowAnalysis"]) expect(checked(`mcp-${k}`)).toBe(false);
+    for (const k of ["enabled", "includePhi", "allowAnalysis", "allowViewerControl"]) expect(checked(`mcp-${k}`)).toBe(false);
     expect(q("mcp-status")!.dataset.listening).toBe("false");
     expect(q("mcp-privacy-notice")!.querySelectorAll("li").length).toBe(5);
     await click("mcp-enabled");
@@ -90,6 +90,9 @@ describe("McpPanel（実際に描画して操作する）", () => {
     await click("mcp-includePhi");
     expect(sent.at(-1)).toEqual({ includePhi: true });
     expect(checked("mcp-includePhi")).toBe(true);
+    await click("mcp-allowViewerControl");
+    expect(sent.at(-1)).toEqual({ allowViewerControl: true });
+    expect(checked("mcp-allowViewerControl")).toBe(true);
     expect(q("mcp-error")).toBeNull();
   });
 
@@ -98,6 +101,8 @@ describe("McpPanel（実際に描画して操作する）", () => {
     await mount();
     await click("mcp-includePhi");
     expect(checked("mcp-includePhi")).toBe(false);
+    await click("mcp-allowViewerControl"); // 表示操作の許可も、確認が取り消されたらオフのまま
+    expect(checked("mcp-allowViewerControl")).toBe(false);
     expect(q("mcp-error")).toBeNull();
   });
 

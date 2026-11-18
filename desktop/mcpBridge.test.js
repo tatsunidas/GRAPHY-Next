@@ -272,3 +272,46 @@ test("bridge: ビューア系の失敗は固定の符号だけ（窓の本文・
     assert.deepEqual((await call(port, token, "get_viewer_state", {})).json, { ok: false, error: "viewer-unavailable" });
   });
 });
+
+test("bridge: 表示操作 — allowViewerControl がオフなら一覧に出ず control-disabled、オンなら記述子が 2D 窓の依存へ渡り、結果は小さな control だけ", async () => {
+  const seen = [];
+  const viewerImpl = async (kind, ctx, desc) => {
+    seen.push({ kind, client: ctx.client, desc });
+    return { ok: true, control: { applied: desc.id ?? "undo", undoDepth: 1 }, state: "YAMADA^TARO" /* 想定外の余計な値は返らない */ };
+  };
+  await withBridge({ viewerImpl }, async ({ port, token, calls }) => {
+    const names = (await request(port, { headers: auth(token) })).json.tools.map((t) => t.name);
+    assert.equal(names.includes("set_window_level"), false);
+    assert.deepEqual((await call(port, token, "set_window_level", { center: 40, width: 400 })).json, { ok: false, error: "control-disabled" });
+    assert.equal(seen.length, 0); // オフでは窓へ届かない
+    assert.equal(calls.length, 0);
+  });
+  await withBridge({ viewerImpl, prefs: { enabled: true, includePhi: false, allowAnalysis: false, allowViewerControl: true } }, async ({ port, token, calls }) => {
+    const names = (await request(port, { headers: auth(token) })).json.tools.map((t) => t.name);
+    assert.ok(names.includes("set_window_level") && names.includes("undo_viewer_action"));
+    assert.equal(names.includes("radiomics_submit"), false); // 解析は別の設定
+    const r = await call(port, token, "set_window_level", { center: 40, width: 400 });
+    assert.deepEqual(r.json, { ok: true, result: { applied: "setWindowLevel", undoDepth: 1 } });
+    assert.equal(r.text.includes("YAMADA"), false);
+    assert.deepEqual(seen[0], { kind: "action", client: "claude-test", desc: { kind: "action", id: "setWindowLevel", params: { center: 40, width: 400 } } });
+    assert.deepEqual((await call(port, token, "undo_viewer_action", {})).json, { ok: true, result: { applied: "undo", undoDepth: 1 } });
+    assert.deepEqual(seen[1].desc, { kind: "undo" });
+    assert.equal((await call(port, token, "set_window_level", { center: 1e9, width: 400 })).json.error, "bad-arg:center"); // 範囲外は窓へ届かない
+    assert.equal((await call(port, token, "create_roi", {})).json.error, "unknown-tool");
+    assert.equal(seen.length, 2);
+    assert.equal(calls.length, 0); // backend には一度も行かない
+  });
+});
+
+test("bridge: 表示操作の失敗は符号の許可リストだけ返す（rate-limited・nothing-to-undo・no-tile は返り、本文は返らない）", async () => {
+  const replies = [{ ok: false, error: "rate-limited" }, { ok: false, error: "nothing-to-undo" }, { ok: false, error: "no-tile" }, { ok: false, error: "exec-failed:YAMADA^TARO" }];
+  let i = 0;
+  await withBridge({ viewerImpl: async () => replies[i++], prefs: { enabled: true, includePhi: false, allowAnalysis: false, allowViewerControl: true } }, async ({ port, token }) => {
+    assert.equal((await call(port, token, "flip_horizontal", {})).json.error, "rate-limited");
+    assert.equal((await call(port, token, "undo_viewer_action", {})).json.error, "nothing-to-undo");
+    assert.equal((await call(port, token, "invert_colors", {})).json.error, "no-tile");
+    const odd = await call(port, token, "go_to_slice", { index: 1 });
+    assert.equal(odd.json.error, "viewer-failed");
+    assert.equal(odd.text.includes("YAMADA"), false);
+  });
+});

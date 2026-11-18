@@ -21,8 +21,7 @@ const { oneLine } = require("./mcpAudit");
 const MAX_BODY = 64 * 1024;
 const MAX_RESULT = 512 * 1024;
 const MAX_CONCURRENT = 4;
-/** 2D ビューア窓からの失敗のうち、そのまま返してよい符号（それ以外は viewer-failed）。 */
-const VIEWER_ERRORS = new Set(["no-viewer", "timeout", "declined"]);
+const { safeError: viewerError } = require("./mcpViewerControl");
 const LOCAL_HOST_RE = /^(localhost|127\.0\.0\.1|\[::1\])(:\d{1,5})?$/i;
 
 function tokenEquals(a, b) {
@@ -38,7 +37,7 @@ function tokenEquals(a, b) {
  * @param {(method: string, path: string, opts: {query?: object, body?: object}) => Promise<{status:number, json:any}>} o.backend
  * @param {(clientName: string) => Promise<boolean>} o.confirmClient  最初の接続の同意（main が描く）
  * @param {string} o.discoveryFile  userData/mcp-endpoint.json
- * @param {(kind: string, ctx: {client: string, includePhi: boolean}) => Promise<{ok: boolean, state?: any, measurements?: any, error?: string}>} [o.viewer]  2D ビューア窓から読む（main が viewerRelay で中継。kind は mcpTools.VIEWER_KINDS の固定リストだけ）
+ * @param {(kind: string, ctx: {client: string, includePhi: boolean}, desc: {kind: string, id?: string, params?: object}) => Promise<{ok: boolean, state?: any, measurements?: any, control?: any, error?: string}>} [o.viewer]  2D ビューア窓から読む・操作する（main が viewerRelay で中継。kind は mcpTools.VIEWER_KINDS の固定リストだけ。action の id は VIEWER_ACTIONS だけ）
  */
 function createMcpBridge({ prefs, audit, backend, confirmClient, discoveryFile, viewer, newToken = () => crypto.randomBytes(32).toString("hex") }) {
   let server = null;
@@ -101,12 +100,12 @@ function createMcpBridge({ prefs, audit, backend, confirmClient, discoveryFile, 
       if (typeof viewer !== "function") return { ok: false, error: "viewer-unavailable" };
       let v;
       try {
-        v = await viewer(req.viewer.kind, { client, includePhi: p.includePhi });
+        v = await viewer(req.viewer.kind, { client, includePhi: p.includePhi }, req.viewer);
       } catch {
         return { ok: false, error: "viewer-failed" };
       }
-      if (!v || v.ok !== true) return { ok: false, error: VIEWER_ERRORS.has(v && v.error) ? v.error : "viewer-failed" };
-      data = req.viewer.kind === "getState" ? v.state : v.measurements;
+      if (!v || v.ok !== true) return { ok: false, error: viewerError(v && v.error) };
+      data = req.viewer.kind === "getState" ? v.state : req.viewer.kind === "getMeasurements" ? v.measurements : v.control; // action・undo は main が作った小さな結果
     } else {
       let r;
       try {
