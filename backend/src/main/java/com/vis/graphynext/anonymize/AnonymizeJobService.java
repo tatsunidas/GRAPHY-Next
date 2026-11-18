@@ -5,6 +5,7 @@
 package com.vis.graphynext.anonymize;
 
 import com.vis.graphynext.activity.ActiveWork;
+import com.vis.graphynext.compute.ComputeDatasetService;
 import com.vis.graphynext.dicom.web.WebDicomDataService;
 import jakarta.annotation.PreDestroy;
 import org.dcm4che3.data.Tag;
@@ -62,13 +63,17 @@ public class AnonymizeJobService implements ActiveWork {
     /** 状態の応答。{@code errors} は先頭の数件、{@code errorCount} は全件数。 */
     public record Status(String jobId, State state, int total, int processed, int instances, int burnedInstances,
             int notBurnedInstances, int partiallyBurnedInstances, Long usedSeed, int errorCount, List<String> errors,
-            String error, long expiresAt, String output, int stored) {
+            String error, long expiresAt, String output, int stored, String reason, int slices) {
     }
 
     private static final class Job {
         final String id = UUID.randomUUID().toString();
         final Path dir;
         final boolean stow;
+        /** NIfTI の書き出しジョブ（出力は {@code out.nii.gz}）。 */
+        final boolean nifti;
+        volatile String reason;
+        volatile int slices;
         final AtomicInteger stored = new AtomicInteger();
         volatile State state = State.QUEUED;
         volatile int total = -1;
@@ -78,22 +83,30 @@ public class AnonymizeJobService implements ActiveWork {
         volatile long finishedAt;
         volatile Future<?> future;
 
-        Job(Path dir, boolean stow) {
+        Job(Path dir, boolean stow, boolean nifti) {
             this.dir = dir;
             this.stow = stow;
+            this.nifti = nifti;
         }
 
         Path zip() {
             return dir.resolve("out.zip");
         }
+
+        Path niftiFile() {
+            return dir.resolve("out.nii.gz");
+        }
     }
 
     private final AnonymizeService service;
+    private final ComputeDatasetService datasets;
     private final WebDicomDataService web;
     private final Path root;
     private final long ttlMillis;
     private final Map<String, Job> jobs = new ConcurrentHashMap<>();
     private final ThreadPoolExecutor workers;
+    /** NIfTI の書き出し専用。体積を丸ごとメモリに持つ（上限 1 GiB）ので、同時に 1 件だけ走らせる。 */
+    private final ThreadPoolExecutor niftiWorkers;
     private final ScheduledExecutorService sweeper = Executors.newSingleThreadScheduledExecutor(r -> {
         Thread t = new Thread(r, "anonymize-sweep");
         t.setDaemon(true);
@@ -101,15 +114,21 @@ public class AnonymizeJobService implements ActiveWork {
     });
 
     @Autowired
-    public AnonymizeJobService(AnonymizeService service, WebDicomDataService web,
+    public AnonymizeJobService(AnonymizeService service, ComputeDatasetService datasets, WebDicomDataService web,
             @Value("${graphy.web.anonymize.max-jobs:4}") int maxJobs,
             @Value("${graphy.web.anonymize.ttl-minutes:30}") long ttlMinutes) {
-        this(service, web, Path.of(System.getProperty("java.io.tmpdir"), "graphy-anon-jobs"), maxJobs,
+        this(service, datasets, web, Path.of(System.getProperty("java.io.tmpdir"), "graphy-anon-jobs"), maxJobs,
                 TimeUnit.MINUTES.toMillis(ttlMinutes));
     }
 
     AnonymizeJobService(AnonymizeService service, WebDicomDataService web, Path root, int maxJobs, long ttlMillis) {
+        this(service, null, web, root, maxJobs, ttlMillis);
+    }
+
+    AnonymizeJobService(AnonymizeService service, ComputeDatasetService datasets, WebDicomDataService web, Path root,
+            int maxJobs, long ttlMillis) {
         this.service = service;
+        this.datasets = datasets;
         this.web = web;
         this.root = root;
         this.ttlMillis = ttlMillis;
@@ -119,6 +138,11 @@ public class AnonymizeJobService implements ActiveWork {
                     t.setDaemon(true);
                     return t;
                 });
+        this.niftiWorkers = new ThreadPoolExecutor(1, 1, 0L, TimeUnit.MILLISECONDS, new LinkedBlockingQueue<>(), r -> {
+            Thread t = new Thread(r, "nifti-job");
+            t.setDaemon(true);
+            return t;
+        });
         deleteTree(root); // 前回の異常終了で残った一時ファイル
         sweeper.scheduleWithFixedDelay(() -> sweep(System.currentTimeMillis()), 1, 1, TimeUnit.MINUTES);
     }
@@ -133,10 +157,62 @@ public class AnonymizeJobService implements ActiveWork {
     public Status submit(List<String> studyUids, AnonymizeConfig cfg, boolean burnIn,
             Map<String, AnonymizeMaskStore.SeriesMask> masks, boolean stow) throws IOException {
         Files.createDirectories(root);
-        Job job = new Job(Files.createTempDirectory(root, "job-"), stow);
+        Job job = new Job(Files.createTempDirectory(root, "job-"), stow, false);
         jobs.put(job.id, job);
         job.future = workers.submit(() -> run(job, studyUids, cfg, burnIn, masks));
         return statusOf(job);
+    }
+
+    /**
+     * 1 シリーズを NIfTI にするジョブを登録する（段 2b）。断る理由は {@link Status#reason()}（standalone の 422 と同じコード）。
+     * 出力は {@link #niftiOf} で 1 回だけ受け取れる。
+     */
+    public Status submitNifti(String studyUid, String seriesUid) throws IOException {
+        Files.createDirectories(root);
+        Job job = new Job(Files.createTempDirectory(root, "job-"), false, true);
+        jobs.put(job.id, job);
+        job.future = niftiWorkers.submit(() -> runNifti(job, studyUid, seriesUid));
+        return statusOf(job);
+    }
+
+    private void runNifti(Job job, String studyUid, String seriesUid) {
+        if (job.state == State.CANCELLED) {
+            return;
+        }
+        job.state = State.RUNNING;
+        try {
+            if (datasets == null) {
+                fail(job, "NIfTI の書き出しが組み込まれていません");
+                return;
+            }
+            WebAnonymizeSource source = new WebAnonymizeSource(web, List.of(studyUid), job.dir.resolve("src"), seriesUid);
+            job.total = source.list().size();
+            if (job.total == 0) {
+                job.reason = "series-not-found";
+                fail(job, "対象のインスタンスが PACS にありません");
+                return;
+            }
+            ComputeDatasetService.WebNifti r;
+            try (OutputStream fo = Files.newOutputStream(job.niftiFile())) {
+                r = datasets.writeNiftiFromSource(source, fo, job.processed::incrementAndGet);
+            }
+            if (job.state == State.CANCELLED) {
+                return;
+            }
+            job.slices = r.instances();
+            job.finishedAt = System.currentTimeMillis();
+            job.state = State.DONE;
+        } catch (ComputeDatasetService.DatasetRefused e) {
+            job.reason = e.reason();
+            fail(job, e.getMessage());
+        } catch (CancellationException e) {
+            cleanup(job, State.CANCELLED);
+        } catch (Exception e) {
+            log.warn("nifti job {} failed", job.id, e);
+            fail(job, e.getMessage() == null ? e.toString() : e.getMessage());
+        } finally {
+            deleteTree(job.dir.resolve("src"));
+        }
     }
 
     private void run(Job job, List<String> studyUids, AnonymizeConfig cfg, boolean burnIn,
@@ -254,7 +330,13 @@ public class AnonymizeJobService implements ActiveWork {
     /** DONE の ZIP のパス。まだ（または失敗・期限切れ）なら null。 */
     public Path zipOf(String id) {
         Job job = jobs.get(id);
-        return job != null && job.state == State.DONE && Files.exists(job.zip()) ? job.zip() : null;
+        return job != null && !job.nifti && job.state == State.DONE && Files.exists(job.zip()) ? job.zip() : null;
+    }
+
+    /** DONE の NIfTI のパス。まだ（または失敗・期限切れ・NIfTI ジョブでない）なら null。 */
+    public Path niftiOf(String id) {
+        Job job = jobs.get(id);
+        return job != null && job.nifti && job.state == State.DONE && Files.exists(job.niftiFile()) ? job.niftiFile() : null;
     }
 
     /** 受け取り後などにジョブごと消す。 */
@@ -305,13 +387,15 @@ public class AnonymizeJobService implements ActiveWork {
                 r == null ? 0 : r.instances(), r == null ? 0 : r.burnedInstances(),
                 r == null ? 0 : r.notBurnedInstances(), r == null ? 0 : r.partiallyBurnedInstances(),
                 r == null ? null : r.usedSeed(), r == null ? 0 : r.errors().size(), errs, job.error,
-                job.finishedAt > 0 ? job.finishedAt + ttlMillis : 0, job.stow ? "stow" : "zip", job.stored.get());
+                job.finishedAt > 0 ? job.finishedAt + ttlMillis : 0, job.nifti ? "nifti" : job.stow ? "stow" : "zip",
+                job.stored.get(), job.reason, job.slices);
     }
 
     @PreDestroy
     void shutdown() {
         sweeper.shutdownNow();
         workers.shutdownNow();
+        niftiWorkers.shutdownNow();
         deleteTree(root);
     }
 

@@ -39,7 +39,8 @@ public class WebWriteGuardFilter extends OncePerRequestFilter {
     /** 守る対象。web 取り込みなど、書き込みの API を足したらここに足す。 */
     private static final List<Guarded> GUARDED = List.of(
             new Guarded(HttpMethod.POST, "/api/anonymizer/jobs"),
-            new Guarded(HttpMethod.DELETE, "/api/anonymizer/jobs/**"));
+            new Guarded(HttpMethod.DELETE, "/api/anonymizer/jobs/**"),
+            new Guarded(HttpMethod.POST, "/api/nifti/export-job"));
 
     private final AntPathMatcher matcher = new AntPathMatcher();
     private final CorsProperties cors;
