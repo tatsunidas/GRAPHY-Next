@@ -3173,6 +3173,7 @@ export const en: Record<string, string> = {
   "cine2.reason.budget": "fitted to the GPU memory budget ({{source}})",
   "cine2.reason.max3d": "fitted to the 3D texture size limit",
   "cine2.source.user": "setting",
+  "cine2.source.nvidia-free": "free memory of the NVIDIA GPU (nvidia-smi)",
   "cine2.source.shared": "estimate of the integrated GPU's shared memory",
   "cine2.source.record": "record of a previous failure",
   "cine2.source.unknown": "unknown",

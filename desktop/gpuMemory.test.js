@@ -37,3 +37,29 @@ test("実行ファイルが無い・ドライバが応答しない機械で、�
   const r = await gm.query({ platform: "linux" });
   assert.ok(r === null || Array.isArray(r));
 });
+
+test("空き量: 名前・空き・搭載を MiB からバイトにする。名前にカンマがあっても末尾の 2 列から切る。読めない行は捨てる", () => {
+  assert.deepEqual(gm.parseNvidiaSmiFree("NVIDIA GeForce GTX 1050 Ti, 3981, 4096\n"), [
+    { name: "NVIDIA GeForce GTX 1050 Ti", freeBytes: 3981 * MIB, totalBytes: 4096 * MIB },
+  ]);
+  assert.deepEqual(gm.parseNvidiaSmiFree("A, B, 100, 200\r\n"), [{ name: "A, B", freeBytes: 100 * MIB, totalBytes: 200 * MIB }]);
+  assert.equal(gm.parseNvidiaSmiFree(""), null);
+  assert.equal(gm.parseNvidiaSmiFree(undefined), null);
+  assert.equal(gm.parseNvidiaSmiFree("X, [N/A], 4096"), null);
+  assert.equal(gm.parseNvidiaSmiFree("X, 100, 0"), null);
+  assert.equal(gm.parseNvidiaSmiFree("X, 100"), null);
+  assert.equal(gm.parseNvidiaSmiFree(", 100, 200"), null);
+  assert.equal(gm.parseNvidiaSmiFree("NVIDIA-SMI has failed because it couldn't communicate with the NVIDIA driver."), null);
+  assert.equal(gm.parseNvidiaSmiFree("X, 1, 2\nbad\nY, 0, 8192").length, 2); // 空きが 0 の GPU は残す（実際に空きが無い）
+});
+
+test("queryFree: Linux 以外は聞かずに null。失敗・例外も null", async () => {
+  let called = 0;
+  const run = async () => (called++, "A, 100, 200");
+  assert.equal(await gm.queryFree({ platform: "win32", run }), null);
+  assert.equal(await gm.queryFree({ platform: "darwin", run }), null);
+  assert.equal(called, 0);
+  assert.equal((await gm.queryFree({ platform: "linux", run }))[0].freeBytes, 100 * MIB);
+  assert.equal(await gm.queryFree({ platform: "linux", run: async () => null }), null);
+  assert.equal(await gm.queryFree({ platform: "linux", run: async () => { throw new Error("x"); } }), null);
+});

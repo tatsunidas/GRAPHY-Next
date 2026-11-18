@@ -1243,6 +1243,8 @@ ipcMain.handle("graphy:gpu-status", async () => {
 
 // GPU の搭載メモリ（設定＞描画環境）。Chromium は返さないので nvidia-smi に聞く（Linux の NVIDIA のみ。取れなければ null＝不明）。
 ipcMain.handle("graphy:gpu-memory", () => gpuMemory.query({ platform: process.platform }));
+// 今の GPU ごとの空きメモリ（シネマティックの開始のたびに聞く。Linux の NVIDIA のみ）。
+ipcMain.handle("graphy:gpu-memory-free", () => gpuMemory.queryFree({ platform: process.platform }));
 
 // 描画に使う GPU の選択（設定＞描画環境）。supported は GPU 一覧が要るので ready 後にここで返す。
 // applied は「この起動で実際に付けたか」（保存した値との食い違い＝再起動待ちを画面が見せる）。
