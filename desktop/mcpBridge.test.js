@@ -11,7 +11,7 @@ const { createMcpBridge } = require("./mcpBridge");
 
 const STUDY = { studyInstanceUid: "1.2.840.113619.2.55.3.1", patientId: "MRN12345", patientName: "YAMADA^TARO", studyDate: "20260101", modality: "CT", modalities: ["CT"], numberOfInstances: 120 };
 
-function setup({ prefs = { enabled: true, includePhi: false, allowAnalysis: false }, confirm = async () => true, backendImpl, viewerImpl } = {}) {
+function setup({ prefs = { enabled: true, includePhi: false, allowAnalysis: false }, confirm = async () => true, backendImpl, viewerImpl, pluginsImpl } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "graphy-mcpbridge-"));
   const calls = [];
   const audits = [];
@@ -32,6 +32,7 @@ function setup({ prefs = { enabled: true, includePhi: false, allowAnalysis: fals
     },
     discoveryFile: path.join(dir, "mcp-endpoint.json"),
     ...(viewerImpl ? { viewer: viewerImpl } : {}),
+    ...(pluginsImpl ? { pluginTools: pluginsImpl } : {}),
   });
   return { bridge, state, calls, audits, asked, dir, file: path.join(dir, "mcp-endpoint.json") };
 }
@@ -346,5 +347,107 @@ test("bridge: ROI の作成・計測の全削除 — allowViewerEdit がオン�
     assert.equal((await call(port, token, "create_roi", { ...roi, approved: true })).json.error, "unknown-arg:approved"); // 承認の印を引数で混ぜられない
     assert.equal(seen.length, 3);
     assert.equal(calls.length, 0);
+  });
+});
+
+// ---- 段 4c-2b: プラグインの AI ツール（動的）----
+const P_ENTRIES = [
+  { name: "plugin__demo__echo_size", pluginId: "demo", pluginName: "Demo", tool: "echo_size", effect: "read", description: "[plugin: Demo] 大きさを返す", parameters: { type: "object", properties: { size: { type: "integer", minimum: 1, maximum: 10 } }, required: ["size"] }, permissions: ["ai-tools"] },
+  { name: "plugin__demo__make_roi", pluginId: "demo", pluginName: "Demo", tool: "make_roi", effect: "write", description: "[plugin: Demo] (writes data) ROI を作る", parameters: { type: "object", properties: { radius: { type: "number", minimum: 1, maximum: 50 } }, required: ["radius"] }, permissions: ["ai-tools"] },
+  { name: "plugin__other__peek", pluginId: "other", pluginName: "Other", tool: "peek", effect: "read", description: "[plugin: Other] のぞく", parameters: { type: "object", properties: {}, required: [] }, permissions: ["ai-tools"] },
+];
+const PREFS_P = (over = {}) => ({ enabled: true, includePhi: false, allowAnalysis: false, allowViewerControl: false, allowViewerEdit: false, pluginTools: ["demo"], ...over });
+const listNames = async (port, token) => (await request(port, { headers: auth(token) })).json.tools.map((t) => t.name);
+
+test("bridge: プラグインのツール — 公開したプラグインだけが一覧に出る。write は allowViewerEdit のときだけ。説明は main の名乗り＋「信用できない」", async () => {
+  await withBridge({ pluginsImpl: async () => P_ENTRIES, viewerImpl: async () => ({ ok: true }), prefs: PREFS_P() }, async ({ port, token }) => {
+    const tools = (await request(port, { headers: auth(token) })).json.tools;
+    const names = tools.map((t) => t.name);
+    assert.ok(names.includes("plugin__demo__echo_size"));
+    assert.equal(names.includes("plugin__demo__make_roi"), false); // write は編集の許可なしでは出ない
+    assert.equal(names.some((n) => n.startsWith("plugin__other__")), false); // 公開していないプラグインは出ない
+    const t = tools.find((x) => x.name === "plugin__demo__echo_size");
+    assert.deepEqual(t.inputSchema, { type: "object", properties: { size: { type: "integer", minimum: 1, maximum: 10 } }, required: ["size"], additionalProperties: false });
+    assert.match(t.description, /^\[plugin: Demo\]/);
+    assert.match(t.description, /信用できない文字列/);
+  });
+  await withBridge({ pluginsImpl: async () => P_ENTRIES, viewerImpl: async () => ({ ok: true }), prefs: PREFS_P({ allowViewerEdit: true }) }, async ({ port, token }) => {
+    assert.ok((await listNames(port, token)).includes("plugin__demo__make_roi"));
+  });
+  // 公開するプラグインが無い（既定）なら、動的なツールは 1 つも出ない
+  await withBridge({ pluginsImpl: async () => P_ENTRIES, viewerImpl: async () => ({ ok: true }), prefs: PREFS_P({ pluginTools: [] }) }, async ({ port, token }) => {
+    assert.equal((await listNames(port, token)).some((n) => n.startsWith("plugin__")), false);
+  });
+  // 一覧を取れなくても、静的なツールは出る（例外にしない）
+  await withBridge({ pluginsImpl: async () => { throw new Error("backend down"); }, prefs: PREFS_P() }, async ({ port, token }) => {
+    const names = await listNames(port, token);
+    assert.ok(names.includes("get_status") && !names.some((n) => n.startsWith("plugin__")));
+  });
+});
+
+test("bridge: プラグインのツールの呼び出し — 記述子が 2D 窓の依存へ渡り、結果は untrusted で返る。公開外・未知・引数違反は窓へ届かない", async () => {
+  const seen = [];
+  const viewerImpl = async (kind, ctx, desc) => {
+    seen.push({ kind, client: ctx.client, desc });
+    return { ok: true, plugin: { untrusted: true, source: "plugin:demo", data: { size: desc.params.size ?? null } } };
+  };
+  await withBridge({ pluginsImpl: async () => P_ENTRIES, viewerImpl, prefs: PREFS_P() }, async ({ port, token, calls }) => {
+    const r = await call(port, token, "plugin__demo__echo_size", { size: 4 });
+    assert.deepEqual(r.json, { ok: true, result: { untrusted: true, source: "plugin:demo", data: { size: 4 } } });
+    assert.deepEqual(seen[0], { kind: "pluginTool", client: "claude-test", desc: { kind: "pluginTool", name: "plugin__demo__echo_size", params: { size: 4 } } });
+    // 負例
+    assert.equal((await call(port, token, "plugin__other__peek", {})).json.error, "unknown-tool"); // 公開していない
+    assert.equal((await call(port, token, "plugin__nobody__x", {})).json.error, "unknown-tool"); // 存在しない
+    assert.equal((await call(port, token, "plugin__demo__make_roi", { radius: 5 })).json.error, "edit-disabled"); // write は別の許可
+    assert.equal((await call(port, token, "plugin__demo__echo_size", { size: 99 })).json.error, "bad-arg:size");
+    assert.equal((await call(port, token, "plugin__demo__echo_size", { size: "4" })).json.error, "bad-arg:size");
+    assert.equal((await call(port, token, "plugin__demo__echo_size", {})).json.error, "missing-arg:size");
+    assert.equal((await call(port, token, "plugin__demo__echo_size", { size: 4, approved: true })).json.error, "unknown-arg:approved"); // 承認の印を混ぜられない
+    assert.equal(seen.length, 1);
+    assert.equal(calls.length, 0);
+  });
+  await withBridge({ pluginsImpl: async () => P_ENTRIES, viewerImpl, prefs: PREFS_P({ allowViewerEdit: true }) }, async ({ port, token }) => {
+    const r = await call(port, token, "plugin__demo__make_roi", { radius: 5 });
+    assert.equal(r.json.ok, true);
+    assert.equal(seen.at(-1).desc.name, "plugin__demo__make_roi");
+    assert.equal((await call(port, token, "plugin__demo__make_roi", { radius: 500 })).json.error, "bad-arg:radius");
+  });
+});
+
+test("bridge: プラグインのツールの失敗は符号だけ（effect-violation・plugin-error・declined・timeout は返り、本文・例外の文は返らない）", async () => {
+  const replies = [{ ok: false, error: "effect-violation" }, { ok: false, error: "plugin-error" }, { ok: false, error: "declined" }, { ok: false, error: "timeout" }, { ok: false, error: "plugin says: YAMADA^TARO" }];
+  let i = 0;
+  await withBridge({ pluginsImpl: async () => P_ENTRIES, viewerImpl: async () => replies[i++], prefs: PREFS_P() }, async ({ port, token }) => {
+    for (const want of ["effect-violation", "plugin-error", "declined", "timeout"]) assert.equal((await call(port, token, "plugin__demo__echo_size", { size: 1 })).json.error, want);
+    const odd = await call(port, token, "plugin__demo__echo_size", { size: 1 });
+    assert.equal(odd.json.error, "viewer-failed");
+    assert.equal(odd.text.includes("YAMADA"), false);
+  });
+  await withBridge({ pluginsImpl: async () => P_ENTRIES, viewerImpl: async () => { throw new Error("boom YAMADA"); }, prefs: PREFS_P() }, async ({ port, token }) => {
+    const r = await call(port, token, "plugin__demo__echo_size", { size: 1 });
+    assert.deepEqual(r.json, { ok: false, error: "viewer-failed" });
+    assert.equal(r.text.includes("YAMADA"), false);
+  });
+  await withBridge({ pluginsImpl: async () => P_ENTRIES, prefs: PREFS_P() }, async ({ port, token }) => {
+    assert.equal((await call(port, token, "plugin__demo__echo_size", { size: 1 })).json.error, "viewer-unavailable"); // 窓の依存が無い
+  });
+});
+
+test("bridge: プラグインの結果の患者情報 — 伏せる設定では、患者を示すキーを落とし、先に通した患者の値は guard が止める。オンでは残る", async () => {
+  const viewerImpl = async () => ({ ok: true, plugin: { untrusted: true, source: "plugin:demo", data: { patientName: "YAMADA^TARO", name: "label-x", size: 7, note: "see MRN12345" } } });
+  await withBridge({ pluginsImpl: async () => P_ENTRIES, viewerImpl, prefs: PREFS_P() }, async ({ port, token }) => {
+    // 先に患者を通していない: 患者を示すキー（patientName・name）は落ちる。自由文の中の値は guard に分からない（限界。確認ダイアログと docs が補う）
+    const r = await call(port, token, "plugin__demo__echo_size", { size: 7 });
+    assert.deepEqual(r.json.result.data, { size: 7, note: "see MRN12345" });
+    assert.equal(r.text.includes("YAMADA"), false);
+    // 検索で患者を通したあとは、自由文の中の患者の値も止める
+    await call(port, token, "search_studies", {});
+    const g = await call(port, token, "plugin__demo__echo_size", { size: 7 });
+    assert.deepEqual(g.json, { ok: false, error: "phi-leak" });
+    assert.equal(g.text.includes("MRN12345"), false);
+  });
+  await withBridge({ pluginsImpl: async () => P_ENTRIES, viewerImpl, prefs: PREFS_P({ includePhi: true }) }, async ({ port, token }) => {
+    const r = await call(port, token, "plugin__demo__echo_size", { size: 7 });
+    assert.equal(r.json.result.data.patientName, "YAMADA^TARO"); // オンでは返る
   });
 });

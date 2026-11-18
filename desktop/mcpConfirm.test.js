@@ -76,3 +76,44 @@ test("文面: ROI の作成はクライアント名・形・位置・大きさ�
   // クライアント名の制御文字・長さは落とす（ダイアログの文面を壊さない）
   assert.ok(!/\n/.test(writeConfirmText("a\nb" + "x".repeat(200), "clearMeasurements").message));
 });
+
+const { pluginWriteConfirmText, pluginSendConfirmText, pluginExposeConfirmText } = require("./mcpConfirm");
+
+const MONAI = { pluginId: "vis-monai", pluginName: "MONAI", tool: "segment_run", effect: "write", description: "[plugin: MONAI] (writes data) 臓器を分割する", permissions: ["remote-compute", "ai-tools"] };
+const DEMO = { pluginId: "demo", pluginName: "Demo", tool: "make_roi", effect: "write", description: "[plugin: Demo] (writes data) ROI を作る", permissions: ["ai-tools"] };
+
+test("文面(plugin): write はクライアント・プラグイン・ツール・引数・「信用できない文字列」を示す。remote-compute には、別に計算機の送信の確認が出ることを添える", () => {
+  const t = pluginWriteConfirmText("claude-x", MONAI, '{"organs":"liver"}');
+  assert.match(t.message, /「claude-x」/);
+  assert.match(t.message, /「MONAI」/);
+  assert.match(t.message, /「segment_run」/);
+  assert.match(t.detail, /信用できない文字列/);
+  assert.match(t.detail, /臓器を分割する/);
+  assert.ok(!/\[plugin:/.test(t.detail) && !/\(writes data\)/.test(t.detail)); // main が前置した名乗りは重複させない
+  assert.match(t.detail, /liver/);
+  assert.match(t.detail, /外部の計算機へデータを送る機能/);
+  assert.match(t.detail, /計算機への送信の同意/);
+  // remote-compute が無いプラグインには、その注記を出さない（出すと常に警告で、見分けがつかなくなる）
+  assert.ok(!/外部の計算機/.test(pluginWriteConfirmText("c", DEMO, "{}").detail));
+  assert.ok(!/\n/.test(pluginWriteConfirmText("a\nb", DEMO, "{}").message));
+});
+
+test("文面(plugin): 結果を返す確認は、結果の先頭と「信用できない文字列」・患者情報の確認を促す。公開の確認はツールと効果の一覧を示す", () => {
+  const s = pluginSendConfirmText("claude-x", DEMO, "x".repeat(500));
+  assert.match(s.message, /「Demo」/);
+  assert.match(s.message, /「claude-x」/);
+  assert.match(s.detail, /信用できない文字列/);
+  assert.match(s.detail, /患者情報が含まれていないか/);
+  assert.ok(s.detail.length < 800); // 結果の先頭は切る
+  const e = pluginExposeConfirmText("vis-monai", [
+    MONAI,
+    { ...MONAI, tool: "segment_models", effect: "read" },
+    { ...DEMO, tool: "show_mask", effect: "display" },
+  ]);
+  assert.match(e.message, /「MONAI」/);
+  assert.match(e.detail, /segment_run（データを変更。実行のたびに確認）/);
+  assert.match(e.detail, /segment_models（読み取り）/);
+  assert.ok(!/show_mask/.test(e.detail)); // 他のプラグインのツールは載せない
+  assert.match(e.detail, /画素や患者に関わる値に触れ得ます/);
+  assert.match(pluginExposeConfirmText("none", []).detail, /ツールが見つかりません/);
+});

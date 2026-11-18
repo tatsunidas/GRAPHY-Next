@@ -735,11 +735,11 @@ app.on("before-quit", () => {
 // MCP サーバー（外部 AI クライアントが、起動中のこのアプリを使う）。設計: roadmap fw/mcp-server-design.md。既定はすべてオフ。
 // 🔴 受け口・同意・患者情報の射影・監査・拒否リストはすべて main 側（mcpBridge / mcpTools / mcpProjection）。中継（graphy-mcp）は転送だけ。
 // 🔴 設定の変更は設定画面（main 窓）からだけ。オンにするときは main が確認を描く（描いた確認をレンダラが飛ばせない）。
-const { createMcpPrefs, confirmationsFor } = require("./mcpPrefs");
+const { createMcpPrefs, confirmationsFor, pluginAdditions } = require("./mcpPrefs");
 const { createMcpAudit } = require("./mcpAudit");
 const { createMcpBridge } = require("./mcpBridge");
 const { createViewerControl } = require("./mcpViewerControl");
-const { createDialogQueue, writeConfirmText, CONFIRM_TIMEOUT_MS } = require("./mcpConfirm");
+const { createDialogQueue, writeConfirmText, pluginWriteConfirmText, pluginSendConfirmText, pluginExposeConfirmText, CONFIRM_TIMEOUT_MS } = require("./mcpConfirm");
 let mcpPrefsStore = null;
 let mcpBridgeInst = null;
 function mcpPrefs() {
@@ -844,6 +844,30 @@ async function mcpConfirmViewerWrite(client, id, params) {
   return r.response === 0;
 }
 
+// プラグインのツールの結果を外部 AI クライアントへ返す前の確認（クライアント × プラグインで 1 回。viewerRelay が数える）。結果は信用できない文字列。
+async function mcpConfirmPluginSend(client, entry, preview) {
+  const t = pluginSendConfirmText(client, entry, preview);
+  const r = await mcpDialogs.ask({ type: "warning", buttons: ["返す", "取り消す"], defaultId: 1, cancelId: 1, title: "外部 AI クライアントの接続", message: t.message, detail: t.detail }, { timeoutMs: CONFIRM_TIMEOUT_MS });
+  return r.response === 0;
+}
+
+// プラグインの write ツールを実行する前の確認（**実行のたびに**）。remote-compute を持つプラグインには、別に計算機への送信の同意が出ることを添える。
+async function mcpConfirmPluginWrite(client, entry, argsPreview) {
+  const t = pluginWriteConfirmText(client, entry, argsPreview);
+  const r = await mcpDialogs.ask({ type: "warning", buttons: ["実行する", "取り消す"], defaultId: 1, cancelId: 1, title: "外部 AI クライアントの操作の確認", message: t.message, detail: t.detail }, { timeoutMs: CONFIRM_TIMEOUT_MS });
+  return r.response === 0;
+}
+
+// MCP に公開するプラグインのツール一覧（backend の GET /api/plugins から組み直したもの。10 秒は使い回す）。公開するかどうかは mcpBridge が mcp.json の pluginTools と照らす。
+let mcpPluginEntriesAt = 0;
+async function mcpPluginEntries() {
+  if (Date.now() - mcpPluginEntriesAt > 10_000) {
+    const r = await refreshPluginToolEntries();
+    if (r.ok) mcpPluginEntriesAt = Date.now();
+  }
+  return pluginToolEntries;
+}
+
 // 外部 AI クライアントが 2D ビューアの状態・ROI を読む。同じプロセス内の viewerRelay を直接呼ぶ（`graphy:assistant-viewer-cmd` の
 // 「チャット窓だけ」の関門は ipcMain の handler にあり、そのまま。2D 窓への送信 graphy:viewer-cmd は main→窓の一方向）。
 // kind は mcpTools.VIEWER_KINDS（getState・getMeasurements・action・undo）だけ。ジャーナルの sessionId は `mcp:<クライアント名>`。
@@ -856,6 +880,21 @@ function mcpControl() {
   return mcpControlInst;
 }
 function mcpViewer(kind, { client, includePhi, allowViewerEdit }, desc) {
+  if (kind === "pluginTool") {
+    // プラグインのツール: 名前は main の一覧で引き直す（公開したプラグインだけ。write は allowViewerEdit のときだけ）。結果は信用できない文字列で、
+    // 返す前に（クライアント × プラグインで 1 回）内容を示して確認する。2 段目の計算機への送信の同意（remote-compute）はプラグイン側で必ず出る。
+    const p = mcpPrefs().get();
+    return viewerRelay
+      .relay(`mcp:${client}`, { kind: "pluginTool", name: desc.name, params: desc.params }, {
+        pluginTools: {
+          lookup: (name) => pluginToolEntries.find((x) => x.name === name && p.pluginTools.includes(x.pluginId) && (x.effect !== "write" || p.allowViewerEdit === true)) || null,
+          external: true,
+          confirmSend: (entry, preview) => mcpConfirmPluginSend(client, entry, preview),
+          confirmWrite: (entry, argsPreview) => mcpConfirmPluginWrite(client, entry, argsPreview),
+        },
+      })
+      .then((r) => (r && r.ok === true ? { ok: true, plugin: { untrusted: true, source: r.source, data: r.data, ...(r.truncated ? { truncated: true } : {}) } } : r));
+  }
   if (kind === "action" || kind === "undo") return mcpControl().run(client, desc, { allowEdit: allowViewerEdit === true, confirm: (id, params) => mcpConfirmViewerWrite(client, id, params) });
   const opts = kind === "getMeasurements" ? { measurements: { external: true, confirmSend: (preview) => mcpConfirmMeasurements(client, preview) } } : {};
   return viewerRelay.relay(`mcp:${client}`, { kind, includeLabels: includePhi === true }, opts);
@@ -869,6 +908,7 @@ function mcpBridge() {
       backend: mcpBackend,
       confirmClient: mcpConfirmClient,
       viewer: mcpViewer,
+      pluginTools: mcpPluginEntries,
       discoveryFile: path.join(app.getPath("userData"), "mcp-endpoint.json"),
     });
   }
@@ -910,6 +950,17 @@ ipcMain.handle("graphy:mcp-set", async (e, patch) => {
       const t = MCP_ENABLE_TEXT[k];
       const r = await dialog.showMessageBox(mainWin, { type: "warning", buttons: ["オンにする", "やめる"], defaultId: 1, cancelId: 1, title: "外部 AI クライアントの接続", message: t.message, detail: t.detail });
       if (r.response !== 0) return { ok: false, error: "cancelled", state: mcpState() };
+    }
+    // プラグインのツールを新しく公開するとき: 実在する（有効で ai-tools の）プラグインだけ。公開するツールの一覧を示して確認する
+    const added = pluginAdditions(prev, patch);
+    if (added.length > 0) {
+      await refreshPluginToolEntries();
+      for (const id of added) {
+        if (!pluginToolEntries.some((x) => x.pluginId === id)) return { ok: false, error: "unknown-plugin", state: mcpState() };
+        const t = pluginExposeConfirmText(id, pluginToolEntries);
+        const r = await dialog.showMessageBox(mainWin, { type: "warning", buttons: ["公開する", "やめる"], defaultId: 1, cancelId: 1, title: "外部 AI クライアントの接続", message: t.message, detail: t.detail });
+        if (r.response !== 0) return { ok: false, error: "cancelled", state: mcpState() };
+      }
     }
     mcpPrefs().set(patch);
   } catch (err) {
