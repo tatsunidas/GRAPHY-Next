@@ -17,16 +17,16 @@ const tmpDir = () => fs.mkdtempSync(path.join(os.tmpdir(), "graphy-mcp-"));
 test("prefs: 既定はすべてオフ。保存して読み戻せる", () => {
   const file = path.join(tmpDir(), "mcp.json");
   const p = createMcpPrefs({ file });
-  assert.deepEqual(p.get(), { enabled: false, includePhi: false, allowAnalysis: false, allowViewerControl: false, allowViewerEdit: false, pluginTools: [] });
+  assert.deepEqual(p.get(), { enabled: false, includePhi: false, allowAnalysis: false, allowViewerControl: false, allowViewerEdit: false, allowViewerCapture: false, pluginTools: [] });
   p.set({ enabled: true });
-  assert.deepEqual(createMcpPrefs({ file }).get(), { enabled: true, includePhi: false, allowAnalysis: false, allowViewerControl: false, allowViewerEdit: false, pluginTools: [] });
+  assert.deepEqual(createMcpPrefs({ file }).get(), { enabled: true, includePhi: false, allowAnalysis: false, allowViewerControl: false, allowViewerEdit: false, allowViewerCapture: false, pluginTools: [] });
 });
 
 test("prefs: 負例 — 壊れた保存・未知のキー・真偽値以外は、既定に戻す／例外", () => {
   const file = path.join(tmpDir(), "mcp.json");
   fs.writeFileSync(file, "{not json");
   const p = createMcpPrefs({ file });
-  assert.deepEqual(p.get(), { enabled: false, includePhi: false, allowAnalysis: false, allowViewerControl: false, allowViewerEdit: false, pluginTools: [] });
+  assert.deepEqual(p.get(), { enabled: false, includePhi: false, allowAnalysis: false, allowViewerControl: false, allowViewerEdit: false, allowViewerCapture: false, pluginTools: [] });
   assert.equal(p.readError(), "corrupt");
   fs.writeFileSync(file, JSON.stringify({ enabled: "yes" }));
   assert.equal(p.readError(), "corrupt");
@@ -149,8 +149,8 @@ test("projection: deep — 患者キーを落とし、UID を札にする（形�
 });
 
 // ---- ツール ----
-const OFF = { includePhi: false, allowAnalysis: false, allowViewerControl: false, allowViewerEdit: false };
-const ON = { includePhi: true, allowAnalysis: true, allowViewerControl: true, allowViewerEdit: true };
+const OFF = { includePhi: false, allowAnalysis: false, allowViewerControl: false, allowViewerEdit: false, allowViewerCapture: false };
+const ON = { includePhi: true, allowAnalysis: true, allowViewerControl: true, allowViewerEdit: true, allowViewerCapture: true };
 
 test("tools: listTools — 解析がオフなら analysis は出ない。患者情報がオフなら患者名の引数も出ない", () => {
   const names = (prefs) => T.listTools(prefs).map((t) => t.name);
@@ -238,8 +238,8 @@ test("tools: すべてのツールが、組み立てた要求を checkBackendCal
   }
 });
 
-test("tools: ビューア系（読み取り 2 つ）— 引数なし。画素（captureView）・プラグイン（pluginTool）の kind は固定リストに無い", () => {
-  assert.deepEqual([...T.VIEWER_KINDS].sort(), ["action", "getMeasurements", "getState", "pluginTool", "undo"]);
+test("tools: ビューア系（読み取り 2 つ）— 引数なし", () => {
+  assert.deepEqual([...T.VIEWER_KINDS].sort(), ["action", "captureView", "getMeasurements", "getState", "pluginTool", "undo"]);
   const read = T.TOOLS.filter((t) => t.via === "viewer" && t.effect === "read");
   assert.deepEqual(read.map((t) => t.name).sort(), ["get_measurements", "get_viewer_state"]);
   for (const t of read) {
@@ -487,4 +487,24 @@ test("prefs: pluginTools の負例 — 配列でない・不正な ID・重複�
     assert.deepEqual(p.get().pluginTools, []);
     assert.equal(p.get().enabled, false); // 壊れていたら全部既定（黙って一部だけ採らない）
   }
+});
+
+// ---- 画像（画素）を返す（allowViewerCapture。実行のたびに利用者が確認）----
+test("tools: capture_viewer_image は allowViewerCapture がオンのときだけ（他の許可とは独立）。オフなら capture-disabled", () => {
+  const P = createProjector({ includePhi: false });
+  const base = { includePhi: false, allowAnalysis: true, allowViewerControl: true, allowViewerEdit: true, pluginTools: [] };
+  const names = (extra) => T.listTools({ ...base, ...extra }).map((t) => t.name);
+  assert.equal(names({ allowViewerCapture: false }).includes("capture_viewer_image"), false); // 他の許可を全部オンにしても出ない
+  assert.equal(names({ allowViewerCapture: true }).includes("capture_viewer_image"), true);
+  assert.equal(T.buildRequest("capture_viewer_image", {}, { projector: P, prefs: { ...base, allowViewerCapture: false } }).error, "capture-disabled");
+  const prefs = { ...base, allowViewerCapture: true };
+  assert.deepEqual(T.buildRequest("capture_viewer_image", {}, { projector: P, prefs }), { viewer: { kind: "captureView", withRoi: false, crop: false } });
+  assert.deepEqual(T.buildRequest("capture_viewer_image", { withRoi: true, crop: true }, { projector: P, prefs }), { viewer: { kind: "captureView", withRoi: true, crop: true } });
+  assert.equal(T.buildRequest("capture_viewer_image", { withRoi: "yes" }, { projector: P, prefs }).error, "bad-arg:withRoi");
+  assert.equal(T.buildRequest("capture_viewer_image", { approved: true }, { projector: P, prefs }).error, "unknown-arg:approved");
+  const t = T.TOOLS.find((x) => x.name === "capture_viewer_image");
+  assert.match(t.description, /焼き込まれている場合がある/);
+  assert.match(t.description, /実行のたびに/);
+  // 表示中の画像を返すのは、この 1 つだけ（読み取り・表示操作のツールは画像を返さない）
+  assert.deepEqual(T.TOOLS.filter((x) => x.viewerKind === "captureView").map((x) => x.name), ["capture_viewer_image"]);
 });

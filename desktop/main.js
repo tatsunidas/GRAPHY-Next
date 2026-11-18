@@ -739,7 +739,7 @@ const { createMcpPrefs, confirmationsFor, pluginAdditions } = require("./mcpPref
 const { createMcpAudit } = require("./mcpAudit");
 const { createMcpBridge } = require("./mcpBridge");
 const { createViewerControl } = require("./mcpViewerControl");
-const { createDialogQueue, writeConfirmText, pluginWriteConfirmText, pluginSendConfirmText, pluginExposeConfirmText, CONFIRM_TIMEOUT_MS } = require("./mcpConfirm");
+const { createDialogQueue, writeConfirmText, captureConfirmText, pluginWriteConfirmText, pluginSendConfirmText, pluginExposeConfirmText, CONFIRM_TIMEOUT_MS } = require("./mcpConfirm");
 let mcpPrefsStore = null;
 let mcpBridgeInst = null;
 function mcpPrefs() {
@@ -763,6 +763,10 @@ const MCP_ENABLE_TEXT = {
   allowViewerControl: {
     message: "AI クライアントが、2D ビューアの表示（窓幅・窓位・スライス・向き・レイアウト・ツール）を操作できるようにします。",
     detail: "いま見ている画面が動きます（対象は、2D ビューアで選んでいるタイル）。元に戻せる操作だけです。ROI の作成・削除は、別の許可（「ROI の作成・計測の全削除を許可する」）が要ります。AI クライアントの「元に戻す」で、行った操作を 1 つずつ戻せます。",
+  },
+  allowViewerCapture: {
+    message: "AI クライアントが、2D ビューアの表示中の画像（画素）を受け取れるようにします。",
+    detail: "画像に、患者の氏名・ID などの文字が焼き込まれていることがあります。アプリは、画像の中の患者情報を検出も除去もできません。受け取った画像は、そのクライアントを通じてクラウドの AI へ送られる可能性があります。実行のたびに、アプリが画像を示して確認します（答えなければ取り消し）。確認した上で返した画像の責任は、あなたにあります。",
   },
   allowViewerEdit: {
     message: "AI クライアントが、2D ビューアに ROI を作成し、計測をすべて削除できるようにします。",
@@ -808,7 +812,7 @@ async function mcpConfirmClient(client) {
     cancelId: 1,
     title: "外部 AI クライアントの接続",
     message: `外部 AI クライアント「${client}」が、GRAPHY-Next への接続を求めています。`,
-    detail: `クライアント名は相手の自己申告で、確認できません。心当たりがなければ［拒否］を選んでください（拒否すると、アプリを再起動するまで受け付けません）。\n現在の設定: 患者情報 = ${p.includePhi ? "返す" : "伏せる"} ／ 解析の実行 = ${p.allowAnalysis ? "許可" : "許可しない"} ／ 2D ビューアの表示操作 = ${p.allowViewerControl ? "許可" : "許可しない"} ／ ROI の作成・計測の全削除 = ${p.allowViewerEdit ? "許可（実行のたびに確認）" : "許可しない"}`,
+    detail: `クライアント名は相手の自己申告で、確認できません。心当たりがなければ［拒否］を選んでください（拒否すると、アプリを再起動するまで受け付けません）。\n現在の設定: 患者情報 = ${p.includePhi ? "返す" : "伏せる"} ／ 解析の実行 = ${p.allowAnalysis ? "許可" : "許可しない"} ／ 2D ビューアの表示操作 = ${p.allowViewerControl ? "許可" : "許可しない"} ／ ROI の作成・計測の全削除 = ${p.allowViewerEdit ? "許可（実行のたびに確認）" : "許可しない"} ／ 画像（画素）を返す = ${p.allowViewerCapture ? "許可（実行のたびに確認）" : "許可しない"}`,
   });
   return r.response === 0;
 }
@@ -835,6 +839,30 @@ async function mcpConfirmViewerWrite(client, id, params) {
   const r = await mcpDialogs.ask({
     type: "warning",
     buttons: [id === "clearMeasurements" ? "削除する" : "追加する", "取り消す"],
+    defaultId: 1,
+    cancelId: 1,
+    title: "外部 AI クライアントの操作の確認",
+    message: t.message,
+    detail: t.detail,
+  }, { timeoutMs: CONFIRM_TIMEOUT_MS });
+  return r.response === 0;
+}
+
+// 2D ビューアの表示中の画像（画素）を外部 AI クライアントへ返す前の確認（**実行のたびに**。サムネイルつき）。焼き込みの患者情報は検出できないので、
+// この確認が唯一の関門（責任は利用者。mcpConfirm.captureConfirmText）。答えないまま CONFIRM_TIMEOUT_MS が過ぎたら［取り消す］。
+async function mcpConfirmCapture(client, image) {
+  let thumb;
+  try {
+    thumb = nativeImage.createFromBuffer(Buffer.from(image.base64, "base64"));
+  } catch {
+    return false;
+  }
+  if (!thumb || thumb.isEmpty()) return false; // 示せない画像は返さない
+  const t = captureConfirmText(client, image);
+  const r = await mcpDialogs.ask({
+    type: "warning",
+    icon: thumb.resize({ width: 160 }),
+    buttons: ["返す", "取り消す"],
     defaultId: 1,
     cancelId: 1,
     title: "外部 AI クライアントの操作の確認",
@@ -880,6 +908,13 @@ function mcpControl() {
   return mcpControlInst;
 }
 function mcpViewer(kind, { client, includePhi, allowViewerEdit }, desc) {
+  if (kind === "captureView") {
+    // 画像: 2D 窓が取り（読み取りだけ）、png/jpeg・マジック・大きさを main が確かめ（sanitizeCapturedImage）、**毎回**利用者に確認してから返す。
+    // imageModelOk は会話の AI のための条件で、MCP には関係ない。
+    return viewerRelay.relay(`mcp:${client}`, { kind: "captureView", withRoi: desc.withRoi === true, crop: desc.crop === true }, {
+      capture: { external: true, imageModelOk: true, confirmSend: (image) => mcpConfirmCapture(client, image) },
+    });
+  }
   if (kind === "pluginTool") {
     // プラグインのツール: 名前は main の一覧で引き直す（公開したプラグインだけ。write は allowViewerEdit のときだけ）。結果は信用できない文字列で、
     // 返す前に（クライアント × プラグインで 1 回）内容を示して確認する。2 段目の計算機への送信の同意（remote-compute）はプラグイン側で必ず出る。

@@ -20,6 +20,8 @@ const { oneLine } = require("./mcpAudit");
 
 const MAX_BODY = 64 * 1024;
 const MAX_RESULT = 512 * 1024;
+/** 画像（captureView）の base64 の上限。viewerRelay の MAX_CAPTURE_B64（アシスタントと同じ 8 MiB）。画像は射影・MAX_RESULT を通さない。 */
+const MAX_IMAGE_B64 = 8 * 1024 * 1024;
 const MAX_CONCURRENT = 4;
 const { safeError: viewerError } = require("./mcpViewerControl");
 
@@ -155,6 +157,15 @@ function createMcpBridge({ prefs, audit, backend, confirmClient, discoveryFile, 
         return { ok: false, error: "viewer-failed" };
       }
       if (!v || v.ok !== true) return { ok: false, error: viewerError(v && v.error) };
+      if (req.viewer.kind === "captureView") {
+        // 画像（画素）は射影・guard・MAX_RESULT を通さない（base64 を文字列として切る・落とすと壊れる。焼き込みの患者情報は射影では落とせない）。
+        // 返す関門は main が毎回出す利用者の確認（viewerRelay.relayCapture の confirmSend）。ここでは形と大きさだけ確かめる。
+        const im = v.image;
+        if (!im || typeof im.base64 !== "string" || typeof im.mimeType !== "string") return { ok: false, error: "viewer-failed" };
+        if (im.base64.length > MAX_IMAGE_B64) return { ok: false, error: "result-too-large" };
+        const dim = (n) => (Number.isInteger(n) && n > 0 && n <= 16384 ? n : 0);
+        return { ok: true, result: { image: { mimeType: im.mimeType, data: im.base64, width: dim(im.w), height: dim(im.h) } } };
+      }
       data = req.viewer.kind === "getState" ? v.state : req.viewer.kind === "getMeasurements" ? v.measurements : req.viewer.kind === "pluginTool" ? v.plugin : v.control; // action・undo は main が作った小さな結果。plugin は {untrusted, source, data, truncated?}
     } else {
       let r;
@@ -295,4 +306,4 @@ function createMcpBridge({ prefs, audit, backend, confirmClient, discoveryFile, 
   return { start, stop, apply, listening: () => server !== null };
 }
 
-module.exports = { createMcpBridge, MAX_BODY, MAX_RESULT };
+module.exports = { createMcpBridge, MAX_BODY, MAX_RESULT, MAX_IMAGE_B64 };

@@ -461,3 +461,57 @@ test("bridge: 監査ログの結果の符号は崩れない（大文字・: が�
     assert.equal(JSON.stringify(audits).includes("YAMADA"), false);
   });
 });
+
+// ---- 画像（画素）を返す（allowViewerCapture）----
+const PNG_HEAD = "iVBORw0KGgo"; // PNG のマジックの base64
+const fakeB64 = (n) => PNG_HEAD + "A".repeat(n - PNG_HEAD.length);
+const PREFS_C = (over = {}) => ({ enabled: true, includePhi: false, allowAnalysis: false, allowViewerControl: false, allowViewerEdit: false, allowViewerCapture: true, pluginTools: [], ...over });
+
+test("bridge: 画像 — allowViewerCapture がオフなら一覧に出ず capture-disabled。窓へ届かない", async () => {
+  const seen = [];
+  await withBridge({ viewerImpl: async (kind, ctx, desc) => { seen.push({ kind, desc }); return { ok: true, image: { base64: fakeB64(100), mimeType: "image/png", w: 4, h: 4 } }; }, prefs: PREFS_C({ allowViewerCapture: false, allowViewerControl: true, allowViewerEdit: true, allowAnalysis: true }) }, async ({ port, token }) => {
+    assert.equal((await request(port, { headers: auth(token) })).json.tools.some((t) => t.name === "capture_viewer_image"), false);
+    assert.deepEqual((await call(port, token, "capture_viewer_image", {})).json, { ok: false, error: "capture-disabled" });
+    assert.equal(seen.length, 0);
+  });
+});
+
+test("bridge: 画像は射影・512 KiB の上限を通らず、そのまま（全バイト）返る。記述子が窓の依存へ渡る", async () => {
+  const seen = [];
+  const big = fakeB64(7 * 1024 * 1024); // 512 KiB・射影の 512 字の上限を超える大きさ
+  await withBridge({ viewerImpl: async (kind, ctx, desc) => { seen.push({ kind, desc }); return { ok: true, image: { base64: big, mimeType: "image/png", w: 2048, h: 1536 } }; }, prefs: PREFS_C() }, async ({ port, token, audits }) => {
+    assert.ok((await request(port, { headers: auth(token) })).json.tools.some((t) => t.name === "capture_viewer_image"));
+    const r = await call(port, token, "capture_viewer_image", { withRoi: true });
+    assert.equal(r.json.ok, true);
+    assert.deepEqual(Object.keys(r.json.result), ["image"]);
+    assert.equal(r.json.result.image.data, big); // 切られても落とされてもいない
+    assert.deepEqual([r.json.result.image.mimeType, r.json.result.image.width, r.json.result.image.height], ["image/png", 2048, 1536]);
+    assert.deepEqual(seen[0], { kind: "captureView", desc: { kind: "captureView", withRoi: true, crop: false } });
+    assert.ok(audits.some((a) => a.tool === "capture_viewer_image" && a.outcome === "ok" && a.bytes > 7 * 1024 * 1024)); // 監査は呼び出しとバイト数だけ
+    assert.equal(JSON.stringify(audits).includes(PNG_HEAD), false); // 画像の中身は監査に入らない
+  });
+});
+
+test("bridge: 画像の負例 — 上限（8 MiB）超は result-too-large、形が違う結果は viewer-failed、失敗の符号は許可リストだけ", async () => {
+  const replies = [
+    { ok: true, image: { base64: fakeB64(8 * 1024 * 1024 + 4), mimeType: "image/png", w: 1, h: 1 } },
+    { ok: true, image: { base64: 123, mimeType: "image/png" } },
+    { ok: true },
+    { ok: false, error: "no-selected-roi" },
+    { ok: false, error: "roi-not-visible" },
+    { ok: false, error: "capture-failed" },
+    { ok: false, error: "declined" },
+    { ok: false, error: "image says YAMADA^TARO" },
+  ];
+  let i = 0;
+  await withBridge({ viewerImpl: async () => replies[i++], prefs: PREFS_C() }, async ({ port, token }) => {
+    const err = async () => (await call(port, token, "capture_viewer_image", {})).json.error;
+    assert.equal(await err(), "result-too-large");
+    assert.equal(await err(), "viewer-failed");
+    assert.equal(await err(), "viewer-failed");
+    for (const want of ["no-selected-roi", "roi-not-visible", "capture-failed", "declined"]) assert.equal(await err(), want);
+    const odd = await call(port, token, "capture_viewer_image", {});
+    assert.equal(odd.json.error, "viewer-failed");
+    assert.equal(odd.text.includes("YAMADA"), false);
+  });
+});
