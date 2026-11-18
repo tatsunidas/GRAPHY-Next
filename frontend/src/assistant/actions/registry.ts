@@ -96,8 +96,8 @@ export const ACTIONS: readonly ActionDef[] = [
   },
   {
     id: "setLayout",
-    description: "Set the number of tile columns in the viewer grid (how many images are shown side by side; 列数). It does not change which slice is shown.",
-    params: { cols: { type: "integer", min: 1, max: 8, description: "Columns, 1-8." } },
+    description: "Set the number of tile columns in the viewer grid (how many images are shown side by side; 列数). It does not change which slice is shown. 0 means automatic (the viewer chooses from the number of images); it is what the undo uses to restore an automatic layout.",
+    params: { cols: { type: "integer", min: 0, max: 8, description: "Columns, 1-8 (0 = automatic)." } },
     required: ["cols"],
   },
   {

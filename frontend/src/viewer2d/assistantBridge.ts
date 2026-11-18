@@ -52,7 +52,10 @@ export interface BridgeDeps {
   run(ids: string[], fn: (c: ViewerCommands) => void): void;
   runSeries(ids: string[], fn: (c: SeriesCommands) => void): void;
   activeTool(): string;
+  /** 今の列数（自動のときは、画像の数から決まった実際の列数。getState が返す）。 */
   layoutCols(): number;
+  /** レイアウトの設定値（0 = 自動、>0 = 固定の列数）。元に戻すとき、自動を固定の列数にしないために使う。無ければ layoutCols。 */
+  layoutSetting?(): number;
   setTool(toolId: string): void;
   setLayoutCols(n: number): void;
   presets(): WlPresetLite[];
@@ -193,7 +196,8 @@ export function executeCommand(deps: BridgeDeps, cmd: BridgeCommand): ActionResu
       break;
     }
     case "setLayout": {
-      inverse.push({ id: "setLayout", params: { cols: Math.min(8, Math.max(1, deps.layoutCols())) } });
+      // 0 = 自動（画像の数から決まる列数）。1 に丸めると、元に戻したときツールバーの選択が「自動」から「1 列」に変わる
+      inverse.push({ id: "setLayout", params: { cols: Math.min(8, Math.max(0, deps.layoutSetting ? deps.layoutSetting() : deps.layoutCols())) } });
       deps.setLayoutCols(p.cols as number);
       break;
     }

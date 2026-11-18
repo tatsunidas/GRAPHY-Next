@@ -183,8 +183,9 @@ async function main(): Promise<void> {
       ["set_tool", { tool: "ruler" }, /bad-arg:tool/],
       ["apply_window_preset", { name: "no-such-preset-xyz" }, /unknown-preset/],
       ["go_to_slice", { index: -1 }, /bad-arg:index/],
-      ["create_roi", {}, /unknown-tool/],
-      ["clear_measurements", {}, /unknown-tool/],
+      ["create_roi", {}, /edit-disabled/], // データを変える操作は別の許可（allowViewerEdit）。この検査では常にオフ
+      ["clear_measurements", {}, /edit-disabled/],
+      ["createRoi", {}, /unknown-tool/], // 操作の id そのものはツールではない
       ["flip_vertical", { id: "createRoi" }, /unknown-arg:id/],
     ];
     for (const [tool, args, re] of neg) {
@@ -218,6 +219,7 @@ async function main(): Promise<void> {
     check(after.equals(before), "undo 後の画像の領域（スクリーンショット）が操作前と同じ");
     // 記録（失敗にしない）: ツールバーの選択（レイアウトの「自動」など）が操作前と同じか。set_layout の逆操作は列数を固定で戻す（アシスタントの「元に戻す」と同じ）
     const selectsAfter = await selects();
+    check(JSON.stringify(selectsBefore) === JSON.stringify(selectsAfter), "undo 後のツールバーの選択（レイアウトの「自動」など）が操作前と同じ", { selectsBefore, selectsAfter });
     console.log(`  [情報] ツールバーの選択（操作前 → undo 後）: ${JSON.stringify(selectsBefore)} → ${JSON.stringify(selectsAfter)}${JSON.stringify(selectsBefore) === JSON.stringify(selectsAfter) ? "（同じ）" : "（違う。レイアウトの自動 → 固定の列数など）"}。ビューア自身の「元に戻す」ボタン（↶）は、MCP の操作のあと有効になる（06-undone-window.png を参照）`);
 
     console.log("\n[5] 連打の上限と、2D 窓を閉じたとき");
@@ -243,6 +245,7 @@ async function main(): Promise<void> {
     check(truth.length > 0 && truth.every((v) => !audit.includes(v)), "監査ログに患者の値が 0 件", { truthKinds: truth.length });
     check(truth.every((v) => !mcp!.stderr.includes(v) && !other!.stderr.includes(v)), "中継の stderr に患者の値が 0 件");
     check(/set_window_level/.test(audit) && /undo_viewer_action/.test(audit), "監査ログに表示操作の呼び出し（ツール名）が残る");
+    check(/"outcome":"bad-arg:center"/.test(audit) && /"outcome":"unknown-arg:id"/.test(audit), "監査ログの結果の符号が崩れない（大文字・: がそのまま。bad-arg:center・unknown-arg:id）", audit.split("\n").filter((l) => /bad-arg|unknown-arg/.test(l)).slice(0, 3));
     const journal = path.join(userData, "assistant-journal.jsonl");
     check(fs.existsSync(journal) && /mcp:claude-control-check/.test(fs.readFileSync(journal, "utf8")), "操作の記録（assistant-journal）に mcp:<クライアント名> で残る");
   } finally {

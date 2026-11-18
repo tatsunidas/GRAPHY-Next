@@ -1,12 +1,14 @@
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { searchDocs, splitDocs, tokenize } from "./docsIndex";
+import { assistantDocFiles, ASSISTANT_DOCS_EXCLUDE, searchDocs, splitDocs, tokenize } from "./docsIndex";
 
 const dir = join(__dirname, "../../../docs");
-const files = Object.fromEntries(
+const allFiles = Object.fromEntries(
   readdirSync(dir).filter((f) => f.endsWith(".md")).map((f) => [f, readFileSync(join(dir, f), "utf8")]),
 );
+// 製品（docsBundle.ts）と同じ除外を通す
+const files = assistantDocFiles(allFiles);
 const chunks = splitDocs(files);
 const opt = { k: 3, maxChars: 1500, minScore: 2 };
 
@@ -26,6 +28,16 @@ describe("docsIndex", () => {
     expect(top("2D ビューアでウィンドウ幅とレベルを調整するには")).toBe("viewer2d.md");
     expect(top("インストールして起動する手順")).toBe("install.md");
     expect(top("プラグインの作り方")).toBe("plugins.md");
+  });
+  it("excludes the pages that are not for the assistant (mcp.md), and the exclusion is what keeps the retrieval clean", () => {
+    expect(ASSISTANT_DOCS_EXCLUDE).toContain("mcp.md");
+    expect(Object.keys(allFiles)).toContain("mcp.md"); // 先に: 除外の対象が実在する（検査が空振りでない）
+    expect(Object.keys(files)).not.toContain("mcp.md");
+    expect(assistantDocFiles({ "a/mcp.md": "x", "docs/plugins.md": "y" })).toEqual({ "docs/plugins.md": "y" });
+    expect(chunks.some((c) => c.file === "mcp.md")).toBe(false);
+    // 負例: 除外しないと、無関係な問いに mcp.md が付く／「プラグインの作り方」の 1 位が mcp.md になる（この除外を外すと落ちる）
+    const polluted = splitDocs(allFiles);
+    expect(searchDocs(polluted, "明日の天気と夕食のレシピを教えて", opt).some((h) => h.file === "mcp.md")).toBe(true);
   });
   it("negative: unrelated questions attach nothing", () => {
     // 「今日」はデータベースウィンドウの日付ボタンの語として資料にある。無関係な問いは、資料にない語だけで作る

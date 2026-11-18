@@ -2574,6 +2574,7 @@ function TileGrid({
     resolveTargets,
     activeTool,
     layoutCols: cols,
+    layoutSetting: patient.gridCols, // 0 = 自動。元に戻すとき自動を固定の列数にしない
     setTool: actions.setTool,
     setLayoutCols: (c) => onSetGrid(patient.patientKey, 0, c),
     presets: wlPresets.map((p) => ({ key: p.key, label: presetLabel(p, t), center: p.center, width: p.width })),

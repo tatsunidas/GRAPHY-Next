@@ -214,7 +214,7 @@ function createMcpBridge({ prefs, audit, backend, confirmClient, discoveryFile, 
         const name = body && typeof body.tool === "string" ? body.tool : "";
         const out = await runTool(name, body && body.args, p, client);
         const bytes = out.ok ? JSON.stringify(out.result).length : 0;
-        log({ event: "call", tool: /^[A-Za-z0-9_-]{1,64}$/.test(name) ? name : undefined, outcome: out.ok ? "ok" : String(out.error).replace(/[^a-z0-9-]/g, "-").slice(0, 40), bytes });
+        log({ event: "call", tool: /^[A-Za-z0-9_-]{1,64}$/.test(name) ? name : undefined, outcome: out.ok ? "ok" : String(out.error).replace(/[^A-Za-z0-9:_-]/g, "-").slice(0, 40), bytes });
         return send(res, 200, out);
       } finally {
         active--;

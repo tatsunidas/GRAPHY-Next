@@ -451,3 +451,13 @@ test("bridge: プラグインの結果の患者情報 — 伏せる設定では�
     assert.equal(r.json.result.data.patientName, "YAMADA^TARO"); // オンでは返る
   });
 });
+
+test("bridge: 監査ログの結果の符号は崩れない（大文字・: がそのまま。引数名は固定の語＋引数名だけで、患者情報は入らない）", async () => {
+  await withBridge({}, async ({ port, token, audits }) => {
+    await call(port, token, "search_studies", { patientName: "YAMADA^TARO" }); // 患者情報オフでは通らない
+    await call(port, token, "list_series", { study: "1.2.840.113619.2.55.3.1" }); // 生の UID
+    const outcomes = audits.filter((a) => a.event === "call").map((a) => a.outcome);
+    assert.deepEqual(outcomes, ["phi-disabled:patientName", "unknown-handle:study"]);
+    assert.equal(JSON.stringify(audits).includes("YAMADA"), false);
+  });
+});

@@ -50,6 +50,8 @@ describe("validateAction", () => {
       ["goToSlice", { index: 1.5 }],
       ["goToSlice", { index: -1 }],
       ["setLayout", { cols: 9 }],
+      ["setLayout", { cols: -1 }],
+      ["setLayout", { cols: 1.5 }],
       ["setTool", { tool: "brush" }],
       ["rotate90", { times: 4 }],
       ["flipH", { extra: 1 }],
@@ -136,6 +138,22 @@ describe("executeCommand", () => {
     const r = executeCommand(deps, { kind: "action", id: "goToSlice", params: { index: 20 } });
     expect(calls).toContain('goTo({"z":20})');
     expect(r).toMatchObject({ inverse: [{ id: "goToSlice", params: { index: 7 } }] });
+  });
+  it("setLayout: the inverse restores the previous layout, including automatic (0), and 0 is accepted", () => {
+    expect(validateAction("setLayout", { cols: 0 }).ok).toBe(true);
+    expect(validateAction("setLayout", { cols: 8 }).ok).toBe(true);
+    // 自動のとき: 実際の列数（getState が返す。ここでは 2）と、設定値（0 = 自動）は別。逆操作は設定値で戻す
+    const auto = makeDeps({ layoutCols: () => 2, layoutSetting: () => 0 });
+    expect(executeCommand(auto.deps, { kind: "action", id: "setLayout", params: { cols: 3 } })).toMatchObject({ inverse: [{ id: "setLayout", params: { cols: 0 } }] });
+    expect(auto.calls).toContain("setLayoutCols(3)");
+    const fixed = makeDeps({ layoutCols: () => 2, layoutSetting: () => 2 });
+    // layoutSetting が無い依存は、従来どおり実際の列数で戻す
+    expect(executeCommand(makeDeps({ layoutCols: () => 3 }).deps, { kind: "action", id: "setLayout", params: { cols: 1 } })).toMatchObject({ inverse: [{ id: "setLayout", params: { cols: 3 } }] });
+    expect(executeCommand(fixed.deps, { kind: "action", id: "setLayout", params: { cols: 4 } })).toMatchObject({ inverse: [{ id: "setLayout", params: { cols: 2 } }] });
+    // 逆操作そのもの（cols: 0）を実行すると、自動に戻る
+    const back = makeDeps({ layoutCols: () => 3 });
+    executeCommand(back.deps, { kind: "action", id: "setLayout", params: { cols: 0 } });
+    expect(back.calls).toContain("setLayoutCols(0)");
   });
   it("setTool: inverse only when the previous tool is a display tool", () => {
     const a = makeDeps();

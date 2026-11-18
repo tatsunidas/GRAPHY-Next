@@ -53,6 +53,15 @@ test("audit: 負例 — 許可リスト以外（引数・結果・患者情報�
   assert.equal(buildRecord(dirty).tool, "search_studies");
 });
 
+test("audit: 結果の符号は大文字・: を含めてそのまま残る（読める）。文字種の外・長すぎるものは捨てる／置き換える", () => {
+  for (const code of ["phi-disabled:patientName", "bad-arg:radiusXmm", "unknown-arg:approved", "roi-off-slice", "viewer-failed", "ok"]) {
+    assert.equal(buildRecord({ tool: "search_studies", outcome: code }).outcome, code, code);
+  }
+  for (const bad of ["a b", "患者名", "a/b", "a;b", "x\ny", "", "y".repeat(41), null, 5]) {
+    assert.equal(buildRecord({ outcome: bad }).outcome, "other", JSON.stringify(bad));
+  }
+});
+
 test("audit: クライアント名は制御文字を除いて 64 文字に切る。ツール名の形が違えば捨てる", () => {
   const r = buildRecord({ tool: "a b;rm", outcome: "ok", client: `x\u0000\n${"y".repeat(100)}` });
   assert.equal(r.tool, undefined);
@@ -272,14 +281,14 @@ test("tools: 表示操作の引数の範囲・ツール名は registry.ts（2D �
   assert.match(REGISTRY, /width: \{ type: "number", min: 1, max: 200000/);
   assert.match(REGISTRY, /times: \{ type: "integer", min: 1, max: 3/);
   assert.match(REGISTRY, /index: \{ type: "integer", min: 0, max: 1_000_000/);
-  assert.match(REGISTRY, /cols: \{ type: "integer", min: 1, max: 8/);
+  assert.match(REGISTRY, /cols: \{ type: "integer", min: 0, max: 8/); // 0 = 自動（undo が使う）。MCP のツールには出さない（AI には明示の列数を使わせる）
   assert.match(REGISTRY, /name: \{ type: "string", maxLength: 60/);
   const tool = (n) => T.TOOLS.find((t) => t.name === n).inputSchema.properties;
   assert.deepEqual([tool("set_window_level").center.minimum, tool("set_window_level").center.maximum], [-100000, 100000]);
   assert.deepEqual([tool("set_window_level").width.minimum, tool("set_window_level").width.maximum], [1, 200000]);
   assert.deepEqual([tool("rotate_view").times.minimum, tool("rotate_view").times.maximum], [1, 3]);
   assert.deepEqual([tool("go_to_slice").index.minimum, tool("go_to_slice").index.maximum], [0, 1_000_000]);
-  assert.deepEqual([tool("set_layout").cols.minimum, tool("set_layout").cols.maximum], [1, 8]);
+  assert.deepEqual([tool("set_layout").cols.minimum, tool("set_layout").cols.maximum], [1, 8]); // registry の範囲（0〜8）に含まれる
   assert.equal(tool("apply_window_preset").name.maxLength, 60);
   const m = /export const DISPLAY_TOOLS = \[([^\]]*)\]/.exec(REGISTRY);
   assert.ok(m, "DISPLAY_TOOLS が registry.ts にある");
