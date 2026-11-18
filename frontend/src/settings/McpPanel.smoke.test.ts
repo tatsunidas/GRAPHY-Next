@@ -43,7 +43,7 @@ async function click(id: string) {
 
 /** main の mcp-get / mcp-set の偽物。confirm=false なら、オンにする変更で確認が取り消される。 */
 function fakeMain(o: { listenFails?: boolean; confirm?: boolean; readError?: McpState["readError"]; relayCommand?: string; forbidden?: boolean } = {}) {
-  let prefs: McpPrefs = { enabled: false, includePhi: false, allowAnalysis: false, allowViewerControl: false };
+  let prefs: McpPrefs = { enabled: false, includePhi: false, allowAnalysis: false, allowViewerControl: false, allowViewerEdit: false };
   let listening = false;
   const sent: Partial<McpPrefs>[] = [];
   const state = (): McpState => ({ prefs, readError: o.readError ?? null, listening, ...(o.relayCommand ? { relayCommand: o.relayCommand } : {}) });
@@ -80,7 +80,7 @@ describe("McpPanel（実際に描画して操作する）", () => {
   it("既定はすべてオフ。オンにすると main へ送り、待ち受けの表示が変わる。注意書きは常に出る", async () => {
     const { sent } = fakeMain();
     await mount();
-    for (const k of ["enabled", "includePhi", "allowAnalysis", "allowViewerControl"]) expect(checked(`mcp-${k}`)).toBe(false);
+    for (const k of ["enabled", "includePhi", "allowAnalysis", "allowViewerControl", "allowViewerEdit"]) expect(checked(`mcp-${k}`)).toBe(false);
     expect(q("mcp-status")!.dataset.listening).toBe("false");
     expect(q("mcp-privacy-notice")!.querySelectorAll("li").length).toBe(5);
     await click("mcp-enabled");
@@ -93,6 +93,9 @@ describe("McpPanel（実際に描画して操作する）", () => {
     await click("mcp-allowViewerControl");
     expect(sent.at(-1)).toEqual({ allowViewerControl: true });
     expect(checked("mcp-allowViewerControl")).toBe(true);
+    await click("mcp-allowViewerEdit");
+    expect(sent.at(-1)).toEqual({ allowViewerEdit: true });
+    expect(checked("mcp-allowViewerEdit")).toBe(true);
     expect(q("mcp-error")).toBeNull();
   });
 
@@ -103,6 +106,8 @@ describe("McpPanel（実際に描画して操作する）", () => {
     expect(checked("mcp-includePhi")).toBe(false);
     await click("mcp-allowViewerControl"); // 表示操作の許可も、確認が取り消されたらオフのまま
     expect(checked("mcp-allowViewerControl")).toBe(false);
+    await click("mcp-allowViewerEdit"); // データを変える許可も、確認が取り消されたらオフのまま
+    expect(checked("mcp-allowViewerEdit")).toBe(false);
     expect(q("mcp-error")).toBeNull();
   });
 

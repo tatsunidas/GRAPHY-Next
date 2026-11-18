@@ -739,6 +739,7 @@ const { createMcpPrefs, confirmationsFor } = require("./mcpPrefs");
 const { createMcpAudit } = require("./mcpAudit");
 const { createMcpBridge } = require("./mcpBridge");
 const { createViewerControl } = require("./mcpViewerControl");
+const { createDialogQueue, writeConfirmText, CONFIRM_TIMEOUT_MS } = require("./mcpConfirm");
 let mcpPrefsStore = null;
 let mcpBridgeInst = null;
 function mcpPrefs() {
@@ -761,7 +762,11 @@ const MCP_ENABLE_TEXT = {
   },
   allowViewerControl: {
     message: "AI クライアントが、2D ビューアの表示（窓幅・窓位・スライス・向き・レイアウト・ツール）を操作できるようにします。",
-    detail: "いま見ている画面が動きます（対象は、2D ビューアで選んでいるタイル）。元に戻せる操作だけで、ROI の作成や削除、データの変更はできません。AI クライアントの「元に戻す」で、行った操作を 1 つずつ戻せます。",
+    detail: "いま見ている画面が動きます（対象は、2D ビューアで選んでいるタイル）。元に戻せる操作だけです。ROI の作成・削除は、別の許可（「ROI の作成・計測の全削除を許可する」）が要ります。AI クライアントの「元に戻す」で、行った操作を 1 つずつ戻せます。",
+  },
+  allowViewerEdit: {
+    message: "AI クライアントが、2D ビューアに ROI を作成し、計測をすべて削除できるようにします。",
+    detail: "データ（ROI・計測）を変える操作です。実行のたびに、アプリが内容を示して確認します（答えなければ取り消し）。ROI の作成は、AI クライアントの「元に戻す」でその ROI だけ消せます。計測の全削除は元に戻せません（ロックされた計測は残ります）。",
   },
 };
 
@@ -786,25 +791,31 @@ async function mcpBackend(method, p, { query, body } = {}) {
   }
 }
 
+// 外部 AI クライアントのための確認ダイアログは、すべてこの待ち行列を通す（同時に 2 枚出さない。mcpConfirm.js）。
+const mcpDialogs = createDialogQueue({
+  show: (options, signal) => {
+    const parent = mainWin && !mainWin.isDestroyed() ? mainWin : undefined;
+    return dialog.showMessageBox(parent, { ...options, signal });
+  },
+});
+
 async function mcpConfirmClient(client) {
   const p = mcpPrefs().get();
-  const parent = mainWin && !mainWin.isDestroyed() ? mainWin : undefined;
-  const r = await dialog.showMessageBox(parent, {
+  const r = await mcpDialogs.ask({
     type: "warning",
     buttons: ["接続を許可", "拒否"],
     defaultId: 1,
     cancelId: 1,
     title: "外部 AI クライアントの接続",
     message: `外部 AI クライアント「${client}」が、GRAPHY-Next への接続を求めています。`,
-    detail: `クライアント名は相手の自己申告で、確認できません。心当たりがなければ［拒否］を選んでください（拒否すると、アプリを再起動するまで受け付けません）。\n現在の設定: 患者情報 = ${p.includePhi ? "返す" : "伏せる"} ／ 解析の実行 = ${p.allowAnalysis ? "許可" : "許可しない"} ／ 2D ビューアの表示操作 = ${p.allowViewerControl ? "許可" : "許可しない"}`,
+    detail: `クライアント名は相手の自己申告で、確認できません。心当たりがなければ［拒否］を選んでください（拒否すると、アプリを再起動するまで受け付けません）。\n現在の設定: 患者情報 = ${p.includePhi ? "返す" : "伏せる"} ／ 解析の実行 = ${p.allowAnalysis ? "許可" : "許可しない"} ／ 2D ビューアの表示操作 = ${p.allowViewerControl ? "許可" : "許可しない"} ／ ROI の作成・計測の全削除 = ${p.allowViewerEdit ? "許可（実行のたびに確認）" : "許可しない"}`,
   });
   return r.response === 0;
 }
 
 // ROI の計測値を外部 AI クライアントへ返す前の確認（クライアントごと・起動ごとに最初の 1 回。viewerRelay が数える）。
 async function mcpConfirmMeasurements(client, preview) {
-  const parent = mainWin && !mainWin.isDestroyed() ? mainWin : undefined;
-  const r = await dialog.showMessageBox(parent, {
+  const r = await mcpDialogs.ask({
     type: "warning",
     buttons: ["返す", "取り消す"],
     defaultId: 1,
@@ -812,7 +823,24 @@ async function mcpConfirmMeasurements(client, preview) {
     title: "外部 AI クライアントの接続",
     message: `2D ビューアの ROI の計測値を、外部 AI クライアント「${client}」へ返します。`,
     detail: `結果の先頭: ${preview}\n\n返した内容は、そのクライアントを通じてクラウドの AI へ送られる可能性があります。患者情報が含まれていないか確認してください。返しますか？`,
-  });
+  }, { timeoutMs: CONFIRM_TIMEOUT_MS });
+  return r.response === 0;
+}
+
+// ROI の作成・計測の全削除を実行する前の確認（**実行のたびに**）。2D 窓が引数と対象を検査（dryRun）して通ったものだけがここへ来る。
+// 答えないまま CONFIRM_TIMEOUT_MS が過ぎたら［取り消す］とみなす（AI クライアントが諦めた後に、ダイアログが残らないように）。
+async function mcpConfirmViewerWrite(client, id, params) {
+  const t = writeConfirmText(client, id, params);
+  if (!t) return false;
+  const r = await mcpDialogs.ask({
+    type: "warning",
+    buttons: [id === "clearMeasurements" ? "削除する" : "追加する", "取り消す"],
+    defaultId: 1,
+    cancelId: 1,
+    title: "外部 AI クライアントの操作の確認",
+    message: t.message,
+    detail: t.detail,
+  }, { timeoutMs: CONFIRM_TIMEOUT_MS });
   return r.response === 0;
 }
 
@@ -820,14 +848,15 @@ async function mcpConfirmMeasurements(client, preview) {
 // 「チャット窓だけ」の関門は ipcMain の handler にあり、そのまま。2D 窓への送信 graphy:viewer-cmd は main→窓の一方向）。
 // kind は mcpTools.VIEWER_KINDS（getState・getMeasurements・action・undo）だけ。ジャーナルの sessionId は `mcp:<クライアント名>`。
 // ラベル（SeriesDescription など自由記述）は、患者情報を返す設定のときだけ。画素（captureView）・プラグインの pluginTool は中継しない。
-// 表示操作（action）は mcpTools.VIEWER_ACTIONS（元に戻せる display の 10 種）だけで、write は中継しない。逆操作の履歴（undo）は main だけが持つ（mcpViewerControl）。
+// 表示操作（action）は mcpTools.VIEWER_ACTIONS（元に戻せる display の 10 種）と、allowViewerEdit のときだけ VIEWER_WRITE_ACTIONS（ROI の作成・計測の全削除。
+// 実行のたびに利用者へ確認。承認の印 approved は viewerRelay が付ける）。逆操作の履歴（undo）は main だけが持つ（mcpViewerControl）。
 let mcpControlInst = null;
 function mcpControl() {
-  if (!mcpControlInst) mcpControlInst = createViewerControl({ relay: (sid, cmd) => viewerRelay.relay(sid, cmd, {}) });
+  if (!mcpControlInst) mcpControlInst = createViewerControl({ relay: (sid, cmd, opts) => viewerRelay.relay(sid, cmd, opts || {}) });
   return mcpControlInst;
 }
-function mcpViewer(kind, { client, includePhi }, desc) {
-  if (kind === "action" || kind === "undo") return mcpControl().run(client, desc);
+function mcpViewer(kind, { client, includePhi, allowViewerEdit }, desc) {
+  if (kind === "action" || kind === "undo") return mcpControl().run(client, desc, { allowEdit: allowViewerEdit === true, confirm: (id, params) => mcpConfirmViewerWrite(client, id, params) });
   const opts = kind === "getMeasurements" ? { measurements: { external: true, confirmSend: (preview) => mcpConfirmMeasurements(client, preview) } } : {};
   return viewerRelay.relay(`mcp:${client}`, { kind, includeLabels: includePhi === true }, opts);
 }

@@ -46,26 +46,35 @@ const num = (description, min, max) => ({ type: "number", description, minimum: 
 const oneOf = (description, values) => ({ type: "string", description, enum: values, maxLength: 32 });
 const HANDLE = "（list/search の結果に出た値をそのまま渡す）";
 const CONTROL_NOTE = "操作の対象は、利用者が今 2D ビューアで選んでいるタイル。元に戻せる（undo_viewer_action）。2D ビューアが開いていなければ no-viewer。";
+const EDIT_NOTE = "対象は、利用者が今 2D ビューアで選んでいるタイル。実行のたびに、アプリが利用者に確認する（拒否されると declined）。2D ビューアが開いていなければ no-viewer。";
 
 /**
  * 2D ビューア窓（renderer）へ main が中継して読む種類（固定リスト）。`via: "viewer"` のツールはここにある kind しか作れない。
- * 🔴 画素を返す `captureView` と、プラグインの `pluginTool` はここに入れない（段 4c-2 以降）。
- *    `action` は下の `VIEWER_ACTIONS` の表示操作だけ、`undo` は main が持つ履歴を戻す操作（窓への kind ではない）。
+ * 🔴 画素を返す `captureView` はここに入れない。`pluginTool`（プラグインの AI ツール）は段 4c-2b で足す。
+ *    `action` は下の `VIEWER_ACTIONS`（表示操作）と `VIEWER_WRITE_ACTIONS`（allowViewerEdit のときだけ。実行のたびに確認）だけ、
+ *    `undo` は main が持つ履歴を戻す操作（窓への kind ではない）。
  */
 const VIEWER_KINDS = ["getState", "getMeasurements", "action", "undo"];
 
 /**
- * 外部 AI クライアントが行える 2D ビューアの表示操作（固定リスト）。**すべて元に戻せる display の操作**。
- * 🔴 データを変える write（clearMeasurements・createRoi・createContourRoi）と、アシスタント専用の removeAssistantRoi は入れない。
- *    frontend/src/assistant/actions/registry.ts の display の action と一致することを mcp.test.js が検査する。
+ * 外部 AI クライアントが行える 2D ビューアの表示操作（固定リスト）。**すべて元に戻せる display の操作**（allowViewerControl）。
+ * 🔴 データを変える write は入れない（下の VIEWER_WRITE_ACTIONS）。アシスタント専用の removeAssistantRoi は UNDO_ONLY_ACTIONS。
+ *    frontend/src/assistant/actions/registry.ts の display の action（removeAssistantRoi を除く）と一致することを mcp.test.js が検査する。
  */
 const VIEWER_ACTIONS = ["setWindowLevel", "resetWindow", "applyWlPreset", "rotate90", "flipH", "flipV", "invert", "goToSlice", "setLayout", "setTool"];
+/**
+ * データを変える操作（allowViewerEdit のときだけ。2D 窓の dryRun で検査してから、main が利用者に**毎回**確認する）。
+ * registry.ts の `effect: "write"` と一致することを mcp.test.js が検査する。clearMeasurements は元に戻せない。
+ */
+const VIEWER_WRITE_ACTIONS = ["createRoi", "createContourRoi", "clearMeasurements"];
+/** 逆操作（undo）でだけ main が再実行する。ツールとしては出さない（ROI は createRoi で作った出自のものだけ消せる）。 */
+const UNDO_ONLY_ACTIONS = ["removeAssistantRoi"];
 /** setTool に渡せるツール（registry.ts の DISPLAY_TOOLS と一致させる）。 */
 const DISPLAY_TOOLS = ["windowLevel", "pan", "zoom", "magnify", "length", "angle"];
 
 /**
- * effect: read | analysis | control。`phiOnly` の引数は includePhi=false では受けない。`via: "viewer"` は backend でなく 2D ビューア窓から読む／操作する。
- * `control` は allowViewerControl がオンのときだけ（利用者の画面が動く）。
+ * effect: read | analysis | control | edit。`phiOnly` の引数は includePhi=false では受けない。`via: "viewer"` は backend でなく 2D ビューア窓から読む／操作する。
+ * `control` は allowViewerControl がオンのときだけ（利用者の画面が動く）。`edit` は allowViewerEdit がオンのときだけ（データを変える）。
  */
 const TOOLS = [
   { name: "get_status", effect: "read", description: "GRAPHY-Next の稼働状況（版・モード）。", inputSchema: obj({}) },
@@ -160,9 +169,46 @@ const TOOLS = [
   {
     name: "undo_viewer_action",
     effect: "control",
+    undo: true, // allowViewerEdit だけでも出す（ROI の作成を戻すため）
     via: "viewer",
     viewerKind: "undo",
-    description: "この接続が行った表示操作のうち、直近の 1 つを元に戻す（履歴は最大 20 件。アプリ側が持つ）。履歴が無ければ nothing-to-undo。",
+    description: "この接続が行った表示操作・ROI の作成のうち、直近の 1 つを元に戻す（履歴は最大 20 件。アプリ側が持つ）。ROI は、この接続が作ったものだけ消える。計測の全削除は戻せない。履歴が無ければ nothing-to-undo。",
+    inputSchema: obj({}),
+  },
+  {
+    name: "create_roi",
+    effect: "edit",
+    via: "viewer",
+    viewerKind: "action",
+    viewerAction: "createRoi",
+    description: `表示中のスライスに ROI（楕円または矩形）を 1 つ追加する。位置は見えている画像の領域に対する割合（u=0 左…1 右、v=0 上…1 下。画面に見えるとおり）、大きさは画面の横・縦方向の半径（mm）。この ROI は undo_viewer_action で消せる。${EDIT_NOTE}`,
+    inputSchema: obj(
+      { shape: oneOf("形", ["ellipse", "rectangle"]), u: num("中心の横位置（0〜1）", 0, 1), v: num("中心の縦位置（0〜1）", 0, 1), radiusXmm: num("横方向の半径（mm）", 0.1, 500), radiusYmm: num("縦方向の半径（mm）", 0.1, 500) },
+      ["shape", "u", "v", "radiusXmm", "radiusYmm"],
+    ),
+  },
+  {
+    name: "create_contour_roi",
+    effect: "edit",
+    via: "viewer",
+    viewerKind: "action",
+    viewerAction: "createContourRoi",
+    description: `表示中のスライスに、頂点で囲んだ閉じた ROI を 1 つ追加する。各頂点は [u, v]（見えている画像の領域に対する割合。u=0 左…1 右、v=0 上…1 下）で、輪郭に沿った順に並べる（最初の点を繰り返さない）。polygon は直線で結び、freehand は自由曲線（頂点を多く）。3〜64 個。輪郭が自分自身と交差してはならない。この ROI は undo_viewer_action で消せる。${EDIT_NOTE}`,
+    inputSchema: obj(
+      {
+        shape: oneOf("形", ["polygon", "freehand"]),
+        points: { type: "array", description: "頂点 [u, v] の並び", minItems: 3, maxItems: 64, items: { type: "array", minItems: 2, maxItems: 2, items: { type: "number", minimum: 0, maximum: 1 } } },
+      },
+      ["shape", "points"],
+    ),
+  },
+  {
+    name: "clear_measurements",
+    effect: "edit",
+    via: "viewer",
+    viewerKind: "action",
+    viewerAction: "clearMeasurements",
+    description: `2D ビューアの計測（長さ・角度など）をすべて消す。**元に戻せない**（undo_viewer_action でも戻らない）。ロックされた計測は残る。利用者が明示的に頼んだときだけ使う。${EDIT_NOTE}`,
     inputSchema: obj({}),
   },
   {
@@ -179,35 +225,56 @@ const TOOLS = [
 
 const BY_NAME = new Map(TOOLS.map((t) => [t.name, t]));
 
-/** この設定で見せるツール（解析がオフなら analysis、表示操作の許可がオフなら control は出さない）。 */
-function listTools({ allowAnalysis, includePhi, allowViewerControl }) {
-  return TOOLS.filter((t) => (allowAnalysis || t.effect !== "analysis") && (allowViewerControl || t.effect !== "control")).map((t) => {
+/** この設定でツールを使えるか（解析・表示操作・データを変える操作は、それぞれ別の許可）。 */
+function allowedBy(t, p) {
+  switch (t.effect) {
+    case "analysis":
+      return p.allowAnalysis === true;
+    case "control":
+      return p.allowViewerControl === true || (t.undo === true && p.allowViewerEdit === true);
+    case "edit":
+      return p.allowViewerEdit === true;
+    default:
+      return true;
+  }
+}
+const DISABLED = { analysis: "analysis-disabled", control: "control-disabled", edit: "edit-disabled" };
+
+/** この設定で見せるツール（解析・表示操作・データを変える操作は、それぞれの許可がオンのときだけ）。 */
+function listTools(prefs) {
+  const { includePhi } = prefs;
+  return TOOLS.filter((t) => allowedBy(t, prefs)).map((t) => {
     const props = { ...t.inputSchema.properties };
     for (const k of includePhi ? [] : t.phiOnly ?? []) delete props[k];
     return { name: t.name, description: t.description, inputSchema: { ...t.inputSchema, properties: props } };
   });
 }
 
-/** 最小の JSON Schema 検査（型・必須・長さ・範囲・未知のキー）。通ったら null、落ちたら理由。 */
+/** 値が JSON Schema（型・長さ・範囲・要素数・enum）に合うか。array は要素を再帰的に検査する（registry.ts の points と同じ形）。 */
+function valueOk(p, v) {
+  if (p.type === "string") {
+    if (typeof v !== "string" || v.length > (p.maxLength ?? 256) || /[\u0000-\u001f\u007f]/.test(v)) return false;
+  } else if (p.type === "integer") {
+    if (!Number.isInteger(v) || v < (p.minimum ?? -Infinity) || v > (p.maximum ?? Infinity)) return false;
+  } else if (p.type === "number") {
+    if (typeof v !== "number" || !Number.isFinite(v) || v < (p.minimum ?? -Infinity) || v > (p.maximum ?? Infinity)) return false;
+  } else if (p.type === "boolean") {
+    if (typeof v !== "boolean") return false;
+  } else if (p.type === "array") {
+    if (!Array.isArray(v) || v.length < (p.minItems ?? 0) || v.length > (p.maxItems ?? 1000)) return false;
+    if (p.items && !v.every((x) => valueOk(p.items, x))) return false;
+  }
+  if (p.enum && !p.enum.includes(v)) return false;
+  return true;
+}
+
+/** 最小の JSON Schema 検査（型・必須・長さ・範囲・要素数・未知のキー）。通ったら null、落ちたら理由。 */
 function validateArgs(schema, args) {
   if (args === undefined || args === null) args = {};
   if (typeof args !== "object" || Array.isArray(args)) return "args-not-object";
   for (const k of Object.keys(args)) if (!(k in schema.properties)) return `unknown-arg:${k}`;
   for (const k of schema.required ?? []) if (args[k] === undefined) return `missing-arg:${k}`;
-  for (const [k, v] of Object.entries(args)) {
-    const p = schema.properties[k];
-    if (p.type === "string") {
-      if (typeof v !== "string" || v.length > (p.maxLength ?? 256)) return `bad-arg:${k}`;
-      if (/[\u0000-\u001f\u007f]/.test(v)) return `bad-arg:${k}`;
-    } else if (p.type === "integer") {
-      if (!Number.isInteger(v) || v < (p.minimum ?? -Infinity) || v > (p.maximum ?? Infinity)) return `bad-arg:${k}`;
-    } else if (p.type === "number") {
-      if (typeof v !== "number" || !Number.isFinite(v) || v < (p.minimum ?? -Infinity) || v > (p.maximum ?? Infinity)) return `bad-arg:${k}`;
-    } else if (p.type === "boolean") {
-      if (typeof v !== "boolean") return `bad-arg:${k}`;
-    }
-    if (p.enum && !p.enum.includes(v)) return `bad-arg:${k}`;
-  }
+  for (const [k, v] of Object.entries(args)) if (!valueOk(schema.properties[k], v)) return `bad-arg:${k}`;
   return null;
 }
 
@@ -218,8 +285,7 @@ function validateArgs(schema, args) {
 function buildRequest(name, args, { projector, prefs }) {
   const tool = BY_NAME.get(name);
   if (!tool) return { error: "unknown-tool" };
-  if (tool.effect === "analysis" && !prefs.allowAnalysis) return { error: "analysis-disabled" };
-  if (tool.effect === "control" && !prefs.allowViewerControl) return { error: "control-disabled" };
+  if (!allowedBy(tool, prefs)) return { error: DISABLED[tool.effect] };
   const bad = validateArgs(tool.inputSchema, args);
   if (bad) return { error: bad };
   const a = args ?? {};
@@ -228,7 +294,7 @@ function buildRequest(name, args, { projector, prefs }) {
     if (!VIEWER_KINDS.includes(tool.viewerKind)) return { error: "unknown-tool" };
     if (tool.viewerKind === "action") {
       // 引数は検査済み（validateArgs）。id は固定リストにあるものだけ（write・アシスタント専用の操作は作れない）
-      if (!VIEWER_ACTIONS.includes(tool.viewerAction)) return { error: "unknown-tool" };
+      if (!VIEWER_ACTIONS.includes(tool.viewerAction) && !VIEWER_WRITE_ACTIONS.includes(tool.viewerAction)) return { error: "unknown-tool" };
       return { viewer: { kind: "action", id: tool.viewerAction, params: { ...a } } };
     }
     return { viewer: { kind: tool.viewerKind } };
@@ -329,4 +395,4 @@ function projectResult(name, data, projector) {
   return P.guard(out);
 }
 
-module.exports = { TOOLS, VIEWER_KINDS, VIEWER_ACTIONS, DISPLAY_TOOLS, listTools, validateArgs, buildRequest, projectResult, checkBackendCall, ALLOWED, DENIED, UID_RE };
+module.exports = { TOOLS, VIEWER_KINDS, VIEWER_ACTIONS, VIEWER_WRITE_ACTIONS, UNDO_ONLY_ACTIONS, DISPLAY_TOOLS, listTools, validateArgs, buildRequest, projectResult, checkBackendCall, ALLOWED, DENIED, UID_RE };
