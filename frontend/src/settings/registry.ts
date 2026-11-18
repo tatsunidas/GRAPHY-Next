@@ -659,6 +659,13 @@ export const SETTINGS_REGISTRY: CategoryDef[] = [
     sections: [],
   },
   {
+    // 施設の資料（リンク集・参照カードの設定ファイル）は専用パネル（ファイルの場所と読み込みの状態）。SettingsDialog で特別扱い。
+    id: "facility",
+    labelKey: "settings.cat.facility",
+    icon: "📚",
+    sections: [],
+  },
+  {
     // 電子カルテ連携は専用パネル（監視するファイル・自動で開く・過去検査の取り込みと状態）。SettingsDialog で特別扱い。standalone のみ動く。
     id: "emr",
     labelKey: "settings.cat.emr",
