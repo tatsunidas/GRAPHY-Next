@@ -32,8 +32,11 @@ export function SearchPanel({
   onSearch,
   isDemo = false,
   missingSupported = true,
+  footer,
 }: {
   onSearch: (f: StudyFilters) => void;
+  /** 検索欄の下に出す節（施設の資料）。 */
+  footer?: React.ReactNode;
   /** 「患者ID・氏名が未設定のみ」を出すか。DICOMweb（Web モード）には空を問う手段が無いので false。 */
   missingSupported?: boolean;
   /** 公開デモ。初期検索条件を「今日のみ」ではなく全期間（1900/01/01〜今日）にする。 */
@@ -398,6 +401,7 @@ export function SearchPanel({
           {t("main.search.clear")}
         </button>
       </div>
+      {footer}
     </div>
   );
 }
