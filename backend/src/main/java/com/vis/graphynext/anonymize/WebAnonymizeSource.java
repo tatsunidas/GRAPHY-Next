@@ -29,12 +29,19 @@ public class WebAnonymizeSource implements AnonymizeSource {
     private final WebDicomDataService web;
     private final List<String> studyUids;
     private final Path tempDir;
+    /** null ならスタディ全体。値があればそのシリーズだけを対象にする（NIfTI の書き出し）。 */
+    private final String seriesUid;
     private List<Item> items;
 
     public WebAnonymizeSource(WebDicomDataService web, List<String> studyUids, Path tempDir) {
+        this(web, studyUids, tempDir, null);
+    }
+
+    public WebAnonymizeSource(WebDicomDataService web, List<String> studyUids, Path tempDir, String seriesUid) {
         this.web = web;
         this.studyUids = studyUids;
         this.tempDir = tempDir;
+        this.seriesUid = seriesUid == null || seriesUid.isBlank() ? null : seriesUid;
     }
 
     @Override
@@ -51,7 +58,7 @@ public class WebAnonymizeSource implements AnonymizeSource {
             for (Attributes a : web.searchStudyInstances(su, Map.of())) {
                 String sop = a.getString(Tag.SOPInstanceUID);
                 String series = a.getString(Tag.SeriesInstanceUID);
-                if (sop == null || series == null) {
+                if (sop == null || series == null || (seriesUid != null && !seriesUid.equals(series))) {
                     continue;
                 }
                 out.add(new Item(su, series, sop, patientId));

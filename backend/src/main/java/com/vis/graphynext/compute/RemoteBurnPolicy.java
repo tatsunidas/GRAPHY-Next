@@ -16,7 +16,7 @@ import java.util.Set;
  * 判定材料は {@link AnonymizeService#seriesBurnFacts}（既存の焼き込み事前検査＋元ファイルの
  * BurnedInAnnotation）。拒否は利用者もプラグインも解除できない——解除したければマスクを登録する。
  */
-final class RemoteBurnPolicy {
+public final class RemoteBurnPolicy {
 
     /** マスクが無ければ送らないモダリティ（焼き込みが普通にあり、BurnedInAnnotation が当てにならない）。 */
     static final Set<String> RISKY_MODALITIES = Set.of(
@@ -40,7 +40,7 @@ final class RemoteBurnPolicy {
      * @param burnIn   匿名化で焼き込みを塗るか（マスクがあるときだけ true）
      * @param localOnly local 限定の緩和で通した（画素に焼き込みが残りうる）。外部の計算機へは送れない
      */
-    record Decision(boolean allowed, String reason, boolean burnIn, boolean localOnly) {
+    public record Decision(boolean allowed, String reason, boolean burnIn, boolean localOnly) {
         Decision(boolean allowed, String reason, boolean burnIn) {
             this(allowed, reason, burnIn, false);
         }
@@ -59,7 +59,7 @@ final class RemoteBurnPolicy {
     }
 
     /** @param localDestination 送り先がこの PC の外へデータを出さない計算機（kind=local）か */
-    static Decision decide(AnonymizeService.SeriesBurnFacts f, boolean localDestination) {
+    public static Decision decide(AnonymizeService.SeriesBurnFacts f, boolean localDestination) {
         if (f.instances() == 0) {
             return Decision.refuse("series-not-found");
         }

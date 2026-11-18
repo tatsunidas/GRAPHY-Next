@@ -2487,3 +2487,61 @@ export async function exportSeriesNifti(studyUid: string, seriesUid: string): Pr
   const n = Number(res.headers.get("X-Graphy-Slices"));
   return { blob: await res.blob(), slices: Number.isFinite(n) && n > 0 ? n : null };
 }
+
+/** web ジョブの状態を見に行く間隔（ms）。 */
+const NIFTI_JOB_POLL_MS = 1000;
+
+/**
+ * web: 1 シリーズの NIfTI をジョブで書き出す（PM-IO-901 段 2b）。PACS から 1 枚ずつ取るので時間がかかり、
+ * 途中の失敗で半端なファイルを渡さないため、投入 → 状態の確認 → 受け取りの 3 段にする。
+ *
+ * <p>断られたら（投入の 4xx・501、ジョブの FAILED）{@link NiftiExportRefused}（理由コードは standalone と同じ）。
+ * {@code signal} が中止されたらジョブを DELETE して AbortError を投げる。受け取れるのは 1 回だけ。
+ * 書き込み系は web では {@code X-Graphy-Request} を要求する（`WebWriteGuardFilter`）。
+ */
+export async function exportSeriesNiftiWeb(
+  studyUid: string,
+  seriesUid: string,
+  onProgress?: (done: number, total: number) => void,
+  signal?: AbortSignal,
+): Promise<{ blob: Blob; slices: number | null }> {
+  const base = `${apiBase()}/api/nifti`;
+  const post = await fetch(`${base}/export-job`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Graphy-Request": "1" },
+    body: JSON.stringify({ studyUid, seriesUid }),
+    signal,
+  });
+  if (!post.ok) throw new NiftiExportRefused(await extractErrorMessage(post), post.status);
+  const { jobId } = (await post.json()) as { jobId: string };
+  const jobUrl = `${apiBase()}/api/anonymizer/jobs/${encodeURIComponent(jobId)}`;
+  const cancel = async () => {
+    try {
+      await fetch(jobUrl, { method: "DELETE", headers: { "X-Graphy-Request": "1" } });
+    } catch {
+      // 中止の通知が届かなくても、ジョブは期限（ttl）で消える
+    }
+  };
+  for (;;) {
+    if (signal?.aborted) {
+      await cancel();
+      throw new DOMException("aborted", "AbortError");
+    }
+    const res = await fetch(jobUrl, { method: "GET", signal });
+    if (!res.ok) throw new NiftiExportRefused(await extractErrorMessage(res), res.status);
+    const st = (await res.json()) as AnonJobStatus & { reason?: string | null; slices?: number };
+    if (st.state === "DONE") {
+      const file = await fetch(`${base}/export-job/${encodeURIComponent(jobId)}/file`, { method: "GET", signal });
+      if (!file.ok) throw new NiftiExportRefused(await extractErrorMessage(file), file.status);
+      const n = Number(file.headers.get("X-Graphy-Slices"));
+      return { blob: await file.blob(), slices: Number.isFinite(n) && n > 0 ? n : null };
+    }
+    if (st.state === "FAILED") throw new NiftiExportRefused(st.reason ?? "web-job-failed", 422);
+    if (st.state === "CANCELLED") throw new DOMException("cancelled", "AbortError");
+    if (st.total > 0) onProgress?.(st.processed, st.total);
+    await new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, NIFTI_JOB_POLL_MS);
+      signal?.addEventListener("abort", () => { clearTimeout(timer); resolve(); }, { once: true }); // 次の周回で中止を処理する
+    });
+  }
+}

@@ -4,6 +4,7 @@
  */
 package com.vis.graphynext.nifti;
 
+import com.vis.graphynext.anonymize.AnonymizeJobService;
 import com.vis.graphynext.compute.ComputeDatasetService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -11,7 +12,10 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.web.bind.annotation.ExceptionHandler;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -37,9 +41,17 @@ public class NiftiExportController {
     private static final MediaType GZIP = MediaType.parseMediaType("application/gzip");
 
     private final ComputeDatasetService datasets;
+    /** web モードだけにある（PACS から取るので時間がかかるためジョブにする。standalone は直接返す）。 */
+    private final ObjectProvider<AnonymizeJobService> webJobs;
 
     public NiftiExportController(ComputeDatasetService datasets) {
+        this(datasets, null);
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public NiftiExportController(ComputeDatasetService datasets, ObjectProvider<AnonymizeJobService> webJobs) {
         this.datasets = datasets;
+        this.webJobs = webJobs;
     }
 
     public record ExportRequest(String studyUid, String seriesUid) {
@@ -96,6 +108,51 @@ public class NiftiExportController {
                 .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + name + "\"")
                 .header(HttpHeaders.CONTENT_LENGTH, String.valueOf(d.bytes()))
                 .header("X-Graphy-Slices", String.valueOf(d.instances()))
+                .body(body);
+    }
+
+    /**
+     * web: ジョブにして 202 と状態を返す（PACS から 1 枚ずつ取るので時間がかかる）。状態の確認・中止は
+     * {@code /api/anonymizer/jobs/{id}}（GET・DELETE）、受け取りは {@link #webFile}。standalone では使えない（501）。
+     * ⚠ {@code /export} と戻り値の型を分ける（{@code ResponseEntity<?>} は実アプリで 500 になった。段 1a の発見）。
+     */
+    @PostMapping("/export-job")
+    public ResponseEntity<AnonymizeJobService.Status> exportJob(@RequestBody ExportRequest req) throws Exception {
+        if (req == null || blank(req.studyUid()) || blank(req.seriesUid())) {
+            throw new Refusal(HttpStatus.BAD_REQUEST, "bad-request");
+        }
+        AnonymizeJobService jobs = webJobs == null ? null : webJobs.getIfAvailable();
+        if (jobs == null) {
+            throw new Refusal(HttpStatus.NOT_IMPLEMENTED, "not-web-mode");
+        }
+        return ResponseEntity.status(HttpStatus.ACCEPTED).body(jobs.submitNifti(req.studyUid(), req.seriesUid()));
+    }
+
+    /** web: 終わったジョブの NIfTI を渡す。⚠ 受け取れるのは 1 回だけ（渡し終えるとジョブごと消える）。 */
+    @GetMapping("/export-job/{id}/file")
+    public ResponseEntity<StreamingResponseBody> webFile(@PathVariable String id) throws Exception {
+        AnonymizeJobService jobs = webJobs == null ? null : webJobs.getIfAvailable();
+        AnonymizeJobService.Status st = jobs == null ? null : jobs.status(id);
+        if (st == null) {
+            throw new Refusal(HttpStatus.NOT_FOUND, "job-not-found");
+        }
+        java.nio.file.Path file = jobs.niftiOf(id);
+        if (file == null) {
+            throw new Refusal(HttpStatus.CONFLICT, "job-not-ready");
+        }
+        long bytes = Files.size(file);
+        StreamingResponseBody body = out -> {
+            try {
+                Files.copy(file, out);
+            } finally {
+                jobs.discard(id);
+            }
+        };
+        return ResponseEntity.ok()
+                .contentType(GZIP)
+                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"volume.nii.gz\"")
+                .header(HttpHeaders.CONTENT_LENGTH, String.valueOf(bytes))
+                .header("X-Graphy-Slices", String.valueOf(st.slices()))
                 .body(body);
     }
 

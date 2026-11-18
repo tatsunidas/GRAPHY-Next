@@ -7,6 +7,7 @@ package com.vis.graphynext.compute;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.vis.graphynext.anonymize.AnonymizeConfig;
 import com.vis.graphynext.anonymize.AnonymizeService;
+import com.vis.graphynext.anonymize.AnonymizeSource;
 import com.vis.graphynext.anonymize.PixelCodec;
 import org.dcm4che3.data.Tag;
 import org.slf4j.Logger;
@@ -237,6 +238,94 @@ public class ComputeDatasetService {
         } catch (NoSuchAlgorithmException e) {
             deleteDir(dir);
             throw new IllegalStateException(e);
+        }
+    }
+
+    /** web の NIfTI 書き出しの結果。 */
+    public record WebNifti(int instances, NiftiInfo info, String modality) {
+    }
+
+    /**
+     * web: PACS から読んだ 1 シリーズを NIfTI にして {@code out} へ書く。standalone の {@link #create} と同じ
+     * {@link VolumeAssembler}・{@link NiftiWriter} を通すので、幾何と値は同じ（段 2b）。
+     *
+     * <p>web の出力はサーバー機の外（利用者のブラウザ）へ出るので、焼き込みは「外へ出る」規則
+     * （{@code localDestination=false}）で判定する。web にはローカルの索引もマスクも無いので、判定の材料は
+     * <b>取得した元の画像</b>（Modality・SOPClassUID・BurnedInAnnotation）から集める。マスクは受け付けない
+     * （焼き込みが普通にある種類は、既存の理由コードで断る）。断るときは {@code out} に何も書かない。
+     *
+     * @param progress 1 枚匿名化するごとに呼ぶ（進行の表示用。null 可）
+     * @throws DatasetRefused 断った（理由コードは standalone と同じ。{@code burnin-declared} など）
+     */
+    public WebNifti writeNiftiFromSource(AnonymizeSource source, OutputStream out, Runnable progress) {
+        FactsSource facts = new FactsSource(source);
+        VolumeAssembler va = new VolumeAssembler(codec);
+        AnonymizeService.Result r = anonymizer.anonymize(facts, niftiConfig(), false, id -> null, true, (ds, ts) -> {
+            va.accept(ds, ts);
+            if (progress != null) {
+                progress.run();
+            }
+        });
+        if (va.failure() != null) {
+            throw new DatasetRefused(va.failure(), null);
+        }
+        RemoteBurnPolicy.Decision none = new RemoteBurnPolicy.Decision(true, null, false);
+        check(r, none);
+        RemoteBurnPolicy.Decision decision = RemoteBurnPolicy.decide(facts.toFacts(r.instances()), false);
+        if (!decision.allowed()) {
+            log.info("[compute] web nifti refused: reason={} modalities={}", decision.reason(), facts.modalities);
+            throw new DatasetRefused(decision.reason(), null);
+        }
+        try {
+            NiftiWriter.Info info = NiftiWriter.write(out, va, va.assemble4d());
+            String modality = facts.modalities.size() == 1 ? facts.modalities.iterator().next() : null;
+            return new WebNifti(r.instances(), new NiftiInfo(info.phases(), info.dtSeconds()), modality);
+        } catch (VolumeAssembler.UnsupportedLayout e) {
+            throw new DatasetRefused(e.getMessage(), null);
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
+    }
+
+    /** 読み元を包み、開いた元の画像から焼き込みの判定材料（Modality・SOP クラス・BurnedInAnnotation）を集める。 */
+    private static final class FactsSource implements AnonymizeSource {
+        private final AnonymizeSource delegate;
+        final java.util.Set<String> modalities = new java.util.TreeSet<>();
+        final java.util.Set<String> sopClasses = new java.util.TreeSet<>();
+        int burnedYes;
+
+        FactsSource(AnonymizeSource delegate) {
+            this.delegate = delegate;
+        }
+
+        @Override
+        public java.util.List<Item> list() {
+            return delegate.list();
+        }
+
+        @Override
+        public Opened open(Item item) throws IOException {
+            Opened o = delegate.open(item);
+            org.dcm4che3.data.Attributes ds = o.dataset();
+            String mod = ds.getString(Tag.Modality);
+            if (mod != null && !mod.isBlank()) {
+                modalities.add(mod.strip());
+            }
+            String sop = ds.getString(Tag.SOPClassUID);
+            if (sop != null && !sop.isBlank()) {
+                sopClasses.add(sop.strip());
+            }
+            if ("YES".equalsIgnoreCase(ds.getString(Tag.BurnedInAnnotation, "").strip())) {
+                burnedYes++;
+            }
+            return o;
+        }
+
+        AnonymizeService.SeriesBurnFacts toFacts(int instances) {
+            // web にはマスクが無い: 全インスタンスが「マスク無し」
+            return new AnonymizeService.SeriesBurnFacts(
+                    new AnonymizeService.BurnPreflight(0, 0, instances, java.util.List.of()),
+                    burnedYes, modalities, sopClasses, instances);
         }
     }
 
