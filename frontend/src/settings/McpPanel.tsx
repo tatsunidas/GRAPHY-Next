@@ -129,6 +129,7 @@ export function McpPanel() {
       {box("allowAnalysis", "settings.mcp.allowAnalysis", "settings.mcp.allowAnalysisHelp")}
       {box("allowViewerControl", "settings.mcp.allowViewerControl", "settings.mcp.allowViewerControlHelp")}
       {box("allowViewerEdit", "settings.mcp.allowViewerEdit", "settings.mcp.allowViewerEditHelp")}
+      {box("allowViewerCapture", "settings.mcp.allowViewerCapture", "settings.mcp.allowViewerCaptureHelp")}
 
       <section>
         <h3 style={h3}>{t("settings.mcp.sec.plugins")}</h3>

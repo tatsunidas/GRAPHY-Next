@@ -22,7 +22,7 @@ export interface ToolDef {
 }
 
 export interface CallResult {
-  content: { type: "text"; text: string }[];
+  content: ({ type: "text"; text: string } | { type: "image"; data: string; mimeType: string })[];
   isError?: boolean;
 }
 
@@ -47,7 +47,12 @@ export const MSG_TIMEOUT = "GRAPHY-Next からの応答が時間内に返りま�
 const MSG_BUSY = "GRAPHY-Next が処理中です。少し待ってからもう一度呼んでください。";
 const MSG_FAILED = "GRAPHY-Next からの応答を処理できませんでした。";
 
-const MAX_RESPONSE = 1024 * 1024;
+/** 受け口の応答の上限。画像（base64 で最大 8 MiB）と、その JSON の余白が入る大きさ。画像でない結果は受け口が 512 KiB に切っている。 */
+const MAX_RESPONSE = 12 * 1024 * 1024;
+/** 画像の base64 の上限（受け口の MAX_IMAGE_B64 と同じ）と、受け付ける mime。受け口の値も信用しきらず、形・mime・base64 を確かめる。 */
+const MAX_IMAGE_B64 = 8 * 1024 * 1024;
+const IMAGE_MIME = /^image\/(png|jpeg)$/;
+const B64_RE = /^[A-Za-z0-9+/]+={0,2}$/;
 const TOKEN_RE = /^[0-9a-f]{16,128}$/;
 const CODE_RE = /^[A-Za-z0-9:_-]{1,64}$/;
 
@@ -146,7 +151,16 @@ export function createRelay(deps: RelayDeps) {
     if (r.status === 403) return fail(MSG_DENIED);
     if (r.status === 429) return fail(MSG_BUSY);
     const j = r.json as { ok?: unknown; result?: unknown; error?: unknown } | null;
-    if (r.status === 200 && j && j.ok === true) return { content: [{ type: "text", text: JSON.stringify(j.result) }] };
+    if (r.status === 200 && j && j.ok === true) {
+      // 画像（capture_viewer_image）: MCP の image content で返す（テキストに base64 を載せない）。本文の画像以外のフィールドは大きさだけ
+      const im = j.result && typeof j.result === "object" ? (j.result as { image?: { data?: unknown; mimeType?: unknown; width?: unknown; height?: unknown } }).image : undefined;
+      if (im) {
+        if (typeof im.data !== "string" || typeof im.mimeType !== "string" || !IMAGE_MIME.test(im.mimeType) || im.data.length === 0 || im.data.length > MAX_IMAGE_B64 || !B64_RE.test(im.data)) return fail(MSG_FAILED);
+        const dim = (n: unknown) => (typeof n === "number" && Number.isInteger(n) && n > 0 && n <= 16384 ? n : 0);
+        return { content: [{ type: "image", data: im.data, mimeType: im.mimeType }, { type: "text", text: JSON.stringify({ width: dim(im.width), height: dim(im.height) }) }] };
+      }
+      return { content: [{ type: "text", text: JSON.stringify(j.result) }] };
+    }
     // 受け口の符号（例 `phi-disabled:patientName`）だけを返す。形が違えば固定文。
     const code = j && typeof j.error === "string" && CODE_RE.test(j.error) ? j.error : null;
     return fail(code ? `error: ${code}` : MSG_FAILED);

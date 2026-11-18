@@ -71,6 +71,12 @@ export class McpStdio {
     }
     return { isError: !!r?.isError, json, text };
   }
+  /** 結果をそのまま返す（image content を含む）。 */
+  async callRaw(name: string, args: Record<string, unknown> = {}, timeoutMs = 120_000): Promise<{ isError: boolean; content: { type: string; text?: string; data?: string; mimeType?: string }[] }> {
+    const m = await this.request("tools/call", { name, arguments: args }, timeoutMs);
+    const r = m.result as { isError?: boolean; content?: { type: string; text?: string; data?: string; mimeType?: string }[] } | undefined;
+    return { isError: !!r?.isError, content: r?.content ?? [] };
+  }
   close(): void {
     this.proc.stdin.end();
     this.proc.kill();

@@ -77,7 +77,7 @@ test("文面: ROI の作成はクライアント名・形・位置・大きさ�
   assert.ok(!/\n/.test(writeConfirmText("a\nb" + "x".repeat(200), "clearMeasurements").message));
 });
 
-const { pluginWriteConfirmText, pluginSendConfirmText, pluginExposeConfirmText } = require("./mcpConfirm");
+const { pluginWriteConfirmText, pluginSendConfirmText, pluginExposeConfirmText, captureConfirmText } = require("./mcpConfirm");
 
 const MONAI = { pluginId: "vis-monai", pluginName: "MONAI", tool: "segment_run", effect: "write", description: "[plugin: MONAI] (writes data) 臓器を分割する", permissions: ["remote-compute", "ai-tools"] };
 const DEMO = { pluginId: "demo", pluginName: "Demo", tool: "make_roi", effect: "write", description: "[plugin: Demo] (writes data) ROI を作る", permissions: ["ai-tools"] };
@@ -116,4 +116,18 @@ test("文面(plugin): 結果を返す確認は、結果の先頭と「信用で�
   assert.ok(!/show_mask/.test(e.detail)); // 他のプラグインのツールは載せない
   assert.match(e.detail, /画素や患者に関わる値に触れ得ます/);
   assert.match(pluginExposeConfirmText("none", []).detail, /ツールが見つかりません/);
+});
+
+test("文面(画像): クライアント名・大きさ・「焼き込まれていないか」・アプリは検出も除去もできないこと・責任が利用者にあること・クラウドへ送られ得ることを書く", () => {
+  const t = captureConfirmText("claude-x", { w: 512, h: 384 });
+  assert.match(t.message, /「claude-x」/);
+  assert.match(t.message, /（512×384）/);
+  assert.match(t.detail, /焼き込まれていないか/);
+  assert.match(t.detail, /検出も除去もできません/);
+  assert.match(t.detail, /クラウドの AI へ送られる可能性/);
+  assert.match(t.detail, /責任は、返すことを許可したあなたにあります/);
+  assert.match(t.detail, /自己申告/);
+  // 大きさが分からなくても文面は壊れない。クライアント名の制御文字は落とす
+  assert.ok(!/（/.test(captureConfirmText("c", {}).message.replace(/「c」/, "")));
+  assert.ok(!/\n/.test(captureConfirmText("a\nb", { w: 1, h: 1 }).message));
 });

@@ -50,11 +50,12 @@ const EDIT_NOTE = "対象は、利用者が今 2D ビューアで選んでいる
 
 /**
  * 2D ビューア窓（renderer）へ main が中継して読む種類（固定リスト）。`via: "viewer"` のツールはここにある kind しか作れない。
- * 🔴 画素を返す `captureView` はここに入れない。`pluginTool` はプラグインの AI ツール（名前は main の一覧で引き直す。`pluginTools` で公開したプラグインだけ）。
+ * `captureView` は表示中のタイルの画像（画素。`allowViewerCapture` のときだけ。焼き込みの患者情報があり得るので、実行のたびに main が画像を見せて利用者に確認する）。
+ * `pluginTool` はプラグインの AI ツール（名前は main の一覧で引き直す。`pluginTools` で公開したプラグインだけ）。
  *    `action` は下の `VIEWER_ACTIONS`（表示操作）と `VIEWER_WRITE_ACTIONS`（allowViewerEdit のときだけ。実行のたびに確認）だけ、
  *    `undo` は main が持つ履歴を戻す操作（窓への kind ではない）。
  */
-const VIEWER_KINDS = ["getState", "getMeasurements", "action", "undo", "pluginTool"];
+const VIEWER_KINDS = ["getState", "getMeasurements", "action", "undo", "pluginTool", "captureView"];
 
 /**
  * 外部 AI クライアントが行える 2D ビューアの表示操作（固定リスト）。**すべて元に戻せる display の操作**（allowViewerControl）。
@@ -73,8 +74,9 @@ const UNDO_ONLY_ACTIONS = ["removeAssistantRoi"];
 const DISPLAY_TOOLS = ["windowLevel", "pan", "zoom", "magnify", "length", "angle"];
 
 /**
- * effect: read | analysis | control | edit。`phiOnly` の引数は includePhi=false では受けない。`via: "viewer"` は backend でなく 2D ビューア窓から読む／操作する。
+ * effect: read | analysis | control | edit | capture。`phiOnly` の引数は includePhi=false では受けない。`via: "viewer"` は backend でなく 2D ビューア窓から読む／操作する。
  * `control` は allowViewerControl がオンのときだけ（利用者の画面が動く）。`edit` は allowViewerEdit がオンのときだけ（データを変える）。
+ * `capture` は allowViewerCapture がオンのときだけ（画像を返す。実行のたびに利用者が確認する）。
  */
 const TOOLS = [
   { name: "get_status", effect: "read", description: "GRAPHY-Next の稼働状況（版・モード）。", inputSchema: obj({}) },
@@ -212,6 +214,15 @@ const TOOLS = [
     inputSchema: obj({}),
   },
   {
+    name: "capture_viewer_image",
+    effect: "capture",
+    via: "viewer",
+    viewerKind: "captureView",
+    description:
+      "2D ビューアの、利用者が今選んでいるタイルの表示中の画像を取る（読み取りだけ。表示・ファイルは変えない）。**画像に患者の氏名・ID などの文字が焼き込まれている場合がある。** 実行のたびに、アプリが画像を利用者に見せて確認し、拒否されると declined（答えがなければ 2 分で取り消し）。withRoi=true で ROI などの注釈を重ねる。crop=true で選択中の ROI の外接矩形で切り出す（選択が無ければ no-selected-roi、画面に出ていなければ roi-not-visible）。2D ビューアが開いていなければ no-viewer。",
+    inputSchema: obj({ withRoi: { type: "boolean", description: "ROI などの注釈を重ねる（既定 false）" }, crop: { type: "boolean", description: "選択中の ROI の外接矩形で切り出す（既定 false）" } }),
+  },
+  {
     name: "radiomics_submit",
     effect: "analysis",
     description: `Radiomics の特徴量の計算を投入する（元データは変えない。結果はキャッシュ）。${HANDLE}`,
@@ -234,11 +245,13 @@ function allowedBy(t, p) {
       return p.allowViewerControl === true || (t.undo === true && p.allowViewerEdit === true);
     case "edit":
       return p.allowViewerEdit === true;
+    case "capture":
+      return p.allowViewerCapture === true;
     default:
       return true;
   }
 }
-const DISABLED = { analysis: "analysis-disabled", control: "control-disabled", edit: "edit-disabled" };
+const DISABLED = { analysis: "analysis-disabled", control: "control-disabled", edit: "edit-disabled", capture: "capture-disabled" };
 
 /** この設定で見せるツール（解析・表示操作・データを変える操作は、それぞれの許可がオンのときだけ）。 */
 function listTools(prefs) {
@@ -297,6 +310,7 @@ function buildRequest(name, args, { projector, prefs }) {
       if (!VIEWER_ACTIONS.includes(tool.viewerAction) && !VIEWER_WRITE_ACTIONS.includes(tool.viewerAction)) return { error: "unknown-tool" };
       return { viewer: { kind: "action", id: tool.viewerAction, params: { ...a } } };
     }
+    if (tool.viewerKind === "captureView") return { viewer: { kind: "captureView", withRoi: a.withRoi === true, crop: a.crop === true } };
     return { viewer: { kind: tool.viewerKind } };
   }
   const uid = (kind, v) => projector.resolve(kind, v);

@@ -1,15 +1,16 @@
 // MCP サーバーの設定（userData/mcp.json）。設計: roadmap fw/mcp-server-design.md §4。electron に依存しない純モジュール。
 //
-// 🔴 5 つとも既定はオフ。`enabled` は外部 AI クライアントからの接続の受け付け、`includePhi` は患者情報を返すこと、
+// 🔴 6 つとも既定はオフ。`enabled` は外部 AI クライアントからの接続の受け付け、`includePhi` は患者情報を返すこと、
 //    `allowAnalysis` は解析の実行（元データは壊さない）、`allowViewerControl` は 2D ビューアの表示操作（利用者が今見ている画面が動く。
 //    元に戻せる操作だけ）、`allowViewerEdit` は 2D ビューアの ROI の作成・計測の全削除（データを変える。実行のたびに main が確認）。
+//    `allowViewerCapture` は 2D ビューアの表示中の画像（画素）を返すこと（焼き込みの患者情報があり得る。実行のたびに main が画像を見せて確認。責任は利用者）。
 //    `pluginTools` は、外部 AI クライアントへツールを公開するプラグインの ID の配列（既定は空。アシスタントの toggle store とは別の一覧）。
 //    オンにする・プラグインを足すときの確認は main が描く（ここでは持たない）。
 // 壊れていたら既定（すべてオフ）に戻し、理由を返す。黙って別の値を採らない。
 const fs = require("node:fs");
 const path = require("node:path");
 
-const KEYS = ["enabled", "includePhi", "allowAnalysis", "allowViewerControl", "allowViewerEdit"];
+const KEYS = ["enabled", "includePhi", "allowAnalysis", "allowViewerControl", "allowViewerEdit", "allowViewerCapture"];
 
 /** プラグイン ID の形（assistantPluginTools の NAME_RE の部品と同じ字種）と、公開できる件数の上限。 */
 const PLUGIN_ID_RE = /^[A-Za-z0-9_.-]{1,80}$/;
@@ -17,7 +18,7 @@ const MAX_PLUGINS = 64;
 const validPluginIds = (v) => Array.isArray(v) && v.length <= MAX_PLUGINS && v.every((x) => typeof x === "string" && PLUGIN_ID_RE.test(x)) && new Set(v).size === v.length;
 
 function defaults() {
-  return { enabled: false, includePhi: false, allowAnalysis: false, allowViewerControl: false, allowViewerEdit: false, pluginTools: [] };
+  return { enabled: false, includePhi: false, allowAnalysis: false, allowViewerControl: false, allowViewerEdit: false, allowViewerCapture: false, pluginTools: [] };
 }
 
 function createMcpPrefs({ file }) {

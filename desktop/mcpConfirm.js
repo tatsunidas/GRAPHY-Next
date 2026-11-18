@@ -112,4 +112,19 @@ function pluginExposeConfirmText(pluginId, entries) {
   };
 }
 
-module.exports = { createDialogQueue, writeConfirmText, pluginWriteConfirmText, pluginSendConfirmText, pluginExposeConfirmText, CONFIRM_TIMEOUT_MS };
+/**
+ * 2D ビューアの表示中の画像（画素）を外部 AI クライアントへ返す前の確認の文面（**実行のたびに**）。画像はダイアログにサムネイルで示す。
+ * 🔴 画像に患者の氏名・ID などが焼き込まれていても、アプリは検出も塗りつぶしもできない。この確認が唯一の関門で、
+ *    確認した上で返した画像の責任は、返すことを許可した利用者にある（2026-11-18 ユーザー決定）。
+ */
+function captureConfirmText(client, image = {}) {
+  const dim = Number.isInteger(image.w) && Number.isInteger(image.h) && image.w > 0 && image.h > 0 ? `（${image.w}×${image.h}）` : "";
+  return {
+    message: `外部 AI クライアント「${oneLine(client, 64)}」へ、2D ビューアの表示中の画像${dim}を返します。`,
+    detail: "画像に、患者の氏名・ID などの文字が焼き込まれていないか確認してください。アプリは、画像の中の患者情報を検出も除去もできません。\n" +
+      "返した画像は、そのクライアントを通じてクラウドの AI へ送られる可能性があります。患者情報が含まれていた場合の責任は、返すことを許可したあなたにあります。\n\n" +
+      `${SELF_REPORTED}返しますか？`,
+  };
+}
+
+module.exports = { createDialogQueue, writeConfirmText, captureConfirmText, pluginWriteConfirmText, pluginSendConfirmText, pluginExposeConfirmText, CONFIRM_TIMEOUT_MS };

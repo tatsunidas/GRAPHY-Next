@@ -899,6 +899,7 @@ export interface McpPrefs {
   allowAnalysis: boolean;
   allowViewerControl: boolean;
   allowViewerEdit: boolean;
+  allowViewerCapture: boolean;
   /** 外部 AI クライアントへツールを公開するプラグインの ID（アシスタントの toggle store とは別の一覧）。 */
   pluginTools: string[];
 }
