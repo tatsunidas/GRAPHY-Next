@@ -37,7 +37,7 @@ function tokenEquals(a, b) {
  * @param {(method: string, path: string, opts: {query?: object, body?: object}) => Promise<{status:number, json:any}>} o.backend
  * @param {(clientName: string) => Promise<boolean>} o.confirmClient  最初の接続の同意（main が描く）
  * @param {string} o.discoveryFile  userData/mcp-endpoint.json
- * @param {(kind: string, ctx: {client: string, includePhi: boolean}, desc: {kind: string, id?: string, params?: object}) => Promise<{ok: boolean, state?: any, measurements?: any, control?: any, error?: string}>} [o.viewer]  2D ビューア窓から読む・操作する（main が viewerRelay で中継。kind は mcpTools.VIEWER_KINDS の固定リストだけ。action の id は VIEWER_ACTIONS だけ）
+ * @param {(kind: string, ctx: {client: string, includePhi: boolean, allowViewerEdit: boolean}, desc: {kind: string, id?: string, params?: object}) => Promise<{ok: boolean, state?: any, measurements?: any, control?: any, error?: string}>} [o.viewer]  2D ビューア窓から読む・操作する（main が viewerRelay で中継。kind は mcpTools.VIEWER_KINDS の固定リストだけ。action の id は VIEWER_ACTIONS だけ）
  */
 function createMcpBridge({ prefs, audit, backend, confirmClient, discoveryFile, viewer, newToken = () => crypto.randomBytes(32).toString("hex") }) {
   let server = null;
@@ -100,7 +100,7 @@ function createMcpBridge({ prefs, audit, backend, confirmClient, discoveryFile, 
       if (typeof viewer !== "function") return { ok: false, error: "viewer-unavailable" };
       let v;
       try {
-        v = await viewer(req.viewer.kind, { client, includePhi: p.includePhi }, req.viewer);
+        v = await viewer(req.viewer.kind, { client, includePhi: p.includePhi, allowViewerEdit: p.allowViewerEdit === true }, req.viewer);
       } catch {
         return { ok: false, error: "viewer-failed" };
       }

@@ -90,6 +90,7 @@ export function McpPanel() {
       {box("includePhi", "settings.mcp.includePhi", "settings.mcp.includePhiHelp")}
       {box("allowAnalysis", "settings.mcp.allowAnalysis", "settings.mcp.allowAnalysisHelp")}
       {box("allowViewerControl", "settings.mcp.allowViewerControl", "settings.mcp.allowViewerControlHelp")}
+      {box("allowViewerEdit", "settings.mcp.allowViewerEdit", "settings.mcp.allowViewerEditHelp")}
 
       {state.relayCommand && (
         <section>

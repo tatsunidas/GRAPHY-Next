@@ -17,16 +17,16 @@ const tmpDir = () => fs.mkdtempSync(path.join(os.tmpdir(), "graphy-mcp-"));
 test("prefs: 既定はすべてオフ。保存して読み戻せる", () => {
   const file = path.join(tmpDir(), "mcp.json");
   const p = createMcpPrefs({ file });
-  assert.deepEqual(p.get(), { enabled: false, includePhi: false, allowAnalysis: false, allowViewerControl: false });
+  assert.deepEqual(p.get(), { enabled: false, includePhi: false, allowAnalysis: false, allowViewerControl: false, allowViewerEdit: false });
   p.set({ enabled: true });
-  assert.deepEqual(createMcpPrefs({ file }).get(), { enabled: true, includePhi: false, allowAnalysis: false, allowViewerControl: false });
+  assert.deepEqual(createMcpPrefs({ file }).get(), { enabled: true, includePhi: false, allowAnalysis: false, allowViewerControl: false, allowViewerEdit: false });
 });
 
 test("prefs: 負例 — 壊れた保存・未知のキー・真偽値以外は、既定に戻す／例外", () => {
   const file = path.join(tmpDir(), "mcp.json");
   fs.writeFileSync(file, "{not json");
   const p = createMcpPrefs({ file });
-  assert.deepEqual(p.get(), { enabled: false, includePhi: false, allowAnalysis: false, allowViewerControl: false });
+  assert.deepEqual(p.get(), { enabled: false, includePhi: false, allowAnalysis: false, allowViewerControl: false, allowViewerEdit: false });
   assert.equal(p.readError(), "corrupt");
   fs.writeFileSync(file, JSON.stringify({ enabled: "yes" }));
   assert.equal(p.readError(), "corrupt");
@@ -36,7 +36,7 @@ test("prefs: 負例 — 壊れた保存・未知のキー・真偽値以外は�
 });
 
 test("prefs: confirmationsFor — オンにするキーだけを、確認の順に返す（オフにする・変わらない変更は確認しない）", () => {
-  const off = { enabled: false, includePhi: false, allowAnalysis: false, allowViewerControl: false };
+  const off = { enabled: false, includePhi: false, allowAnalysis: false, allowViewerControl: false, allowViewerEdit: false };
   assert.deepEqual(confirmationsFor(off, { enabled: true }), ["enabled"]);
   assert.deepEqual(confirmationsFor(off, { allowAnalysis: true, enabled: true, includePhi: true }), ["enabled", "includePhi", "allowAnalysis"]);
   assert.deepEqual(confirmationsFor({ ...off, enabled: true }, { enabled: true }), []); // すでにオン
@@ -140,8 +140,8 @@ test("projection: deep — 患者キーを落とし、UID を札にする（形�
 });
 
 // ---- ツール ----
-const OFF = { includePhi: false, allowAnalysis: false, allowViewerControl: false };
-const ON = { includePhi: true, allowAnalysis: true, allowViewerControl: true };
+const OFF = { includePhi: false, allowAnalysis: false, allowViewerControl: false, allowViewerEdit: false };
+const ON = { includePhi: true, allowAnalysis: true, allowViewerControl: true, allowViewerEdit: true };
 
 test("tools: listTools — 解析がオフなら analysis は出ない。患者情報がオフなら患者名の引数も出ない", () => {
   const names = (prefs) => T.listTools(prefs).map((t) => t.name);
@@ -211,17 +211,18 @@ test("tools: checkBackendCall — 許可リストの外・拒否リスト・経�
 test("tools: すべてのツールが、組み立てた要求を checkBackendCall に通す（登録表と許可リストの食い違いを検出）", () => {
   const P = createProjector({ includePhi: true });
   const U = "1.2.840.1.2.3.4";
-  const args = { study: U, series: U, instance: U, sourceSeries: U, maskSeries: U, albumId: 1, jobId: "j1", center: 40, width: 400, name: "lung", index: 3, cols: 2, tool: "zoom" };
+  const args = { study: U, series: U, instance: U, sourceSeries: U, maskSeries: U, albumId: 1, jobId: "j1", center: 40, width: 400, name: "lung", index: 3, cols: 2, tool: "zoom", shape: "ellipse", u: 0.5, v: 0.5, radiusXmm: 20, radiusYmm: 10, points: [[0.1, 0.1], [0.9, 0.1], [0.5, 0.9]] };
   for (const t of T.TOOLS) {
     const a = {};
     for (const k of t.inputSchema.required) a[k] = args[k];
+    if (t.name === "create_contour_roi") a.shape = "polygon"; // shape の enum がツールごとに違う
     const r = T.buildRequest(t.name, a, { projector: P, prefs: ON });
     assert.equal(r.error, undefined, `${t.name}: ${r.error}`);
     // 2D ビューア窓から読むツールは backend の要求でなく、固定の kind だけを返す（それ以外の kind は作れない）
     if (t.via === "viewer") {
       assert.deepEqual(Object.keys(r), ["viewer"], t.name);
       assert.ok(T.VIEWER_KINDS.includes(r.viewer.kind), `${t.name}: ${r.viewer.kind}`);
-      if (r.viewer.kind === "action") assert.ok(T.VIEWER_ACTIONS.includes(r.viewer.id), `${t.name}: ${r.viewer.id}`);
+      if (r.viewer.kind === "action") assert.ok(T.VIEWER_ACTIONS.includes(r.viewer.id) || T.VIEWER_WRITE_ACTIONS.includes(r.viewer.id), `${t.name}: ${r.viewer.id}`);
     } else {
       assert.ok(r.method && r.path, t.name);
     }
@@ -247,16 +248,23 @@ test("tools: ビューア系（読み取り 2 つ）— 引数なし。画素（
 // ---- 段 4c-1: 2D ビューアの表示操作（元に戻せるものだけ）----
 const REGISTRY = require("node:fs").readFileSync(path.join(__dirname, "..", "frontend", "src", "assistant", "actions", "registry.ts"), "utf8");
 
-test("tools: VIEWER_ACTIONS は registry.ts の display の操作と一致する（write とアシスタント専用の removeAssistantRoi は入らない）", () => {
+test("tools: 操作の固定リストは registry.ts と一致する（表示 = display、データを変える = write、undo 専用 = removeAssistantRoi。互いに素）", () => {
   const block = REGISTRY.slice(REGISTRY.indexOf("export const ACTIONS"), REGISTRY.indexOf("const BY_ID"));
   const parts = block.split(/\bid: "/).slice(1);
   const display = parts.filter((p) => !p.includes('effect: "write"')).map((p) => p.slice(0, p.indexOf('"')));
   const writes = parts.filter((p) => p.includes('effect: "write"')).map((p) => p.slice(0, p.indexOf('"')));
   assert.ok(writes.includes("createRoi") && writes.includes("clearMeasurements") && writes.includes("createContourRoi")); // 先に: write が見つかっている（検査が空振りでない）
   assert.deepEqual([...T.VIEWER_ACTIONS].sort(), display.filter((id) => id !== "removeAssistantRoi").sort());
-  for (const w of [...writes, "removeAssistantRoi"]) assert.equal(T.VIEWER_ACTIONS.includes(w), false, w);
-  // 制御ツールが指す操作は、すべて固定リストにある
-  for (const t of T.TOOLS.filter((x) => x.viewerKind === "action")) assert.ok(T.VIEWER_ACTIONS.includes(t.viewerAction), t.name);
+  assert.deepEqual([...T.VIEWER_WRITE_ACTIONS].sort(), [...writes].sort());
+  assert.deepEqual([...T.UNDO_ONLY_ACTIONS], ["removeAssistantRoi"]);
+  const all = [...T.VIEWER_ACTIONS, ...T.VIEWER_WRITE_ACTIONS, ...T.UNDO_ONLY_ACTIONS];
+  assert.equal(new Set(all).size, all.length, "互いに素");
+  // ツールが指す操作は固定リストにあり、undo 専用の操作を指すツールは無い
+  for (const t of T.TOOLS.filter((x) => x.viewerKind === "action")) {
+    assert.ok(T.VIEWER_ACTIONS.includes(t.viewerAction) || T.VIEWER_WRITE_ACTIONS.includes(t.viewerAction), t.name);
+    assert.equal(T.UNDO_ONLY_ACTIONS.includes(t.viewerAction), false, t.name);
+    assert.equal(T.VIEWER_WRITE_ACTIONS.includes(t.viewerAction), t.effect === "edit", `${t.name}: write は edit のツールだけ`);
+  }
 });
 
 test("tools: 表示操作の引数の範囲・ツール名は registry.ts（2D 窓の validateAction）と同じ", () => {
@@ -314,7 +322,66 @@ test("tools: 表示操作の要求 — 引数を検査して { viewer: { kind: a
   assert.equal(build("go_to_slice", { index: -1 }).error, "bad-arg:index");
   assert.equal(build("flip_vertical", { id: "createRoi" }).error, "unknown-arg:id"); // id を引数で差し替えられない
   // write・アシスタント専用の操作は、ツールとして存在しない
-  for (const n of ["create_roi", "createRoi", "clear_measurements", "clearMeasurements", "createContourRoi", "removeAssistantRoi", "plugin__x__y"]) assert.equal(build(n, {}).error, "unknown-tool", n);
+  for (const n of ["createRoi", "clearMeasurements", "createContourRoi", "removeAssistantRoi", "remove_assistant_roi", "plugin__x__y"]) assert.equal(build(n, {}).error, "unknown-tool", n);
+});
+
+test("tools: データを変える操作（ROI の作成・計測の全削除）は allowViewerEdit がオンのときだけ。表示操作の許可とは独立。undo は両方で出る", () => {
+  const P = createProjector({ includePhi: false });
+  const edit = T.TOOLS.filter((t) => t.effect === "edit");
+  assert.deepEqual(edit.map((t) => t.name).sort(), ["clear_measurements", "create_contour_roi", "create_roi"]);
+  const base = { includePhi: false, allowAnalysis: false };
+  const names = (extra) => T.listTools({ ...base, ...extra }).map((t) => t.name);
+  for (const t of edit) {
+    assert.equal(names({ allowViewerControl: true }).includes(t.name), false, `表示操作だけで出ている: ${t.name}`);
+    assert.equal(names({ allowViewerEdit: true }).includes(t.name), true, `許可しても出ない: ${t.name}`);
+    assert.equal(T.buildRequest(t.name, {}, { projector: P, prefs: { ...base, allowViewerControl: true, allowViewerEdit: false } }).error, "edit-disabled", t.name);
+  }
+  assert.equal(names({ allowViewerEdit: true }).includes("set_window_level"), false); // データを変える許可は、表示操作の許可を含まない
+  assert.equal(names({ allowViewerEdit: true }).includes("undo_viewer_action"), true); // ROI の作成を戻すため
+  assert.equal(names({ allowViewerControl: true }).includes("undo_viewer_action"), true);
+  assert.equal(names({}).includes("undo_viewer_action"), false);
+  assert.equal(T.buildRequest("undo_viewer_action", {}, { projector: P, prefs: { ...base, allowViewerEdit: true } }).viewer.kind, "undo");
+  assert.equal(T.buildRequest("undo_viewer_action", {}, { projector: P, prefs: base }).error, "control-disabled");
+});
+
+test("tools: create_roi・create_contour_roi の引数の検査（範囲・形・points の配列）。write の要求は { viewer: { kind: action, id, params } }", () => {
+  const P = createProjector({ includePhi: false });
+  const prefs = { includePhi: false, allowAnalysis: false, allowViewerEdit: true };
+  const build = (n, a) => T.buildRequest(n, a, { projector: P, prefs });
+  const roi = { shape: "ellipse", u: 0.5, v: 0.25, radiusXmm: 20, radiusYmm: 10 };
+  assert.deepEqual(build("create_roi", roi), { viewer: { kind: "action", id: "createRoi", params: roi } });
+  assert.deepEqual(build("clear_measurements", {}), { viewer: { kind: "action", id: "clearMeasurements", params: {} } });
+  for (const [bad, err] of [[{ ...roi, u: 1.5 }, "bad-arg:u"], [{ ...roi, v: -0.1 }, "bad-arg:v"], [{ ...roi, radiusXmm: 0 }, "bad-arg:radiusXmm"], [{ ...roi, radiusYmm: 501 }, "bad-arg:radiusYmm"], [{ ...roi, shape: "circle" }, "bad-arg:shape"], [{ ...roi, u: "0.5" }, "bad-arg:u"], [{ shape: "ellipse" }, "missing-arg:u"], [{ ...roi, approved: true }, "unknown-arg:approved"]]) {
+    assert.equal(build("create_roi", bad).error, err, JSON.stringify(bad));
+  }
+  const tri = [[0.1, 0.1], [0.9, 0.1], [0.5, 0.9]];
+  assert.deepEqual(build("create_contour_roi", { shape: "polygon", points: tri }).viewer.params.points, tri);
+  for (const [bad, err] of [
+    [{ shape: "polygon", points: tri.slice(0, 2) }, "bad-arg:points"], // 3 個未満
+    [{ shape: "polygon", points: Array.from({ length: 65 }, () => [0.5, 0.5]) }, "bad-arg:points"], // 65 個
+    [{ shape: "polygon", points: [[0.1, 0.1], [0.9, 0.1], [0.5, 1.5]] }, "bad-arg:points"], // 範囲外
+    [{ shape: "polygon", points: [[0.1, 0.1], [0.9, 0.1], [0.5]] }, "bad-arg:points"], // 要素が 2 個でない
+    [{ shape: "polygon", points: [[0.1, 0.1], [0.9, 0.1], [0.5, "0.9"]] }, "bad-arg:points"], // 型違い
+    [{ shape: "polygon", points: "x" }, "bad-arg:points"],
+    [{ shape: "star", points: tri }, "bad-arg:shape"],
+  ]) assert.equal(build("create_contour_roi", bad).error, err, JSON.stringify(bad).slice(0, 80));
+  // 自己交差・面積ゼロは 2D 窓（dryRun）が拒否する（ここは形だけ）
+});
+
+test("tools: ROI の作成の範囲・形は registry.ts（2D 窓の validateAction）と同じ", () => {
+  assert.match(REGISTRY, /u: \{ type: "number", min: 0, max: 1/);
+  assert.match(REGISTRY, /v: \{ type: "number", min: 0, max: 1/);
+  assert.match(REGISTRY, /radiusXmm: \{ type: "number", min: 0.1, max: 500/);
+  assert.match(REGISTRY, /radiusYmm: \{ type: "number", min: 0.1, max: 500/);
+  assert.match(REGISTRY, /CONTOUR_POINTS_MIN = 3/);
+  assert.match(REGISTRY, /CONTOUR_POINTS_MAX = 64/);
+  assert.match(REGISTRY, /ROI_SHAPES = \["ellipse", "rectangle"\]/);
+  assert.match(REGISTRY, /CONTOUR_SHAPES = \["polygon", "freehand"\]/);
+  const t = (n) => T.TOOLS.find((x) => x.name === n).inputSchema.properties;
+  assert.deepEqual(t("create_roi").shape.enum, ["ellipse", "rectangle"]);
+  assert.deepEqual(t("create_contour_roi").shape.enum, ["polygon", "freehand"]);
+  assert.deepEqual([t("create_contour_roi").points.minItems, t("create_contour_roi").points.maxItems], [3, 64]);
+  assert.deepEqual([t("create_roi").radiusXmm.minimum, t("create_roi").radiusXmm.maximum], [0.1, 500]);
 });
 
 test("tools: projectResult — 患者情報オフで、全ツールの出力に患者の値が 0 件（オンでは出る）", () => {

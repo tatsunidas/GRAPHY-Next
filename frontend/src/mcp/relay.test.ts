@@ -7,7 +7,7 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { createRelay, MSG_DENIED, MSG_NOT_RUNNING, readEndpointFile, type Endpoint } from "./relay";
+import { createRelay, MSG_DENIED, MSG_NOT_RUNNING, MSG_TIMEOUT, readEndpointFile, type Endpoint } from "./relay";
 
 const TOKEN = "a".repeat(64);
 
@@ -44,7 +44,7 @@ async function fakeBridge(reply: (seen: Seen) => { status: number; body?: unknow
   return { seen, ep: { port, token: TOKEN } as Endpoint };
 }
 
-const relayTo = (ep: Endpoint | null, name = "claude-test") => createRelay({ readEndpoint: () => ep, clientName: () => name, timeoutMs: 3000 });
+const relayTo = (ep: Endpoint | null, name = "claude-test") => createRelay({ readEndpoint: () => ep, clientName: () => name, timeoutMs: 3000, callTimeoutMs: 3000 });
 
 describe("relay", () => {
   it("一覧は受け口の tools をそのまま返し、Bearer・自称名を付け、Origin を付けない", async () => {
@@ -112,6 +112,33 @@ describe("relay", () => {
     cur = { ...ep, token: "b".repeat(64) };
     await relay.listTools();
     expect(seen.map((s) => s.headers.authorization)).toEqual([`Bearer ${TOKEN}`, `Bearer ${"b".repeat(64)}`]);
+  });
+
+  it("呼び出しは、アプリが利用者の確認を待つ間（応答が遅い間）も待つ。一覧の待ち時間とは別（確認の待ちで「起動していない」と誤報しない）", async () => {
+    let slow = 250;
+    const s = http.createServer((req, res) => {
+      req.resume();
+      req.on("end", () => setTimeout(() => {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify(req.url === "/v1/tools" ? { tools: [] } : { ok: true, result: { done: true } }));
+      }, slow));
+    });
+    servers.push(s);
+    await new Promise<void>((r) => s.listen(0, "127.0.0.1", () => r()));
+    const ep = { port: (s.address() as { port: number }).port, token: TOKEN } as Endpoint;
+    // 一覧は 100ms、呼び出しは 2000ms まで待つ。応答は 250ms かかる
+    const relay = createRelay({ readEndpoint: () => ep, clientName: () => "c", timeoutMs: 100, callTimeoutMs: 2000 });
+    const call = await relay.callTool("create_roi", {});
+    expect(call.isError).toBeUndefined();
+    expect(JSON.parse(call.content[0].text)).toEqual({ done: true });
+    expect(await relay.listTools()).toEqual([]); // 一覧は 100ms で切れる（空で返る。例外にしない）
+    // 呼び出しの待ち時間が切れたら、受け口が無い（起動していない）のとは別の文面
+    slow = 1500;
+    const quick = createRelay({ readEndpoint: () => ep, clientName: () => "c", callTimeoutMs: 150 });
+    const t = await quick.callTool("create_roi", {});
+    expect(t.isError).toBe(true);
+    expect(t.content[0].text).toBe(MSG_TIMEOUT);
+    expect(t.content[0].text).not.toBe(MSG_NOT_RUNNING);
   });
 
   it("自称名は 64 字に切り、制御文字を空白にする", async () => {

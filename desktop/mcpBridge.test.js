@@ -240,7 +240,7 @@ test("bridge: ビューア系 — 2D 窓から読み、backend は呼ばない�
     const m = await call(port, token, "get_measurements", {});
     assert.equal(m.json.result.rois[0].lengthMm, 12.5);
     assert.equal(m.text.includes("YAMADA"), false);
-    assert.deepEqual(seen, [{ kind: "getState", client: "claude-test", includePhi: false }, { kind: "getMeasurements", client: "claude-test", includePhi: false }]);
+    assert.deepEqual(seen, [{ kind: "getState", client: "claude-test", includePhi: false, allowViewerEdit: false }, { kind: "getMeasurements", client: "claude-test", includePhi: false, allowViewerEdit: false }]);
     assert.equal(calls.length, 0); // backend には一度も行かない
     assert.ok(audits.some((a) => a.tool === "get_viewer_state" && a.outcome === "ok"));
   });
@@ -276,7 +276,7 @@ test("bridge: ビューア系の失敗は固定の符号だけ（窓の本文・
 test("bridge: 表示操作 — allowViewerControl がオフなら一覧に出ず control-disabled、オンなら記述子が 2D 窓の依存へ渡り、結果は小さな control だけ", async () => {
   const seen = [];
   const viewerImpl = async (kind, ctx, desc) => {
-    seen.push({ kind, client: ctx.client, desc });
+    seen.push({ kind, client: ctx.client, desc, allowViewerEdit: ctx.allowViewerEdit });
     return { ok: true, control: { applied: desc.id ?? "undo", undoDepth: 1 }, state: "YAMADA^TARO" /* 想定外の余計な値は返らない */ };
   };
   await withBridge({ viewerImpl }, async ({ port, token, calls }) => {
@@ -293,11 +293,12 @@ test("bridge: 表示操作 — allowViewerControl がオフなら一覧に出ず
     const r = await call(port, token, "set_window_level", { center: 40, width: 400 });
     assert.deepEqual(r.json, { ok: true, result: { applied: "setWindowLevel", undoDepth: 1 } });
     assert.equal(r.text.includes("YAMADA"), false);
-    assert.deepEqual(seen[0], { kind: "action", client: "claude-test", desc: { kind: "action", id: "setWindowLevel", params: { center: 40, width: 400 } } });
+    assert.deepEqual(seen[0], { kind: "action", client: "claude-test", desc: { kind: "action", id: "setWindowLevel", params: { center: 40, width: 400 } }, allowViewerEdit: false });
     assert.deepEqual((await call(port, token, "undo_viewer_action", {})).json, { ok: true, result: { applied: "undo", undoDepth: 1 } });
     assert.deepEqual(seen[1].desc, { kind: "undo" });
     assert.equal((await call(port, token, "set_window_level", { center: 1e9, width: 400 })).json.error, "bad-arg:center"); // 範囲外は窓へ届かない
-    assert.equal((await call(port, token, "create_roi", {})).json.error, "unknown-tool");
+    assert.equal((await call(port, token, "create_roi", { shape: "ellipse", u: 0.5, v: 0.5, radiusXmm: 5, radiusYmm: 5 })).json.error, "edit-disabled"); // データを変える操作は別の許可
+    assert.equal((await call(port, token, "createRoi", {})).json.error, "unknown-tool"); // 操作の id そのものはツールではない
     assert.equal(seen.length, 2);
     assert.equal(calls.length, 0); // backend には一度も行かない
   });
@@ -313,5 +314,37 @@ test("bridge: 表示操作の失敗は符号の許可リストだけ返す（rat
     const odd = await call(port, token, "go_to_slice", { index: 1 });
     assert.equal(odd.json.error, "viewer-failed");
     assert.equal(odd.text.includes("YAMADA"), false);
+  });
+});
+
+test("bridge: ROI の作成・計測の全削除 — allowViewerEdit がオンのときだけ。記述子と allowViewerEdit が窓の依存へ渡り、roiUid などは返らない", async () => {
+  const seen = [];
+  const viewerImpl = async (kind, ctx, desc) => {
+    seen.push({ kind, edit: ctx.allowViewerEdit, desc });
+    return { ok: true, control: { applied: desc.id, undoDepth: 1 }, inverse: [{ id: "removeAssistantRoi", params: { roiUid: "SECRET-ROI-UID" } }] };
+  };
+  const roi = { shape: "rectangle", u: 0.5, v: 0.5, radiusXmm: 5, radiusYmm: 5 };
+  await withBridge({ viewerImpl, prefs: { enabled: true, includePhi: false, allowAnalysis: false, allowViewerControl: true, allowViewerEdit: false } }, async ({ port, token }) => {
+    const names = (await request(port, { headers: auth(token) })).json.tools.map((t) => t.name);
+    assert.ok(names.includes("set_window_level"));
+    assert.equal(["create_roi", "create_contour_roi", "clear_measurements"].some((n) => names.includes(n)), false); // 表示操作だけでは出ない
+    assert.equal((await call(port, token, "clear_measurements", {})).json.error, "edit-disabled");
+    assert.equal(seen.length, 0);
+  });
+  await withBridge({ viewerImpl, prefs: { enabled: true, includePhi: false, allowAnalysis: false, allowViewerControl: false, allowViewerEdit: true } }, async ({ port, token, calls }) => {
+    const names = (await request(port, { headers: auth(token) })).json.tools.map((t) => t.name);
+    assert.ok(["create_roi", "create_contour_roi", "clear_measurements", "undo_viewer_action"].every((n) => names.includes(n)));
+    assert.equal(names.includes("set_window_level"), false); // データを変える許可は、表示操作の許可を含まない
+    const r = await call(port, token, "create_roi", roi);
+    assert.deepEqual(r.json, { ok: true, result: { applied: "createRoi", undoDepth: 1 } });
+    assert.equal(r.text.includes("SECRET-ROI-UID"), false);
+    assert.deepEqual(seen[0], { kind: "action", edit: true, desc: { kind: "action", id: "createRoi", params: roi } });
+    const tri = [[0.1, 0.1], [0.9, 0.1], [0.5, 0.9]];
+    assert.equal((await call(port, token, "create_contour_roi", { shape: "polygon", points: tri })).json.ok, true);
+    assert.equal((await call(port, token, "create_contour_roi", { shape: "polygon", points: tri.slice(0, 2) })).json.error, "bad-arg:points");
+    assert.equal((await call(port, token, "clear_measurements", {})).json.ok, true);
+    assert.equal((await call(port, token, "create_roi", { ...roi, approved: true })).json.error, "unknown-arg:approved"); // 承認の印を引数で混ぜられない
+    assert.equal(seen.length, 3);
+    assert.equal(calls.length, 0);
   });
 });

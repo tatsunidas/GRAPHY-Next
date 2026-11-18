@@ -1,16 +1,17 @@
 // MCP サーバーの設定（userData/mcp.json）。設計: roadmap fw/mcp-server-design.md §4。electron に依存しない純モジュール。
 //
-// 🔴 4 つとも既定はオフ。`enabled` は外部 AI クライアントからの接続の受け付け、`includePhi` は患者情報を返すこと、
+// 🔴 5 つとも既定はオフ。`enabled` は外部 AI クライアントからの接続の受け付け、`includePhi` は患者情報を返すこと、
 //    `allowAnalysis` は解析の実行（元データは壊さない）、`allowViewerControl` は 2D ビューアの表示操作（利用者が今見ている画面が動く。
-//    元に戻せる操作だけ）。オンにするときの確認は main が描く（ここでは持たない）。
+//    元に戻せる操作だけ）、`allowViewerEdit` は 2D ビューアの ROI の作成・計測の全削除（データを変える。実行のたびに main が確認）。
+//    オンにするときの確認は main が描く（ここでは持たない）。
 // 壊れていたら既定（すべてオフ）に戻し、理由を返す。黙って別の値を採らない。
 const fs = require("node:fs");
 const path = require("node:path");
 
-const KEYS = ["enabled", "includePhi", "allowAnalysis", "allowViewerControl"];
+const KEYS = ["enabled", "includePhi", "allowAnalysis", "allowViewerControl", "allowViewerEdit"];
 
 function defaults() {
-  return { enabled: false, includePhi: false, allowAnalysis: false, allowViewerControl: false };
+  return { enabled: false, includePhi: false, allowAnalysis: false, allowViewerControl: false, allowViewerEdit: false };
 }
 
 function createMcpPrefs({ file }) {

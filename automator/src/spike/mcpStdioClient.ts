@@ -59,8 +59,8 @@ export class McpStdio {
     await this.request("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: this.clientName, version: "1" } });
     this.send({ jsonrpc: "2.0", method: "notifications/initialized" });
   }
-  async call(name: string, args: Record<string, unknown> = {}): Promise<{ isError: boolean; json: unknown; text: string }> {
-    const m = await this.request("tools/call", { name, arguments: args });
+  async call(name: string, args: Record<string, unknown> = {}, timeoutMs = 120_000): Promise<{ isError: boolean; json: unknown; text: string }> {
+    const m = await this.request("tools/call", { name, arguments: args }, timeoutMs);
     const r = m.result as { isError?: boolean; content?: { text?: string }[] } | undefined;
     const text = r?.content?.[0]?.text ?? "";
     let json: unknown = null;
