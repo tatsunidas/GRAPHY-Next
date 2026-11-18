@@ -9,6 +9,8 @@ const path = require("node:path");
 const DEFAULT_MAX_BYTES = 2 * 1024 * 1024;
 const NAME_RE = /^[A-Za-z0-9_-]{1,64}$/;
 const CODE_RE = /^[a-z0-9-]{1,40}$/;
+/** 結果の符号（受け口の error）。`phi-disabled:patientName` のように、大文字の引数名と `:` を含む。患者情報は入らない（引数名と固定の語だけ）。 */
+const OUTCOME_RE = /^[A-Za-z0-9:_-]{1,40}$/;
 
 const natural = (v) => (typeof v === "number" && Number.isInteger(v) && v >= 0 ? v : null);
 const word = (v, re) => (typeof v === "string" && re.test(v) ? v : undefined);
@@ -25,7 +27,7 @@ function buildRecord(o) {
   return {
     event: word(src.event, CODE_RE) ?? "call",
     tool: word(src.tool, NAME_RE),
-    outcome: word(src.outcome, CODE_RE) ?? "other",
+    outcome: word(src.outcome, OUTCOME_RE) ?? "other",
     bytes: natural(src.bytes),
     includePhi: src.includePhi === true,
     client: oneLine(src.client, 64),

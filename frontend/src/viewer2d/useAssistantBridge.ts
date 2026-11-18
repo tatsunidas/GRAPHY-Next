@@ -40,6 +40,8 @@ export interface AssistantBridgeInput {
   resolveTargets: () => string[];
   activeTool: string;
   layoutCols: number;
+  /** レイアウトの設定値（0 = 自動）。 */
+  layoutSetting?: number;
   setTool: (toolId: string) => void;
   setLayoutCols: (n: number) => void;
   presets: WlPresetLite[];
@@ -65,6 +67,7 @@ export function useAssistantBridge(input: AssistantBridgeInput): void {
       runSeries: (ids, fn) => runSeriesCommand(ids, fn),
       activeTool: () => ref.current.activeTool,
       layoutCols: () => ref.current.layoutCols,
+      layoutSetting: () => ref.current.layoutSetting ?? ref.current.layoutCols,
       setTool: (t) => ref.current.setTool(t),
       setLayoutCols: (n) => ref.current.setLayoutCols(n),
       presets: () => ref.current.presets,
