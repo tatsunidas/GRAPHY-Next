@@ -888,6 +888,7 @@ export interface McpPrefs {
   enabled: boolean;
   includePhi: boolean;
   allowAnalysis: boolean;
+  allowViewerControl: boolean;
 }
 
 /** `graphy:mcp-get` の結果。readError は設定ファイルが読めなかった理由（すべてオフに戻してある）、relayCommand はパッケージ版だけ。 */

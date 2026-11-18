@@ -141,6 +141,7 @@ export async function mcpSection(ctx: McpSmokeCtx, phase: "running" | "closed"):
     log(`tools: ${tools.join(",")}`);
     check(tools.includes("get_status") && tools.includes("search_studies"), "[14] ★graphy-mcp から tools/list が取れる（get_status・search_studies がある）", tools);
     check(!tools.includes("radiomics_submit"), "[14] 解析のツールは、既定（解析の許可がオフ）では出ない");
+    check(!tools.includes("set_window_level") && !tools.includes("undo_viewer_action") && tools.includes("get_viewer_state"), "[14] 2D ビューアの表示操作のツールは、既定（表示操作の許可がオフ）では出ない（読み取りは出る）", tools.filter((t) => /window|slice|layout|rotate|flip|invert|tool|undo/.test(t)));
     const st = await m.call("get_status");
     log(`get_status: ${st.text}`);
     check(!st.isError && (st.json as { version?: string } | null)?.version === status.version, "[14] ★get_status が通り、版が /api/status と同じ", { mcp: st.text.slice(0, 120), api: status.version });

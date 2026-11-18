@@ -7,10 +7,11 @@
 ## 0. 次にやること
 1. 起動時の同期で `GRAPHY-Next` と `graphy-next-roadmap` を最新にする。`git fetch && git merge origin/main`（rebase の pull は使わない）。
 2. 実装の前に、機能ごとにプランモードで計画を立て、承認を得る（全体の計画は roadmap の設計にある）。
-3. **段 4c（持ち越し）**: 表示操作（窓幅・スライス・レイアウトなど可逆なもの）とプラグインの AI ツール（`write` は毎回 main で確認）。`viewerRelay.relay` を main 内から呼ぶ道は 4b で作ってある（`mcpViewer`）。`mcpTools.VIEWER_KINDS` に `action`・`pluginTool` を足す前に、確認ダイアログと安全上の面を計画で承認してもらう。画素（`captureView`）は返さない方針のまま（患者情報オンでも返すかは段 5 の後）。
-4. **段 5 の残り**: 配布物の起動検査（installedSmoke [14]）の予行演習の結果（release.yml を `gh workflow run release.yml --ref feat/mcp-stage5 -f local_ai_smoke=false` で起動。Windows・macOS（arm64・intel）・Linux deb の `mcp-output.log` と [14] の合格）を確かめてから、段 5 を閉じる。
+3. **段 4c-2（持ち越し・別計画で承認を取る）**: ROI の作成・全削除（write、毎回 main で確認。`clearMeasurements` は元に戻せない）と、プラグインの AI ツール（公開するプラグインの選び方＝`mcp.json` に別キーかアシスタントの toggle store の流用か、`segment_run` のような外部送信を伴う write、プラグインの戻り値の患者情報）。画素（`captureView`）は返さない方針のまま。
+4. 段 4c-1（2D ビューアの表示操作）は #（この PR）。
 
 ## 1. 現在の状態
+- **段 4c-1 = 2D ビューアの表示操作**（`allowViewerControl`、既定オフ）: `set_window_level`・`reset_window`・`apply_window_preset`・`rotate_view`・`flip_horizontal`・`flip_vertical`・`invert_colors`・`go_to_slice`・`set_layout`・`set_tool` と `undo_viewer_action`。操作は `mcpTools.VIEWER_ACTIONS`（元に戻せる display の 10 種。registry.ts と一致をテストで検査）だけで、write は出さない。履歴（逆操作）は main の `mcpViewerControl.js` が接続ごとに最大 20 件持ち、クライアントへ `inverse` は返さない。10 秒に 20 回の上限。対象は利用者が 2D ビューアで選んでいるタイル（AI は指定できない）。実機（`automator/src/spike/mcpViewerControlCheck.ts`）で 45 件合格: 画面の W/L の表示・スライス・回転・反転・レイアウト・ツールが `get_viewer_state` と一致、undo で操作前の状態と画像が一致、範囲外・write は通らない、連打で `rate-limited`、窓を閉じると `no-viewer`。**既知の差**: undo のあと、ツールバーのレイアウトの選択が「自動」から固定の列数に変わり、ビューア自身の「元に戻す」ボタンが有効になる（アシスタントの「元に戻す」と同じ。`setLayout` の逆操作が固定の列数で戻すため）。
 - **完了・マージ済み**: 段 1 = #708、段 2 = #709、段 3 = 中継 `graphy-mcp`（`frontend/src/mcp/{relay,server}.ts` を `npm run build:mcp` で `desktop/mcp/run.cjs` に束ねる。`desktop/mcpCli.js`・`desktop/cli/graphy-mcp(.cmd)`・配布の一覧・CI/release の束ね）。SDK は `@modelcontextprotocol/sdk` 1.32.2（exact、frontend の devDependencies）。束ねは stdio だけ（express・hono・cors・jose などが入ると `build:mcp` が落ちる）。
 - 段 4a = 環境設定 ▸ 外部 AI クライアント（MCP）（#716。`McpPanel`・preload の `getMcp`/`setMcp`・`docs/settings.md`）。設定は既定ですべてオフで、利用者が画面でオンにできる（確認ダイアログは main）。パッケージ版では中継のコマンドを画面に出す（開発起動は出ない）。
 - 段 4b = 読み取りのビューア系ツール `get_viewer_state`・`get_measurements`（main が `viewerRelay` を直接呼ぶ。`mcpBridge` の依存 `viewer`、`mcpTools` の `via:"viewer"`/`VIEWER_KINDS`）。`get_measurements` はクライアントごと・起動ごとに最初の 1 回、main が確認を描く。ジャーナルは `assistant-journal.jsonl` の sessionId `mcp:<クライアント名>`。宛先は 2D ビューア窓（単一）で、無ければ `no-viewer`。

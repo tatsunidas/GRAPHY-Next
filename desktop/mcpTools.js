@@ -42,15 +42,31 @@ function checkBackendCall(method, pathname) {
 const obj = (properties, required = []) => ({ type: "object", properties, required, additionalProperties: false });
 const str = (description, max = 128) => ({ type: "string", description, maxLength: max });
 const int = (description, min = 0, max = 1_000_000_000) => ({ type: "integer", description, minimum: min, maximum: max });
+const num = (description, min, max) => ({ type: "number", description, minimum: min, maximum: max });
+const oneOf = (description, values) => ({ type: "string", description, enum: values, maxLength: 32 });
 const HANDLE = "（list/search の結果に出た値をそのまま渡す）";
+const CONTROL_NOTE = "操作の対象は、利用者が今 2D ビューアで選んでいるタイル。元に戻せる（undo_viewer_action）。2D ビューアが開いていなければ no-viewer。";
 
 /**
  * 2D ビューア窓（renderer）へ main が中継して読む種類（固定リスト）。`via: "viewer"` のツールはここにある kind しか作れない。
- * 🔴 画素を返す `captureView` と、窓を操作する `action`・`pluginTool` はここに入れない（段 4c 以降）。
+ * 🔴 画素を返す `captureView` と、プラグインの `pluginTool` はここに入れない（段 4c-2 以降）。
+ *    `action` は下の `VIEWER_ACTIONS` の表示操作だけ、`undo` は main が持つ履歴を戻す操作（窓への kind ではない）。
  */
-const VIEWER_KINDS = ["getState", "getMeasurements"];
+const VIEWER_KINDS = ["getState", "getMeasurements", "action", "undo"];
 
-/** effect: read | analysis。`phiOnly` の引数は includePhi=false では受けない。`via: "viewer"` は backend でなく 2D ビューア窓から読む。 */
+/**
+ * 外部 AI クライアントが行える 2D ビューアの表示操作（固定リスト）。**すべて元に戻せる display の操作**。
+ * 🔴 データを変える write（clearMeasurements・createRoi・createContourRoi）と、アシスタント専用の removeAssistantRoi は入れない。
+ *    frontend/src/assistant/actions/registry.ts の display の action と一致することを mcp.test.js が検査する。
+ */
+const VIEWER_ACTIONS = ["setWindowLevel", "resetWindow", "applyWlPreset", "rotate90", "flipH", "flipV", "invert", "goToSlice", "setLayout", "setTool"];
+/** setTool に渡せるツール（registry.ts の DISPLAY_TOOLS と一致させる）。 */
+const DISPLAY_TOOLS = ["windowLevel", "pan", "zoom", "magnify", "length", "angle"];
+
+/**
+ * effect: read | analysis | control。`phiOnly` の引数は includePhi=false では受けない。`via: "viewer"` は backend でなく 2D ビューア窓から読む／操作する。
+ * `control` は allowViewerControl がオンのときだけ（利用者の画面が動く）。
+ */
 const TOOLS = [
   { name: "get_status", effect: "read", description: "GRAPHY-Next の稼働状況（版・モード）。", inputSchema: obj({}) },
   { name: "list_albums", effect: "read", description: "アルバムの一覧（id と件数。名前は患者情報の設定がオンのときだけ）。", inputSchema: obj({}) },
@@ -84,6 +100,72 @@ const TOOLS = [
     inputSchema: obj({}),
   },
   {
+    name: "set_window_level",
+    effect: "control",
+    via: "viewer",
+    viewerKind: "action",
+    viewerAction: "setWindowLevel",
+    description: `2D ビューアの窓位（center）と窓幅（width）を設定する（モダリティの単位。CT は HU）。${CONTROL_NOTE}`,
+    inputSchema: obj({ center: num("窓位", -100000, 100000), width: num("窓幅（1 以上）", 1, 200000) }, ["center", "width"]),
+  },
+  { name: "reset_window", effect: "control", via: "viewer", viewerKind: "action", viewerAction: "resetWindow", description: `窓位・窓幅を DICOM の既定に戻す。${CONTROL_NOTE}`, inputSchema: obj({}) },
+  {
+    name: "apply_window_preset",
+    effect: "control",
+    via: "viewer",
+    viewerKind: "action",
+    viewerAction: "applyWlPreset",
+    description: `名前つきの窓条件を適用する（brain=脳・soft=軟部・lung=肺・bone=骨・abdomen=腹部・liver=肝、または利用者のプリセット名）。${CONTROL_NOTE}`,
+    inputSchema: obj({ name: str("プリセットの名前", 60) }, ["name"]),
+  },
+  {
+    name: "rotate_view",
+    effect: "control",
+    via: "viewer",
+    viewerKind: "action",
+    viewerAction: "rotate90",
+    description: `画像を時計回りに 90 度ずつ回す（times 回。既定 1）。${CONTROL_NOTE}`,
+    inputSchema: obj({ times: int("90 度の回数", 1, 3) }),
+  },
+  { name: "flip_horizontal", effect: "control", via: "viewer", viewerKind: "action", viewerAction: "flipH", description: `左右反転（もう一度呼ぶと戻る）。${CONTROL_NOTE}`, inputSchema: obj({}) },
+  { name: "flip_vertical", effect: "control", via: "viewer", viewerKind: "action", viewerAction: "flipV", description: `上下反転（もう一度呼ぶと戻る）。${CONTROL_NOTE}`, inputSchema: obj({}) },
+  { name: "invert_colors", effect: "control", via: "viewer", viewerKind: "action", viewerAction: "invert", description: `白黒反転（ネガポジ。もう一度呼ぶと戻る）。${CONTROL_NOTE}`, inputSchema: obj({}) },
+  {
+    name: "go_to_slice",
+    effect: "control",
+    via: "viewer",
+    viewerKind: "action",
+    viewerAction: "goToSlice",
+    description: `指定のスライスへ移動する。index は 0 始まり（N 枚目は N-1、最初は 0、最後は sliceCount-1。sliceCount は get_viewer_state）。範囲外は端に寄せる。${CONTROL_NOTE}`,
+    inputSchema: obj({ index: int("0 始まりのスライス番号", 0, 1_000_000) }, ["index"]),
+  },
+  {
+    name: "set_layout",
+    effect: "control",
+    via: "viewer",
+    viewerKind: "action",
+    viewerAction: "setLayout",
+    description: `ビューアの列数（画像を横に並べる数）を設定する。表示するスライスは変わらない。${CONTROL_NOTE}`,
+    inputSchema: obj({ cols: int("列数", 1, 8) }, ["cols"]),
+  },
+  {
+    name: "set_tool",
+    effect: "control",
+    via: "viewer",
+    viewerKind: "action",
+    viewerAction: "setTool",
+    description: `左ボタンのツールを選ぶ（表示・計測表示用のツールだけ）。${CONTROL_NOTE}`,
+    inputSchema: obj({ tool: oneOf("ツール名", DISPLAY_TOOLS) }, ["tool"]),
+  },
+  {
+    name: "undo_viewer_action",
+    effect: "control",
+    via: "viewer",
+    viewerKind: "undo",
+    description: "この接続が行った表示操作のうち、直近の 1 つを元に戻す（履歴は最大 20 件。アプリ側が持つ）。履歴が無ければ nothing-to-undo。",
+    inputSchema: obj({}),
+  },
+  {
     name: "radiomics_submit",
     effect: "analysis",
     description: `Radiomics の特徴量の計算を投入する（元データは変えない。結果はキャッシュ）。${HANDLE}`,
@@ -97,9 +179,9 @@ const TOOLS = [
 
 const BY_NAME = new Map(TOOLS.map((t) => [t.name, t]));
 
-/** この設定で見せるツール（解析がオフなら analysis は出さない）。 */
-function listTools({ allowAnalysis, includePhi }) {
-  return TOOLS.filter((t) => allowAnalysis || t.effect !== "analysis").map((t) => {
+/** この設定で見せるツール（解析がオフなら analysis、表示操作の許可がオフなら control は出さない）。 */
+function listTools({ allowAnalysis, includePhi, allowViewerControl }) {
+  return TOOLS.filter((t) => (allowAnalysis || t.effect !== "analysis") && (allowViewerControl || t.effect !== "control")).map((t) => {
     const props = { ...t.inputSchema.properties };
     for (const k of includePhi ? [] : t.phiOnly ?? []) delete props[k];
     return { name: t.name, description: t.description, inputSchema: { ...t.inputSchema, properties: props } };
@@ -119,27 +201,36 @@ function validateArgs(schema, args) {
       if (/[\u0000-\u001f\u007f]/.test(v)) return `bad-arg:${k}`;
     } else if (p.type === "integer") {
       if (!Number.isInteger(v) || v < (p.minimum ?? -Infinity) || v > (p.maximum ?? Infinity)) return `bad-arg:${k}`;
+    } else if (p.type === "number") {
+      if (typeof v !== "number" || !Number.isFinite(v) || v < (p.minimum ?? -Infinity) || v > (p.maximum ?? Infinity)) return `bad-arg:${k}`;
     } else if (p.type === "boolean") {
       if (typeof v !== "boolean") return `bad-arg:${k}`;
     }
+    if (p.enum && !p.enum.includes(v)) return `bad-arg:${k}`;
   }
   return null;
 }
 
 /**
  * ツール呼び出し → backend への要求。落とすときは { error } を返す（要求を作らない）。
- * @returns {{ error: string } | { viewer: { kind: string } } | { method: string, path: string, query?: object, limit?: number, body?: object }}
+ * @returns {{ error: string } | { viewer: { kind: string, id?: string, params?: object } } | { method: string, path: string, query?: object, limit?: number, body?: object }}
  */
 function buildRequest(name, args, { projector, prefs }) {
   const tool = BY_NAME.get(name);
   if (!tool) return { error: "unknown-tool" };
   if (tool.effect === "analysis" && !prefs.allowAnalysis) return { error: "analysis-disabled" };
+  if (tool.effect === "control" && !prefs.allowViewerControl) return { error: "control-disabled" };
   const bad = validateArgs(tool.inputSchema, args);
   if (bad) return { error: bad };
   const a = args ?? {};
   for (const k of prefs.includePhi ? [] : tool.phiOnly ?? []) if (a[k] !== undefined) return { error: `phi-disabled:${k}` };
   if (tool.via === "viewer") {
     if (!VIEWER_KINDS.includes(tool.viewerKind)) return { error: "unknown-tool" };
+    if (tool.viewerKind === "action") {
+      // 引数は検査済み（validateArgs）。id は固定リストにあるものだけ（write・アシスタント専用の操作は作れない）
+      if (!VIEWER_ACTIONS.includes(tool.viewerAction)) return { error: "unknown-tool" };
+      return { viewer: { kind: "action", id: tool.viewerAction, params: { ...a } } };
+    }
     return { viewer: { kind: tool.viewerKind } };
   }
   const uid = (kind, v) => projector.resolve(kind, v);
@@ -238,4 +329,4 @@ function projectResult(name, data, projector) {
   return P.guard(out);
 }
 
-module.exports = { TOOLS, VIEWER_KINDS, listTools, validateArgs, buildRequest, projectResult, checkBackendCall, ALLOWED, DENIED, UID_RE };
+module.exports = { TOOLS, VIEWER_KINDS, VIEWER_ACTIONS, DISPLAY_TOOLS, listTools, validateArgs, buildRequest, projectResult, checkBackendCall, ALLOWED, DENIED, UID_RE };

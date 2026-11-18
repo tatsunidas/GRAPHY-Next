@@ -738,6 +738,7 @@ app.on("before-quit", () => {
 const { createMcpPrefs, confirmationsFor } = require("./mcpPrefs");
 const { createMcpAudit } = require("./mcpAudit");
 const { createMcpBridge } = require("./mcpBridge");
+const { createViewerControl } = require("./mcpViewerControl");
 let mcpPrefsStore = null;
 let mcpBridgeInst = null;
 function mcpPrefs() {
@@ -757,6 +758,10 @@ const MCP_ENABLE_TEXT = {
   allowAnalysis: {
     message: "AI クライアントからの解析の実行（Radiomics の特徴量の計算）を許可します。",
     detail: "元の画像・マスクは変更しません。計算結果はキャッシュに保存されます。",
+  },
+  allowViewerControl: {
+    message: "AI クライアントが、2D ビューアの表示（窓幅・窓位・スライス・向き・レイアウト・ツール）を操作できるようにします。",
+    detail: "いま見ている画面が動きます（対象は、2D ビューアで選んでいるタイル）。元に戻せる操作だけで、ROI の作成や削除、データの変更はできません。AI クライアントの「元に戻す」で、行った操作を 1 つずつ戻せます。",
   },
 };
 
@@ -791,7 +796,7 @@ async function mcpConfirmClient(client) {
     cancelId: 1,
     title: "外部 AI クライアントの接続",
     message: `外部 AI クライアント「${client}」が、GRAPHY-Next への接続を求めています。`,
-    detail: `クライアント名は相手の自己申告で、確認できません。心当たりがなければ［拒否］を選んでください（拒否すると、アプリを再起動するまで受け付けません）。\n現在の設定: 患者情報 = ${p.includePhi ? "返す" : "伏せる"} ／ 解析の実行 = ${p.allowAnalysis ? "許可" : "許可しない"}`,
+    detail: `クライアント名は相手の自己申告で、確認できません。心当たりがなければ［拒否］を選んでください（拒否すると、アプリを再起動するまで受け付けません）。\n現在の設定: 患者情報 = ${p.includePhi ? "返す" : "伏せる"} ／ 解析の実行 = ${p.allowAnalysis ? "許可" : "許可しない"} ／ 2D ビューアの表示操作 = ${p.allowViewerControl ? "許可" : "許可しない"}`,
   });
   return r.response === 0;
 }
@@ -813,9 +818,16 @@ async function mcpConfirmMeasurements(client, preview) {
 
 // 外部 AI クライアントが 2D ビューアの状態・ROI を読む。同じプロセス内の viewerRelay を直接呼ぶ（`graphy:assistant-viewer-cmd` の
 // 「チャット窓だけ」の関門は ipcMain の handler にあり、そのまま。2D 窓への送信 graphy:viewer-cmd は main→窓の一方向）。
-// kind は mcpTools.VIEWER_KINDS（getState・getMeasurements）だけ。ジャーナルの sessionId は `mcp:<クライアント名>`。
-// ラベル（SeriesDescription など自由記述）は、患者情報を返す設定のときだけ。画素（captureView）・操作（action・pluginTool）は中継しない。
-function mcpViewer(kind, { client, includePhi }) {
+// kind は mcpTools.VIEWER_KINDS（getState・getMeasurements・action・undo）だけ。ジャーナルの sessionId は `mcp:<クライアント名>`。
+// ラベル（SeriesDescription など自由記述）は、患者情報を返す設定のときだけ。画素（captureView）・プラグインの pluginTool は中継しない。
+// 表示操作（action）は mcpTools.VIEWER_ACTIONS（元に戻せる display の 10 種）だけで、write は中継しない。逆操作の履歴（undo）は main だけが持つ（mcpViewerControl）。
+let mcpControlInst = null;
+function mcpControl() {
+  if (!mcpControlInst) mcpControlInst = createViewerControl({ relay: (sid, cmd) => viewerRelay.relay(sid, cmd, {}) });
+  return mcpControlInst;
+}
+function mcpViewer(kind, { client, includePhi }, desc) {
+  if (kind === "action" || kind === "undo") return mcpControl().run(client, desc);
   const opts = kind === "getMeasurements" ? { measurements: { external: true, confirmSend: (preview) => mcpConfirmMeasurements(client, preview) } } : {};
   return viewerRelay.relay(`mcp:${client}`, { kind, includeLabels: includePhi === true }, opts);
 }
@@ -847,6 +859,7 @@ function mcpState() {
 async function mcpApply() {
   try {
     await mcpBridge().apply();
+    if (!mcpPrefs().get().enabled && mcpControlInst) mcpControlInst.clear(); // 受け口を止めたら、表示操作の履歴も捨てる
   } catch (e) {
     console.warn("[mcp] could not apply:", e && e.message);
     try {
