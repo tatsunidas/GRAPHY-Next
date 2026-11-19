@@ -91,9 +91,23 @@ export const IVH_FAMILY = "IntensityVolumeHistogram";
 export const CALIBRATION_CHOICES = ["auto", "bw", "sul-james", "sul-janma", "bsa", "none"] as const;
 export type CalibrationChoice = (typeof CALIBRATION_CHOICES)[number];
 
+/**
+ * 値の種類（backend `ValueKind`）。DICOM のメタデータから、離散の校正値（CT の HU。IVH は mode 0、補間後の丸めを選べる）・
+ * 連続の校正値（単位が明示。IVH は mode 1 でビン幅が要る）・任意単位（MR など。IVH は mode 2）を判定する。
+ * `auto` は判定に任せる。`legacy` は分類しない（従来。IVH は RadiomicsJ の既定のまま。項目の無い従来の定義はこれ）。
+ */
+export const VALUE_KIND_CHOICES = ["auto", "discrete", "continuous", "arbitrary", "legacy"] as const;
+export type ValueKindChoice = (typeof VALUE_KIND_CHOICES)[number];
+
 export interface RoiFeatureForm {
   /** PET の校正。範囲・離散化・特徴量は、校正後の値に対して働く。 */
   calibration: CalibrationChoice;
+  /** 値の種類。IVH のモードと補間後の丸めを決める。 */
+  valueKind: ValueKindChoice;
+  /** 連続の校正値の IVH のビン幅（強度の単位）。空欄は既定（PET の SUV は 0.10。他の単位は未設定）。 */
+  ivhBinWidthText: string;
+  /** 離散の校正値（CT の HU）で、補間後の強度を整数へ丸める（IBSI 68QD）。既定 off。 */
+  intensityRounding: boolean;
   fixedBinNumber: boolean;
   binCount: number;
   binWidth: number;
@@ -145,6 +159,9 @@ export function splitFilteredFamily(family: string): { sigma: string; base: stri
 export function defaultRoiFeatureForm(): RoiFeatureForm {
   return {
     calibration: "auto",
+    valueKind: "auto",
+    ivhBinWidthText: "",
+    intensityRounding: false,
     fixedBinNumber: true,
     binCount: 32,
     binWidth: 25,
@@ -200,6 +217,22 @@ export function rangeBounds(form: RoiFeatureForm):
   }
   if (min !== null && max !== null && min > max) return { min, max, problem: "ORDER" };
   return { min, max, problem: null };
+}
+
+export type IvhBinWidthProblem = "INVALID";
+
+/** IVH のビン幅の入力。空欄は未指定（null）。正の有限数でなければ問題あり。 */
+export function ivhBinWidthOf(form: RoiFeatureForm): { value: number | null; problem: IvhBinWidthProblem | null } {
+  const t = form.ivhBinWidthText.trim();
+  if (t === "") return { value: null, problem: null };
+  const v = Number(t);
+  return Number.isFinite(v) && v > 0 ? { value: v, problem: null } : { value: null, problem: "INVALID" };
+}
+
+/** backend の `valueSpec`。`legacy`（分類しない）は null（従来の要求と同じ）。 */
+export function valueSpecOf(form: RoiFeatureForm): { valueKind: string; ivhBinWidth: number | null; intensityRounding: boolean } | null {
+  if (form.valueKind === "legacy") return null;
+  return { valueKind: form.valueKind, ivhBinWidth: ivhBinWidthOf(form).value, intensityRounding: form.intensityRounding };
 }
 
 export const anyFamilyOn = (form: RoiFeatureForm) => ROI_FEATURE_FAMILIES.some((f) => form.families[f.key]);

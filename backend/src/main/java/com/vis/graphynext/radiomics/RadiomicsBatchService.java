@@ -75,12 +75,24 @@ public class RadiomicsBatchService {
      *                       （設定はフロントが一次統計の族だけを有効にして送る）
      * @param calibration    PET の校正（{@link RoiFeatureRequest#calibration}）。null は {@code auto}（PET を SUVbw に校正）。
      *                       VOI 統計は、{@code none}（Bq/mL のまま）の PET だけを断る
+     * @param valueSpec      値の種類（{@link RoiFeatureRequest#valueSpec}）。null は従来（分類しない）。VOI 統計では使わない
      */
     public record BatchRequest(List<BatchPair> pairs, Map<String, String> settings,
                                Set<RoiFeatureRequest.RoiMode> roiModes, List<Double> scales, String scaleNotation,
                                List<String> scaleLabels, String scaleConversion, Double scaleCoefficient,
                                int channel, int timePoint, boolean recompute, Qc qc, List<String> qcAcknowledged,
-                               Integer smallRoiWarnVoxels, String kind, String calibration) {
+                               Integer smallRoiWarnVoxels, String kind, String calibration,
+                               ValueKind.Spec valueSpec) {
+        /** 値の種類を指定しない（従来の要求）。 */
+        public BatchRequest(List<BatchPair> pairs, Map<String, String> settings,
+                            Set<RoiFeatureRequest.RoiMode> roiModes, List<Double> scales, String scaleNotation,
+                            List<String> scaleLabels, String scaleConversion, Double scaleCoefficient,
+                            int channel, int timePoint, boolean recompute, Qc qc, List<String> qcAcknowledged,
+                            Integer smallRoiWarnVoxels, String kind, String calibration) {
+            this(pairs, settings, roiModes, scales, scaleNotation, scaleLabels, scaleConversion, scaleCoefficient,
+                    channel, timePoint, recompute, qc, qcAcknowledged, smallRoiWarnVoxels, kind, calibration, null);
+        }
+
         /** PET の校正を指定しない（従来の要求。{@code auto}）。 */
         public BatchRequest(List<BatchPair> pairs, Map<String, String> settings,
                             Set<RoiFeatureRequest.RoiMode> roiModes, List<Double> scales, String scaleNotation,
@@ -313,7 +325,7 @@ public class RadiomicsBatchService {
         return new RoiFeatureRequest(p.studyUid(), p.sourceSeriesUid(), p.maskSeriesUid(), p.maskChannel(),
                 req.channel(), req.timePoint(), req.settings(), req.recompute(), req.roiModes(), req.scales(),
                 req.scaleNotation(), req.scaleLabels(), req.scaleConversion(), req.scaleCoefficient(),
-                req.smallRoiWarnVoxels(), req.calibration());
+                req.smallRoiWarnVoxels(), req.calibration(), req.valueSpec());
     }
 
     private void set(Job job, int i, PairState state, FailureKind kind, String error, boolean fromCache, long ms) {
@@ -337,6 +349,9 @@ public class RadiomicsBatchService {
         }
         if (r.provenance() != null && r.provenance().uncalibratedPet()) {
             flags.add(FLAG_UNCALIBRATED_PT);
+        }
+        if (r.provenance() != null && r.provenance().valueKindFlags() != null) {
+            flags.addAll(r.provenance().valueKindFlags());
         }
         return flags;
     }

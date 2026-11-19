@@ -6,8 +6,9 @@ import type { CSSProperties, ReactNode } from "react";
 import { NumberField } from "../hooks/NumberField";
 import { useI18n } from "../i18n/i18n";
 import {
-  CALIBRATION_CHOICES, ROI_FEATURE_FAMILIES, applyScale36, applySixStatistics, isScale36, isSixStatistics, rangeBounds,
-  type CalibrationChoice, type RoiFeatureForm,
+  CALIBRATION_CHOICES, ROI_FEATURE_FAMILIES, VALUE_KIND_CHOICES, applyScale36, applySixStatistics, ivhBinWidthOf, isScale36,
+  isSixStatistics, rangeBounds,
+  type CalibrationChoice, type RoiFeatureForm, type ValueKindChoice,
 } from "./roiFeatureSettings";
 
 /**
@@ -36,6 +37,59 @@ export function CalibrationField({ form, setForm, disabled, testIdPrefix, layout
       </div>
       {form.calibration === "none" && (
         <div style={warnBand} data-testid={`${testIdPrefix}-calibration-none-warn`}>{t("roiFeat.calibration.noneWarn")}</div>
+      )}
+    </>
+  );
+}
+
+/**
+ * 値の種類（離散の校正値・連続の校正値・任意単位）の選択と、それで決まる IVH のビン幅・補間後の丸め。
+ * 自動は DICOM のメタデータから判定する（結果の表に判定と根拠が残る）。
+ */
+export function ValueKindField({ form, setForm, disabled, testIdPrefix, layout }: {
+  form: RoiFeatureForm;
+  setForm: (f: (prev: RoiFeatureForm) => RoiFeatureForm) => void;
+  disabled: boolean;
+  testIdPrefix: "roifeat" | "batch";
+  layout: { labelMinWidth: number; align: "left" | "right" };
+}) {
+  const { t } = useI18n();
+  const k = form.valueKind;
+  const binWidthProblem = ivhBinWidthOf(form).problem !== null;
+  const showBinWidth = k === "auto" || k === "continuous";
+  const showRounding = k === "auto" || k === "discrete";
+  return (
+    <>
+      <Row label={t("roiFeat.field.valueKind")} layout={layout} gap={8}>
+        <select value={k} disabled={disabled} style={{ ...input, width: 320, maxWidth: "100%" }}
+          data-testid={`${testIdPrefix}-valuekind`} title={t("roiFeat.valueKind.tooltip")}
+          onChange={(e) => setForm((f) => ({ ...f, valueKind: e.target.value as ValueKindChoice }))}>
+          {VALUE_KIND_CHOICES.map((c) => <option key={c} value={c}>{t(`roiFeat.valueKind.${c}`)}</option>)}
+        </select>
+      </Row>
+      <div style={{ color: "#5a6672", fontSize: 11, margin: "0 0 4px" }} data-testid={`${testIdPrefix}-valuekind-help`}>
+        {t(`roiFeat.valueKind.help.${k}`)}
+      </div>
+      {showBinWidth && (
+        <Row label={t("roiFeat.field.ivhBinWidth")} layout={layout} gap={8}>
+          <input value={form.ivhBinWidthText} disabled={disabled} style={{ ...input, width: 90 }} inputMode="decimal"
+            placeholder={t("roiFeat.ivhBinWidth.placeholder")} data-testid={`${testIdPrefix}-ivh-binwidth`}
+            title={t("roiFeat.ivhBinWidth.tooltip")}
+            onChange={(e) => setForm((f) => ({ ...f, ivhBinWidthText: e.target.value }))} />
+          <span style={{ color: "#5a6672", fontSize: 11 }}>{t("roiFeat.ivhBinWidth.unit")}</span>
+        </Row>
+      )}
+      {showBinWidth && binWidthProblem && (
+        <div style={warnBand} data-testid={`${testIdPrefix}-ivh-binwidth-warn`}>{t("roiFeat.ivhBinWidth.invalid")}</div>
+      )}
+      {showRounding && (
+        <Row label={t("roiFeat.field.intensityRounding")} layout={layout} gap={8}>
+          <label title={t("roiFeat.rounding.tooltip")}>
+            <input type="checkbox" checked={form.intensityRounding} disabled={disabled}
+              data-testid={`${testIdPrefix}-rounding`}
+              onChange={(e) => setForm((f) => ({ ...f, intensityRounding: e.target.checked }))} /> {t("roiFeat.rounding.label")}
+          </label>
+        </Row>
       )}
     </>
   );
@@ -85,6 +139,7 @@ export function RoiFeatureSettingsFields({
   return (
     <>
       <CalibrationField form={form} setForm={setForm} disabled={disabled} testIdPrefix={testIdPrefix} layout={layout} />
+      <ValueKindField form={form} setForm={setForm} disabled={disabled} testIdPrefix={testIdPrefix} layout={layout} />
       {row(t("roiFeat.field.discretisation"), 8, (
         <>
           <label>

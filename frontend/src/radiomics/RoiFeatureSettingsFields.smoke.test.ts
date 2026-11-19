@@ -98,3 +98,61 @@ describe("PET の校正の設定欄", () => {
     expect((q("roifeat-calibration") as HTMLSelectElement).disabled).toBe(true);
   });
 });
+
+async function typeInto(id: string, value: string) {
+  const el = q(id) as HTMLInputElement;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(el, value);
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+}
+async function click(id: string) {
+  await act(async () => { (q(id) as HTMLInputElement).click(); });
+}
+
+describe("値の種類の設定欄", () => {
+  it("既定のまま通す: 自動、ビン幅は空（既定）、丸めは off、警告は出ない", async () => {
+    await render(Full);
+    const sel = q("batch-valuekind") as HTMLSelectElement;
+    expect(sel.value).toBe("auto");
+    expect(latest.valueKind).toBe("auto");
+    expect(Array.from(sel.options).map((o) => o.value)).toEqual(["auto", "discrete", "continuous", "arbitrary", "legacy"]);
+    expect((q("batch-ivh-binwidth") as HTMLInputElement).value).toBe("");
+    expect(latest.intensityRounding).toBe(false);
+    expect((q("batch-rounding") as HTMLInputElement).checked).toBe(false);
+    expect(q("batch-ivh-binwidth-warn")).toBeNull();
+    expect(q("batch-valuekind-help")?.textContent).toContain("ADC");
+  });
+
+  it("種類を選ぶと、関係する欄だけが出入りする（離散: 丸め、連続: ビン幅、任意単位・従来: どちらも無い）", async () => {
+    await render(Full);
+    await choose("batch-valuekind", "discrete");
+    expect(latest.valueKind).toBe("discrete");
+    expect(q("batch-rounding")).not.toBeNull();
+    expect(q("batch-ivh-binwidth")).toBeNull();
+    await choose("batch-valuekind", "continuous");
+    expect(q("batch-ivh-binwidth")).not.toBeNull();
+    expect(q("batch-rounding")).toBeNull();
+    await choose("batch-valuekind", "arbitrary");
+    expect(q("batch-ivh-binwidth")).toBeNull();
+    expect(q("batch-rounding")).toBeNull();
+    await choose("batch-valuekind", "legacy");
+    expect(latest.valueKind).toBe("legacy");
+    expect(q("batch-valuekind-help")?.textContent).toContain("判定しません");
+  });
+
+  it("ビン幅と丸めの入力が値に反映され、不正なビン幅は警告が出る", async () => {
+    await render(Full);
+    await typeInto("batch-ivh-binwidth", "0.25");
+    expect(latest.ivhBinWidthText).toBe("0.25");
+    expect(q("batch-ivh-binwidth-warn")).toBeNull();
+    await typeInto("batch-ivh-binwidth", "-1");
+    expect(q("batch-ivh-binwidth-warn")).not.toBeNull();
+    await typeInto("batch-ivh-binwidth", "abc");
+    expect(q("batch-ivh-binwidth-warn")).not.toBeNull();
+    await typeInto("batch-ivh-binwidth", "");
+    expect(q("batch-ivh-binwidth-warn")).toBeNull();
+    await click("batch-rounding");
+    expect(latest.intensityRounding).toBe(true);
+  });
+});

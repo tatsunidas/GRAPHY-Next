@@ -84,18 +84,33 @@ public record RoiFeatureResult(
      * @param settingsSha256    {@code settingsProperties} の SHA-256（16 進小文字）
      */
     public record Provenance(String graphyNextVersion, String radiomicsjVersion, Instant extractedAt,
-                             String settingsSha256, String valueUnit, String calibration, boolean uncalibratedPet) {
+                             String settingsSha256, String valueUnit, String calibration, boolean uncalibratedPet,
+                             String valueKind, String valueKindBasis, List<String> valueKindFlags) {
 
         /** 校正の記録なし（従来の記録。キャッシュに残っている古い結果もこの形で読める）。 */
         public Provenance(String graphyNextVersion, String radiomicsjVersion, Instant extractedAt,
                           String settingsSha256) {
-            this(graphyNextVersion, radiomicsjVersion, extractedAt, settingsSha256, null, null, false);
+            this(graphyNextVersion, radiomicsjVersion, extractedAt, settingsSha256, null, null, false,
+                    null, null, List.of());
         }
 
-        /** 返すたびに付け直す校正の記録（同じ画素値でも、要求の校正の指定で単位の表示が変わりうる）。 */
-        Provenance withCalibration(ValueCalibration vc) {
+        /** 値の種類の記録なし。 */
+        public Provenance(String graphyNextVersion, String radiomicsjVersion, Instant extractedAt,
+                          String settingsSha256, String valueUnit, String calibration, boolean uncalibratedPet) {
+            this(graphyNextVersion, radiomicsjVersion, extractedAt, settingsSha256, valueUnit, calibration,
+                    uncalibratedPet, null, null, List.of());
+        }
+
+        /**
+         * 返すたびに付け直す記録。同じ画素値でも、要求の校正・値の種類の指定で単位や種類の表示が変わりうる。
+         * 値の種類を分類しなかった（従来）ときは、種類の欄は空。
+         */
+        Provenance withCalibration(ValueCalibration vc, ValueKind kind) {
+            boolean classified = kind != null && !ValueKind.LEGACY.equals(kind.kind());
             return new Provenance(graphyNextVersion, radiomicsjVersion, extractedAt, settingsSha256,
-                    vc.valueUnit(), vc.text(), vc.uncalibratedPet());
+                    vc.valueUnit(), vc.text(), vc.uncalibratedPet(),
+                    classified ? kind.kind() : null, classified ? kind.basis() : null,
+                    classified ? kind.flags() : List.of());
         }
     }
 
@@ -116,7 +131,12 @@ public record RoiFeatureResult(
      * 2D の計算の記録（実際に使った設定 {@code BOOL_force2D=1} を含む）。3D と設定が違うのでハッシュも別。
      */
     public record Record2d(Instant computedAt, Discretisation discretisation, Provenance provenance,
-                           String settingsProperties) {}
+                           String settingsProperties) {
+        Record2d withCalibration(ValueCalibration vc, ValueKind kind) {
+            return new Record2d(computedAt, discretisation,
+                    provenance == null ? null : provenance.withCalibration(vc, kind), settingsProperties);
+        }
+    }
 
     /**
      * 最大断面 2D（{@link MaxSectionService} が選んだ 1 枚）。
@@ -124,7 +144,11 @@ public record RoiFeatureResult(
      * @param positionMm 患者座標の法線方向の位置（mm）。スライス番号は持たない
      */
     public record Section(boolean fromCache, double positionMm, double areaMm2, long pixels, List<Row> rows,
-                          Record2d record, RoiSize roiSize) {}
+                          Record2d record, RoiSize roiSize) {
+        Section withRecord(Record2d r) {
+            return new Section(fromCache, positionMm, areaMm2, pixels, rows, r, roiSize);
+        }
+    }
 
     /** スライス 1 枚ぶんの行（前景のあるスライスだけ）。 */
     public record SliceRow(double positionMm, long pixels, double areaMm2, List<Row> rows) {}
@@ -145,7 +169,12 @@ public record RoiFeatureResult(
     public record Slices(boolean fromCache, List<SliceRow> rows, List<SliceFailure> failures, List<Row> mean,
                          List<Row> pixelWeightedMean, java.util.Map<String, Integer> slicesUsed,
                          int foregroundSlices, Record2d record, Integer smallRoiWarnPixels,
-                         List<Double> smallRoiPositionsMm) {}
+                         List<Double> smallRoiPositionsMm) {
+        Slices withRecord(Record2d r) {
+            return new Slices(fromCache, rows, failures, mean, pixelWeightedMean, slicesUsed, foregroundSlices, r,
+                    smallRoiWarnPixels, smallRoiPositionsMm);
+        }
+    }
 
     RoiFeatureResult asCached() {
         return new RoiFeatureResult(radiomicsjVersion, computedAt, true, label, rows, discretisation,
@@ -168,10 +197,10 @@ public record RoiFeatureResult(
                 provenance, settingsProperties, size, lossy, section, slices, scales);
     }
 
-    /** {@link #withPerRequest(RoiSize, boolean)} に、読み込みで掛けた校正の記録を付ける。 */
-    RoiFeatureResult withPerRequest(RoiSize size, boolean lossy, ValueCalibration vc) {
+    /** {@link #withPerRequest(RoiSize, boolean)} に、読み込みで掛けた校正と、値の種類の記録を付ける。 */
+    RoiFeatureResult withPerRequest(RoiSize size, boolean lossy, ValueCalibration vc, ValueKind kind) {
         return new RoiFeatureResult(radiomicsjVersion, computedAt, fromCache, label, rows, discretisation,
-                provenance == null ? null : provenance.withCalibration(vc), settingsProperties, size, lossy,
+                provenance == null ? null : provenance.withCalibration(vc, kind), settingsProperties, size, lossy,
                 section, slices, scales);
     }
 }

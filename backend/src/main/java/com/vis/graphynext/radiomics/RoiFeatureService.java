@@ -287,6 +287,10 @@ public class RoiFeatureService {
         RadiomicsMapEngine.LoadedVolume vol = engine.load(req.studyInstanceUid(), req.sourceSeriesUid(),
                 req.channel(), req.timePoint(), req.maskSeriesUid(), req.maskChannel(), label, loadSettings, true);
 
+        // 値の種類（離散の校正値・連続の校正値・任意単位）で IVH のモードと補間後の丸めを決める。要求ごとの設定に足す
+        // （RadiomicsJ の static には書かない。キャッシュの鍵・2D・スケールごとの設定・設定の SHA に同じ値が乗る）。
+        settings = applyValueKind(settings, kindOf(req, vol));
+
         if (inputs == null) {
             return computeUnits(req, vol, label, settings, settings, phase, progress, cancelled);
         }
@@ -310,6 +314,46 @@ public class RoiFeatureService {
         scaleProgress.scale(scales.size(), scales.size(), scales.get(scales.size() - 1).radiusMm());
         // 先頭のスケールの結果をトップレベルに置く（スケールを知らない呼び手はそれを読む）
         return entries.get(0).result().withScales(entries);
+    }
+
+    /** 要求の指定とヘッダから決めた値の種類。ヘッダだけから決まる（同じ要求・同じ画像なら何度呼んでも同じ）。 */
+    static ValueKind kindOf(RoiFeatureRequest req, RadiomicsMapEngine.LoadedVolume vol) {
+        ValueCalibration vc = vol.valueCalibration();
+        ValueKind k = ValueKind.decide(vc == null ? null : vc.facts(), vc, req.valueSpec());
+        if (ValueKind.LEGACY.equals(k.kind()) || req.settings() == null) {
+            return k;
+        }
+        for (String key : VALUE_KIND_KEYS) {
+            String v = req.settings().get(key);
+            if (v != null && !v.isBlank()) {
+                List<String> flags = new ArrayList<>(k.flags());
+                flags.add(ValueKind.FLAG_SETTING_EXPLICIT);
+                return new ValueKind(k.kind(), k.basis(), List.copyOf(flags), k.ivhMode(), k.ivhBinWidth(), k.rounding());
+            }
+        }
+        return k;
+    }
+
+    /** 値の種類が決める設定のキー。利用者が直接渡したときは、そちらを優先する。 */
+    private static final List<String> VALUE_KIND_KEYS =
+            List.of("INT_IVH_MODE", "DOUBLE_IVH_binWidth", "BOOL_interpolation_intensity_rounding");
+
+    /** 値の種類の IVH・丸めの設定を足す。利用者が同じキーを渡していれば、それを残す。分類しない（従来）なら何もしない。 */
+    static Map<String, String> applyValueKind(Map<String, String> settings, ValueKind kind) {
+        if (ValueKind.LEGACY.equals(kind.kind())) {
+            return settings;
+        }
+        Map<String, String> out = new TreeMap<>(settings);
+        if (kind.ivhMode() != null) {
+            out.putIfAbsent("INT_IVH_MODE", Integer.toString(kind.ivhMode()));
+        }
+        if (kind.ivhBinWidth() != null) {
+            out.putIfAbsent("DOUBLE_IVH_binWidth", Double.toString(kind.ivhBinWidth()));
+        }
+        if (kind.rounding()) {
+            out.putIfAbsent("BOOL_interpolation_intensity_rounding", "1");
+        }
+        return out;
     }
 
     /** 指定された 1 つの値と名札。 */
@@ -398,6 +442,15 @@ public class RoiFeatureService {
                 ? computeSection(req, vol, label, s2) : null;
         RoiFeatureResult.Slices slices = req.has(RoiFeatureRequest.RoiMode.SLICES_2D)
                 ? computeSlices(req, vol, label, s2, progress, cancelled) : null;
+        ValueCalibration vc = vol.valueCalibration();
+        ValueKind kind = kindOf(req, vol);
+        // 2D の記録にも校正と値の種類を付ける（付けないと 2D の CSV で単位・種類の列が空になる）
+        if (section != null && vc != null) {
+            section = section.withRecord(section.record().withCalibration(vc, kind));
+        }
+        if (slices != null && vc != null) {
+            slices = slices.withRecord(slices.record().withCalibration(vc, kind));
+        }
         return whole.withModes(section, slices);
     }
 
@@ -442,7 +495,8 @@ public class RoiFeatureService {
             if (hit.isPresent()) {
                 log.info("[roi-features] cache hit key={}", key.substring(0, 12));
                 RoiFeatureResult cached = hit.get().asCached();
-                return cached.withPerRequest(roiSizeOf(cached.rows(), threshold), vol.lossyCompressed(), vol.valueCalibration());
+                return cached.withPerRequest(roiSizeOf(cached.rows(), threshold), vol.lossyCompressed(), vol.valueCalibration(),
+                        kindOf(req, vol));
             }
         }
 
@@ -461,7 +515,8 @@ public class RoiFeatureService {
         if (key != null) {
             cache.saveFeatures(key, json.writeValueAsBytes(result));
         }
-        return result.withPerRequest(roiSizeOf(result.rows(), threshold), vol.lossyCompressed(), vol.valueCalibration());
+        return result.withPerRequest(roiSizeOf(result.rows(), threshold), vol.lossyCompressed(), vol.valueCalibration(),
+                        kindOf(req, vol));
     }
 
     // ───────────── 2D の単位（最大断面・スライス別） ─────────────

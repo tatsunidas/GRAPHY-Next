@@ -336,7 +336,7 @@ async function main(): Promise<void> {
       for (const r of feat.rows) {
         const direct = await apiFeatures(base, {
           studyInstanceUid: r[col("StudyInstanceUID")], sourceSeriesUid: r[col("SourceSeriesUID")], maskSeriesUid: r[col("MaskSeriesUID")],
-          maskChannel: Number(r[col("Roi_MaskChannel")]), channel: 0, timePoint: 0, settings: req.settings, recompute: true,
+          maskChannel: Number(r[col("Roi_MaskChannel")]), channel: 0, timePoint: 0, settings: req.settings, valueSpec: req.valueSpec, recompute: true,
         });
         const names = feat.header.slice(start);
         const values = r.slice(start).map(Number);
@@ -475,7 +475,7 @@ async function main(): Promise<void> {
         const fc = (n: string) => feat.rows[i][feat.header.indexOf(n)];
         const direct = await apiFeatures(base, {
           studyInstanceUid: fc("StudyInstanceUID"), sourceSeriesUid: fc("SourceSeriesUID"), maskSeriesUid: fc("MaskSeriesUID"),
-          maskChannel: Number(fc("Roi_MaskChannel")), channel: 0, timePoint: 0, settings: reqNow.settings, recompute: true,
+          maskChannel: Number(fc("Roi_MaskChannel")), channel: 0, timePoint: 0, settings: reqNow.settings, valueSpec: reqNow.valueSpec, recompute: true,
         });
         const names = feat.header.slice(featureStart(feat.header));
         const values = feat.rows[i].slice(featureStart(feat.header)).map(Number);
@@ -614,9 +614,10 @@ async function main(): Promise<void> {
     check(await bincount.inputValue() === "32" && (await page.getByTestId("batch-labels").inputValue()) === "", "開き直すと欄は既定");
     const shaDefault = await page.getByTestId("batch-spec-sha").getAttribute("title");
     check(shaDefault !== shownA, "既定の定義の SHA-256 は保存した定義と違う");
-    // 校正（PET）の項目が増えたので、新しい既定の定義は calibration=auto を含む。正準 JSON を別（Python）で組み立てた SHA-256 と同じ。
-    // 校正の項目が無い従来の定義の値 9e08bec6… は、batchSpec.test.ts が固定値で守る（読み込んでも変わらない）。
-    check(shaDefault === "f54302dd56d8504990b9668e2ce2a2724c71476b4e7ebbf31e76eb1b5f1af659", "既定の定義の SHA-256 は、校正（auto）を含む正準 JSON を独立に求めた値と同じ（実アプリ）", shaDefault);
+    // 校正（PET）と値の種類の項目が増えたので、新しい既定の定義は calibration=auto と valueKind=auto を含む。
+    // 正準 JSON のキーを足し引きして別（Python の hashlib）で求めた SHA-256 と同じ。校正も値の種類も無い従来の定義の値 9e08bec6…、
+    // 校正だけがある定義の値 f54302dd… は、batchSpec.test.ts が固定値で守る（読み込んでも変わらない）。
+    check(shaDefault === "78f5a3d4001797d079252e55cd8ff3cbcce5f2707273eade0ac5d82076994ac2", "既定の定義の SHA-256 は、校正（auto）と値の種類（auto）を含む正準 JSON を独立に求めた値と同じ（実アプリ）", shaDefault);
     await page.getByTestId("batch-spec-file").setInputFiles(path.join(OUT_DIR, savedSpec.name));
     await waitText(page, "batch-info", /読み込みました/, 20_000);
     await page.waitForTimeout(400);
@@ -782,7 +783,7 @@ async function main(): Promise<void> {
     for (const r of featR.rows) {
       const direct = await apiFeatures(base, {
         studyInstanceUid: r[cR("StudyInstanceUID")], sourceSeriesUid: r[cR("SourceSeriesUID")], maskSeriesUid: r[cR("MaskSeriesUID")],
-        maskChannel: Number(r[cR("Roi_MaskChannel")]), channel: 0, timePoint: 0, settings: reqR.settings, recompute: true,
+        maskChannel: Number(r[cR("Roi_MaskChannel")]), channel: 0, timePoint: 0, settings: reqR.settings, valueSpec: reqR.valueSpec, recompute: true,
       });
       const names = featR.header.slice(startR);
       const values = r.slice(startR).map(Number);

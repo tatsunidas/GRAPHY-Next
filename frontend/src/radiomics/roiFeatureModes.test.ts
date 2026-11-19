@@ -89,31 +89,32 @@ describe("2D の CSV", () => {
     expect(roiFeatureDataCsv(a, "c1")).toBe(roiFeatureDataCsv(b, "c1"));
   });
 
-  it("最大断面の CSV: 記録 7 列（校正の単位・記録を含む）・大きさ 6 列・最大断面 3 列・特徴。Morphology の列は無い", () => {
+  it("最大断面の CSV: 記録 9 列（校正の単位・記録と値の種類を含む）・大きさ 6 列・最大断面 3 列・特徴。Morphology の列は無い", () => {
     const [h, v] = roiFeatureSectionCsv(full().section!, "c1").trimEnd().split("\r\n");
     const cols = h.split(",");
-    expect(cols.slice(0, 7)).toEqual([
+    expect(cols.slice(0, 9)).toEqual([
       "CaseLabel", "Provenance_GraphyNextVersion", "Provenance_RadiomicsJVersion", "Provenance_ExtractedAt",
       "Provenance_SettingsSha256", "Provenance_ValueUnit", "Provenance_Calibration",
+      "Provenance_ValueKind", "Provenance_ValueKindBasis",
     ]);
-    expect(cols.slice(13, 16)).toEqual(["Section_PositionMm", "Section_AreaMm2", "Section_Pixels"]);
-    expect(cols.slice(16)).toEqual(["Shape2D_PixelSurface", MEAN]);
+    expect(cols.slice(15, 18)).toEqual(["Section_PositionMm", "Section_AreaMm2", "Section_Pixels"]);
+    expect(cols.slice(18)).toEqual(["Shape2D_PixelSurface", MEAN]);
     const vals = v.split(",");
     expect(vals.length).toBe(cols.length);
     expect(vals[0]).toBe("c1");
-    expect(Number(vals[14])).toBe(147);
+    expect(Number(vals[16])).toBe(147);
     expect(Number(vals[vals.length - 1])).toBe(200);
     // 形態の体積は 2D では無いので大きさの列は NaN、しきい値は 150
-    expect(vals[9]).toBe("NaN");
-    expect(vals[11]).toBe("150");
+    expect(vals[11]).toBe("NaN");
+    expect(vals[13]).toBe("150");
   });
 
   it("スライス別の CSV: 前景のあるスライスごとに 1 行（失敗は行にならない）", () => {
     const lines = roiFeatureSlicesCsv(full().slices!, "c1").trimEnd().split("\r\n");
     expect(lines.length).toBe(1 + 2);
     const h = lines[0].split(",");
-    expect(h.slice(7, 10)).toEqual(["Slice_PositionMm", "Slice_AreaMm2", "Slice_Pixels"]);
-    expect(lines.slice(1).map((l) => Number(l.split(",")[7]))).toEqual([0, 2]);
+    expect(h.slice(9, 12)).toEqual(["Slice_PositionMm", "Slice_AreaMm2", "Slice_Pixels"]);
+    expect(lines.slice(1).map((l) => Number(l.split(",")[9]))).toEqual([0, 2]);
     expect(lines.slice(1).map((l) => Number(l.split(",")[h.indexOf(MEAN)]))).toEqual([100, 200]);
   });
 

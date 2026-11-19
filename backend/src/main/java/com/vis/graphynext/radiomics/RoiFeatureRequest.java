@@ -33,6 +33,9 @@ import java.util.Map;
  *                      {@code bw}・{@code sul-james}・{@code sul-janma}・{@code bsa} は PET をその SUV に校正（PET 以外は断る）。
  *                      {@code none} は PET を Bq/mL のまま（利用者が明示したときだけ。結果に旗を付ける）。
  *                      校正後の画素値で離散化・範囲・特徴量を計算するので、キャッシュの鍵も変わる
+ * @param valueSpec     値の種類（{@link ValueKind}）の指定。null は従来（分類しない。IVH は RadiomicsJ の既定のまま）。
+ *                      あれば、DICOM のメタデータから離散の校正値・連続の校正値・任意単位を判定して、IVH のモードと
+ *                      補間後の丸めを切り替える（設定に同じキーを直接渡したときは、そちらを優先する）
  */
 public record RoiFeatureRequest(
         String studyInstanceUid,
@@ -50,7 +53,19 @@ public record RoiFeatureRequest(
         String scaleConversion,
         Double scaleCoefficient,
         Integer smallRoiWarnVoxels,
-        String calibration) {
+        String calibration,
+        ValueKind.Spec valueSpec) {
+
+    /** 値の種類の指定なし（従来の要求）。 */
+    public RoiFeatureRequest(String studyInstanceUid, String sourceSeriesUid, String maskSeriesUid,
+                             int maskChannel, int channel, int timePoint, Map<String, String> settings,
+                             boolean recompute, java.util.Set<RoiMode> roiModes, java.util.List<Double> scales,
+                             String scaleNotation, java.util.List<String> scaleLabels, String scaleConversion,
+                             Double scaleCoefficient, Integer smallRoiWarnVoxels, String calibration) {
+        this(studyInstanceUid, sourceSeriesUid, maskSeriesUid, maskChannel, channel, timePoint, settings,
+                recompute, roiModes, scales, scaleNotation, scaleLabels, scaleConversion, scaleCoefficient,
+                smallRoiWarnVoxels, calibration, null);
+    }
 
     /** PET の校正の指定（{@code calibration}）の値。null は {@link #CALIBRATION_AUTO}。 */
     public static final String CALIBRATION_AUTO = "auto";

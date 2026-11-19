@@ -21,9 +21,20 @@ import java.util.Locale;
  * @param scale          画素値に掛けた係数（掛けなかったときは 1）
  * @param warnings       係数の計算の警告
  * @param uncalibratedPet PET を、利用者の明示で校正せずに（Bq/mL のまま）読んだ
+ * @param facts          値の種類（{@link ValueKind}）の判定の材料。ヘッダを読まなかった経路は null
  */
 public record ValueCalibration(String valueUnit, String type, double scale, List<String> warnings,
-                               boolean uncalibratedPet) {
+                               boolean uncalibratedPet, ValueKind.Facts facts) {
+
+    /** 判定の材料なし（従来の作り方）。 */
+    public ValueCalibration(String valueUnit, String type, double scale, List<String> warnings,
+                            boolean uncalibratedPet) {
+        this(valueUnit, type, scale, warnings, uncalibratedPet, null);
+    }
+
+    ValueCalibration withFacts(ValueKind.Facts f) {
+        return new ValueCalibration(valueUnit, type, scale, warnings, uncalibratedPet, f);
+    }
 
     /** 校正を扱わない読み込み（従来の経路・PET 以外で単位が分からないとき）。 */
     public static final ValueCalibration UNSET = new ValueCalibration("", "", 1.0, List.of(), false);
@@ -61,6 +72,10 @@ public record ValueCalibration(String valueUnit, String type, double scale, List
     static ValueCalibration resolve(String requested, Attributes first, Attributes last) {
         String req = requested.trim().toLowerCase(Locale.ROOT);
         String modality = String.valueOf(first.getString(Tag.Modality, "")).trim().toUpperCase(Locale.ROOT);
+        return resolveCalibration(req, modality, first, last).withFacts(ValueKind.factsOf(first, last));
+    }
+
+    private static ValueCalibration resolveCalibration(String req, String modality, Attributes first, Attributes last) {
         boolean pet = modality.equals("PT") || modality.equals("PET");
         PetSuvCalibration.Type type = PetSuvCalibration.Type.of(req);
         if (!pet) {
