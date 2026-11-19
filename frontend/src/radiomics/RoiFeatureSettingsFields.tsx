@@ -2,9 +2,11 @@
  * Copyright (c) Visionary Imaging Services, Inc. All rights reserved.
  * Author: Tatsuaki Kobayashi
  */
-import type { CSSProperties, ReactNode } from "react";
+import { useState, type CSSProperties, type ReactNode } from "react";
 import { NumberField } from "../hooks/NumberField";
 import { useI18n } from "../i18n/i18n";
+import { advancedToText, managedKeys, parseAdvanced } from "./advancedSettings";
+import { useSettingsSchema } from "./useSettingsSchema";
 import {
   CALIBRATION_CHOICES, ROI_FEATURE_FAMILIES, VALUE_KIND_CHOICES, applyScale36, applySixStatistics, ivhBinWidthOf, isScale36,
   isSixStatistics, rangeBounds,
@@ -39,6 +41,75 @@ export function CalibrationField({ form, setForm, disabled, testIdPrefix, layout
         <div style={warnBand} data-testid={`${testIdPrefix}-calibration-none-warn`}>{t("roiFeat.calibration.noneWarn")}</div>
       )}
     </>
+  );
+}
+
+/**
+ * 詳細設定（上級者向け）: RadiomicsJ の設定キーを `KEY=値` で 1 行 1 項目に書く。他の欄が決めるキーは書けない（理由を出す）。
+ * RadiomicsJ の既定値の一覧（backend から）を見て、行を追加できる。
+ */
+export function AdvancedSettingsField({ form, setForm, disabled, testIdPrefix }: {
+  form: RoiFeatureForm;
+  setForm: (f: (prev: RoiFeatureForm) => RoiFeatureForm) => void;
+  disabled: boolean;
+  testIdPrefix: "roifeat" | "batch";
+}) {
+  const { t } = useI18n();
+  const p = testIdPrefix;
+  const schema = useSettingsSchema();
+  const [filter, setFilter] = useState("");
+  // 既定値の一覧は、開いたときだけ描く（キーが 40 項目ほど並ぶので、閉じている間は DOM に出さない）
+  const [defaultsOpen, setDefaultsOpen] = useState(false);
+  const parsed = parseAdvanced(form.advancedText, schema);
+  const managed = managedKeys();
+  const shown = (schema ?? []).filter((e) => !managed.has(e.key) && e.key.toLowerCase().includes(filter.trim().toLowerCase())).slice(0, 40);
+  const message = (e: (typeof parsed.errors)[number]): string =>
+    t(`roiFeat.advanced.err.${e.code}`, {
+      line: String(e.line), key: e.key, type: e.detail ?? "",
+      field: e.code === "managed" ? t(`roiFeat.advanced.group.${e.detail}`) : "",
+    });
+  const append = (key: string, v: string | null) =>
+    setForm((f) => {
+      const cur = parseAdvanced(f.advancedText).entries;
+      if (key in cur) return f;
+      return { ...f, advancedText: advancedToText({ ...cur, [key]: v ?? "" }) };
+    });
+  return (
+    <details open={form.advancedText.trim() !== ""} style={{ marginTop: 8 }} data-testid={`${p}-advanced`}>
+      <summary style={{ cursor: "pointer", color: "#5a6672" }}>{t("roiFeat.advanced.title")}</summary>
+      <div style={{ color: "#5a6672", fontSize: 11, margin: "4px 0" }} data-testid={`${p}-advanced-help`}>{t("roiFeat.advanced.help")}</div>
+      <textarea value={form.advancedText} disabled={disabled} rows={4} spellCheck={false}
+        placeholder={t("roiFeat.advanced.placeholder")} data-testid={`${p}-advanced-text`}
+        style={{ ...input, width: "100%", fontFamily: "monospace", resize: "vertical" }}
+        onChange={(e) => setForm((f) => ({ ...f, advancedText: e.target.value }))} />
+      {parsed.errors.length > 0 && (
+        <ul style={{ ...warnBand, margin: "4px 0", paddingLeft: 22, color: "#b00020", background: "#fdecee", borderColor: "#e6a4ad" }}
+          data-testid={`${p}-advanced-errors`}>
+          {parsed.errors.map((e, i) => <li key={i}>{message(e)}</li>)}
+        </ul>
+      )}
+      <details style={{ marginTop: 4 }} data-testid={`${p}-advanced-defaults`}
+        onToggle={(e) => setDefaultsOpen((e.currentTarget as HTMLDetailsElement).open)}>
+        <summary style={{ cursor: "pointer", color: "#5a6672", fontSize: 11 }}>{t("roiFeat.advanced.defaults.title")}</summary>
+        {defaultsOpen && !schema && <div style={{ color: "#7a4b00", fontSize: 11 }}>{t("roiFeat.advanced.defaults.unavailable")}</div>}
+        {defaultsOpen && schema && (
+          <>
+            <input value={filter} onChange={(e) => setFilter(e.target.value)} placeholder={t("roiFeat.advanced.defaults.filter")}
+              data-testid={`${p}-advanced-filter`} style={{ ...input, width: 220, margin: "4px 0" }} />
+            <div style={{ maxHeight: 160, overflowY: "auto", fontSize: 11, fontFamily: "monospace" }}>
+              {shown.map((e) => (
+                <div key={e.key} style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                  <button type="button" disabled={disabled} style={{ fontSize: 11 }} data-testid={`${p}-advanced-add-${e.key}`}
+                    onClick={() => append(e.key, e.defaultValue)}>{t("roiFeat.advanced.defaults.add")}</button>
+                  <span>{e.key}</span>
+                  <span style={{ color: "#6b7785" }}>= {e.defaultValue === null || e.defaultValue === "" ? t("roiFeat.advanced.defaults.none") : e.defaultValue}</span>
+                </div>
+              ))}
+            </div>
+          </>
+        )}
+      </details>
+    </details>
   );
 }
 
@@ -219,6 +290,7 @@ export function RoiFeatureSettingsFields({
           </label>
         ))}
       </div>
+      <AdvancedSettingsField form={form} setForm={setForm} disabled={disabled} testIdPrefix={testIdPrefix} />
     </>
   );
 }

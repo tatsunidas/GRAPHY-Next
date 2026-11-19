@@ -197,7 +197,7 @@ const ID_NOTES: Record<string, [family: string, feature: string, note: string]> 
   Roi_SegmentNumber: ["Roi", "SegmentNumber", ""],
   Roi_SegmentLabel: ["Roi", "SegmentLabel", ""],
   Roi_MaskChannel: ["Roi", "MaskChannel", "rank-of-segment-with-foreground"],
-  RowStatus: ["Row", "Status", "DONE|FAILED|NOT_RUN|CANCELLED"],
+  RowStatus: ["Row", "Status", "DONE|FAILED|QC_SKIPPED|NOT_RUN|CANCELLED"],
   RowFailureKind: ["Row", "FailureKind", "INPUT|ENGINE|ENVIRONMENT"],
   RowError: ["Row", "Error", ""],
   Provenance_QcFlags: ["Provenance", "QcFlags", "SMALL_ROI;LOSSY_COMPRESSION"],

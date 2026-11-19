@@ -10,6 +10,7 @@
  * マップ用で、ここでは読まない。
  */
 
+import { parseAdvanced } from "./advancedSettings";
 import { DEFAULT_SCALES, parseScaleLabels, parseScaleSpec, type ScaleNotation } from "./scaleSpec";
 
 export const SCALE_CONVERSIONS = ["SQRT_D", "IDENTITY", "COEFFICIENT"] as const;
@@ -102,6 +103,8 @@ export type ValueKindChoice = (typeof VALUE_KIND_CHOICES)[number];
 export interface RoiFeatureForm {
   /** PET の校正。範囲・離散化・特徴量は、校正後の値に対して働く。 */
   calibration: CalibrationChoice;
+  /** 詳細設定（上級者向け）。RadiomicsJ の設定キーを `KEY=値` で 1 行 1 項目。他の欄が決めるキーは書けない（advancedSettings.ts）。 */
+  advancedText: string;
   /** 値の種類。IVH のモードと補間後の丸めを決める。 */
   valueKind: ValueKindChoice;
   /** 連続の校正値の IVH のビン幅（強度の単位）。空欄は既定（PET の SUV は 0.10。他の単位は未設定）。 */
@@ -159,13 +162,16 @@ export function splitFilteredFamily(family: string): { sigma: string; base: stri
 export function defaultRoiFeatureForm(): RoiFeatureForm {
   return {
     calibration: "auto",
+    advancedText: "",
     valueKind: "auto",
     ivhBinWidthText: "",
     intensityRounding: false,
     fixedBinNumber: true,
     binCount: 32,
     binWidth: 25,
-    resampleMm: null,
+    // 等方 1 mm（スライス厚が混在するアルバムで、スライス厚の違いがテクスチャに乗るのを避ける。手入力・「なし」も選べる）。
+    // 項目の無い従来の定義・VOI 統計の定義は、従来どおりリサンプリングなしで読む（batchSpec.ts）。
+    resampleMm: 1,
     rangeMinText: "",
     rangeMaxText: "",
     logOn: false,
@@ -242,7 +248,9 @@ export const anyFamilyOn = (form: RoiFeatureForm) => ROI_FEATURE_FAMILIES.some((
  * マスクの値 `INT_label` は backend が必ず上書きするので送らない。
  */
 export function roiFeatureSettings(form: RoiFeatureForm): Record<string, string> {
+  // 詳細設定（検査を通った項目だけ。他の欄のキーはここに来ない）を先に置き、他の欄の設定で上書きする（画面の欄が優先）
   const s: Record<string, string> = {
+    ...parseAdvanced(form.advancedText).entries,
     BOOL_USE_FixedBinNumber: form.fixedBinNumber ? "1" : "0",
   };
   if (form.fixedBinNumber) s.INT_binCount = String(form.binCount);

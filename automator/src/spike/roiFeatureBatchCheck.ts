@@ -283,6 +283,7 @@ async function main(): Promise<void> {
     check(nCols >= 150, "試行で 150 列以上の特徴量を計算", trialText);
     check(((await page.evaluate("window.__roiDownloads.length")) as number) === 0, "試行ではファイルを書かない");
     check(posted.length === 1 && (posted[0].pairs as unknown[]).length === 1, "試行は 1 組だけ送る", posted[0]?.pairs);
+    check((posted[0].settings as Record<string, string>).DOUBLEARRAY_resamplingFactorXYZ === "1,1,1", "既定のまま送った設定は、等方 1 mm のリサンプリング", posted[0]?.settings);
 
     console.log("\n[4] 要確認の組を選んで一括実行 → 書き出し");
     await page.getByTestId(`batch-source-${swapped}`).selectOption(trueSource);
@@ -313,13 +314,15 @@ async function main(): Promise<void> {
       "5 ファイルの名前（表・定義表・設定・定義・被験者の対応表）", dl.map((f) => f.name));
     check(!!features && !!subjectsPrivate, "表と被験者の対応表がある");
     check(!dl.some((f) => f.text.includes(PATIENT_NAME)), "どのファイルにも患者名が無い");
-    check(!dl.filter((f) => f !== subjectsPrivate).some((f) => f.text.includes("SYNTHBATCH")), "患者 ID は被験者の対応表以外のファイルに入らない");
+    // 患者 ID は既定で表にも入る（利用者の要望。画面に警告を常に出す）。定義表・設定・定義には入らない
+    check(!dl.filter((f) => f !== subjectsPrivate && f !== features).some((f) => f.text.includes("SYNTHBATCH")), "患者 ID は、被験者の対応表と結果の表だけに入る（定義表・設定・定義には入らない）");
+    check(!!features && features.text.includes("SYNTHBATCH"), "既定では、結果の表にも患者 ID が入る");
     if (features && subjectsPrivate) {
       const feat = parseFeatures(features.text);
       const col = (n: string) => feat.header.indexOf(n);
       check(feat.rows.length === 6, "表は 6 行（送った組の数）", feat.rows.length);
       check(features.head.join() !== "239,187,191", "BOM なし");
-      check(!feat.header.includes("PatientID"), "既定では PatientID の列が無い");
+      check(feat.header[1] === "PatientID" && feat.rows.every((r) => r[1].startsWith("SYNTHBATCH")), "既定では PatientID の列が表の 2 列目にある", feat.header.slice(0, 3));
       check(feat.rows.every((r) => r[col("RowStatus")] === "DONE"), "状態はすべて DONE");
       check(feat.rows.map((r) => r[col("SubjectCode")]).join() === "S001,S001,S001,S001,S002,S002",
         "SubjectCode: 患者 A の 4 組が S001、患者 B の 2 組が S002", feat.rows.map((r) => r[col("SubjectCode")]));
@@ -397,12 +400,18 @@ async function main(): Promise<void> {
     const put = (v: string) => api(base, "/api/settings", {
       method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ "texture.SmallRoiWarnVoxels": v }),
     });
-    const reopen = async () => {
+    // 既定は等方 1 mm のリサンプリング。この検査の QC の予測値（ROI のボクセル数）は元の格子のものなので、開き直したら「なし」にする
+    // （既定のままの経路は、最初の実行と、既定の定義の SHA-256 の確認で通す）
+    const reopen = async (keepDefaults = false) => {
       await page.getByTestId("batch-close").click();
       await page.waitForTimeout(500);
       await btn.click();
       await page.getByTestId("batch-row-5").waitFor({ state: "visible", timeout: 30_000 });
       await page.waitForTimeout(1500);
+      if (!keepDefaults) {
+        await page.getByTestId("batch-resampling").selectOption("none");
+        await page.waitForTimeout(300);
+      }
     };
     const bincount = page.getByTestId("batch-bincount").locator("input");
     const radio = (id: string, n: number) => page.getByTestId(id).locator('input[type="radio"]').nth(n);
@@ -610,14 +619,19 @@ async function main(): Promise<void> {
     check(featA.rows.length === 2 && /^[0-9a-f]{64}$/.test(provA), "手で設定して実行: 2 行・設定の SHA-256 が出る", provA);
 
     // 開き直す → 既定に戻る → 定義を読み込む
-    await reopen();
+    await reopen(true);
     check(await bincount.inputValue() === "32" && (await page.getByTestId("batch-labels").inputValue()) === "", "開き直すと欄は既定");
+    check(await page.getByTestId("batch-resampling").inputValue() === "iso" && await page.getByTestId("batch-resample-mm").locator("input").inputValue() === "1",
+      "既定のリサンプリングは等方 1 mm");
+    check(await page.getByTestId("batch-out-patientid").isChecked() && await page.getByTestId("batch-out-patientid-warn").isVisible(),
+      "既定では「患者 ID を表に含める」がオンで、警告が見える");
+    await page.screenshot({ path: path.join(OUT_DIR, "10-defaults.png"), fullPage: true });
     const shaDefault = await page.getByTestId("batch-spec-sha").getAttribute("title");
     check(shaDefault !== shownA, "既定の定義の SHA-256 は保存した定義と違う");
     // 校正（PET）と値の種類の項目が増えたので、新しい既定の定義は calibration=auto と valueKind=auto を含む。
     // 正準 JSON のキーを足し引きして別（Python の hashlib）で求めた SHA-256 と同じ。校正も値の種類も無い従来の定義の値 9e08bec6…、
     // 校正だけがある定義の値 f54302dd… は、batchSpec.test.ts が固定値で守る（読み込んでも変わらない）。
-    check(shaDefault === "78f5a3d4001797d079252e55cd8ff3cbcce5f2707273eade0ac5d82076994ac2", "既定の定義の SHA-256 は、校正（auto）と値の種類（auto）を含む正準 JSON を独立に求めた値と同じ（実アプリ）", shaDefault);
+    check(shaDefault === "f0f8273683f4304a247ca1ccad7d54687be5fa5ab313c4ce2613feb1776de81c", "既定の定義の SHA-256 は、校正（auto）・値の種類（auto）・リサンプリング 1 mm を含む正準 JSON を独立に求めた値と同じ（実アプリ）", shaDefault);
     await page.getByTestId("batch-spec-file").setInputFiles(path.join(OUT_DIR, savedSpec.name));
     await waitText(page, "batch-info", /読み込みました/, 20_000);
     await page.waitForTimeout(400);

@@ -60,7 +60,7 @@ function fakeApi(behaviour: (submitIndex: number, req: BatchRequest) => "ok" | "
       index, pair: p, state: "DONE", failureKind: null, error: null, fromCache: false, elapsedMs: 1, qcFlags: [],
     }));
     return {
-      jobId: id, state, elapsedMs: 1, total: prs.length, done: prs.length, failed: 0, skipped: 0, notRun: 0, cancelled: 0,
+      jobId: id, state, elapsedMs: 1, total: prs.length, done: prs.length, failed: 0, skipped: 0, notRun: 0, cancelled: 0, qcSkipped: 0,
       stopReason, stopKind, stopIndex: null, pairs: prs,
     };
   };

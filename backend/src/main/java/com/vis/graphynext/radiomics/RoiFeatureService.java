@@ -316,6 +316,25 @@ public class RoiFeatureService {
         return entries.get(0).result().withScales(entries);
     }
 
+    /** 画素間隔（PixelSpacing）が DICOM に無く、面内が pixel のまま読み込まれた。 */
+    public static final String FLAG_UNCALIBRATED_SPACING = "UNCALIBRATED_SPACING";
+
+    /** 面内の画素間隔があるか。無い画像のリサンプリングの目標値は pixel として読まれ、体積は mm³ にならない。 */
+    static boolean spacingCalibrated(RadiomicsMapEngine.LoadedVolume vol) {
+        return vol.pixelSpacingRow() > 0 && vol.pixelSpacingCol() > 0;
+    }
+
+    /** 読み込みが付ける記録の旗（値の種類とは別）。 */
+    static List<String> loadFlagsOf(RadiomicsMapEngine.LoadedVolume vol) {
+        return spacingCalibrated(vol) ? List.of() : List.of(FLAG_UNCALIBRATED_SPACING);
+    }
+
+    private RoiFeatureResult.RoiSize sizeOf(List<RoiFeatureResult.Row> rows, Integer threshold,
+                                            RadiomicsMapEngine.LoadedVolume vol) {
+        RoiFeatureResult.RoiSize size = roiSizeOf(rows, threshold);
+        return spacingCalibrated(vol) ? size : size.withoutVolume();
+    }
+
     /** 要求の指定とヘッダから決めた値の種類。ヘッダだけから決まる（同じ要求・同じ画像なら何度呼んでも同じ）。 */
     static ValueKind kindOf(RoiFeatureRequest req, RadiomicsMapEngine.LoadedVolume vol) {
         ValueCalibration vc = vol.valueCalibration();
@@ -446,10 +465,10 @@ public class RoiFeatureService {
         ValueKind kind = kindOf(req, vol);
         // 2D の記録にも校正と値の種類を付ける（付けないと 2D の CSV で単位・種類の列が空になる）
         if (section != null && vc != null) {
-            section = section.withRecord(section.record().withCalibration(vc, kind));
+            section = section.withRecord(section.record().withCalibration(vc, kind, loadFlagsOf(vol)));
         }
         if (slices != null && vc != null) {
-            slices = slices.withRecord(slices.record().withCalibration(vc, kind));
+            slices = slices.withRecord(slices.record().withCalibration(vc, kind, loadFlagsOf(vol)));
         }
         return whole.withModes(section, slices);
     }
@@ -495,8 +514,8 @@ public class RoiFeatureService {
             if (hit.isPresent()) {
                 log.info("[roi-features] cache hit key={}", key.substring(0, 12));
                 RoiFeatureResult cached = hit.get().asCached();
-                return cached.withPerRequest(roiSizeOf(cached.rows(), threshold), vol.lossyCompressed(), vol.valueCalibration(),
-                        kindOf(req, vol));
+                return cached.withPerRequest(sizeOf(cached.rows(), threshold, vol), vol.lossyCompressed(),
+                        vol.valueCalibration(), kindOf(req, vol), loadFlagsOf(vol));
             }
         }
 
@@ -515,8 +534,8 @@ public class RoiFeatureService {
         if (key != null) {
             cache.saveFeatures(key, json.writeValueAsBytes(result));
         }
-        return result.withPerRequest(roiSizeOf(result.rows(), threshold), vol.lossyCompressed(), vol.valueCalibration(),
-                        kindOf(req, vol));
+        return result.withPerRequest(sizeOf(result.rows(), threshold, vol), vol.lossyCompressed(),
+                vol.valueCalibration(), kindOf(req, vol), loadFlagsOf(vol));
     }
 
     // ───────────── 2D の単位（最大断面・スライス別） ─────────────

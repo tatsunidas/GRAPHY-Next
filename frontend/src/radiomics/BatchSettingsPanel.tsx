@@ -44,16 +44,21 @@ export function BatchSettingsPanel({
             </div>
             <div style={row} data-testid="batch-qc">
               <span style={label}>{t("roiFeat.batch.qc.title")}</span>
-              <span>{t("roiFeat.batch.qc.smallRoi")}</span>
-              <QcRadios name="qc-small" value={qc.smallRoi} disabled={disabled} testId="batch-qc-small"
-                onChange={(v) => setQc({ ...qc, smallRoi: v })} />
-              {/* 基準値は「小さい ROI」の値なので、その項目の隣に置く（非可逆圧縮より前） */}
-              <span style={{ marginLeft: 4 }}>{t("roiFeat.batch.qc.voxels")}</span>
-              <VoxelsField value={qc.smallRoiVoxels} disabled={disabled} onChange={(v) => setQc({ ...qc, smallRoiVoxels: v })} />
-              <span>{t("roiFeat.batch.qc.voxelsUnit")}</span>
-              <span style={{ marginLeft: 16 }}>{t("roiFeat.batch.qc.lossy")}</span>
-              <QcRadios name="qc-lossy" value={qc.lossy} disabled={disabled} testId="batch-qc-lossy"
-                onChange={(v) => setQc({ ...qc, lossy: v })} />
+              {/* 項目ごとのまとまりは折り返さない（幅が足りないときは、まとまりの間で折り返す） */}
+              <span style={qcGroup}>
+                <span>{t("roiFeat.batch.qc.smallRoi")}</span>
+                <QcRadios name="qc-small" value={qc.smallRoi} disabled={disabled} testId="batch-qc-small"
+                  onChange={(v) => setQc({ ...qc, smallRoi: v })} />
+                {/* 基準値は「小さい ROI」の値なので、その項目の隣に置く（非可逆圧縮より前） */}
+                <span style={{ marginLeft: 4 }}>{t("roiFeat.batch.qc.voxels")}</span>
+                <VoxelsField value={qc.smallRoiVoxels} disabled={disabled} onChange={(v) => setQc({ ...qc, smallRoiVoxels: v })} />
+                <span>{t("roiFeat.batch.qc.voxelsUnit")}</span>
+              </span>
+              <span style={qcGroup}>
+                <span>{t("roiFeat.batch.qc.lossy")}</span>
+                <QcRadios name="qc-lossy" value={qc.lossy} disabled={disabled} testId="batch-qc-lossy"
+                  onChange={(v) => setQc({ ...qc, lossy: v })} />
+              </span>
             </div>
             <div style={hint}>{t("roiFeat.batch.qc.help")} {t("roiFeat.batch.qc.voxelsHelp")}</div>
           </>
@@ -124,10 +129,13 @@ function QcRadios({ name, value, disabled, onChange, testId }: {
         onChange={() => onChange("FLAG")} /> {t("roiFeat.batch.qc.flag")}</label>
       <label><input type="radio" name={name} checked={value === "STOP"} disabled={disabled}
         onChange={() => onChange("STOP")} /> {t("roiFeat.batch.qc.stop")}</label>
+      <label title={t("roiFeat.batch.qc.skipTip")}><input type="radio" name={name} checked={value === "SKIP"} disabled={disabled}
+        onChange={() => onChange("SKIP")} /> {t("roiFeat.batch.qc.skip")}</label>
     </span>
   );
 }
 
+const qcGroup: React.CSSProperties = { display: "inline-flex", alignItems: "center", gap: 8, whiteSpace: "nowrap" };
 const hint: React.CSSProperties = { color: "#6b7785", fontSize: 11 };
 const row: React.CSSProperties = { display: "flex", alignItems: "center", gap: 10, padding: "3px 0", flexWrap: "wrap" };
 const label: React.CSSProperties = { color: "#5a6672", minWidth: 110 };

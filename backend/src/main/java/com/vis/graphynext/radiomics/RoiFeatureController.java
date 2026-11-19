@@ -53,6 +53,16 @@ public class RoiFeatureController {
         }
     }
 
+    /** RadiomicsJ の設定キーの一覧と既定値（一括抽出の「詳細設定」の入力検査用）。 */
+    @GetMapping("/settings-schema")
+    public java.util.List<RadiomicsSettingsSchema.Entry> settingsSchema() {
+        try {
+            return RadiomicsSettingsSchema.entries();
+        } catch (Exception e) {
+            throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "設定の一覧を作れません: " + e.getMessage(), e);
+        }
+    }
+
     @GetMapping("/jobs/{jobId}")
     public RoiFeatureJobService.Status get(@PathVariable String jobId) {
         RoiFeatureJobService.Status s = jobs.get(jobId);

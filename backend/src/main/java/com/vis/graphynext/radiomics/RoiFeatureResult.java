@@ -85,7 +85,7 @@ public record RoiFeatureResult(
      */
     public record Provenance(String graphyNextVersion, String radiomicsjVersion, Instant extractedAt,
                              String settingsSha256, String valueUnit, String calibration, boolean uncalibratedPet,
-                             String valueKind, String valueKindBasis, List<String> valueKindFlags) {
+                             String valueKind, String valueKindBasis, List<String> recordFlags) {
 
         /** 校正の記録なし（従来の記録。キャッシュに残っている古い結果もこの形で読める）。 */
         public Provenance(String graphyNextVersion, String radiomicsjVersion, Instant extractedAt,
@@ -106,11 +106,17 @@ public record RoiFeatureResult(
          * 値の種類を分類しなかった（従来）ときは、種類の欄は空。
          */
         Provenance withCalibration(ValueCalibration vc, ValueKind kind) {
+            return withCalibration(vc, kind, List.of());
+        }
+
+        /** {@code extraFlags}: 値の種類とは別の、この読み込みの旗（例: 画素間隔なし）。 */
+        Provenance withCalibration(ValueCalibration vc, ValueKind kind, List<String> extraFlags) {
             boolean classified = kind != null && !ValueKind.LEGACY.equals(kind.kind());
+            List<String> flags = new java.util.ArrayList<>(classified ? kind.flags() : List.of());
+            flags.addAll(extraFlags);
             return new Provenance(graphyNextVersion, radiomicsjVersion, extractedAt, settingsSha256,
                     vc.valueUnit(), vc.text(), vc.uncalibratedPet(),
-                    classified ? kind.kind() : null, classified ? kind.basis() : null,
-                    classified ? kind.flags() : List.of());
+                    classified ? kind.kind() : null, classified ? kind.basis() : null, List.copyOf(flags));
         }
     }
 
@@ -125,16 +131,21 @@ public record RoiFeatureResult(
      * @param smallRoi           {@code intensityVoxels < smallRoiWarnVoxels}。基準値が未設定なら null
      */
     public record RoiSize(Long initialVoxels, Long intensityVoxels, Long morphVoxels, Double volumeMm3,
-                          Integer smallRoiWarnVoxels, Boolean smallRoi) {}
+                          Integer smallRoiWarnVoxels, Boolean smallRoi) {
+        /** 画素間隔が無い画像では、体積を mm³ として出さない（単位の取り違えを避ける）。 */
+        RoiSize withoutVolume() {
+            return new RoiSize(initialVoxels, intensityVoxels, morphVoxels, null, smallRoiWarnVoxels, smallRoi);
+        }
+    }
 
     /**
      * 2D の計算の記録（実際に使った設定 {@code BOOL_force2D=1} を含む）。3D と設定が違うのでハッシュも別。
      */
     public record Record2d(Instant computedAt, Discretisation discretisation, Provenance provenance,
                            String settingsProperties) {
-        Record2d withCalibration(ValueCalibration vc, ValueKind kind) {
+        Record2d withCalibration(ValueCalibration vc, ValueKind kind, List<String> extraFlags) {
             return new Record2d(computedAt, discretisation,
-                    provenance == null ? null : provenance.withCalibration(vc, kind), settingsProperties);
+                    provenance == null ? null : provenance.withCalibration(vc, kind, extraFlags), settingsProperties);
         }
     }
 
@@ -197,10 +208,11 @@ public record RoiFeatureResult(
                 provenance, settingsProperties, size, lossy, section, slices, scales);
     }
 
-    /** {@link #withPerRequest(RoiSize, boolean)} に、読み込みで掛けた校正と、値の種類の記録を付ける。 */
-    RoiFeatureResult withPerRequest(RoiSize size, boolean lossy, ValueCalibration vc, ValueKind kind) {
+    /** {@link #withPerRequest(RoiSize, boolean)} に、読み込みで掛けた校正と、値の種類・画素間隔の記録を付ける。 */
+    RoiFeatureResult withPerRequest(RoiSize size, boolean lossy, ValueCalibration vc, ValueKind kind,
+                                    List<String> extraFlags) {
         return new RoiFeatureResult(radiomicsjVersion, computedAt, fromCache, label, rows, discretisation,
-                provenance == null ? null : provenance.withCalibration(vc, kind), settingsProperties, size, lossy,
-                section, slices, scales);
+                provenance == null ? null : provenance.withCalibration(vc, kind, extraFlags), settingsProperties,
+                size, lossy, section, slices, scales);
     }
 }

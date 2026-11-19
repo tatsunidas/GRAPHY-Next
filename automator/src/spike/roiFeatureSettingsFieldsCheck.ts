@@ -8,8 +8,8 @@
  *   SETTINGS_FIELDS_DUMP=<出力先.json> を付けると、比較せずに今の画面の一覧を書き出す（期待値を作り直すとき用）。
  *
  * 取る状態（それぞれ testid の並びと、設定欄の表示文字列の行）:
- *   screen-default / screen-iso / screen-radius（ROI 特徴量の画面。リサンプリングを等方に、フィルタを半径指定に）
- *   batch-default / batch-iso（一括抽出ダイアログの設定欄）
+ *   screen-default / screen-none / screen-radius（ROI 特徴量の画面。既定は等方 1 mm のリサンプリング。「なし」に、フィルタを半径指定に）
+ *   batch-default / batch-none（一括抽出ダイアログの設定欄。既定は等方 1 mm、「なし」に変えた状態）
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -75,9 +75,9 @@ async function main(): Promise<void> {
     await page.getByTestId("roifeat-bincount").waitFor({ state: "visible", timeout: 20_000 });
     got["screen-default"] = await snapshot(page, "body");
     await page.screenshot({ path: path.join(OUT_DIR, "01-screen-default.png"), fullPage: true });
-    await page.getByTestId("roifeat-resampling").selectOption("iso");
+    await page.getByTestId("roifeat-resampling").selectOption("none");
     await page.waitForTimeout(300);
-    got["screen-iso"] = await snapshot(page, "body");
+    got["screen-none"] = await snapshot(page, "body");
     await page.getByTestId("roifeat-filter-radius").check();
     await page.waitForTimeout(300);
     got["screen-radius"] = await snapshot(page, "body");
@@ -99,11 +99,17 @@ async function main(): Promise<void> {
     await page.getByTestId("batch-settings").waitFor({ state: "visible", timeout: 30_000 });
     got["batch-default"] = await snapshot(page, '[data-testid="batch-settings"]');
     await page.screenshot({ path: path.join(OUT_DIR, "03-batch-default.png"), fullPage: true });
-    await page.getByTestId("batch-resampling").selectOption("iso");
+    await page.getByTestId("batch-resampling").selectOption("none");
     await page.waitForTimeout(300);
-    got["batch-iso"] = await snapshot(page, '[data-testid="batch-settings"]');
-    await page.screenshot({ path: path.join(OUT_DIR, "04-batch-iso.png"), fullPage: true });
+    got["batch-none"] = await snapshot(page, '[data-testid="batch-settings"]');
+    await page.screenshot({ path: path.join(OUT_DIR, "04-batch-none.png"), fullPage: true });
 
+    // 詳細設定（上級者向け）: 他の欄のキー・形の誤りを書くと、理由つきのエラーが出る（撮影して見る。スナップショットの比較には含めない）
+    await page.getByTestId("batch-advanced").locator("summary").first().click();
+    await page.getByTestId("batch-advanced-text").fill("INT_deltaGLCM=2\nINT_binCount=5\nbad line\nBOGUS_KEY=1");
+    await page.waitForTimeout(500);
+    await page.screenshot({ path: path.join(OUT_DIR, "05-batch-advanced-errors.png"), fullPage: true });
+    check(await page.getByTestId("batch-advanced-errors").isVisible(), "詳細設定に誤りを書くと、エラーの一覧が出る");
     const dump = process.env.SETTINGS_FIELDS_DUMP;
     if (dump) {
       fs.writeFileSync(dump, JSON.stringify(got, null, 2) + "\n");

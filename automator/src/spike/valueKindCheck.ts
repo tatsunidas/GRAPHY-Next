@@ -90,7 +90,7 @@ interface Row { column: string; value: number | null }
 interface PairResult {
   pair: Pair;
   result: {
-    rows: Row[]; provenance: { valueUnit?: string; calibration?: string; valueKind?: string | null; valueKindBasis?: string | null; valueKindFlags?: string[] };
+    rows: Row[]; provenance: { valueUnit?: string; calibration?: string; valueKind?: string | null; valueKindBasis?: string | null; recordFlags?: string[] };
     discretisation: { ivhMode: number; ivhBinWidth: number };
   };
 }

@@ -2401,8 +2401,8 @@ export interface RoiFeatureProvenance {
   valueKind?: string | null;
   /** 値の種類の判定の根拠（例 `RescaleType=HU;ImageType=ORIGINAL;rescale=integer`）。 */
   valueKindBasis?: string | null;
-  /** 値の種類の QC の旗（VALUEKIND_OVERRIDDEN・IVH_BINWIDTH_UNSET・ROUNDING_IGNORED・IVH_SETTING_EXPLICIT）。 */
-  valueKindFlags?: string[];
+  /** 値の種類・画素間隔の記録の旗（VALUEKIND_OVERRIDDEN・IVH_BINWIDTH_UNSET・ROUNDING_IGNORED・IVH_SETTING_EXPLICIT・UNCALIBRATED_SPACING）。 */
+  recordFlags?: string[];
 }
 
 export type RoiFeatureJobState = "QUEUED" | "LOADING" | "EXTRACTING" | "DONE" | "FAILED" | "CANCELLED";
@@ -2425,6 +2425,11 @@ export interface RoiFeatureJobStatus {
 
 export const submitRoiFeatureJob = (req: RoiFeatureRequest) =>
   httpSend<RoiFeatureJobStatus>("/api/radiomics/features/jobs", "POST", req);
+
+/** RadiomicsJ の設定キーの一覧と既定値（一括抽出・ROI 特徴量の「詳細設定」の入力検査用）。 */
+export const getRoiFeatureSettingsSchema = () =>
+  httpGet<{ key: string; type: "boolean" | "int" | "long" | "double" | "array" | "string"; defaultValue: string | null }[]>(
+    "/api/radiomics/features/settings-schema");
 
 export const getRoiFeatureJob = (jobId: string) =>
   httpGet<RoiFeatureJobStatus>(`/api/radiomics/features/jobs/${encodeURIComponent(jobId)}`);

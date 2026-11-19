@@ -67,6 +67,8 @@ import {
   type LogPadding,
   type RoiFeatureForm,
 } from "./roiFeatureSettings";
+import { parseAdvanced } from "./advancedSettings";
+import { useSettingsSchema } from "./useSettingsSchema";
 
 interface RoiFeatureContext {
   studyInstanceUid: string;
@@ -392,7 +394,9 @@ export function RoiFeatureScreen() {
     return t("roiFeat.summary.settings", { disc, resampling: rs, filter, on, total: ROI_FEATURE_FAMILIES.length });
   }, [result, t]);
 
-  const rangeProblem = rangeBounds(form).problem;
+  const settingsSchema = useSettingsSchema();
+  // 範囲の入力か、詳細設定にエラーがある間は計算しない（エラーの行を黙って捨てた設定で計算しない）
+  const rangeProblem = rangeBounds(form).problem ?? (parseAdvanced(form.advancedText, settingsSchema).errors.length > 0 ? "ADVANCED" : null);
 
   const seriesLabel = (s: Series) =>
     `#${s.seriesNumber ?? "?"} ${s.modality ?? ""} ${s.seriesDescription ?? ""}`.trim();

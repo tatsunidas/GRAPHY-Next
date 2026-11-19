@@ -448,6 +448,80 @@ class RadiomicsBatchServiceTest {
         assertEquals(RadiomicsBatchService.FLAG_LOSSY, stopped.stopReason());
     }
 
+    private static final RadiomicsBatchService.Qc SKIP_SMALL =
+            new RadiomicsBatchService.Qc(RadiomicsBatchService.QcMode.SKIP, RadiomicsBatchService.QcMode.FLAG);
+
+    @Test
+    void skipModeDoesNotStop_keepsTheRowWithItsReason_andLeavesTheOthersAlone() throws Exception {
+        AtomicInteger computed = new AtomicInteger();
+        RadiomicsBatchService svc = service((req, c) -> {
+            computed.incrementAndGet();
+            return stubQc(req.sourceSeriesUid().equals("src2"), false);
+        });
+        Status s = await(svc, svc.submit(requestQc(List.of(auto(0), auto(1), auto(2), auto(3), auto(4)), SKIP_SMALL, null)));
+
+        assertEquals(JobState.DONE, s.state(), "止めずに最後まで走る");
+        assertEquals(null, s.stopKind());
+        assertEquals(5, computed.get(), "スキップのあとも残りを計算する");
+        assertEquals(4, s.done());
+        assertEquals(1, s.qcSkipped());
+        assertEquals(0, s.notRun());
+        assertEquals(0, s.failed());
+        RadiomicsBatchService.PairStatus skipped = s.pairs().get(2);
+        assertEquals(PairState.QC_SKIPPED, skipped.state());
+        assertTrue(skipped.error().startsWith("QC でスキップ: 小さい ROI（"), skipped.error());
+        assertEquals(List.of(RadiomicsBatchService.FLAG_SMALL_ROI), skipped.qcFlags(), "旗は残る");
+        // 値は返さない（表に入れない）。ほかの組は返す
+        List<RadiomicsBatchService.PairResult> r = svc.results(s.jobId());
+        assertEquals(4, r.size());
+        assertEquals(List.of(0, 1, 3, 4), r.stream().map(RadiomicsBatchService.PairResult::index).toList());
+    }
+
+    @Test
+    void skipModeDoesNotSkipWhatTheFlagModeOrAnAcknowledgedPairKeeps() throws Exception {
+        RadiomicsBatchService svc = service((req, c) -> stubQc(req.sourceSeriesUid().equals("src2"), false));
+        List<BatchPair> pairs = List.of(auto(0), auto(1), auto(2), auto(3));
+        Status flag = await(svc, svc.submit(request(pairs)));
+        assertEquals(0, flag.qcSkipped(), "旗を付けて続ける（FLAG）は値を残す");
+        assertEquals(4, flag.done());
+        Status ack = await(svc, svc.submit(requestQc(pairs, SKIP_SMALL, List.of(pairs.get(2).pairKey()))));
+        assertEquals(0, ack.qcSkipped(), "許容した組はスキップしない");
+        assertEquals(4, ack.done());
+    }
+
+    @Test
+    void stopTakesPrecedenceOverSkipWhenBothAreHit() throws Exception {
+        RadiomicsBatchService svc = service((req, c) -> stubQc(req.sourceSeriesUid().equals("src1"), req.sourceSeriesUid().equals("src1")));
+        RadiomicsBatchService.Qc skipSmallStopLossy =
+                new RadiomicsBatchService.Qc(RadiomicsBatchService.QcMode.SKIP, RadiomicsBatchService.QcMode.STOP);
+        Status s = await(svc, svc.submit(requestQc(List.of(auto(0), auto(1), auto(2)), skipSmallStopLossy, null)));
+        assertEquals(JobState.STOPPED, s.state(), "止めるの指定が先に効く（人が判断する関門）");
+        assertEquals(PairState.DONE, s.pairs().get(1).state());
+    }
+
+    @Test
+    void skipReasonNamesOnlyTheConditionsThatWereAskedToSkip() {
+        RoiFeatureResult r = stubQc(true, true);
+        String both = RadiomicsBatchService.skipReason(
+                new RadiomicsBatchService.Qc(RadiomicsBatchService.QcMode.SKIP, RadiomicsBatchService.QcMode.SKIP), r,
+                List.of(RadiomicsBatchService.FLAG_SMALL_ROI, RadiomicsBatchService.FLAG_LOSSY));
+        assertTrue(both.contains("小さい ROI") && both.contains("非可逆圧縮"), both);
+        String onlyLossy = RadiomicsBatchService.skipReason(
+                new RadiomicsBatchService.Qc(RadiomicsBatchService.QcMode.FLAG, RadiomicsBatchService.QcMode.SKIP), r,
+                List.of(RadiomicsBatchService.FLAG_SMALL_ROI, RadiomicsBatchService.FLAG_LOSSY));
+        assertTrue(onlyLossy.contains("非可逆圧縮") && !onlyLossy.contains("小さい ROI"), onlyLossy);
+    }
+
+    @Test
+    void theJsonContractParsesTheSkipMode() throws Exception {
+        String json = "{\"pairs\":[],\"settings\":{},\"channel\":0,\"timePoint\":0,\"recompute\":false"
+                + ",\"qc\":{\"smallRoi\":\"SKIP\",\"lossy\":\"STOP\"}}";
+        RadiomicsBatchService.BatchRequest b = new com.fasterxml.jackson.databind.ObjectMapper()
+                .readValue(json, RadiomicsBatchService.BatchRequest.class);
+        assertEquals(RadiomicsBatchService.QcMode.SKIP, b.qc().smallRoi());
+        assertEquals(RadiomicsBatchService.QcMode.STOP, b.qc().lossy());
+    }
+
     @Test
     void environmentStopIsMarkedAsEnvironment() throws Exception {
         RadiomicsBatchService svc = service((req, c) -> {

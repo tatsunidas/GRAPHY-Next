@@ -8,6 +8,8 @@ import { act, createElement, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { I18nProvider } from "../i18n/i18n";
+import { BatchSettingsPanel } from "./BatchSettingsPanel";
+import { defaultSpecContent, type SpecQc } from "./batchSpec";
 import { CalibrationField, RoiFeatureSettingsFields } from "./RoiFeatureSettingsFields";
 import { defaultRoiFeatureForm, type RoiFeatureForm } from "./roiFeatureSettings";
 
@@ -154,5 +156,92 @@ describe("値の種類の設定欄", () => {
     expect(q("batch-ivh-binwidth-warn")).toBeNull();
     await click("batch-rounding");
     expect(latest.intensityRounding).toBe(true);
+  });
+});
+
+describe("詳細設定（上級者向け）", () => {
+  const typeArea = async (id: string, value: string) => {
+    const el = q(id) as HTMLTextAreaElement;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(el, value);
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+  };
+  const openDetails = async (id: string) => {
+    const el = q(id) as HTMLDetailsElement;
+    await act(async () => { el.open = true; el.dispatchEvent(new Event("toggle")); });
+  };
+  const realFetch = globalThis.fetch;
+  afterEach(() => { globalThis.fetch = realFetch; });
+
+  it("既定のまま通す: 空で、エラーは出ず、閉じている", async () => {
+    await render(Full);
+    expect((q("batch-advanced-text") as HTMLTextAreaElement).value).toBe("");
+    expect(latest.advancedText).toBe("");
+    expect(q("batch-advanced-errors")).toBeNull();
+    expect((q("batch-advanced") as HTMLDetailsElement).open).toBe(false);
+  });
+
+  it("書いた値がフォームに入り、他の欄のキー・形の誤りは理由つきで出る（スキーマなしでも）", async () => {
+    globalThis.fetch = (() => Promise.reject(new Error("offline"))) as typeof fetch;
+    await render(Full);
+    await typeArea("batch-advanced-text", "INT_deltaGLCM=2\nINT_binCount=5\nbad line");
+    expect(latest.advancedText).toBe("INT_deltaGLCM=2\nINT_binCount=5\nbad line");
+    const errs = q("batch-advanced-errors")?.textContent ?? "";
+    expect(errs).toContain("INT_binCount");
+    expect(errs).toContain("離散化"); // 離散化の欄で指定する、という理由
+    expect(errs).toContain("3 行目");
+    await openDetails("batch-advanced-defaults");
+    expect(q("batch-advanced-defaults")?.textContent).toContain("読み込めません");
+    await typeArea("batch-advanced-text", "INT_deltaGLCM=2");
+    expect(q("batch-advanced-errors")).toBeNull();
+    expect((q("batch-advanced") as HTMLDetailsElement).open).toBe(true); // 書いてあれば開く
+  });
+
+  it("スキーマがあれば、知らないキーと値の型も検査し、既定値の一覧から行を追加できる", async () => {
+    globalThis.fetch = (() => Promise.resolve(new Response(JSON.stringify([
+      { key: "INT_deltaGLCM", type: "int", defaultValue: "1" },
+      { key: "DOUBLE_zScore", type: "double", defaultValue: "3.0" },
+      { key: "INT_binCount", type: "int", defaultValue: "32" },
+    ]), { status: 200, headers: { "Content-Type": "application/json" } }))) as typeof fetch;
+    await render(Full);
+    await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
+    await typeArea("batch-advanced-text", "BOGUS_key=1\nDOUBLE_zScore=abc");
+    const errs = q("batch-advanced-errors")?.textContent ?? "";
+    expect(errs).toContain("BOGUS_key");
+    expect(errs).toContain("DOUBLE_zScore");
+    await typeArea("batch-advanced-text", "");
+    expect(q("batch-advanced-add-INT_deltaGLCM")).toBeNull(); // 閉じている間は一覧を描かない
+    await openDetails("batch-advanced-defaults");
+    expect(q("batch-advanced-add-INT_deltaGLCM")).not.toBeNull();
+    expect(q("batch-advanced-add-INT_binCount")).toBeNull(); // 他の欄が決めるキーは一覧に出さない
+    await act(async () => { (q("batch-advanced-add-INT_deltaGLCM") as HTMLButtonElement).click(); });
+    expect(latest.advancedText).toBe("INT_deltaGLCM=1");
+  });
+});
+
+describe("QC の 3 択", () => {
+  function Panel({ qc0 }: { qc0: SpecQc }) {
+    const [form, setForm] = useState(defaultRoiFeatureForm());
+    const [qc, setQc] = useState(qc0);
+    qcLatest = qc;
+    return createElement(BatchSettingsPanel, {
+      form, setForm, disabled: false, qc, setQc, labelsText: "", setLabelsText: () => {}, kind: "radiomics", setKind: () => {},
+    });
+  }
+  let qcLatest: SpecQc;
+  const radios = (id: string) => Array.from(q(id)!.querySelectorAll<HTMLInputElement>("input[type=radio]"));
+
+  it("印を付けて続ける・止める・スキップの 3 つ。選ぶと値に入り、定義の既定は FLAG のまま", async () => {
+    await render(() => createElement(Panel, { qc0: defaultSpecContent().qc }));
+    expect(radios("batch-qc-small").length).toBe(3);
+    expect(radios("batch-qc-lossy").length).toBe(3);
+    expect(radios("batch-qc-small").map((r) => r.checked)).toEqual([true, false, false]);
+    await act(async () => { radios("batch-qc-small")[2].click(); });
+    expect(qcLatest.smallRoi).toBe("SKIP");
+    expect(qcLatest.lossy).toBe("FLAG");
+    await act(async () => { radios("batch-qc-lossy")[1].click(); });
+    expect(qcLatest.lossy).toBe("STOP");
+    expect(q("batch-qc")?.textContent).toContain("スキップ");
   });
 });
