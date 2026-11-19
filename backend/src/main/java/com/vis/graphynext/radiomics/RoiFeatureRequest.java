@@ -36,6 +36,9 @@ import java.util.Map;
  * @param valueSpec     値の種類（{@link ValueKind}）の指定。null は従来（分類しない。IVH は RadiomicsJ の既定のまま）。
  *                      あれば、DICOM のメタデータから離散の校正値・連続の校正値・任意単位を判定して、IVH のモードと
  *                      補間後の丸めを切り替える（設定に同じキーを直接渡したときは、そちらを優先する）
+ * @param planes        2D の単位で計算する断面。null・{@code ACQUISITION} は取得面（元のスライス。従来）だけ。
+ *                      {@code ALL} は、取得面に加えて、患者の LPS 軸に揃えた 3 断面（Axial・Sagittal・Coronal）へ体積を
+ *                      再スライスして計算する（2D の単位を選んでいないときは無視）
  */
 public record RoiFeatureRequest(
         String studyInstanceUid,
@@ -54,7 +57,29 @@ public record RoiFeatureRequest(
         Double scaleCoefficient,
         Integer smallRoiWarnVoxels,
         String calibration,
-        ValueKind.Spec valueSpec) {
+        ValueKind.Spec valueSpec,
+        String planes) {
+
+    public static final String PLANES_ACQUISITION = "ACQUISITION";
+    public static final String PLANES_ALL = "ALL";
+    public static final java.util.Set<String> PLANES = java.util.Set.of(PLANES_ACQUISITION, PLANES_ALL);
+
+    /** 断面の指定なし（従来の要求。取得面だけ）。 */
+    public RoiFeatureRequest(String studyInstanceUid, String sourceSeriesUid, String maskSeriesUid,
+                             int maskChannel, int channel, int timePoint, Map<String, String> settings,
+                             boolean recompute, java.util.Set<RoiMode> roiModes, java.util.List<Double> scales,
+                             String scaleNotation, java.util.List<String> scaleLabels, String scaleConversion,
+                             Double scaleCoefficient, Integer smallRoiWarnVoxels, String calibration,
+                             ValueKind.Spec valueSpec) {
+        this(studyInstanceUid, sourceSeriesUid, maskSeriesUid, maskChannel, channel, timePoint, settings,
+                recompute, roiModes, scales, scaleNotation, scaleLabels, scaleConversion, scaleCoefficient,
+                smallRoiWarnVoxels, calibration, valueSpec, null);
+    }
+
+    /** 全断面（取得面に加えて Axial・Sagittal・Coronal）を求めるか。 */
+    public boolean allPlanes() {
+        return PLANES_ALL.equalsIgnoreCase(planes);
+    }
 
     /** 値の種類の指定なし（従来の要求）。 */
     public RoiFeatureRequest(String studyInstanceUid, String sourceSeriesUid, String maskSeriesUid,
@@ -64,7 +89,7 @@ public record RoiFeatureRequest(
                              Double scaleCoefficient, Integer smallRoiWarnVoxels, String calibration) {
         this(studyInstanceUid, sourceSeriesUid, maskSeriesUid, maskChannel, channel, timePoint, settings,
                 recompute, roiModes, scales, scaleNotation, scaleLabels, scaleConversion, scaleCoefficient,
-                smallRoiWarnVoxels, calibration, null);
+                smallRoiWarnVoxels, calibration, null, null);
     }
 
     /** PET の校正の指定（{@code calibration}）の値。null は {@link #CALIBRATION_AUTO}。 */

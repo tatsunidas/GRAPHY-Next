@@ -106,6 +106,9 @@ public class RadiomicsMapEngine {
      * <p>{@code normalPositionsMm} は、**計算に使う格子の各スライス**の、法線方向の位置（{@code IPP·法線}、mm、
      * 向きは IOP の法線のまま）。取り直し（{@code rectified}）のときは取り直した格子の位置（元の IPP は使えない）、
      * そうでなければ元のスライスの位置。Next のリサンプリングで格子が変わったとき、読み込みが失敗したときは null。
+     *
+     * <p>{@code originLps} は、計算に使う格子の (0,0,0) の画素中心の患者座標（LPS、mm）。取り直したときは取り直した格子の原点、
+     * そうでなければ先頭スライスの IPP。別の断面への再スライス（{@link LpsResampler}）に使う。分からないときは null。
      */
     public record LoadedVolume(
             ImagePlus image,
@@ -123,7 +126,20 @@ public class RadiomicsMapEngine {
             boolean lossyCompressed,
             ValueCalibration valueCalibration,
             double[] normalPositionsMm,
-            boolean rectified) {
+            boolean rectified,
+            double[] originLps) {
+
+        /** 格子の原点の記録なし（従来の呼び出し元・試験用）。再スライスはできない。 */
+        public LoadedVolume(ImagePlus image, ImagePlus mask, int width, int height, int slices, int label,
+                            boolean hasMask, Calibration calibration, double[] imageOrientationPatient,
+                            double pixelSpacingRow, double pixelSpacingCol, Map<Integer, double[]> ippByZ,
+                            String[] sopPerZ, String frameOfReferenceUid, TextureResampling.Grid resampling,
+                            boolean lossyCompressed, ValueCalibration valueCalibration, double[] normalPositionsMm,
+                            boolean rectified) {
+            this(image, mask, width, height, slices, label, hasMask, calibration, imageOrientationPatient,
+                    pixelSpacingRow, pixelSpacingCol, ippByZ, sopPerZ, frameOfReferenceUid, resampling,
+                    lossyCompressed, valueCalibration, normalPositionsMm, rectified, null);
+        }
 
         /**
          * 値の種類・位置の記録なし（従来の呼び出し元・試験用）。{@code normalPositionsMm} は null（位置は IPP から求める）、
@@ -136,7 +152,7 @@ public class RadiomicsMapEngine {
                             boolean lossyCompressed, ValueCalibration valueCalibration) {
             this(image, mask, width, height, slices, label, hasMask, calibration, imageOrientationPatient,
                     pixelSpacingRow, pixelSpacingCol, ippByZ, sopPerZ, frameOfReferenceUid, resampling,
-                    lossyCompressed, valueCalibration, null, false);
+                    lossyCompressed, valueCalibration, null, false, null);
         }
 
         /** 校正の記録なし（従来の呼び出し元・試験用）。 */
@@ -147,7 +163,7 @@ public class RadiomicsMapEngine {
                             boolean lossyCompressed) {
             this(image, mask, width, height, slices, label, hasMask, calibration, imageOrientationPatient,
                     pixelSpacingRow, pixelSpacingCol, ippByZ, sopPerZ, frameOfReferenceUid, resampling,
-                    lossyCompressed, ValueCalibration.UNSET, null, false);
+                    lossyCompressed, ValueCalibration.UNSET, null, false, null);
         }
     }
 
@@ -289,6 +305,7 @@ public class RadiomicsMapEngine {
         ImagePlus mask = buildMask(studyInstanceUid, maskSeriesUid, maskChannel, w, h, nZ, label,
                 layout.imageOrientationPatient(), ippByZ, targetLayout);
 
+        double[] rectifiedOrigin = null;
         if (rectify) {
             // 不等間隔・欠損・チルト: 直交・等間隔の格子へ取り直す（画像は線形補間、マスクは最近傍）。
             // 取り直したボリュームは元のスライスと対応しない（ippByZ / sopPerZ は元のまま）。
@@ -308,6 +325,7 @@ public class RadiomicsMapEngine {
                 is2.addSlice(new ij.process.FloatProcessor(rr.width(), rr.height(), rr.slices()[z]));
                 ms2.addSlice(new ByteProcessor(rr.width(), rr.height(), rr.mask()[z], null));
             }
+            rectifiedOrigin = rr.origin();
             ImagePlus newMask = new ImagePlus("texture-mask", ms2);
             newMask.setProp(PROP_GEOMETRY_ALIGNED, mask.getProp(PROP_GEOMETRY_ALIGNED));
             mask = newMask;
@@ -366,8 +384,10 @@ public class RadiomicsMapEngine {
         // 計算格子の各スライスの法線方向の位置。取り直したときは、取り直した格子の位置（先頭は最小位置、dz 刻み）。
         double[] nrmForPos = normalOf(layout.imageOrientationPatient());
         double[] normalPositions = null;
+        double[] originLps = null;
         if (nrmForPos != null && grid == null && ippByZ != null) {
             if (rectify) {
+                originLps = rectifiedOrigin;
                 double tMin = Double.POSITIVE_INFINITY;
                 for (double[] ipp : ippList(ippByZ, srcNZ)) {
                     tMin = Math.min(tMin, dot(ipp, nrmForPos));
@@ -377,6 +397,7 @@ public class RadiomicsMapEngine {
                     normalPositions[m] = tMin + m * finalCal.pixelDepth;
                 }
             } else if (ippByZ.size() == nZ) {
+                originLps = ippByZ.get(0) == null ? null : ippByZ.get(0).clone();
                 normalPositions = new double[nZ];
                 for (int z = 0; z < nZ; z++) {
                     double[] ipp = ippByZ.get(z);
@@ -386,7 +407,7 @@ public class RadiomicsMapEngine {
         }
         return new LoadedVolume(img, mask, w, h, nZ, label, hasMask, finalCal,
                 layout.imageOrientationPatient(), layout.pixelSpacingRow(), layout.pixelSpacingCol(),
-                ippByZ, sopPerZ, layout.frameOfReferenceUID(), grid, lossy, valueCal, normalPositions, rectify);
+                ippByZ, sopPerZ, layout.frameOfReferenceUID(), grid, lossy, valueCal, normalPositions, rectify, originLps);
     }
 
     /** 画素値に係数を掛ける（float のまま。NaN は NaN のまま）。PET の SUV 校正だけが使う。 */

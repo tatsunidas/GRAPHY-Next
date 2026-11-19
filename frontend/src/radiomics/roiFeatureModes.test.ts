@@ -157,6 +157,23 @@ describe("2D の CSV", () => {
     expect(roiFeature2dFiles(r, "")).toEqual([]);
   });
 
+  it("全断面: 断面ごとのファイルが、取得面と同じ並びで追加される（作れなかった断面は書かない）", () => {
+    const r = full();
+    r.planeResults = [
+      { plane: "AXIAL", spacingMm: 0.7, section: r.section, slices: r.slices },
+      { plane: "SAGITTAL", spacingMm: 0.7, section: null, slices: null, error: "スライスが 1 枚だけのため、別の断面を作れません。" },
+      { plane: "CORONAL", spacingMm: 0.7, section: r.section, slices: null },
+    ];
+    const files = roiFeature2dFiles(r, "c1");
+    expect(files.map((f) => f.suffix).slice(7)).toEqual([
+      "_maxsection2d_axial.csv", "_slices2d_axial.csv", "_slices2d_axial_aggregate.csv", "_maxsection2d_coronal.csv",
+    ]);
+    // 取得面のファイルと同じ内容（同じ列・同じ値）
+    const byName = Object.fromEntries(files.map((f) => [f.suffix, f.text]));
+    expect(byName["_maxsection2d_axial.csv"]).toBe(byName["_maxsection2d.csv"]);
+    expect(byName["_slices2d_axial.csv"]).toBe(byName["_slices2d.csv"]);
+  });
+
   it("定義表の離散化に per-slice が付く（IVH は付かない）", () => {
     expect(discretisationOf2d("GLCM", disc)).toBe("fixedBinNumber=32;scope=per-slice");
     expect(discretisationOf2d("IntensityVolumeHistogram", disc)).toBe("ivhMode=0;ivhBinCount=1000;ivhBinWidth=2.5");

@@ -135,6 +135,10 @@ public class RoiFeatureService {
         }
         smallRoiThreshold(req);
         threshold(smallRoiSetting2d, "小さい ROI の警告（画素数、2D）");
+        if (req.planes() != null && !req.planes().isBlank()
+                && !RoiFeatureRequest.PLANES.contains(req.planes().trim().toUpperCase(java.util.Locale.ROOT))) {
+            throw new IllegalArgumentException("断面（planes）は ACQUISITION・ALL のどちらかです: " + req.planes());
+        }
     }
 
     /** 環境設定の基準値。空・未設定なら null。整数でない・1 未満なら例外（黙って警告を止めない）。 */
@@ -498,7 +502,104 @@ public class RoiFeatureService {
         if (slices != null && vc != null) {
             slices = slices.withRecord(slices.record().withCalibration(vc, kind, loadFlagsOf(vol)));
         }
-        return whole.withModes(section, slices);
+        RoiFeatureResult result = whole.withModes(section, slices);
+        if (!req.allPlanes()) {
+            return result;
+        }
+        return result.withPlanes(computePlanes(req, vol, label, s2, progress, cancelled, vc, kind));
+    }
+
+    /** 2D 形状（Shape2D）を有効にしたが、3D の単位では計算しない（2D の単位を選んだときだけ計算される）。 */
+    public static final String FLAG_SHAPE2D_NOT_IN_3D = "SHAPE2D_NOT_IN_3D";
+
+    private static final String SHAPE2D_KEY = "BOOL_enableShape2D";
+
+    /** 再スライスした断面の記録に付ける旗（取得面の 2D ではなく、LPS 座標で再スライスした体積で計算した）。 */
+    public static final String FLAG_RESLICED_PLANE = "RESLICED_PLANE";
+
+    private static final String[] PATIENT_PLANES = {ImagePlane.AXIAL, ImagePlane.SAGITTAL, ImagePlane.CORONAL};
+
+    /**
+     * 全断面: 取り直した体積を、患者の LPS 軸に揃えた 3 断面へ再スライスして、同じ 2D の計算（最大断面・スライス別）を行う。
+     * 作れない断面（スライス 1 枚・位置不明・ROI が消えた など）は、理由を持つ結果にして、ほかの断面と 3D の結果は残す。
+     */
+    private List<RoiFeatureResult.PlaneResult> computePlanes(RoiFeatureRequest req, RadiomicsMapEngine.LoadedVolume vol,
+                                                              int label, Map<String, String> s2, Progress progress,
+                                                              BooleanSupplier cancelled, ValueCalibration vc, ValueKind kind)
+            throws IOException {
+        double spacing = planeSpacing(s2, vol);
+        double maskThreshold = maskThreshold(s2);
+        List<String> flags = new ArrayList<>(loadFlagsOf(vol));
+        flags.add(FLAG_RESLICED_PLANE);
+        List<RoiFeatureResult.PlaneResult> out = new ArrayList<>();
+        for (String plane : PATIENT_PLANES) {
+            if (cancelled.getAsBoolean()) {
+                throw new java.util.concurrent.CancellationException("断面の境界で取り消しました");
+            }
+            try {
+                RadiomicsMapEngine.LoadedVolume pv = LpsResampler.reslice(vol, label, plane, spacing, maskThreshold);
+                RoiFeatureResult.Section sec = req.has(RoiFeatureRequest.RoiMode.MAX_SECTION_2D)
+                        ? computeSection(req, pv, label, s2) : null;
+                RoiFeatureResult.Slices sl = req.has(RoiFeatureRequest.RoiMode.SLICES_2D)
+                        ? computeSlices(req, pv, label, s2, progress, cancelled) : null;
+                if (sec != null && vc != null) {
+                    sec = sec.withRecord(sec.record().withCalibration(vc, kind, flags));
+                }
+                if (sl != null && vc != null) {
+                    sl = sl.withRecord(sl.record().withCalibration(vc, kind, flags));
+                }
+                out.add(new RoiFeatureResult.PlaneResult(plane, spacing, sec, sl, null));
+            } catch (IllegalArgumentException e) {
+                log.warn("[roi-features] plane {} not computed: {}", plane, e.getMessage());
+                out.add(new RoiFeatureResult.PlaneResult(plane, spacing, null, null, e.getMessage()));
+            }
+        }
+        return out;
+    }
+
+    /**
+     * 再スライスの間隔（mm、等方）: リサンプリングの設定（{@code DOUBLEARRAY_resamplingFactorXYZ} の先頭の正の値）、
+     * 無ければ元の体積の最小の間隔。
+     */
+    static double planeSpacing(Map<String, String> settings, RadiomicsMapEngine.LoadedVolume vol) {
+        String r = settings.get("DOUBLEARRAY_resamplingFactorXYZ");
+        if (r != null && !r.isBlank()) {
+            try {
+                double v = Double.parseDouble(r.split(",")[0].trim());
+                if (v > 0 && Double.isFinite(v)) {
+                    return v;
+                }
+            } catch (NumberFormatException ignored) {
+                // 読めない値は RadiomicsJ も既定に戻す。ここでも元の最小間隔にする
+            }
+        }
+        double m = Double.MAX_VALUE;
+        ij.measure.Calibration c = vol.calibration();
+        for (double d : new double[] {c.pixelWidth, c.pixelHeight, c.pixelDepth}) {
+            if (d > 0) {
+                m = Math.min(m, d);
+            }
+        }
+        if (m == Double.MAX_VALUE) {
+            throw new IllegalArgumentException("画素間隔が不明なため、全断面の間隔を決められません。");
+        }
+        return m;
+    }
+
+    /** マスクの部分体積のしきい値（設定 {@code DOUBLE_Mask_PartialVolumeThareshold}。無ければ RadiomicsJ の既定 0.5）。 */
+    static double maskThreshold(Map<String, String> settings) {
+        String v = settings.get("DOUBLE_Mask_PartialVolumeThareshold");
+        if (v != null && !v.isBlank()) {
+            try {
+                double d = Double.parseDouble(v.trim());
+                if (d > 0 && d <= 1) {
+                    return d;
+                }
+            } catch (NumberFormatException ignored) {
+                // 既定
+            }
+        }
+        return 0.5;
     }
 
     /**
@@ -517,9 +618,19 @@ public class RoiFeatureService {
     }
 
     private RoiFeatureResult compute3d(RoiFeatureRequest req, RadiomicsMapEngine.LoadedVolume vol, int label,
-                                       Map<String, String> settings, java.util.function.Consumer<Phase> phase)
+                                       Map<String, String> requested, java.util.function.Consumer<Phase> phase)
             throws IOException {
         Integer threshold = smallRoiThreshold(req);
+        // 2D 形状は 1 枚の画像の特徴量で、多断面の体積では RadiomicsJ が黙って計算しない。3D の設定には渡さず、記録に残す
+        List<String> flags3d = new ArrayList<>(loadFlagsOf(vol));
+        final Map<String, String> settings;
+        if (isTrue(requested.get(SHAPE2D_KEY))) {
+            settings = new TreeMap<>(requested);
+            settings.put(SHAPE2D_KEY, "0");
+            flags3d.add(FLAG_SHAPE2D_NOT_IN_3D);
+        } else {
+            settings = requested;
+        }
 
         long roiVoxels = GlamAnalysisService.countRoiVoxels(vol.mask(), label);
         if (roiVoxels < 1) {
@@ -543,7 +654,7 @@ public class RoiFeatureService {
                 log.info("[roi-features] cache hit key={}", key.substring(0, 12));
                 RoiFeatureResult cached = hit.get().asCached();
                 return cached.withPerRequest(sizeOf(cached.rows(), threshold, vol), vol.lossyCompressed(),
-                        vol.valueCalibration(), kindOf(req, vol), loadFlagsOf(vol));
+                        vol.valueCalibration(), kindOf(req, vol), flags3d);
             }
         }
 
@@ -563,7 +674,7 @@ public class RoiFeatureService {
             cache.saveFeatures(key, json.writeValueAsBytes(result));
         }
         return result.withPerRequest(sizeOf(result.rows(), threshold, vol), vol.lossyCompressed(),
-                vol.valueCalibration(), kindOf(req, vol), loadFlagsOf(vol));
+                vol.valueCalibration(), kindOf(req, vol), flags3d);
     }
 
     // ───────────── 2D の単位（最大断面・スライス別） ─────────────

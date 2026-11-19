@@ -99,7 +99,9 @@ async function main(): Promise<void> {
   const r = spawnSync(process.env.PYTHON ?? "python3", ["-I", path.join(import.meta.dirname, "roiFeatureSynth.py"), dir, "11"], { encoding: "utf8" });
   if (r.status !== 0) throw new Error(`合成データを作れません: ${r.stderr}`);
   const synth = JSON.parse(r.stdout) as Synth;
-  const d = new DesktopDriver();
+  // 背面・遮蔽されたウィンドウは描画（rAF）が止まり、Playwright の待機（要素・スクリーンショット）が時間切れになることがある
+  // （2026-11-19: 要素は DOM にあるのに waitFor が 20 秒で落ち、約半数の実行で失敗した）。バックグラウンドでの抑制を切る
+  const d = new DesktopDriver({}, { extraElectronArgs: ["--disable-renderer-backgrounding", "--disable-backgrounding-occluded-windows", "--disable-background-timer-throttling"] });
   await d.start();
   const base = `http://127.0.0.1:${d.ports.http}`;
   try {
@@ -146,6 +148,8 @@ async function main(): Promise<void> {
 
     console.log("[2] 画面");
     const mainPage = d.page;
+    // 検索条件なしの検索は confirm が出る（合成データだけの DB なので続行する）。承認しないと一覧が出ず、ビューアを開けない
+    mainPage.on("dialog", (dlg) => { void dlg.accept(); });
     await mainPage.getByTestId("search-patientid-input").waitFor({ state: "visible", timeout: 60_000 });
     await mainPage.waitForTimeout(2000);
     const later = mainPage.getByRole("button", { name: /^(後で|Later)$/ });
@@ -155,10 +159,17 @@ async function main(): Promise<void> {
     }
     await mainPage.evaluate("localStorage.setItem('graphy.locale', 'ja')");
     await openFirstSeriesInViewer(mainPage, createStepRecorder());
-    const viewer = await d.waitForNewPage(
-      () => mainPage.getByTestId("viewer2d-toolbar-button").click(),
-      (url) => url.includes("2dviewer"),
-    );
+    // メイン窓の操作が空振りすることがある（約半数の実行。原因は未確認。Playwright の待機・クリックが固まる／クリックが
+    // 効かない）。DOM へ直接クリックを送り、窓が開かなければやり直す
+    let viewer: Awaited<ReturnType<typeof d.waitForNewPage>> | undefined;
+    for (let attempt = 1; attempt <= 4 && !viewer; attempt++) {
+      viewer = await d.waitForNewPage(
+        async () => { await mainPage.evaluate("document.querySelector('[data-testid=\"viewer2d-toolbar-button\"]').click()"); },
+        (url) => url.includes("2dviewer"),
+        20_000,
+      ).catch(() => undefined);
+    }
+    if (!viewer) throw new Error("2D ビューアの窓が開かない（4 回試した）");
     await viewer.getByTestId("series-viewer-root").first().waitFor({ state: "visible", timeout: 20_000 });
     await viewer.waitForTimeout(2000);
     await viewer.getByTestId("viewer2d-menu-analysis").click();
@@ -170,8 +181,16 @@ async function main(): Promise<void> {
     await page.waitForTimeout(1500);
     await page.getByTestId("roifeat-mask").selectOption(seg.seriesInstanceUid);
     await page.getByTestId("roifeat-caselabel").fill("modes-case");
+    // 基準の API の要求はリサンプリングなし（settings: {}）。画面の既定は等方 1 mm なので、そろえる
+    await page.getByTestId("roifeat-resampling").selectOption("none");
+    // 値の種類の既定は「自動」（CT は離散で IVH の格子が変わる）。基準の API は従来どおりなので、そろえる
+    await page.getByTestId("roifeat-valuekind").selectOption("legacy");
     check(await page.getByTestId("roifeat-mode-whole").isDisabled(), "3D のチェックは外せない（常に計算）");
     check(!(await page.getByTestId("roifeat-mode-section").isChecked()) && !(await page.getByTestId("roifeat-mode-slices").isChecked()), "既定は 2D の単位がオフ");
+    // 族 × 単位の規則: 2D の単位が無いと、2D 形状（Shape2D）と断面の選択は選べない
+    check(await page.getByTestId("roifeat-family-Shape2D").isDisabled() && !(await page.getByTestId("roifeat-family-Shape2D").isChecked()), "2D の単位が無い: Shape2D は選べない（無効・オフ）");
+    check(await page.getByTestId("roifeat-planes-all").isDisabled() && await page.getByTestId("roifeat-planes-acquisition").isDisabled(), "2D の単位が無い: 断面の選択は無効");
+    check(!(await page.getByTestId("roifeat-family-Morphology").isDisabled()), "形態は 3D の族なので選べる");
 
     // 3D だけで計算 → 従来の表（比較表ではない）
     await page.getByTestId("roifeat-run").click();
@@ -253,6 +272,7 @@ async function main(): Promise<void> {
     await page.waitForTimeout(300);
     await page.screenshot({ path: path.join(OUT_DIR, "03-compare-table.png"), fullPage: false });
 
+    check(!(await page.getByTestId("roifeat-family-Shape2D").isDisabled()) && !(await page.getByTestId("roifeat-planes-all").isDisabled()), "2D の単位を選ぶと、Shape2D と断面の選択が有効になる");
     // 書き出し: 3D の 2 本 + 2D の 7 本
     const dl = await grab(page, () => page.getByTestId("roifeat-csv").click(), 9);
     check(dl.length === 9, "CSV: 3D の 2 本＋2D の 7 本", dl.map((x) => x.name));
@@ -263,17 +283,18 @@ async function main(): Promise<void> {
     const hdr = sec.header;
     const maxDiff = (names: string[], vals: string[], hdrs: string[], ref2: Row[]) => {
       let worst = 0;
+      let worstCol = "";
       let n = 0;
       for (const r2 of ref2) {
         const i = hdrs.indexOf(r2.column);
         if (i < 0) return { worst: Infinity, n, missing: r2.column };
         const got = vals[i] === "NaN" ? null : Number(vals[i]);
         if ((got == null) !== (r2.value == null)) return { worst: Infinity, n, missing: `${r2.column} NaN 不一致` };
-        if (got != null) worst = Math.max(worst, Math.abs(got - r2.value!));
+        if (got != null && Math.abs(got - r2.value!) > worst) { worst = Math.abs(got - r2.value!); worstCol = `${r2.column}: csv=${got} api=${r2.value}`; }
         n++;
       }
       void names;
-      return { worst, n, missing: null as string | null };
+      return { worst, n, missing: null as string | null, worstCol };
     };
     const d1 = maxDiff([], sec.rows[0] ?? [], hdr, R.section!.rows);
     check(hdr.length > 20 && sec.rows.length === 1, "最大断面の CSV に中身がある", [hdr.length, sec.rows.length]);
@@ -300,6 +321,25 @@ async function main(): Promise<void> {
     check((by["modes-case-seg0_maxsection2d_radiomicsj.properties"] ?? "").includes("BOOL_force2D=1"), "2D の設定ファイルに BOOL_force2D=1");
     check(!(by["modes-case-seg0_radiomicsj.properties"] ?? "").includes("BOOL_force2D=1"), "3D の設定ファイルには force2D が無い（負例）");
     check(dl.every((x) => !/PatientName|PatientID|Patient/.test(x.text)), "患者情報の列が出力に無い");
+
+    // 全断面: 取得面に加えて Axial・Sagittal・Coronal（断面ごとに最大断面・スライス別・集約の 3 本）
+    await page.getByTestId("roifeat-planes-all").check();
+    await page.getByTestId("roifeat-run").click();
+    await page.getByTestId("roifeat-modes2d").waitFor({ state: "visible", timeout: 180_000 });
+    await page.waitForTimeout(1500);
+    await page.screenshot({ path: path.join(OUT_DIR, "04-planes-all.png"), fullPage: false });
+    const dlAll = await grab(page, () => page.getByTestId("roifeat-csv").click(), 18);
+    const allNames = dlAll.map((x) => x.name);
+    check(dlAll.length === 18, "全断面: CSV は 9 本＋断面 3 つ×3 本", allNames);
+    const byAll = Object.fromEntries(dlAll.map((x) => [x.name, x.text]));
+    for (const pl of ["axial", "sagittal", "coronal"]) {
+      const sc = parseCsv(byAll[`modes-case-seg0_maxsection2d_${pl}.csv`] ?? "");
+      check(sc.rows.length === 1 && sc.header.includes("Plane") && sc.rows[0][sc.header.indexOf("Plane")] === pl.toUpperCase(), `${pl}: 最大断面の CSV の Plane = ${pl.toUpperCase()}`, sc.rows[0]?.[sc.header.indexOf("Plane")]);
+      check(sc.rows.length === 1 && Number(sc.rows[0][sc.header.indexOf("Section_Pixels")]) > 0 && Number(sc.rows[0][sc.header.indexOf("Plane_TiltDeg")]) === 0, `${pl}: 画素数 > 0・傾き角 0`);
+      const sls = parseCsv(byAll[`modes-case-seg0_slices2d_${pl}.csv`] ?? "");
+      check(sls.rows.length > 1 && sls.rows.every((r4) => r4[sls.header.indexOf("Plane")] === pl.toUpperCase()), `${pl}: スライス別の CSV に複数行`, sls.rows.length);
+    }
+    check(!/Morphology_|GLAM_/.test((byAll["modes-case-seg0_maxsection2d_axial.csv"] ?? "").split("\r\n")[0]), "断面の CSV にも Morphology・GLAM は無い");
   } finally {
     await d.stop();
   }

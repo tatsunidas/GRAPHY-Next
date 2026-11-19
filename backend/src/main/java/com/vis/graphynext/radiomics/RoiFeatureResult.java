@@ -35,7 +35,17 @@ public record RoiFeatureResult(
         boolean lossyCompressed,
         Section section,
         Slices slices,
-        List<ScaleEntry> scales) {
+        List<ScaleEntry> scales,
+        List<PlaneResult> planeResults) {
+
+    /** 断面の結果なし（従来の呼び出し元・キャッシュに残っている古い結果）。 */
+    public RoiFeatureResult(String radiomicsjVersion, Instant computedAt, boolean fromCache, int label,
+                            List<Row> rows, Discretisation discretisation, Provenance provenance,
+                            String settingsProperties, RoiSize roiSize, boolean lossyCompressed,
+                            Section section, Slices slices, List<ScaleEntry> scales) {
+        this(radiomicsjVersion, computedAt, fromCache, label, rows, discretisation, provenance,
+                settingsProperties, roiSize, lossyCompressed, section, slices, scales, null);
+    }
 
     /** 3D と 2D の単位まで（スケールなし）。 */
     public RoiFeatureResult(String radiomicsjVersion, Instant computedAt, boolean fromCache, int label,
@@ -199,25 +209,34 @@ public record RoiFeatureResult(
         }
     }
 
+    /**
+     * 患者の軸に揃えた 1 つの断面（体積を LPS 座標で再スライスしたもの）の 2D の結果。{@code section}・{@code slices} は
+     * 取得面の 2D と同じ形で、記録（{@code record}）に断面の名前と傾き角（0）が入る。作れなかった断面は {@code error} に理由を
+     * 入れ、ほかの断面と 3D の結果は残す。
+     *
+     * @param spacingMm 再スライスした間隔（面内・法線方向とも、mm）
+     */
+    public record PlaneResult(String plane, Double spacingMm, Section section, Slices slices, String error) {}
+
     RoiFeatureResult asCached() {
         return new RoiFeatureResult(radiomicsjVersion, computedAt, true, label, rows, discretisation,
-                provenance, settingsProperties, roiSize, lossyCompressed, section, slices, scales);
+                provenance, settingsProperties, roiSize, lossyCompressed, section, slices, scales, planeResults);
     }
 
     RoiFeatureResult withScales(List<ScaleEntry> list) {
         return new RoiFeatureResult(radiomicsjVersion, computedAt, fromCache, label, rows, discretisation,
-                provenance, settingsProperties, roiSize, lossyCompressed, section, slices, list);
+                provenance, settingsProperties, roiSize, lossyCompressed, section, slices, list, planeResults);
     }
 
     RoiFeatureResult withModes(Section sec, Slices sl) {
         return new RoiFeatureResult(radiomicsjVersion, computedAt, fromCache, label, rows, discretisation,
-                provenance, settingsProperties, roiSize, lossyCompressed, sec, sl, scales);
+                provenance, settingsProperties, roiSize, lossyCompressed, sec, sl, scales, planeResults);
     }
 
     /** 返すたびに付け直す欄（キャッシュに無い・古いかもしれない値）。 */
     RoiFeatureResult withPerRequest(RoiSize size, boolean lossy) {
         return new RoiFeatureResult(radiomicsjVersion, computedAt, fromCache, label, rows, discretisation,
-                provenance, settingsProperties, size, lossy, section, slices, scales);
+                provenance, settingsProperties, size, lossy, section, slices, scales, planeResults);
     }
 
     /** {@link #withPerRequest(RoiSize, boolean)} に、読み込みで掛けた校正と、値の種類・画素間隔の記録を付ける。 */
@@ -225,6 +244,12 @@ public record RoiFeatureResult(
                                     List<String> extraFlags) {
         return new RoiFeatureResult(radiomicsjVersion, computedAt, fromCache, label, rows, discretisation,
                 provenance == null ? null : provenance.withCalibration(vc, kind, extraFlags), settingsProperties,
-                size, lossy, section, slices, scales);
+                size, lossy, section, slices, scales, planeResults);
+    }
+
+    /** 患者の軸に揃えた断面（Axial・Sagittal・Coronal）の 2D の結果を付ける。 */
+    RoiFeatureResult withPlanes(List<PlaneResult> list) {
+        return new RoiFeatureResult(radiomicsjVersion, computedAt, fromCache, label, rows, discretisation,
+                provenance, settingsProperties, roiSize, lossyCompressed, section, slices, scales, list);
     }
 }
