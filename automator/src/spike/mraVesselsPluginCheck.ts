@@ -33,6 +33,9 @@ import { openFirstSeriesInViewer } from "../checklist/items/shared/helpers.js";
 import { createStepRecorder } from "../checklist/types.js";
 import { AUTOMATOR_ROOT } from "../fixtures/manifest.js";
 
+// プロセスの探索に使う作業コピーの名前（worktree ごとに違う）
+const REPO_DIR = path.basename(path.resolve(AUTOMATOR_ROOT, ".."));
+
 function arg(name: string): string | null {
   const hit = process.argv.slice(2).find((a) => a.startsWith(`--${name}=`));
   return hit ? hit.slice(name.length + 3) : null;
@@ -151,10 +154,10 @@ async function main(): Promise<void> {
         for (const line of out.split("\n")) {
           const kb = Number(line.trim().split(/\s+/)[0]);
           if (!Number.isFinite(kb)) continue;
-          if (line.includes("/gn-mrav/desktop")) {
+          if (line.includes(`/${REPO_DIR}/desktop`)) {
             tot += kb;
             if (kb > peakProcKb) peakProcKb = kb;
-          } else if (line.includes("/gn-mrav/backend") && kb > peakBackendKb) peakBackendKb = kb;
+          } else if (line.includes(`/${REPO_DIR}/backend`) && kb > peakBackendKb) peakBackendKb = kb;
         }
         if (tot > peakElectronKb) peakElectronKb = tot;
       } catch {
@@ -226,6 +229,46 @@ async function main(): Promise<void> {
     check(unchecked === rows.length - 1, "「だけ表示」で、ほかの行のチェックが外れる", { unchecked, rows: rows.length });
     await root.locator("[data-act=show-all]").click();
     await v.waitForTimeout(500);
+
+    // 小さい分離物を隠す（段 6）: スライダーを上げ、離したときに適用される。Other の体積が減り、3D の画が変わり、名前付きの行は 1 つも変わらない
+    const hideSlider = root.locator("[data-role=hide-small]");
+    check((await hideSlider.count()) === 1 && !(await hideSlider.isDisabled()), "「小さい分離物を隠す」のスライダーがあり、操作できる");
+    const rowsOf = () => root.locator(".gnmv-item").evaluateAll((els) => els.map((e) => ({ label: (e as HTMLElement).dataset.label ?? "", vol: e.querySelector(".gnmv-vol")?.textContent ?? "" })));
+    const rowsBefore = await rowsOf();
+    const labelBefore = (await root.locator("[data-role=hide-label]").textContent()) ?? "";
+    await hideSlider.evaluate((el) => {
+      const input = el as HTMLInputElement;
+      const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")?.set;
+      setter?.call(input, input.max); // 最大（5 mL 未満）
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await v.waitForFunction(() => document.querySelector(".gnmv")?.getAttribute("data-state") === "result" && /個を隠しています|islands are hidden/.test(document.querySelector("[data-role=status]")?.textContent ?? ""), null, { timeout: 120000 });
+    await v.waitForTimeout(500);
+    const rowsAfter = await rowsOf();
+    const isOther = (r: { label: string }) => r.label === "31";
+    const named = (r: { label: string }) => !["31", "34"].includes(r.label);
+    check(JSON.stringify(rowsBefore.filter(named)) === JSON.stringify(rowsAfter.filter(named)), "名前付きの行（ラベルと体積）は 1 つも変わらない", { rowsBefore: rowsBefore.filter(named).length, rowsAfter: rowsAfter.filter(named).length });
+    const vol = (rs: { label: string; vol: string }[], f: (r: { label: string }) => boolean) => Number(rs.find(f)?.vol.replace(" mL", "") ?? "0");
+    const otherB = vol(rowsBefore, isOther), otherA = vol(rowsAfter, isOther);
+    check(otherA < otherB, "Other（灰色）の体積が減る", { rowsBefore: otherB, rowsAfter: otherA });
+    const labelAfter = (await root.locator("[data-role=hide-label]").textContent()) ?? "";
+    console.log(`  Other ${otherB} → ${otherA} mL / 表示: 「${labelBefore}」→「${labelAfter}」`);
+    const hiddenShot = await view.screenshot({ path: path.join(OUT_DIR, "4d2-3d-hidden-small.png") });
+    check(Buffer.compare(allShot, hiddenShot) !== 0, "3D の画が変わる（隠す前と違う）", { all: allShot.length, hidden: hiddenShot.length });
+    // 0 に戻すと、体積が元に戻る（可逆）
+    await hideSlider.evaluate((el) => {
+      const input = el as HTMLInputElement;
+      const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")?.set;
+      setter?.call(input, "0");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await v.waitForFunction(() => document.querySelector(".gnmv")?.getAttribute("data-state") === "result" && !/個を隠しています|islands are hidden/.test(document.querySelector("[data-role=status]")?.textContent ?? ""), null, { timeout: 120000 });
+    await v.waitForTimeout(500);
+    const restored = await rowsOf();
+    check(JSON.stringify(restored) === JSON.stringify(rowsBefore), "0 に戻すと、一覧が元と同じになる（可逆）");
+    // SEG に隠した分が入ることの確認は、この後の保存の検査で、隠した状態（下で再度隠す）の体積と照合する
 
     // コントラスト（暗い背景に暗い文字ではない）
     const CONTRAST_BODY = `
@@ -358,6 +401,17 @@ async function main(): Promise<void> {
     }
 
     console.log("\n[6] DICOM SEG の保存");
+    // 小さい分離物を最大まで隠した状態で保存し、SEG に隠した分が入らないことを後で照合する（その時点の一覧を控える）
+    await root.locator("[data-role=hide-small]").evaluate((el) => {
+      const input = el as HTMLInputElement;
+      const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")?.set;
+      setter?.call(input, input.max);
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await v.waitForFunction(() => document.querySelector(".gnmv")?.getAttribute("data-state") === "result" && /個を隠しています|islands are hidden/.test(document.querySelector("[data-role=status]")?.textContent ?? ""), null, { timeout: 120000 });
+    await v.waitForTimeout(500);
+    fs.writeFileSync(path.join(OUT_DIR, "rows-hidden.json"), JSON.stringify(await root.locator(".gnmv-item").evaluateAll((els) => els.map((e) => ({ label: (e as HTMLElement).dataset.label, name: e.querySelector(".gnmv-nm")?.textContent ?? "", vol: e.querySelector(".gnmv-vol")?.textContent ?? "" }))), null, 1));
     await root.locator("[data-act=save-seg]").click();
     const dialog = v.getByTestId("plugin-save-confirm");
     await dialog.waitFor({ state: "visible", timeout: 20_000 });
