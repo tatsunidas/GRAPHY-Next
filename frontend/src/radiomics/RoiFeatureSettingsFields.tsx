@@ -7,6 +7,7 @@ import { NumberField } from "../hooks/NumberField";
 import { useI18n } from "../i18n/i18n";
 import { advancedToText, managedKeys, parseAdvanced } from "./advancedSettings";
 import { useSettingsSchema } from "./useSettingsSchema";
+import { familyUnits } from "./unitRules";
 import {
   CALIBRATION_CHOICES, ROI_FEATURE_FAMILIES, VALUE_KIND_CHOICES, applyScale36, applySixStatistics, ivhBinWidthOf, isScale36,
   isSixStatistics, rangeBounds,
@@ -181,6 +182,7 @@ export function RoiFeatureSettingsFields({
   showPreset,
   presetScale36 = true,
   middleSlot,
+  twoDSelected,
 }: {
   form: RoiFeatureForm;
   setForm: (f: (prev: RoiFeatureForm) => RoiFeatureForm) => void;
@@ -195,6 +197,11 @@ export function RoiFeatureSettingsFields({
   presetScale36?: boolean;
   /** 範囲（無ければリサンプリング）の後、プリセット（無ければ族）の前に差し込む。 */
   middleSlot?: ReactNode;
+  /**
+   * 2D の単位を選んでいるか。渡すと、族の欄に計算される単位（3D のみ・2D のみ）を注記し、2D の単位を選んでいないときは
+   * Shape2D を選べなくする。渡さない（一括抽出）ときは従来どおり注記も制限もしない。
+   */
+  twoDSelected?: boolean;
 }) {
   const { t } = useI18n();
   const p = testIdPrefix;
@@ -282,13 +289,21 @@ export function RoiFeatureSettingsFields({
       ))}
       <div style={{ color: "#5a6672", marginTop: 6 }}>{t("roiFeat.field.families")}</div>
       <div style={familyGrid}>
-        {ROI_FEATURE_FAMILIES.map((fam) => (
-          <label key={fam.key}>
-            <input type="checkbox" checked={!!form.families[fam.key]} disabled={disabled}
-              onChange={(e) => setForm((f) => ({ ...f, families: { ...f.families, [fam.key]: e.target.checked } }))} />{" "}
-            {familyLabel(fam.key)}
-          </label>
-        ))}
+        {ROI_FEATURE_FAMILIES.map((fam) => {
+          const u = familyUnits(fam.key);
+          const gated = twoDSelected !== undefined;
+          const blocked = gated && !u.in3d && !twoDSelected;
+          const unitNote = !gated || (u.in3d && u.in2d) ? "" : u.in3d ? t("roiFeat.family.only3d") : t("roiFeat.family.only2d");
+          return (
+            <label key={fam.key} title={blocked ? t("roiFeat.family.needs2d") : undefined}
+              style={blocked ? { opacity: 0.55 } : undefined}>
+              <input type="checkbox" checked={!!form.families[fam.key] && !blocked} disabled={disabled || blocked}
+                data-testid={`${p}-family-${fam.key}`}
+                onChange={(e) => setForm((f) => ({ ...f, families: { ...f.families, [fam.key]: e.target.checked } }))} />{" "}
+              {familyLabel(fam.key)}{unitNote && <span style={{ color: "#5a6672", fontSize: 11 }}>{unitNote}</span>}
+            </label>
+          );
+        })}
       </div>
       <AdvancedSettingsField form={form} setForm={setForm} disabled={disabled} testIdPrefix={testIdPrefix} />
     </>

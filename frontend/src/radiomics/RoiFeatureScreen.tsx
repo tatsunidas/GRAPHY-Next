@@ -123,6 +123,7 @@ export function RoiFeatureScreen() {
   /** 計算の単位（3D は常に計算する）。既定は 3D だけ＝従来と同じ。 */
   const [sectionOn, setSectionOn] = useState(false);
   const [slicesOn, setSlicesOn] = useState(false);
+  const [allPlanes, setAllPlanes] = useState(false);
   /** 症例を突き合わせるための任意の文字列（CSV の CaseLabel 列とファイル名）。患者情報は入れない。 */
   const [caseLabel, setCaseLabel] = useState("");
 
@@ -311,7 +312,9 @@ export function RoiFeatureScreen() {
         maskChannel,
         channel,
         timePoint,
-        settings: roiFeatureSettings(form),
+        // 2D の単位を選んでいないときは、Shape2D（1 枚の画像の特徴量）を送らない（3D では計算されないため）
+        settings: { ...roiFeatureSettings(form), ...(sectionOn || slicesOn ? {} : { BOOL_enableShape2D: "0" }) },
+        planes: (sectionOn || slicesOn) && allPlanes ? "ALL" : "ACQUISITION",
         calibration: form.calibration,
         valueSpec: valueSpecOf(form),
         recompute,
@@ -531,9 +534,23 @@ export function RoiFeatureScreen() {
           </span>
         </Field>
         {(sectionOn || slicesOn) && <div style={note}>{t("roiFeat.mode.note2d")}</div>}
+        <Field label={t("roiFeat.field.planes")}>
+          <span style={{ display: "inline-flex", gap: 10, alignItems: "center", justifyContent: "flex-end", flexWrap: "wrap" }}
+            title={sectionOn || slicesOn ? undefined : t("roiFeat.planes.needs2d")}>
+            <label>
+              <input type="radio" name="roifeat-planes" checked={!allPlanes} disabled={busy || !(sectionOn || slicesOn)}
+                data-testid="roifeat-planes-acquisition" onChange={() => setAllPlanes(false)} /> {t("roiFeat.planes.acquisition")}
+            </label>
+            <label>
+              <input type="radio" name="roifeat-planes" checked={allPlanes && (sectionOn || slicesOn)} disabled={busy || !(sectionOn || slicesOn)}
+                data-testid="roifeat-planes-all" onChange={() => setAllPlanes(true)} /> {t("roiFeat.planes.all")}
+            </label>
+          </span>
+        </Field>
+        {(sectionOn || slicesOn) && allPlanes && <div style={note}>{t("roiFeat.planes.noteAll")}</div>}
 
         <RoiFeatureSettingsFields form={form} setForm={setForm} disabled={busy} testIdPrefix="roifeat"
-          layout={{ labelMinWidth: 150, align: "right" }} showRange showPreset
+          layout={{ labelMinWidth: 150, align: "right" }} showRange showPreset twoDSelected={sectionOn || slicesOn}
           middleSlot={(
             <>
         <Field label={t("roiFeat.field.filter")}>

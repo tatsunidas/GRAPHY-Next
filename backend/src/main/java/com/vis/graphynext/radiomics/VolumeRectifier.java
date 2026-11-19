@@ -26,7 +26,10 @@ final class VolumeRectifier {
     /** 取り直し後のボクセル数がソースのこの倍率を超えたら断る（黙って何十分も待たせないため）。 */
     static final double MAX_VOXEL_GROWTH = 4.0;
 
-    record Result(float[][] slices, byte[][] mask, int width, int height, int nSlices, double dz) {}
+    /**
+     * @param origin 出力の (0,0,0) の画素中心の患者座標（LPS、mm）。以降のスライスは法線方向に {@code dz} ずつ進む
+     */
+    record Result(float[][] slices, byte[][] mask, int width, int height, int nSlices, double dz, double[] origin) {}
 
     private VolumeRectifier() {}
 
@@ -116,7 +119,9 @@ final class VolumeRectifier {
                 }
             }
         }
-        return new Result(out, outMask, outW, outH, outN, dz);
+        double[] origin = {base[0] + aMin * rc[0] + bMin * rr[0], base[1] + aMin * rc[1] + bMin * rr[1],
+                base[2] + aMin * rc[2] + bMin * rr[2]};
+        return new Result(out, outMask, outW, outH, outN, dz, origin);
     }
 
     /** 双一次補間。画像の外は端の画素で埋める。 */

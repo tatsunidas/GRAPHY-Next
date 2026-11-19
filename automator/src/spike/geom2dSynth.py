@@ -95,6 +95,8 @@ for k in ks:
     d.save_as(os.path.join(out, f"g_{k:03d}.dcm"), enforce_file_format=True)
     frames.append({"k": k, "sopInstanceUid": sop, "imagePositionPatient": ipp})
 
+# 独立の基準（planes2dRef.py）用に、校正後（HU）の体積を残す。取り込むディレクトリの外へ置く
+np.save(os.path.join(os.path.dirname(os.path.abspath(out)), f"{mode}_vol.npy"), vol.astype(np.float64) - 1000.0)
 BOX = {"r0": 12, "r1": 36, "c0": 10, "c1": 34, "k0": 3, "k1": 13}
 plane_axis = {"axial": 2, "missing": 2, "tilt": 2, "feetfirst": 2, "sagittal": 0, "coronal": 1}[mode]
 # 期待する位置: 箱のスライスの、患者軸の座標（チルトは z）。昇順。

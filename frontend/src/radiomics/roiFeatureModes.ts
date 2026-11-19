@@ -221,5 +221,16 @@ export function roiFeature2dFiles(result: RoiFeatureResult, caseLabel = ""): Csv
       { suffix: "_slices2d_radiomicsj.properties", text: sl.record.settingsProperties, mime: "text/plain;charset=utf-8" },
     );
   }
+  // 全断面（planes=ALL）: 断面ごとに、最大断面・スライス別・集約の CSV（取得面と同じ並び。接尾辞に断面名を足す）
+  for (const pr of result.planeResults ?? []) {
+    const tag = pr.plane.toLowerCase();
+    if (pr.section) out.push({ suffix: `_maxsection2d_${tag}.csv`, text: roiFeatureSectionCsv(pr.section, caseLabel) });
+    if (pr.slices) {
+      out.push(
+        { suffix: `_slices2d_${tag}.csv`, text: roiFeatureSlicesCsv(pr.slices, caseLabel) },
+        { suffix: `_slices2d_${tag}_aggregate.csv`, text: roiFeatureAggregateCsv(pr.slices, caseLabel) },
+      );
+    }
+  }
   return out;
 }

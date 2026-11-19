@@ -2232,6 +2232,11 @@ export interface RoiFeatureRequest {
   /** 計算の単位。省略は 3D だけ（3D は常に計算する）。 */
   roiModes?: RoiMode[];
   /**
+   * 2D の単位を計算する断面。省略・ACQUISITION は取得面（元のスライス）だけ。ALL は取得面に加えて、患者の LPS 軸に揃えた
+   * Axial・Sagittal・Coronal へ体積を再スライスして計算する（2D の単位を選んでいないときは無視）。
+   */
+  planes?: RoiPlanes;
+  /**
    * LoG のスケールの値の並び（単位は scaleNotation）。0 はフィルタなし。省略は従来（スケールなし）。
    * 設定の DOUBLEARRAY_logSigmaMm とは併用できない。
    */
@@ -2254,6 +2259,17 @@ export interface RoiFeatureRequest {
 }
 
 export type RoiMode = "WHOLE_3D" | "MAX_SECTION_2D" | "SLICES_2D";
+export type RoiPlanes = "ACQUISITION" | "ALL";
+
+/** 患者の軸に揃えた 1 つの断面の 2D の結果（backend: RoiFeatureResult.PlaneResult）。作れなかった断面は error に理由。 */
+export interface RoiFeaturePlaneResult {
+  plane: "AXIAL" | "SAGITTAL" | "CORONAL";
+  /** 再スライスした間隔（面内・法線方向とも、mm）。 */
+  spacingMm: number | null;
+  section?: RoiFeatureSection | null;
+  slices?: RoiFeatureSlices | null;
+  error?: string | null;
+}
 
 /** 表の 1 行（backend: RoiFeatureResult.Row）。 */
 export interface RoiFeatureRow {
@@ -2298,6 +2314,8 @@ export interface RoiFeatureResult {
   section?: RoiFeatureSection | null;
   /** スライス別 2D。単位に SLICES_2D を選んだときだけ。 */
   slices?: RoiFeatureSlices | null;
+  /** 全断面（planes=ALL）のとき、取得面に加えた Axial・Sagittal・Coronal の 2D の結果。 */
+  planeResults?: RoiFeaturePlaneResult[] | null;
   /** 空間スケールごとの結果（scalesMm を指定したときだけ）。この結果自体は先頭のスケールのもの。 */
   scales?: RoiFeatureScaleEntry[] | null;
 }
