@@ -14,8 +14,8 @@
  */
 import { ADVANCED_MAX_ENTRIES, ADVANCED_MAX_VALUE_LEN, advancedToText, parseAdvanced } from "./advancedSettings";
 import {
-  CALIBRATION_CHOICES, ROI_FEATURE_FAMILIES, VALUE_KIND_CHOICES, defaultRoiFeatureForm, ivhBinWidthOf, rangeBounds,
-  type CalibrationChoice, type RoiFeatureForm, type ValueKindChoice,
+  CALIBRATION_CHOICES, ROI_FEATURE_FAMILIES, UNITS_2D, VALUE_KIND_CHOICES, defaultRoiFeatureForm, ivhBinWidthOf, rangeBounds,
+  type CalibrationChoice, type RoiFeatureForm, type Unit2d, type ValueKindChoice,
 } from "./roiFeatureSettings";
 
 export const SPEC_FORMAT = "graphy-next.roi-batch-spec";
@@ -39,7 +39,7 @@ export const SPEC_KINDS: readonly SpecKind[] = ["radiomics", "voiStats"];
  * 設定の中身。`rangeMin`・`rangeMax` は範囲で除く（再セグメント）の下限・上限（強度の単位）で、null は未指定（片側だけも可）。
  * null のときは正準 JSON にキーを出さない（範囲の無い従来の定義の SHA-256 を変えない）。
  */
-export type SpecForm = Pick<RoiFeatureForm, "fixedBinNumber" | "binCount" | "binWidth" | "resampleMm" | "families"> & {
+export type SpecForm = Pick<RoiFeatureForm, "fixedBinNumber" | "binCount" | "binWidth" | "resampleMm" | "families" | "units2d" | "planesAll"> & {
   rangeMin: number | null;
   rangeMax: number | null;
   /**
@@ -102,7 +102,7 @@ export function defaultSpecContent(): SpecContent {
   const f = defaultRoiFeatureForm();
   return {
     kind: "radiomics",
-    form: { fixedBinNumber: f.fixedBinNumber, binCount: f.binCount, binWidth: f.binWidth, resampleMm: f.resampleMm, families: f.families, rangeMin: null, rangeMax: null, calibration: f.calibration, valueKind: f.valueKind, ivhBinWidth: null, intensityRounding: false, settings: {} },
+    form: { fixedBinNumber: f.fixedBinNumber, binCount: f.binCount, binWidth: f.binWidth, resampleMm: f.resampleMm, families: f.families, units2d: [], planesAll: false, rangeMin: null, rangeMax: null, calibration: f.calibration, valueKind: f.valueKind, ivhBinWidth: null, intensityRounding: false, settings: {} },
     qc: { smallRoi: "FLAG", lossy: "FLAG", smallRoiVoxels: null },
     selection: { segmentLabels: [] },
   };
@@ -132,6 +132,9 @@ const formJson = (f: SpecForm) => ({
   binWidth: f.binWidth,
   resampleMm: f.resampleMm,
   families: Object.fromEntries(ROI_FEATURE_FAMILIES.map((fam) => [fam.key, !!f.families[fam.key]])),
+  // 3D だけ（従来）はキーを出さない（従来の定義の SHA-256 を変えない）。断面は 2D の単位があるときだけ意味を持つ
+  ...(f.units2d.length === 0 ? {} : { units: UNITS_2D.filter((u) => f.units2d.includes(u)) }),
+  ...(f.units2d.length === 0 || !f.planesAll ? {} : { planes: "ALL" }),
   ...(f.rangeMin == null ? {} : { rangeMin: f.rangeMin }),
   ...(f.rangeMax == null ? {} : { rangeMax: f.rangeMax }),
   ...(f.calibration == null ? {} : { calibration: f.calibration }),
@@ -148,7 +151,7 @@ const formJson = (f: SpecForm) => ({
 const effectiveForm = (c: SpecContent): SpecForm =>
   // 校正は VOI 統計でも選ぶ。値の種類・IVH・丸めは VOI 統計では使わない。再標本化も使わない（従来どおり null で固定。
   // 既定を 1 mm にしても、保存済みの VOI 統計の定義の SHA-256 を変えない）
-  c.kind === "voiStats" ? { ...defaultSpecContent().form, resampleMm: null, calibration: c.form.calibration, valueKind: "legacy", settings: {} } : c.form;
+  c.kind === "voiStats" ? { ...defaultSpecContent().form, resampleMm: null, calibration: c.form.calibration, valueKind: "legacy", settings: {}, units2d: [], planesAll: false } : c.form;
 
 /** 正準な JSON。キーの並びを固定して組み立てる（族は `ROI_FEATURE_FAMILIES` の順）。 */
 export function canonicalContentJson(c: SpecContent): string {
@@ -260,6 +263,18 @@ export async function parseSpec(text: string): Promise<SpecParse> {
   if (rndRaw !== undefined && rndRaw !== null && typeof rndRaw !== "boolean") return fail("type", "form.intensityRounding");
   const intensityRounding = rndRaw === true;
 
+  const unitsRaw = own(form, "units");
+  let units2d: Unit2d[] = [];
+  if (unitsRaw !== undefined && unitsRaw !== null) {
+    if (!Array.isArray(unitsRaw) || unitsRaw.length === 0 || !unitsRaw.every((u) => (UNITS_2D as readonly unknown[]).includes(u))
+      || new Set(unitsRaw).size !== unitsRaw.length) return fail("type", "form.units");
+    units2d = UNITS_2D.filter((u) => unitsRaw.includes(u));
+  }
+  const planesRaw = own(form, "planes");
+  if (planesRaw !== undefined && planesRaw !== null && planesRaw !== "ALL" && planesRaw !== "ACQUISITION") return fail("type", "form.planes");
+  const planesAll = planesRaw === "ALL";
+  if (planesAll && units2d.length === 0) return fail("type", "form.planes");
+
   const setRaw = own(form, "settings");
   let settings: Record<string, string> = {};
   if (setRaw !== undefined && setRaw !== null) {
@@ -319,7 +334,7 @@ export async function parseSpec(text: string): Promise<SpecParse> {
 
   const content: SpecContent = {
     kind,
-    form: { fixedBinNumber, binCount, binWidth, resampleMm: resampleMm as number | null, families, rangeMin, rangeMax, calibration, valueKind, ivhBinWidth, intensityRounding, settings },
+    form: { fixedBinNumber, binCount, binWidth, resampleMm: resampleMm as number | null, families, units2d, planesAll, rangeMin, rangeMax, calibration, valueKind, ivhBinWidth, intensityRounding, settings },
     qc: { smallRoi, lossy, smallRoiVoxels },
     selection: { segmentLabels: normalizeLabels(labels) },
   };
@@ -352,6 +367,7 @@ export function specContentFrom(
     kind,
     form: {
       fixedBinNumber: form.fixedBinNumber, binCount: form.binCount, binWidth: form.binWidth, resampleMm: form.resampleMm, families: form.families,
+      units2d: form.units2d, planesAll: form.planesAll,
       rangeMin: ok ? range.min : null, rangeMax: ok ? range.max : null,
       calibration: form.calibration,
       valueKind: form.valueKind, ivhBinWidth: ivhBinWidthOf(form).value, intensityRounding: form.intensityRounding,

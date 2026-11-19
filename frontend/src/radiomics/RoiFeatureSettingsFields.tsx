@@ -9,8 +9,8 @@ import { advancedToText, managedKeys, parseAdvanced } from "./advancedSettings";
 import { useSettingsSchema } from "./useSettingsSchema";
 import { familyUnits } from "./unitRules";
 import {
-  CALIBRATION_CHOICES, ROI_FEATURE_FAMILIES, VALUE_KIND_CHOICES, applyScale36, applySixStatistics, ivhBinWidthOf, isScale36,
-  isSixStatistics, rangeBounds,
+  CALIBRATION_CHOICES, ROI_FEATURE_FAMILIES, VALUE_KIND_CHOICES, applyAllFamilies, applyScale36, applySixStatistics, applyTexture,
+  ivhBinWidthOf, isAllFamilies, isScale36, isSixStatistics, isTexture, rangeBounds,
   type CalibrationChoice, type RoiFeatureForm, type ValueKindChoice,
 } from "./roiFeatureSettings";
 
@@ -276,14 +276,18 @@ export function RoiFeatureSettingsFields({
       )}
       {middleSlot}
       {showPreset && row(t("roiFeat.field.preset"), 8, (
-        <select value={presetScale36 && isScale36(form) ? "scale36" : isSixStatistics(form) ? "six" : "custom"} disabled={disabled}
+        <select value={presetScale36 && isScale36(form) ? "scale36" : isSixStatistics(form) ? "six" : isTexture(form) ? "texture" : isAllFamilies(form) ? "all" : "custom"} disabled={disabled}
           style={{ ...input, width: 260 }} data-testid={`${p}-preset`}
           onChange={(e) => {
             if (e.target.value === "six") setForm((f) => applySixStatistics(f));
             if (e.target.value === "scale36") setForm((f) => applyScale36(f));
+            if (e.target.value === "texture") setForm((f) => applyTexture(f));
+            if (e.target.value === "all") setForm((f) => applyAllFamilies(f));
           }}>
           <option value="custom">{t("roiFeat.preset.custom")}</option>
           <option value="six">{t("roiFeat.preset.six")}</option>
+          <option value="texture">{t("roiFeat.preset.texture")}</option>
+          <option value="all">{t("roiFeat.preset.all")}</option>
           {presetScale36 && <option value="scale36">{t("roiFeat.preset.scale36")}</option>}
         </select>
       ))}

@@ -18,7 +18,7 @@ import {
   specText,
   type SpecContent,
 } from "./batchSpec";
-import { ROI_FEATURE_FAMILIES, defaultRoiFeatureForm } from "./roiFeatureSettings";
+import { ROI_FEATURE_FAMILIES, defaultRoiFeatureForm, type Unit2d } from "./roiFeatureSettings";
 
 const content = (over: Partial<SpecContent> = {}): SpecContent => ({ ...defaultSpecContent(), ...over });
 
@@ -602,5 +602,48 @@ describe("detail settings and the QC skip mode in the definition", () => {
     expect(bad.ok).toBe(false);
     // 従来の STOP の定義は、そのまま読める（SHA も変わらない）
     expect(await contentSha256(legacy(content({ qc: { smallRoi: "STOP", lossy: "FLAG", smallRoiVoxels: null }, selection: { segmentLabels: ["GTV", "tumor"] } })))).toBe("673da998ba6bff623ef058121cffeb17a9175bb45d7b01efa4309e9246ac636f");
+  });
+});
+
+describe("2D の単位と断面（units・planes）", () => {
+  // Python（hashlib・json）で、正準 JSON を独立に組み立てて求めた値
+  const SEC_SHA = "3c0067c0710d305d0065ad13c6efb9d71a47ccef1358073e4e47bfc31b9a6e26";
+  const BOTH_SHA = "863b37d9c3322c11498ec7b4dfb00085984d725beb7d9b80872a8f2285aca7e8";
+  const BOTH_ALL_SHA = "b329095c279a3859218615b1ec7bdce4a630b010e79c277fef5ce3c2b114e42b";
+  const withUnits = (units2d: Unit2d[], planesAll = false) => content({ form: { ...defaultSpecContent().form, units2d, planesAll } });
+
+  it("3D だけの定義の SHA-256 は変わらない（キーを出さない）。新しい項目の SHA-256 は独立の計算と一致", async () => {
+    expect(await contentSha256(defaultSpecContent())).toBe("f0f8273683f4304a247ca1ccad7d54687be5fa5ab313c4ce2613feb1776de81c");
+    expect(await contentSha256(withUnits(["MAX_SECTION_2D"]))).toBe(SEC_SHA);
+    expect(await contentSha256(withUnits(["MAX_SECTION_2D", "SLICES_2D"]))).toBe(BOTH_SHA);
+    expect(await contentSha256(withUnits(["MAX_SECTION_2D", "SLICES_2D"], true))).toBe(BOTH_ALL_SHA);
+  });
+
+  it("単位の並びに依らず同じ SHA-256。2D の単位が無ければ断面は効かない（SHA-256 も同じ）", async () => {
+    expect(await contentSha256(withUnits(["SLICES_2D", "MAX_SECTION_2D"]))).toBe(BOTH_SHA);
+    expect(await contentSha256(withUnits([], true))).toBe(await contentSha256(defaultSpecContent()));
+  });
+
+  it("保存して読み直すと同じ。VOI 統計では 2D の単位を使わない（SHA-256 に影響しない）", async () => {
+    const c = withUnits(["MAX_SECTION_2D", "SLICES_2D"], true);
+    const r = await parseSpec(specText(await buildSpec(c, "p")));
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.spec.form.units2d).toEqual(["MAX_SECTION_2D", "SLICES_2D"]);
+      expect(r.spec.form.planesAll).toBe(true);
+      expect(applySpecToForm(defaultRoiFeatureForm(), r.spec).units2d).toEqual(["MAX_SECTION_2D", "SLICES_2D"]);
+    }
+    const voi = { ...withUnits(["SLICES_2D"], true), kind: "voiStats" as const };
+    expect(await contentSha256(voi)).toBe(await contentSha256({ ...defaultSpecContent(), kind: "voiStats" }));
+  });
+
+  it("不正な単位・断面は理由つきで断る（何も変えない）", async () => {
+    const c = withUnits(["MAX_SECTION_2D"]);
+    const bad = async (mutate: (o: Record<string, any>) => void) => parseSpec(await text(mutate, c));
+    expect(await bad((o) => { o.form.units = ["WHOLE_3D"]; })).toMatchObject({ ok: false, error: "type" });
+    expect(await bad((o) => { o.form.units = []; })).toMatchObject({ ok: false, error: "type" });
+    expect(await bad((o) => { o.form.units = ["SLICES_2D", "SLICES_2D"]; })).toMatchObject({ ok: false, error: "type" });
+    expect(await bad((o) => { o.form.planes = "SIDEWAYS"; })).toMatchObject({ ok: false, error: "type" });
+    expect(await bad((o) => { delete o.form.units; o.form.planes = "ALL"; })).toMatchObject({ ok: false, error: "type" });
   });
 });

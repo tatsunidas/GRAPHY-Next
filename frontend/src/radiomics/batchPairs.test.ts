@@ -254,3 +254,23 @@ describe("batchFileBase", () => {
     expect(batchFileBase("  ")).toBe("roi-features-batch");
   });
 });
+
+describe("buildBatchRequest: 2D の単位と断面", () => {
+  const f = defaultRoiFeatureForm();
+  const p: BatchPair[] = [];
+  it("既定（3D だけ）は従来どおり。2D の単位を選ぶと roiModes に足され、断面は ALL のときだけ送る", () => {
+    expect(buildBatchRequest(p, f).roiModes).toEqual(["WHOLE_3D"]);
+    expect(buildBatchRequest(p, f).planes).toBeNull();
+    const r = buildBatchRequest(p, { ...f, units2d: ["MAX_SECTION_2D", "SLICES_2D"] });
+    expect(r.roiModes).toEqual(["WHOLE_3D", "MAX_SECTION_2D", "SLICES_2D"]);
+    expect(r.planes).toBeNull();
+    expect(buildBatchRequest(p, { ...f, units2d: ["SLICES_2D"], planesAll: true }).planes).toBe("ALL");
+    // 2D の単位が無ければ断面は効かない
+    expect(buildBatchRequest(p, { ...f, planesAll: true }).planes).toBeNull();
+  });
+  it("VOI 統計は 3D だけ（2D の単位・断面は送らない）", () => {
+    const r = buildBatchRequest(p, { ...f, units2d: ["SLICES_2D"], planesAll: true }, { kind: "voiStats" });
+    expect(r.roiModes).toEqual(["WHOLE_3D"]);
+    expect(r.planes).toBeNull();
+  });
+});

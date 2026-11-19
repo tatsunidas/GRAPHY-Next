@@ -343,3 +343,97 @@ describe("voiStats table", () => {
   });
 });
 
+
+describe("2D の単位を含む表（twoD）", () => {
+  const rec = (plane: string) => ({ plane, tiltDeg: 0, provenance: { graphyNextVersion: "0.5.1", radiomicsjVersion: "2.7.0", extractedAt: "2026-10-28T00:00:00.2Z", settingsSha256: "ef".repeat(32) }, settingsProperties: "BOOL_force2D=1\n", discretisation: { fixedBinNumber: true, nBins: 32, binWidth: 25, ivhMode: 0, ivhBinCount: 1000, ivhBinWidth: 2.5 } });
+  const sec = (plane: string, pos: number, px: number) => ({ fromCache: false, rows: [row("Stat_mean", px), row("Shape2D_PixelSurface", px * 2)], positionMm: pos, areaMm2: px * 0.5, pixels: px, record: rec(plane) });
+  const sli = (plane: string, positions: number[]) => ({
+    fromCache: false, failures: [], foregroundSlices: positions.length, record: rec(plane), mean: [], pixelWeightedMean: [], slicesUsed: {},
+    rows: positions.map((p, i) => ({ positionMm: p, areaMm2: 1, pixels: 10 + i, rows: [row("Stat_mean", p)] })),
+  });
+  const full = (): RoiFeatureResult => ({
+    ...result([1, 2]),
+    section: sec("AXIAL", 10, 225), slices: sli("AXIAL", [8, 10]),
+    planeResults: [
+      { plane: "AXIAL", spacingMm: 0.7, section: sec("AXIAL", 10, 200), slices: sli("AXIAL", [9, 10, 11]) },
+      { plane: "SAGITTAL", spacingMm: 0.7, section: null, slices: null, error: "スライスが 1 枚だけのため、別の断面を作れません。" },
+    ],
+  } as unknown as RoiFeatureResult);
+  const OPTS2 = { ...OPTS, twoD: true };
+
+  it("3D だけの表は、twoD を付けなければ従来と全く同じ（バイト一致）", () => {
+    const rows = [drow("c1", pair(), result([1, 2])), drow("c2", pair({ studyUid: "9" }), result([3, 4]))];
+    const a = table(datasetTable(rows, subjects({}), OPTS)).csv;
+    const b = table(datasetTable(rows, subjects({}), { ...OPTS, twoD: false })).csv;
+    expect(b).toBe(a);
+    expect(lines(a)[0]).not.toContain("RowKey");
+  });
+
+  it("組ごとに 3D の 1 行と 2D の各行が縦に並び、列は 3D の列→2D にだけある列", () => {
+    const t = table(datasetTable([drow("c1", pair(), full())], subjects({}), OPTS2));
+    const L = lines(t.csv);
+    const h = split(L[0]);
+    // 取得面: 最大断面 1 + スライス 2、再スライス AXIAL: 最大断面 1 + スライス 3（SAGITTAL は作れず行なし）+ 3D の 1 行
+    expect(L.length - 1).toBe(1 + 1 + 2 + 1 + 3);
+    expect(t.featureColumns).toEqual(["Stat_mean", "Stat_max", "Shape2D_PixelSurface"]);
+    const col = (r: string[], n: string) => r[h.indexOf(n)];
+    const body = L.slice(1).map(split);
+    expect(body.map((r) => col(r, "Unit"))).toEqual(["WHOLE_3D", "MAX_SECTION_2D", "SLICE_2D", "SLICE_2D", "MAX_SECTION_2D", "SLICE_2D", "SLICE_2D", "SLICE_2D"]);
+    expect(body.map((r) => col(r, "PlaneSource"))).toEqual(["", "ACQUISITION", "ACQUISITION", "ACQUISITION", "RESLICED", "RESLICED", "RESLICED", "RESLICED"]);
+    // 2D の行: 位置・面積・画素数が入り、3D の大きさの列は空。計算しない特徴は空欄（0・NaN を書かない）
+    const sec1 = body[1];
+    expect(col(sec1, "Roi_PositionMm")).toBe("10");
+    expect(col(sec1, "Roi_Pixels")).toBe("225");
+    expect(col(sec1, "Roi_VolumeMm3")).toBe("");
+    expect(col(sec1, "Stat_max")).toBe("");
+    expect(col(sec1, "Shape2D_PixelSurface")).toBe("450");
+    expect(col(body[0], "Shape2D_PixelSurface")).toBe("");
+    expect(col(body[0], "Stat_max")).toBe("2");
+    // 2D の行の記録は 2D の設定の SHA-256
+    expect(col(sec1, "Provenance_SettingsSha256")).toBe("ef".repeat(32));
+    expect(col(body[0], "Provenance_SettingsSha256")).toBe("ab".repeat(32));
+  });
+
+  it("RowKey は全行で一意（取得面と再スライスの同名の断面でも）。数の識別の列は Roi_ で始まる", () => {
+    const rows = [drow("c1", pair(), full()), drow("c2", pair({ studyUid: "9" }), full())];
+    const L = lines(table(datasetTable(rows, subjects({}), OPTS2)).csv);
+    const h = split(L[0]);
+    const keys = L.slice(1).map((l) => split(l)[h.indexOf("RowKey")]);
+    expect(new Set(keys).size).toBe(keys.length);
+    expect(keys[1]).toBe("c1|MAX_SECTION_2D|ACQUISITION|AXIAL|10");
+    expect(keys.some((k) => k.startsWith("c1|MAX_SECTION_2D|RESLICED|AXIAL|"))).toBe(true);
+    for (const n of ["Roi_PlaneTiltDeg", "Roi_PositionMm", "Roi_AreaMm2", "Roi_Pixels"]) expect(h).toContain(n);
+  });
+
+  it("失敗した組は 1 行（単位は空、RowKey は CaseLabel）で、行は消えない", () => {
+    const rows = [drow("c1", pair(), full()), drow("c2", pair({ studyUid: "9" }), null)];
+    const L = lines(table(datasetTable(rows, subjects({}), OPTS2)).csv);
+    const h = split(L[0]);
+    const last = split(L[L.length - 1]);
+    expect(last[h.indexOf("RowStatus")]).toBe("FAILED");
+    expect(last[h.indexOf("Unit")]).toBe("");
+    expect(last[h.indexOf("RowKey")]).toBe("c2");
+    expect(last.length).toBe(h.length);
+    expect(L.every((l) => split(l).length === h.length)).toBe(true);
+  });
+
+  it("定義表に、特徴量の列を計算した単位が付く", () => {
+    const t = table(datasetTable([drow("c1", pair(), full())], subjects({}), OPTS2));
+    const d = lines(datasetDefinitionsCsv(t)).map(split);
+    expect(d[0][d[0].length - 1]).toBe("units");
+    const u = (c: string) => d.find((r) => r[0] === c)![d[0].length - 1];
+    expect(u("Stat_mean")).toBe("WHOLE_3D;MAX_SECTION_2D;SLICE_2D");
+    expect(u("Stat_max")).toBe("WHOLE_3D");
+    expect(u("Shape2D_PixelSurface")).toBe("MAX_SECTION_2D");
+    expect(d.find((r) => r[0] === "RowKey")![4]).toContain("feature-id");
+    expect(d.every((r) => r.length === d[0].length)).toBe(true);
+  });
+
+  it("3D の行の見出しが組の間で違えば止める（従来どおり）。2D の設定ファイルを書く", () => {
+    const bad = datasetTable([drow("c1", pair(), full()), drow("c2", pair({ studyUid: "9" }), result([1], ["Other_x"]))], subjects({}), OPTS2);
+    expect(bad).toEqual({ ok: false, reason: "header mismatch", caseLabel: "c2" });
+    const r = datasetFiles([drow("c1", pair(), full())], subjects({}), { ...OPTS2, base: "b", specText: "{}", subjectsFile: false, bom: false });
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.files.find((f) => f.name === "b_radiomicsj_2d.properties")?.text).toBe("BOOL_force2D=1\n");
+  });
+});

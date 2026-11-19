@@ -720,12 +720,13 @@ async function main(): Promise<void> {
     };
     const rangeMin = page.getByTestId("batch-range-min");
     const rangeMax = page.getByTestId("batch-range-max");
-    const familyBoxes = page.getByTestId("batch-settings").locator('input[type="checkbox"]');
+    // 族のチェックボックスだけ（計算の単位の欄の「全腫瘍（3D）」などは含めない）
+    const familyBoxes = page.getByTestId("batch-settings").locator('input[type="checkbox"][data-testid^="batch-family-"]');
     await reopen();
     await page.getByTestId("batch-prefix").fill("rangecheck");
     check((await page.getByTestId("batch-preset").inputValue()) === "custom", "プリセットは既定で「自分で選ぶ」");
     const presetValues = await page.getByTestId("batch-preset").locator("option").evaluateAll((os) => os.map((o) => (o as HTMLOptionElement).value));
-    check(presetValues.join() === "custom,six", "一括抽出のプリセットに「36 特徴」は出ない（LoG が前提のため）", presetValues);
+    check(presetValues.join() === "custom,six,texture,all", "一括抽出のプリセットは 6 統計・テクスチャ・すべての族で、「36 特徴」は出ない（LoG が前提のため）", presetValues);
     check((await rangeMin.inputValue()) === "" && (await rangeMax.inputValue()) === "", "範囲の欄は既定で空");
 
     console.log("  -- 9a. プリセット「6 統計」");
@@ -837,6 +838,86 @@ async function main(): Promise<void> {
     await page.getByTestId("batch-spec-file").setInputFiles(path.join(OUT_DIR, "range_reversed.json"));
     await waitText(page, "batch-error", /範囲外.*form\.range/, 20_000);
     check((await rangeMin.inputValue()) === "-850.5" && (await rangeMax.inputValue()) === "", "下限が上限より大きい定義は範囲外として断られ、欄は変わらない（負例）");
+
+    console.log("  -- 10. 2D の単位・全断面（一括抽出の縦長の 1 表）");
+    await reopen();
+    await page.getByTestId("batch-preset").selectOption("six");
+    await page.waitForTimeout(300);
+    check(await page.getByTestId("batch-family-Shape2D").isDisabled() && !(await page.getByTestId("batch-family-Shape2D").isChecked()), "2D の単位が無いと Shape2D は選べない");
+    check((await page.getByTestId("batch-planes").count()) === 0, "2D の単位が無いと断面の選択は出ない");
+    await page.getByTestId("batch-unit-MAX_SECTION_2D").check();
+    await page.getByTestId("batch-unit-SLICES_2D").check();
+    await page.getByTestId("batch-planes-all").check();
+    check(!(await page.getByTestId("batch-family-Shape2D").isDisabled()), "2D の単位を選ぶと Shape2D が選べる");
+    await page.getByTestId("batch-family-Shape2D").check();
+    check(/RowKey/.test(await page.getByTestId("batch-units-help").innerText()), "RowKey の使い方の説明が出る");
+    const opts10 = await page.getByTestId("batch-preset").locator("option").allInnerTexts();
+    check(opts10.some((t) => /^テクスチャ/.test(t)) && opts10.some((t) => /^すべての族/.test(t)), "プリセットにテクスチャとすべての族がある", opts10);
+    const sha10 = await shaOf();
+    await page.screenshot({ path: path.join(OUT_DIR, "16-units-form.png"), fullPage: true });
+    await page.getByTestId("batch-run").click();
+    await waitText(page, "batch-progress", /完了 — 5\/5 完了/, 900_000);
+    const req10 = posted[posted.length - 1];
+    check((req10.roiModes as string[]).join() === "WHOLE_3D,MAX_SECTION_2D,SLICES_2D" && req10.planes === "ALL", "送った要求: 3 単位・断面 ALL", [req10.roiModes, req10.planes]);
+    await page.getByTestId("batch-prefix").fill("units2d");
+    await page.getByTestId("batch-write").click();
+    const dl10 = await takeDownloads(page, 6);
+    for (const f of dl10) fs.writeFileSync(path.join(OUT_DIR, f.name), f.text);
+    check(dl10.map((f) => f.name).sort().join() === ["units2d.csv", "units2d_definitions.csv", "units2d_radiomicsj.properties", "units2d_radiomicsj_2d.properties", "units2d_spec.json", "units2d_subjects_private.csv"].sort().join(), "6 ファイル（2D の設定ファイルが増える）", dl10.map((f) => f.name));
+    const t10 = parseFeatures(dl10.find((f) => f.name === "units2d.csv")!.text);
+    const c10 = (n: string) => t10.header.indexOf(n);
+    check(["Unit", "PlaneSource", "Plane", "RowKey", "Roi_PlaneTiltDeg", "Roi_PositionMm", "Roi_AreaMm2", "Roi_Pixels"].every((n) => c10(n) > 0), "単位の列がある");
+    const keys10 = t10.rows.map((r) => r[c10("RowKey")]);
+    check(new Set(keys10).size === keys10.length, "RowKey は全行で一意", keys10.length);
+    const spec10 = JSON.parse(dl10.find((f) => f.name === "units2d_spec.json")!.text) as { sha256: string; form: { units: string[]; planes: string } };
+    check(spec10.sha256 === sha10 && spec10.form.units.join() === "MAX_SECTION_2D,SLICES_2D" && spec10.form.planes === "ALL" && t10.rows.every((r) => r[c10("Provenance_SpecSha256")] === sha10), "定義の units・planes・SHA-256 が画面・全行と一致");
+    // 基準: 同じ組を API 直呼び（同じ設定・3 単位・全断面）で計算し、期待する行（単位・断面・位置・画素数・平均）を作る
+    const MEAN10 = "IntensityBasedStatistical_Mean";
+    interface Sec10 { positionMm: number; pixels: number; rows: Row[]; record: { plane?: string } }
+    interface Sl10 { rows: { positionMm: number; pixels: number; rows: Row[] }[]; record: { plane?: string } }
+    interface Res10 { rows: Row[]; section?: Sec10; slices?: Sl10; planeResults?: { plane: string; section?: Sec10 | null; slices?: Sl10 | null; error?: string | null }[] }
+    const pairsDone = [...new Set(t10.rows.map((r) => `${r[c10("StudyInstanceUID")]}|${r[c10("MaskSeriesUID")]}|${r[c10("Roi_MaskChannel")]}`))];
+    check(pairsDone.length === 5, "5 組", pairsDone.length);
+    let rowsWant = 0;
+    let rowsOk = 0;
+    let meanDiff = 0;
+    const planesCovered = new Set<string>();
+    for (const key of pairsDone) {
+      const [study, mask, ch] = key.split("|");
+      const mine = t10.rows.filter((r) => r[c10("StudyInstanceUID")] === study && r[c10("MaskSeriesUID")] === mask && r[c10("Roi_MaskChannel")] === ch);
+      const src = mine[0][c10("SourceSeriesUID")];
+      const direct = (await apiFeatures(base, { studyInstanceUid: study, sourceSeriesUid: src, maskSeriesUid: mask, maskChannel: Number(ch), channel: 0, timePoint: 0,
+        settings: req10.settings, valueSpec: req10.valueSpec, calibration: req10.calibration, recompute: true, roiModes: ["WHOLE_3D", "MAX_SECTION_2D", "SLICES_2D"], planes: "ALL" })) as unknown as Res10;
+      const want: { unit: string; src: string; plane: string; pos: number; pixels: number; mean: number | null }[] = [
+        { unit: "WHOLE_3D", src: "", plane: "", pos: NaN, pixels: NaN, mean: direct.rows.find((x) => x.column === MEAN10)?.value ?? null }];
+      const addU = (source: string, sec?: Sec10 | null, sl?: Sl10 | null) => {
+        if (sec) want.push({ unit: "MAX_SECTION_2D", src: source, plane: sec.record.plane ?? "", pos: sec.positionMm, pixels: sec.pixels, mean: sec.rows.find((x) => x.column === MEAN10)?.value ?? null });
+        for (const r of sl?.rows ?? []) want.push({ unit: "SLICE_2D", src: source, plane: sl!.record.plane ?? "", pos: r.positionMm, pixels: r.pixels, mean: r.rows.find((x) => x.column === MEAN10)?.value ?? null });
+      };
+      addU("ACQUISITION", direct.section, direct.slices);
+      for (const p of direct.planeResults ?? []) { addU("RESLICED", p.section, p.slices); if (p.section) planesCovered.add(p.plane); }
+      rowsWant += want.length;
+      const fmt = (u: string, s: string, pl: string, pos: number, px: number) => `${u}|${s}|${pl}|${Number.isNaN(pos) ? "" : pos.toFixed(4)}|${Number.isNaN(px) ? "" : px}`;
+      const gotKeys = new Map(mine.map((r) => [fmt(r[c10("Unit")], r[c10("PlaneSource")], r[c10("Plane")], r[c10("Roi_PositionMm")] === "" ? NaN : Number(r[c10("Roi_PositionMm")]), r[c10("Roi_Pixels")] === "" ? NaN : Number(r[c10("Roi_Pixels")])), r]));
+      for (const w of want) {
+        const g = gotKeys.get(fmt(w.unit, w.src, w.plane, w.pos, w.pixels));
+        if (g) {
+          rowsOk++;
+          const gv = g[c10(MEAN10)] === "" ? null : Number(g[c10(MEAN10)]);
+          if (w.mean == null ? gv != null : gv == null || Math.abs(gv - w.mean) > 1e-9) meanDiff++;
+        }
+      }
+      if (mine.length !== want.length) console.log(`  [info] ${key}: 行数 表 ${mine.length} / 基準 ${want.length}`);
+    }
+    check(rowsWant > 40 && rowsOk === rowsWant, "全 5 組の全行（単位・取得面/再スライス・断面・位置・画素数）が、API 直呼びの結果と一致", { rowsWant, rowsOk });
+    check(meanDiff === 0, "全行の平均強度が API 直呼びと一致（2D の行は 2D の値、3D の行は 3D の値）", { meanDiff });
+    check(t10.rows.length === rowsWant, "表の行数 = 基準の行数（余計な行・欠けた行が無い）", [t10.rows.length, rowsWant]);
+    check(["AXIAL", "SAGITTAL", "CORONAL"].every((p) => planesCovered.has(p)), "再スライスした 3 断面が計算されている", [...planesCovered]);
+    const sh2d = t10.rows.filter((r) => r[c10("Unit")] !== "WHOLE_3D" && c10("Shape2D_PixelSurface") > 0 && r[c10("Shape2D_PixelSurface")] !== "");
+    check(c10("Shape2D_PixelSurface") > 0 && sh2d.length > 0 && t10.rows.filter((r) => r[c10("Unit")] === "WHOLE_3D").every((r) => r[c10("Shape2D_PixelSurface")] === ""), "Shape2D は 2D の行だけに値があり、3D の行は空欄");
+    const defs10 = dl10.find((f) => f.name === "units2d_definitions.csv")!.text;
+    check(/Shape2D_PixelSurface[^\n]*MAX_SECTION_2D;SLICE_2D/.test(defs10) && /IntensityBasedStatistical_Mean[^\n]*WHOLE_3D;MAX_SECTION_2D;SLICE_2D/.test(defs10), "定義表に、列ごとの計算した単位が付く");
+    check(!dl10.some((f) => f.text.includes(PATIENT_NAME)), "どのファイルにも患者名が無い");
   } finally {
     // resetDb はアルバムを消さないので、自分で作ったものは自分で消す
     if (albumId) await fetch(`${base}/api/albums/${albumId}`, { method: "DELETE" }).catch(() => {});
