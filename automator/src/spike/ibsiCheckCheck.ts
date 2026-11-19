@@ -7,7 +7,7 @@
  *   2. 書き出した CSV・JSON が API の本文（csv・report）と一致する。
  *   3. 絞り込み: 「不合格だけ」は不合格の数、「不合格と計算されず」は不合格＋計算されずの数、
  *      検索は件数を減らす（絞り込みが効いていることを、すべて表示との差で確かめる）。
- *   4. CT ファントム（構成 C・D）は「リリース時の記録」として出て、構成 C の不合格 1 件が見える。
+ *   4. CT ファントム（構成 C・D）は「リリース時の記録」として出る。構成 C・D とも不合格 0（2.7.2 までは構成 C に 1 件あった）。
  *      記録に書かれた RadiomicsJ の版が、載せている版（backend/pom.xml）と一致する。
  *   5. スクリーンショット（out/）で見た目を人が判定する。
  *
@@ -161,7 +161,11 @@ async function main(): Promise<void> {
     await c.waitFor({ state: "visible", timeout: 10_000 });
     check((await dd.count()) === 1, "構成 D の記録が出る");
     const cText = await c.innerText();
-    check(cText.includes("不合格") && cText.includes("IntensityAtVolumeFraction") || cText.includes("Intensity at"), "構成 C の不合格 1 件の行が見える", cText);
+    // 2.7.2 までは構成 C に不合格が 1 件（Intensity at 10% volume）あった。2.7.3 は IBSI の定義どおりで 0 件（API の記録の件数と画面が一致）
+    const apiRecs = (await (await fetch(`${base}/api/radiomics/ibsi-check/records`)).json()) as { dataSet: string; counts: Record<string, number> }[];
+    const apiC = apiRecs.find((r) => r.dataSet === "configuration C");
+    check(apiC?.counts.FAIL === 0, "API: 構成 C の記録は不合格 0", apiC?.counts);
+    check(/不合格\s*0\b/.test(cText) && !/不合格\s*[1-9]/.test(cText), "構成 C の記録は不合格 0 と表示される（不合格の行は無い）", cText.slice(0, 200));
     check((await c.innerText()).includes(`RadiomicsJ ${RADIOMICSJ_VERSION}`), `構成 C の記録の版が ${RADIOMICSJ_VERSION}`, cText.slice(0, 80));
     check((await dd.innerText()).includes(`RadiomicsJ ${RADIOMICSJ_VERSION}`), `構成 D の記録の版が ${RADIOMICSJ_VERSION}`);
     check((await page.getByText("この PC では実行していません").count()) >= 1, "「この PC では実行していない」と明記");
