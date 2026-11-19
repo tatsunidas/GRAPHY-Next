@@ -44,14 +44,22 @@ public class RadiomicsBatchService {
 
     public enum JobState { QUEUED, RUNNING, DONE, STOPPED, CANCELLED }
 
-    public enum PairState { PENDING, RUNNING, DONE, FAILED, SKIPPED, NOT_RUN, CANCELLED }
+    /**
+     * {@code SKIPPED} は計画で除外された組（計算しない）。{@code QC_SKIPPED} は計算したが、QC の「スキップ」に当たって
+     * 値を表に入れなかった組（理由は {@code error}、旗は {@code qcFlags}）。
+     */
+    public enum PairState { PENDING, RUNNING, DONE, FAILED, SKIPPED, QC_SKIPPED, NOT_RUN, CANCELLED }
 
     /** INPUT＝入力固有（IllegalArgumentException）、ENGINE＝入力かエンジンか区別できない（IllegalStateException など）、
      *  ENVIRONMENT＝IO・メモリ。 */
     public enum FailureKind { INPUT, ENGINE, ENVIRONMENT }
 
     /** QC に当たった組をどうするか。{@code FLAG}＝記録して続ける、{@code STOP}＝その組の結果を残してジョブを止める。 */
-    public enum QcMode { FLAG, STOP }
+    /**
+     * FLAG＝旗を付けて続ける、STOP＝当たった組の結果を残して止める（人が 1 件ずつ判断する）、
+     * SKIP＝止めずに続け、当たった組の値は表に入れずに「スキップ・理由」の行として残す。
+     */
+    public enum QcMode { FLAG, STOP, SKIP }
 
     /** QC の条件ごとの扱い。null は {@code FLAG}。 */
     public record Qc(QcMode smallRoi, QcMode lossy) {}
@@ -135,7 +143,7 @@ public class RadiomicsBatchService {
      * @param stopIndex  止めた組の添字（{@code pairs} の中）。止まっていなければ null
      */
     public record Status(String jobId, JobState state, long elapsedMs, int total, int done, int failed, int skipped,
-                         int notRun, int cancelled, String stopReason, StopKind stopKind, Integer stopIndex,
+                         int notRun, int cancelled, int qcSkipped, String stopReason, StopKind stopKind, Integer stopIndex,
                          List<PairStatus> pairs) {}
 
     public record PairResult(int index, BatchPair pair, RoiFeatureResult result) {}
@@ -184,7 +192,7 @@ public class RadiomicsBatchService {
             // 組の更新がすべて見える（組を先に走査して、あとから状態を読むと、完了なのに最後の組が「実行中」のままの
             // 食い違った状態が返りうる）。
             JobState stateNow = state;
-            int done = 0, failed = 0, skipped = 0, notRun = 0, cancelled = 0;
+            int done = 0, failed = 0, skipped = 0, notRun = 0, cancelled = 0, qcSkipped = 0;
             List<PairStatus> list = new ArrayList<>(status.length);
             for (PairStatus p : status) {
                 list.add(p);
@@ -194,11 +202,12 @@ public class RadiomicsBatchService {
                     case SKIPPED -> skipped++;
                     case NOT_RUN -> notRun++;
                     case CANCELLED -> cancelled++;
+                    case QC_SKIPPED -> qcSkipped++;
                     default -> { }
                 }
             }
             return new Status(id, stateNow, elapsedMs(), status.length, done, failed, skipped, notRun, cancelled,
-                    stopReason, stopKind, stopIndex, list);
+                    qcSkipped, stopReason, stopKind, stopIndex, list);
         }
     }
 
@@ -300,7 +309,7 @@ public class RadiomicsBatchService {
         List<PairResult> out = new ArrayList<>();
         for (int i = 0; i < job.results.length; i++) {
             RoiFeatureResult r = job.results[i];
-            if (r != null && job.status[i].state() == PairState.DONE) {
+            if (r != null && job.status[i].state() == PairState.DONE) { // QC_SKIPPED の値は返さない
                 out.add(new PairResult(i, job.pairs.get(i), r));
             }
         }
@@ -350,10 +359,33 @@ public class RadiomicsBatchService {
         if (r.provenance() != null && r.provenance().uncalibratedPet()) {
             flags.add(FLAG_UNCALIBRATED_PT);
         }
-        if (r.provenance() != null && r.provenance().valueKindFlags() != null) {
-            flags.addAll(r.provenance().valueKindFlags());
+        if (r.provenance() != null && r.provenance().recordFlags() != null) {
+            flags.addAll(r.provenance().recordFlags());
         }
         return flags;
+    }
+
+    /** QC の「スキップ」に当たったか（止める指定が先に効くので、止めるに当たったときは呼ばない）。 */
+    private static boolean skipsOn(Qc qc, List<String> flags) {
+        if (qc == null) {
+            return false;
+        }
+        return (qc.smallRoi() == QcMode.SKIP && flags.contains(FLAG_SMALL_ROI))
+                || (qc.lossy() == QcMode.SKIP && flags.contains(FLAG_LOSSY));
+    }
+
+    /** スキップの理由（結果の表の RowError に入る）。スキップの指定に当たった旗だけを書く。 */
+    static String skipReason(Qc qc, RoiFeatureResult r, List<String> flags) {
+        List<String> why = new ArrayList<>();
+        if (qc.smallRoi() == QcMode.SKIP && flags.contains(FLAG_SMALL_ROI)) {
+            RoiFeatureResult.RoiSize s = r.roiSize();
+            why.add("小さい ROI（" + (s == null || s.intensityVoxels() == null ? "?" : s.intensityVoxels())
+                    + " ボクセル ＜ 基準値 " + (s == null || s.smallRoiWarnVoxels() == null ? "?" : s.smallRoiWarnVoxels()) + "）");
+        }
+        if (qc.lossy() == QcMode.SKIP && flags.contains(FLAG_LOSSY)) {
+            why.add("非可逆圧縮の画像");
+        }
+        return "QC でスキップ: " + String.join("、", why);
     }
 
     private static boolean stopsOn(Qc qc, List<String> flags) {
@@ -396,6 +428,12 @@ public class RadiomicsBatchService {
                         stop(job, i + 1, n, String.join(",", flags), StopKind.QC, i);
                         log.info("[roi-batch] job {} stopped by QC at pair {}: {}", job.id, i, flags);
                         return;
+                    }
+                    if (!flags.isEmpty() && skipsOn(req.qc(), flags) && !acknowledged(req).contains(p.pairKey())) {
+                        // 止めずに続ける。値は表に入れず、状態と理由を残す（黙って捨てない）。許容した組は飛ばさない
+                        set(job, i, PairState.QC_SKIPPED, null, skipReason(req.qc(), r, flags), r.fromCache(),
+                                System.currentTimeMillis() - t0, flags);
+                        log.info("[roi-batch] job {} pair {} skipped by QC: {}", job.id, i, flags);
                     }
                 } catch (CancellationException e) {
                     set(job, i, PairState.CANCELLED, null, null, false, System.currentTimeMillis() - t0);

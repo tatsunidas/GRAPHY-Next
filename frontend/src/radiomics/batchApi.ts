@@ -30,8 +30,8 @@ export interface BatchPlanRequest {
   studyUids: string[] | null;
 }
 
-/** QC に当たった組の扱い。FLAG＝記録して続ける、STOP＝その組の結果を残してジョブを止める。 */
-export type BatchQcMode = "FLAG" | "STOP";
+/** QC に当たった組の扱い。FLAG＝記録して続ける、STOP＝その組の結果を残してジョブを止める、SKIP＝止めずに続け、その組の値は表に入れず行として残す。 */
+export type BatchQcMode = "FLAG" | "STOP" | "SKIP";
 
 export interface BatchQc {
   smallRoi: BatchQcMode;
@@ -39,7 +39,9 @@ export interface BatchQc {
 }
 
 /** QC の旗。SMALL_ROI は環境設定の基準値が未設定なら立たない（「判定していない」）。 */
-export type BatchQcFlag = "SMALL_ROI" | "LOSSY_COMPRESSION";
+export type BatchQcFlag =
+  | "SMALL_ROI" | "LOSSY_COMPRESSION" | "UNCALIBRATED_PT" | "UNCALIBRATED_SPACING"
+  | "VALUEKIND_OVERRIDDEN" | "IVH_BINWIDTH_UNSET" | "ROUNDING_IGNORED" | "IVH_SETTING_EXPLICIT";
 
 export interface BatchRequest {
   pairs: BatchPair[];
@@ -68,7 +70,8 @@ export interface BatchRequest {
 }
 
 export type BatchJobState = "QUEUED" | "RUNNING" | "DONE" | "STOPPED" | "CANCELLED";
-export type BatchPairState = "PENDING" | "RUNNING" | "DONE" | "FAILED" | "SKIPPED" | "NOT_RUN" | "CANCELLED";
+/** `SKIPPED` は計画で除外された組。`QC_SKIPPED` は計算したが QC の「スキップ」に当たって値を表に入れなかった組（理由は error）。 */
+export type BatchPairState = "PENDING" | "RUNNING" | "DONE" | "FAILED" | "SKIPPED" | "QC_SKIPPED" | "NOT_RUN" | "CANCELLED";
 /** INPUT＝入力固有、ENGINE＝入力かエンジンか区別できない、ENVIRONMENT＝IO・メモリ（残りを止める）。 */
 export type BatchFailureKind = "INPUT" | "ENGINE" | "ENVIRONMENT";
 
@@ -93,6 +96,8 @@ export interface BatchStatus {
   skipped: number;
   notRun: number;
   cancelled: number;
+  /** QC の「スキップ」に当たって値を表に入れなかった組の数。 */
+  qcSkipped: number;
   /** QC なら旗の並び（`SMALL_ROI,LOSSY_COMPRESSION`）、環境障害ならそのメッセージ。 */
   stopReason: string | null;
   /** QC＝利用者の確認待ち、ENVIRONMENT＝IO・メモリの障害。止まっていなければ null。 */

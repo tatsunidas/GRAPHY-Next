@@ -29,12 +29,12 @@ const SETTING_PARAMS = new Set([
 ]);
 
 describe("roiFeatureSettings", () => {
-  it("既定は RadiomicsJ の既定（ビン数 32、GLAM・Shape2D はオフ、リサンプリングなし）", () => {
+  it("既定: ビン数 32、GLAM・Shape2D はオフ、リサンプリングは等方 1 mm", () => {
     const s = roiFeatureSettings(defaultRoiFeatureForm());
     expect(s.BOOL_USE_FixedBinNumber).toBe("1");
     expect(s.INT_binCount).toBe("32");
     expect(s.DOUBLE_binWidth).toBeUndefined();
-    expect(s.DOUBLEARRAY_resamplingFactorXYZ).toBeUndefined();
+    expect(s.DOUBLEARRAY_resamplingFactorXYZ).toBe("1,1,1");
     expect(s.BOOL_enableGLAM).toBe("0");
     expect(s.BOOL_enableShape2D).toBe("0");
     for (const k of ["Morphological", "GLCM", "GLRLM", "GLSZM", "GLDZM", "NGTDM", "NGLDM", "Fractal",

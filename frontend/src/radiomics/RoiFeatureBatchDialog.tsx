@@ -53,7 +53,9 @@ import { BatchQueuePanel } from "./BatchQueuePanel";
 import { buildDatasetOutput, runQueue, type QueueEntry } from "./batchQueue";
 import { assignSubjectCodes } from "./datasetCsv";
 import { downloadText } from "./downloadText";
+import { parseAdvanced } from "./advancedSettings";
 import { defaultRoiFeatureForm, rangeBounds, type RoiFeatureForm } from "./roiFeatureSettings";
+import { useSettingsSchema } from "./useSettingsSchema";
 
 const POLL_INTERVAL_MS = 1000;
 const SERIES_CONCURRENCY = 4;
@@ -113,7 +115,8 @@ export function RoiFeatureBatchDialog({
   const [info, setInfo] = useState<string | null>(null);
   /** 出力の選択。被験者の対応表は既定で書く（別ファイル）。患者 ID を表に含めるのは選んだときだけ。BOM は既定で付けない。 */
   const [subjectsFile, setSubjectsFile] = useState(true);
-  const [includePatientId, setIncludePatientId] = useState(false);
+  // 既定でオン（利用者の要望）。表に患者 ID が入るので、共有・公開する表では外す。警告は常に見える位置に出す。
+  const [includePatientId, setIncludePatientId] = useState(true);
   const [bom, setBom] = useState(false);
   /** 送信中（押してから応答が来るまで）。この間に押し直すと同じ組が二重に投入される。 */
   const [starting, setStarting] = useState(false);
@@ -213,7 +216,11 @@ export function RoiFeatureBatchDialog({
   /** 単独実行中、または一覧の実行中。設定・組・出力の欄を触らせない。 */
   const locked = running || queueRunning;
   /** 範囲の欄が数でない・下限が上限より大きい間は、実行も定義の保存もしない（範囲なしの定義が黙って作られるのを防ぐ）。 */
-  const rangeProblem = kind === "voiStats" ? null : rangeBounds(form).problem;
+  const settingsSchema = useSettingsSchema();
+  // 詳細設定にエラー（形・重複・他の欄のキー・知らないキー・値の型）がある間は、実行も定義の保存もしない
+  // （エラーの行を黙って捨てた設定で計算しない）
+  const advancedProblem = kind === "voiStats" ? false : parseAdvanced(form.advancedText, settingsSchema).errors.length > 0;
+  const inputProblem = kind === "voiStats" ? (advancedProblem ? "ADVANCED" : null) : (rangeBounds(form).problem ?? (advancedProblem ? "ADVANCED" : null));
   // 実行時に振られる症例ラベル。空欄の行の placeholder に出す（振り方は assignCaseLabels の 1 つだけ。表示と実行で食い違わない）
   const planned = rows ? assignCaseLabels(rows) : [];
   const dup = rows ? duplicateLabels(planned) : [];
@@ -408,7 +415,7 @@ export function RoiFeatureBatchDialog({
           <div style={note}>{t("roiFeat.researchOnly")}</div>
           <div style={note}>{t("roiFeat.batch.privacy")}</div>
           <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 8 }}>
-            <button type="button" style={btn} data-testid="batch-spec-save" disabled={locked || rangeProblem !== null} onClick={() => void saveSpec()}>
+            <button type="button" style={btn} data-testid="batch-spec-save" disabled={locked || inputProblem !== null} onClick={() => void saveSpec()}>
               {t("roiFeat.batch.spec.save")}
             </button>
             <button type="button" style={btn} data-testid="batch-spec-load" disabled={locked} onClick={() => fileRef.current?.click()}>
@@ -527,7 +534,7 @@ export function RoiFeatureBatchDialog({
               </div>
               {dup.length > 0 && <div style={errStyle}>{t("roiFeat.batch.err.duplicate", { labels: dup.join(", ") })}</div>}
               <BatchQueuePanel entries={queue} onChange={setQueue} running={queueRunning} busy={running || starting}
-                canAddCurrent={rangeProblem === null} onAddFiles={(fs) => void addSpecs(fs)} onAddCurrent={() => void addCurrentSpec()}
+                canAddCurrent={inputProblem === null} onAddFiles={(fs) => void addSpecs(fs)} onAddCurrent={() => void addCurrentSpec()}
                 onRun={() => void runList()} onCancel={() => { queueCancelRef.current = true; }} />
             </>
           )}
@@ -537,9 +544,10 @@ export function RoiFeatureBatchDialog({
               <div>
                 {t(`roiFeat.batch.jobState.${job.state}`)} — {t("roiFeat.batch.progress", {
                   done: job.done, total: job.total, failed: job.failed, skipped: job.skipped, notRun: job.notRun,
+                  qcSkipped: job.qcSkipped ?? 0,
                 })}
               </div>
-              <div style={track}><div style={{ ...bar, width: `${job.total ? Math.round(((job.done + job.failed + job.skipped) / job.total) * 100) : 0}%` }} /></div>
+              <div style={track}><div style={{ ...bar, width: `${job.total ? Math.round(((job.done + job.failed + job.skipped + (job.qcSkipped ?? 0)) / job.total) * 100) : 0}%` }} /></div>
               {job.state === "STOPPED" && job.stopKind !== "QC" && (
                 <div style={errStyle}>{t("roiFeat.batch.stopped", { reason: job.stopReason ?? "" })}</div>
               )}
@@ -568,15 +576,15 @@ export function RoiFeatureBatchDialog({
               {t("roiFeat.batch.trialResult", { n: trial.result.rows.length, ms: job?.pairs[0]?.elapsedMs ?? 0 })}
             </div>
           )}
-          {unsetThreshold && (qc.smallRoi === "STOP" || results || trial) && (
+          {unsetThreshold && (qc.smallRoi !== "FLAG" || results || trial) && (
             <div style={{ ...note, color: "#7a4b00" }} data-testid="batch-unset-threshold">{t("roiFeat.batch.qc.unset")}</div>
           )}
           {written != null && <div style={{ ...note, color: "#2f6b2f" }} data-testid="batch-written">{t("roiFeat.batch.written", { n: written })}</div>}
         </div>
         <div style={footer}>
-          <button type="button" style={btn} data-testid="batch-trial" disabled={rangeProblem !== null || locked || starting || !summary || summary.selected === 0}
+          <button type="button" style={btn} data-testid="batch-trial" disabled={inputProblem !== null || locked || starting || !summary || summary.selected === 0}
             onClick={() => void start(true)}>{t("roiFeat.batch.trial")}</button>
-          <button type="button" style={btnPrimary} data-testid="batch-run" disabled={rangeProblem !== null || locked || starting || !summary || summary.selected === 0}
+          <button type="button" style={btnPrimary} data-testid="batch-run" disabled={inputProblem !== null || locked || starting || !summary || summary.selected === 0}
             onClick={() => void start(false)}>{t("roiFeat.batch.run")}</button>
           {running && <button type="button" style={btn} data-testid="batch-cancel" onClick={cancel}>{t("roiFeat.batch.cancel")}</button>}
           <button type="button" style={btn} data-testid="batch-write"

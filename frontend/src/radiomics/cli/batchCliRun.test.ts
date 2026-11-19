@@ -44,7 +44,7 @@ function fake(pairs: BatchPair[], mode: (i: number) => Mode = () => "ok", albums
       index, pair: p, state: "DONE", failureKind: null, error: null, fromCache: false, elapsedMs: 1, qcFlags: [],
     }));
     return {
-      jobId: id, state, elapsedMs: 1, total: prs.length, done: prs.length, failed: 0, skipped: 0, notRun: 0, cancelled: 0,
+      jobId: id, state, elapsedMs: 1, total: prs.length, done: prs.length, failed: 0, skipped: 0, notRun: 0, cancelled: 0, qcSkipped: 0,
       stopReason: j.mode === "qc" ? "SMALL_ROI" : null, stopKind: j.mode === "qc" ? "QC" : null, stopIndex: null, pairs: prs,
     };
   };

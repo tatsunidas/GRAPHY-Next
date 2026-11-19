@@ -12,6 +12,7 @@
  *
  * <p>画像フィルタ（LoG・スケール）は定義に入れない（一括抽出が対象にしていない）。
  */
+import { ADVANCED_MAX_ENTRIES, ADVANCED_MAX_VALUE_LEN, advancedToText, parseAdvanced } from "./advancedSettings";
 import {
   CALIBRATION_CHOICES, ROI_FEATURE_FAMILIES, VALUE_KIND_CHOICES, defaultRoiFeatureForm, ivhBinWidthOf, rangeBounds,
   type CalibrationChoice, type RoiFeatureForm, type ValueKindChoice,
@@ -25,7 +26,7 @@ export const SEGMENT_LABELS_MAX = 100;
 export const SEGMENT_LABEL_MAX_LEN = 128;
 export const PREFIX_MAX_LEN = 100;
 
-export type SpecQcMode = "FLAG" | "STOP";
+export type SpecQcMode = "FLAG" | "STOP" | "SKIP";
 
 /**
  * 抽出の種類。`radiomics`＝特徴量抽出（従来）、`voiStats`＝一次統計だけの VOI 統計。
@@ -55,6 +56,11 @@ export type SpecForm = Pick<RoiFeatureForm, "fixedBinNumber" | "binCount" | "bin
   ivhBinWidth: number | null;
   /** 補間後の整数への丸め。false は正準 JSON にキーを出さない。 */
   intensityRounding: boolean;
+  /**
+   * 詳細設定（RadiomicsJ の設定キー → 値。他の欄が決めるキーは含まない）。空は正準 JSON にキーを出さない
+   * （詳細設定の無い従来の定義の SHA-256 を変えない）。出すときはキーの昇順。
+   */
+  settings: Record<string, string>;
 };
 
 /**
@@ -96,7 +102,7 @@ export function defaultSpecContent(): SpecContent {
   const f = defaultRoiFeatureForm();
   return {
     kind: "radiomics",
-    form: { fixedBinNumber: f.fixedBinNumber, binCount: f.binCount, binWidth: f.binWidth, resampleMm: f.resampleMm, families: f.families, rangeMin: null, rangeMax: null, calibration: f.calibration, valueKind: f.valueKind, ivhBinWidth: null, intensityRounding: false },
+    form: { fixedBinNumber: f.fixedBinNumber, binCount: f.binCount, binWidth: f.binWidth, resampleMm: f.resampleMm, families: f.families, rangeMin: null, rangeMax: null, calibration: f.calibration, valueKind: f.valueKind, ivhBinWidth: null, intensityRounding: false, settings: {} },
     qc: { smallRoi: "FLAG", lossy: "FLAG", smallRoiVoxels: null },
     selection: { segmentLabels: [] },
   };
@@ -132,6 +138,7 @@ const formJson = (f: SpecForm) => ({
   ...(f.valueKind === "legacy" ? {} : { valueKind: f.valueKind }),
   ...(f.ivhBinWidth == null ? {} : { ivhBinWidth: f.ivhBinWidth }),
   ...(f.intensityRounding ? { intensityRounding: true } : {}),
+  ...(Object.keys(f.settings).length === 0 ? {} : { settings: Object.fromEntries(Object.keys(f.settings).sort().map((k) => [k, f.settings[k]])) }),
 });
 
 /**
@@ -139,8 +146,9 @@ const formJson = (f: SpecForm) => ({
  * 通常の特徴量抽出はそのまま。
  */
 const effectiveForm = (c: SpecContent): SpecForm =>
-  // 校正は VOI 統計でも選ぶ。値の種類・IVH・丸めは VOI 統計では使わない（従来の VOI 統計の定義の SHA-256 を変えない）
-  c.kind === "voiStats" ? { ...defaultSpecContent().form, calibration: c.form.calibration, valueKind: "legacy" } : c.form;
+  // 校正は VOI 統計でも選ぶ。値の種類・IVH・丸めは VOI 統計では使わない。再標本化も使わない（従来どおり null で固定。
+  // 既定を 1 mm にしても、保存済みの VOI 統計の定義の SHA-256 を変えない）
+  c.kind === "voiStats" ? { ...defaultSpecContent().form, resampleMm: null, calibration: c.form.calibration, valueKind: "legacy", settings: {} } : c.form;
 
 /** 正準な JSON。キーの並びを固定して組み立てる（族は `ROI_FEATURE_FAMILIES` の順）。 */
 export function canonicalContentJson(c: SpecContent): string {
@@ -252,6 +260,21 @@ export async function parseSpec(text: string): Promise<SpecParse> {
   if (rndRaw !== undefined && rndRaw !== null && typeof rndRaw !== "boolean") return fail("type", "form.intensityRounding");
   const intensityRounding = rndRaw === true;
 
+  const setRaw = own(form, "settings");
+  let settings: Record<string, string> = {};
+  if (setRaw !== undefined && setRaw !== null) {
+    if (!isObj(setRaw)) return fail("type", "form.settings");
+    const keys = Object.keys(setRaw);
+    if (keys.length > ADVANCED_MAX_ENTRIES) return fail("range", "form.settings");
+    for (const k of keys) {
+      const v = (setRaw as Record<string, unknown>)[k];
+      if (!/^[A-Za-z][A-Za-z0-9_]*$/.test(k) || typeof v !== "string" || v === "" || v.length > ADVANCED_MAX_VALUE_LEN) {
+        return fail("type", `form.settings.${k}`);
+      }
+    }
+    settings = Object.fromEntries(keys.map((k) => [k, (setRaw as Record<string, string>)[k]]));
+  }
+
   const famRaw = own(form, "families");
   if (!isObj(famRaw)) return fail("type", "form.families");
   const known = new Set(ROI_FEATURE_FAMILIES.map((f) => f.key));
@@ -267,7 +290,8 @@ export async function parseSpec(text: string): Promise<SpecParse> {
 
   const smallRoi = own(qc, "smallRoi");
   const lossy = own(qc, "lossy");
-  if ((smallRoi !== "FLAG" && smallRoi !== "STOP") || (lossy !== "FLAG" && lossy !== "STOP")) return fail("type", "qc");
+  const isQcMode = (v: unknown): v is SpecQcMode => v === "FLAG" || v === "STOP" || v === "SKIP";
+  if (!isQcMode(smallRoi) || !isQcMode(lossy)) return fail("type", "qc");
   const voxelsRaw = own(qc, "smallRoiVoxels");
   let smallRoiVoxels: number | null = null;
   if (voxelsRaw !== undefined && voxelsRaw !== null) {
@@ -295,7 +319,7 @@ export async function parseSpec(text: string): Promise<SpecParse> {
 
   const content: SpecContent = {
     kind,
-    form: { fixedBinNumber, binCount, binWidth, resampleMm: resampleMm as number | null, families, rangeMin, rangeMax, calibration, valueKind, ivhBinWidth, intensityRounding },
+    form: { fixedBinNumber, binCount, binWidth, resampleMm: resampleMm as number | null, families, rangeMin, rangeMax, calibration, valueKind, ivhBinWidth, intensityRounding, settings },
     qc: { smallRoi, lossy, smallRoiVoxels },
     selection: { segmentLabels: normalizeLabels(labels) },
   };
@@ -306,9 +330,10 @@ export async function parseSpec(text: string): Promise<SpecParse> {
 
 /** 定義の中身を ROI 特徴量の入力欄の値に反映する（LoG・スケールは既定のまま）。 */
 export function applySpecToForm(base: RoiFeatureForm, spec: SpecContent): RoiFeatureForm {
-  const { rangeMin, rangeMax, calibration, ivhBinWidth, ...rest } = spec.form;
+  const { rangeMin, rangeMax, calibration, ivhBinWidth, settings, ...rest } = spec.form;
   return {
     ...base, ...rest, families: { ...spec.form.families },
+    advancedText: advancedToText(settings),
     ivhBinWidthText: ivhBinWidth == null ? "" : String(ivhBinWidth),
     // 校正の項目が無い従来の定義は、PET を校正しない（従来の結果の再現）。画面は、そのことを知らせる
     calibration: calibration ?? "none",
@@ -330,6 +355,7 @@ export function specContentFrom(
       rangeMin: ok ? range.min : null, rangeMax: ok ? range.max : null,
       calibration: form.calibration,
       valueKind: form.valueKind, ivhBinWidth: ivhBinWidthOf(form).value, intensityRounding: form.intensityRounding,
+      settings: parseAdvanced(form.advancedText).entries,
     },
     qc,
     selection: { segmentLabels: normalizeLabels(labels) },

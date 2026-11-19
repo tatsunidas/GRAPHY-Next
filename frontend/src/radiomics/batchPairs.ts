@@ -145,7 +145,7 @@ export interface BatchRunOptions {
 /** VOI 統計の設定: 一次統計の族だけを有効にし、再標本化・範囲は使わない（値が元の格子の値になるように）。 */
 export function voiStatsForm(base: RoiFeatureForm): RoiFeatureForm {
   const families = Object.fromEntries(ROI_FEATURE_FAMILIES.map((f) => [f.key, f.key === "IntensityBasedStatistical"]));
-  return { ...base, families, resampleMm: null, rangeMinText: "", rangeMaxText: "", logOn: false };
+  return { ...base, families, resampleMm: null, rangeMinText: "", rangeMaxText: "", logOn: false, advancedText: "" };
 }
 
 export function buildBatchRequest(pairs: readonly BatchPair[], form: RoiFeatureForm, opts: BatchRunOptions = {}): BatchRequest {
