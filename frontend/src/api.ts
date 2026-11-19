@@ -2326,6 +2326,10 @@ export interface RoiFeatureRecord2d {
   discretisation: RoiFeatureDiscretisation;
   provenance: RoiFeatureProvenance;
   settingsProperties: string;
+  /** 断面の名前（AXIAL・SAGITTAL・CORONAL。IOP の法線に最も近い患者軸）。古い記録は無い。 */
+  plane?: string | null;
+  /** 法線がその患者軸からなす角（度）。0 なら軸に揃っている。古い記録は無い。 */
+  tiltDeg?: number | null;
 }
 
 export interface RoiFeatureSection {

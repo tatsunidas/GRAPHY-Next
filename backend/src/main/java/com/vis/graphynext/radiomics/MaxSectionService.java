@@ -87,17 +87,35 @@ public class MaxSectionService {
         return analyze(vol.sopPerZ(), frames, pos, pixels, pixelArea);
     }
 
-    /** スライスごとの法線方向の位置（mm、LPS）。マスクの位置が分からないときは例外（スライス順に落とさない）。 */
+    /**
+     * スライスごとの法線方向の位置（mm、LPS）。**計算に使う格子のスライス**の位置で、取り直した体積（欠損・不等間隔・チルト）は
+     * 取り直した格子の位置（元の IPP は枚数が違うので使えない）。向きは、法線をその患者軸の正の向きに揃える（{@link ImagePlane}）。
+     * マスクの位置が分からないときは例外（スライス順に落とさない）。
+     */
     static double[] positionsMm(RadiomicsMapEngine.LoadedVolume vol) {
         if (!"1".equals(vol.mask().getProp(RadiomicsMapEngine.PROP_GEOMETRY_ALIGNED))) {
             throw new IllegalArgumentException("位置が分からないため最大断面を示せません"
                     + "（ターゲットとマスクの向き・位置が揃わず、スライス順の対応にしか落とせません）。");
         }
-        double[] normal = RadiomicsMapEngine.normalOf(vol.imageOrientationPatient());
+        ImagePlane plane = ImagePlane.of(vol.imageOrientationPatient());
+        if (plane == null) {
+            throw new IllegalArgumentException("ImageOrientationPatient が不正なため、スライスの位置を求められません。");
+        }
         double[] pos = new double[vol.slices()];
+        double[] t = vol.normalPositionsMm();
+        if (t != null && t.length == pos.length) {
+            for (int z = 0; z < pos.length; z++) {
+                pos[z] = plane.fromNormalPosition(t[z]);
+            }
+            return pos;
+        }
+        // 格子の位置が無い（従来の呼び出し元）: 元のスライスの IPP から。枚数が違えば、位置を作らず断る（ずれた位置を出さない）
         for (int z = 0; z < pos.length; z++) {
-            double[] ipp = vol.ippByZ().get(z);
-            pos[z] = ipp[0] * normal[0] + ipp[1] * normal[1] + ipp[2] * normal[2];
+            double[] ipp = vol.ippByZ() == null ? null : vol.ippByZ().get(z);
+            if (ipp == null) {
+                throw new IllegalArgumentException("スライス " + z + " の位置（IPP）が分からないため、2D の位置を求められません。");
+            }
+            pos[z] = plane.positionMm(ipp);
         }
         return pos;
     }
@@ -128,7 +146,8 @@ public class MaxSectionService {
         List<Slice> ties = new ArrayList<>();
         for (int z = 0; z < n; z++) {
             if (pixels[z] == max) {
-                ties.add(new Slice(sops[z], frames[z], pos[z], pixels[z], pixels[z] * pixelArea));
+                ties.add(new Slice(sops != null && z < sops.length ? sops[z] : null, frames != null && z < frames.length ? frames[z] : -1,
+                        pos[z], pixels[z], pixels[z] * pixelArea));
             }
         }
         ties.sort(Comparator.comparingDouble(Slice::positionMm));

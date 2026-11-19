@@ -62,8 +62,9 @@ public class RoiFeatureService {
     static final String SMALL_ROI_SETTING = "texture.SmallRoiWarnVoxels";
     /** 同じく 2D（最大断面・スライス別の画素数）。3D と「小さい」の意味が違うので別の設定。 */
     static final String SMALL_ROI_SETTING_2D = "texture.SmallRoiWarnPixels2D";
-    static final String SECTION_ENGINE_VERSION = "roi-features-2d-section-1";
-    static final String SLICES_ENGINE_VERSION = "roi-features-2d-slices-1";
+    // 2: 位置を、取り直した格子の位置・固定の患者軸の向きで出すようにし、幾何（IOP・位置）をキャッシュの鍵に入れた
+    static final String SECTION_ENGINE_VERSION = "roi-features-2d-section-2";
+    static final String SLICES_ENGINE_VERSION = "roi-features-2d-slices-2";
     private static final String WEIGHT_COLUMN = "Diagnostics_DiagnosticsResegmentedROIIntMaskVoxelCount";
 
     private static final String DIAG = RoiFeatureDefinitions.DIAGNOSTICS + "_";
@@ -319,6 +320,9 @@ public class RoiFeatureService {
     /** 画素間隔（PixelSpacing）が DICOM に無く、面内が pixel のまま読み込まれた。 */
     public static final String FLAG_UNCALIBRATED_SPACING = "UNCALIBRATED_SPACING";
 
+    /** 欠損・不等間隔・チルトのシリーズを、直交・等間隔の格子に取り直して計算した（2D の位置は取り直した格子の位置）。 */
+    public static final String FLAG_RECTIFIED_GRID = "RECTIFIED_GRID";
+
     /** 面内の画素間隔があるか。無い画像のリサンプリングの目標値は pixel として読まれ、体積は mm³ にならない。 */
     static boolean spacingCalibrated(RadiomicsMapEngine.LoadedVolume vol) {
         return vol.pixelSpacingRow() > 0 && vol.pixelSpacingCol() > 0;
@@ -326,7 +330,31 @@ public class RoiFeatureService {
 
     /** 読み込みが付ける記録の旗（値の種類とは別）。 */
     static List<String> loadFlagsOf(RadiomicsMapEngine.LoadedVolume vol) {
-        return spacingCalibrated(vol) ? List.of() : List.of(FLAG_UNCALIBRATED_SPACING);
+        List<String> flags = new ArrayList<>();
+        if (!spacingCalibrated(vol)) {
+            flags.add(FLAG_UNCALIBRATED_SPACING);
+        }
+        if (vol.rectified()) {
+            flags.add(FLAG_RECTIFIED_GRID);
+        }
+        return List.copyOf(flags);
+    }
+
+    /**
+     * 2D の結果の鍵に入れる、幾何の指紋（IOP・計算格子の各スライスの位置・間隔）。画素が同じでも位置が違えば別の鍵にする
+     * （古い位置を返さない）。
+     */
+    static String geometryKey(RadiomicsMapEngine.LoadedVolume vol) {
+        StringBuilder b = new StringBuilder("iop=").append(java.util.Arrays.toString(vol.imageOrientationPatient()))
+                .append(";rectified=").append(vol.rectified())
+                .append(";spacing=").append(vol.pixelSpacingRow()).append(',').append(vol.pixelSpacingCol())
+                .append(";pos=").append(java.util.Arrays.toString(vol.normalPositionsMm()));
+        return b.toString();
+    }
+
+    /** 2D の断面（名前と傾き角）。IOP が不正なら null。 */
+    private static ImagePlane planeOf(RadiomicsMapEngine.LoadedVolume vol) {
+        return ImagePlane.of(vol.imageOrientationPatient());
     }
 
     private RoiFeatureResult.RoiSize sizeOf(List<RoiFeatureResult.Row> rows, Integer threshold,
@@ -556,6 +584,11 @@ public class RoiFeatureService {
 
     private record Prepared(RoiFeatureResult.Record2d record) {}
 
+    private static RoiFeatureResult.Record2d withPlane(RoiFeatureResult.Record2d r, RadiomicsMapEngine.LoadedVolume vol) {
+        ImagePlane p = planeOf(vol);
+        return p == null ? r : r.withPlane(p.name(), p.tiltDeg());
+    }
+
     /** 2D の設定を RadiomicsJ に読ませ、実際に効いた設定と離散化を記録する。 */
     private Prepared prepare2d(Map<String, String> settings2d) throws IOException {
         try {
@@ -612,7 +645,8 @@ public class RoiFeatureService {
         for (int z = 0; z < nZ; z++) {
             pixels[z] = MaxSectionService.countSlice(vol.mask().getStack().getProcessor(z + 1), label);
         }
-        MaxSectionService.Result max = MaxSectionService.analyze(vol.sopPerZ(), new int[nZ], pos, pixels, pixelArea);
+        // 取り直した格子には、対応する元のインスタンス（SOP）が無い
+        MaxSectionService.Result max = MaxSectionService.analyze(vol.rectified() ? null : vol.sopPerZ(), new int[nZ], pos, pixels, pixelArea);
         int z = -1;
         for (int i = 0; i < nZ; i++) {
             if (pos[i] == max.best().positionMm() && pixels[i] == max.best().pixels()) {
@@ -624,6 +658,7 @@ public class RoiFeatureService {
         Map<String, String> s2 = settings2d(settings);
         Map<String, String> keySettings = new TreeMap<>(s2);
         keySettings.put("NEXT_sectionPositionMm", Double.toString(max.best().positionMm()));
+        keySettings.put("NEXT_geometry", geometryKey(vol));
         String key = cache.featureKey(SECTION_ENGINE_VERSION, keySettings, vol);
         if (key != null && !req.recompute()) {
             Optional<byte[]> raw = cache.loadFeatures(key);
@@ -652,7 +687,7 @@ public class RoiFeatureService {
             throw new IllegalStateException("RadiomicsJ が最大断面 2D の結果を返しませんでした。");
         }
         RoiFeatureResult.Section out = new RoiFeatureResult.Section(false, max.best().positionMm(),
-                max.best().areaMm2(), max.best().pixels(), rows, prepared.record(), null);
+                max.best().areaMm2(), max.best().pixels(), rows, withPlane(prepared.record(), vol), null);
         if (key != null) {
             cache.saveFeatures(key, json.writeValueAsBytes(out));
         }
@@ -677,7 +712,9 @@ public class RoiFeatureService {
         fg.sort(java.util.Comparator.comparingDouble(z -> pos[z]));
         Integer threshold = threshold(smallRoiSetting2d, "小さい ROI の警告（画素数、2D）");
         Map<String, String> s2 = settings2d(settings);
-        String key = cache.featureKey(SLICES_ENGINE_VERSION, s2, vol);
+        Map<String, String> keySettings = new TreeMap<>(s2);
+        keySettings.put("NEXT_geometry", geometryKey(vol));
+        String key = cache.featureKey(SLICES_ENGINE_VERSION, keySettings, vol);
         if (key != null && !req.recompute()) {
             Optional<byte[]> raw = cache.loadFeatures(key);
             if (raw.isPresent()) {
@@ -717,7 +754,7 @@ public class RoiFeatureService {
         }
         Aggregation agg = aggregate(rows);
         RoiFeatureResult.Slices out = new RoiFeatureResult.Slices(false, rows, failures, agg.mean,
-                agg.weighted, agg.used, fg.size(), prepared.record(), null, List.of());
+                agg.weighted, agg.used, fg.size(), withPlane(prepared.record(), vol), null, List.of());
         if (key != null && failures.isEmpty()) {
             // 失敗のあった結果は置かない（次回は再計算して、直っていれば全枚の結果になる）
             cache.saveFeatures(key, json.writeValueAsBytes(out));
