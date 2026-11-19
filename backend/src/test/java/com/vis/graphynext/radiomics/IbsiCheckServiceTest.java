@@ -113,9 +113,19 @@ class IbsiCheckServiceTest {
         JsonNode c = records.get(0), d = records.get(1);
         assertEquals("configuration C", c.get("dataSet").asText());
         assertEquals("configuration D", d.get("dataSet").asText());
-        // 構成 C は Intensity at 10% volume の 1 件が不合格、構成 D は 0（RadiomicsJ の記録どおり）
-        assertEquals(1, c.get("counts").get("FAIL").asInt());
+        // 2.7.2 までは、構成 C は Intensity at 10% volume の 1 件が不合格だった（IVH の I10 が 1 格子点低かった）。
+        // 2.7.3 は IBSI の定義どおりにして、構成 C・D とも 0（RadiomicsJ の記録どおり）
+        assertEquals(0, c.get("counts").get("FAIL").asInt());
         assertEquals(0, d.get("counts").get("FAIL").asInt());
+        JsonNode i10 = null;
+        for (JsonNode row : c.get("rows")) {
+            if ("Intensity at 10% volume".equals(row.get("imageBiomarker").asText())) {
+                i10 = row;
+            }
+        }
+        assertNotNull(i10, "構成 C の記録に Intensity at 10% volume の行がある");
+        assertEquals("PASS", i10.get("verdict").asText(), "不合格だった行が合格になった");
+        assertEquals(88.75, i10.get("computed").asDouble(), 1e-9, "IBSI の基準 88.8（許容 0.2）に対し、格子点 88.75");
         // 記録の版が、載せている RadiomicsJ の版と食い違ったら取り直す（docs/benchmark の IbsiBenchmarkRecorder）
         assertEquals(RadiomicsJ.version, c.get("radiomicsjVersion").asText());
         assertEquals(RadiomicsJ.version, d.get("radiomicsjVersion").asText());

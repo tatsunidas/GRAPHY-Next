@@ -14,9 +14,14 @@
  *   AUTOMATOR_DATA_DIR=<専用のデータ置き場> npx tsx src/spike/mraVesselsPluginCheck.ts \
  *     --plugin=<プラグインリポジトリ> --dicom=<DICOM ディレクトリ> [--name=<出力名>] [--no-edit]
  *
+ * 注意: **実行のたびに `frontend/node_modules/.vite`（Vite の依存キャッシュ）を消す**。連続して走らせると、古いキャッシュとの食い違いで
+ * メイン画面が真っ白になる（依存モジュールの 404。メイン画面の `search-patientid-input` が出ず、匿名化データでも落ちる）。
+ * 細い血管の層の期待は `--expect-fine=yes|capped|any`。解析中のメモリ（RSS）のピークと、SEG の保存時間を出す。
+ *
  * 専用ポートは 28771 番台。結果は `automator/.results/mra-vessels-check/<name>/` に出る
  * （スクリーンショットと、取り出した SEG）。
  */
+import { execSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import type { Page } from "@playwright/test";
@@ -27,6 +32,9 @@ import { importPaths } from "../fixtures/importFixtures.js";
 import { openFirstSeriesInViewer } from "../checklist/items/shared/helpers.js";
 import { createStepRecorder } from "../checklist/types.js";
 import { AUTOMATOR_ROOT } from "../fixtures/manifest.js";
+
+// プロセスの探索に使う作業コピーの名前（worktree ごとに違う）
+const REPO_DIR = path.basename(path.resolve(AUTOMATOR_ROOT, ".."));
 
 function arg(name: string): string | null {
   const hit = process.argv.slice(2).find((a) => a.startsWith(`--${name}=`));
@@ -44,6 +52,8 @@ const PLUGIN_REPO = requireDir(arg("plugin"), "plugin");
 const DICOM_DIR = requireDir(arg("dicom"), "dicom");
 const NAME = arg("name") ?? "case";
 const DO_EDIT = !process.argv.includes("--no-edit");
+/** 細い血管（名前なし）の層の期待: yes = 出る、capped = 雑音で歯止めが働く、any = どちらでもよい（どちらか一方であること）。 */
+const EXPECT_FINE = arg("expect-fine") ?? "any";
 const OUT_DIR = path.join(AUTOMATOR_ROOT, ".results", "mra-vessels-check", NAME);
 const PLUGIN_ID = JSON.parse(fs.readFileSync(path.join(PLUGIN_REPO, "plugin.json"), "utf8")).id as string;
 const RESULT_TIMEOUT_MS = 25 * 60_000;
@@ -99,6 +109,7 @@ async function main(): Promise<void> {
     console.log(`import: ${JSON.stringify(imported)}`);
     const main = driver.page;
     main.on("console", (m) => m.type() === "error" && console.log(`  [renderer error] ${m.text()}`));
+    main.on("pageerror", (e) => console.log(`  [main pageerror] ${e.message}\n${(e.stack ?? "").split("\n").slice(0, 6).join("\n")}`));
     try {
       await main.getByTestId("search-patientid-input").waitFor({ state: "visible", timeout: 30_000 });
     } catch {
@@ -132,6 +143,27 @@ async function main(): Promise<void> {
     await shot("2-window.png");
 
     console.log("\n[2] 既定のまま（何も選ばずに）解析を押す");
+    // 解析中のメモリ（RSS）を 2 秒ごとに記録する。Electron はこの worktree の desktop 配下のプロセス、backend は JVM。
+    let peakElectronKb = 0;
+    let peakProcKb = 0;
+    let peakBackendKb = 0;
+    const sampler = setInterval(() => {
+      try {
+        const out = execSync("ps -eo rss=,args=", { encoding: "utf8", maxBuffer: 1 << 26 });
+        let tot = 0;
+        for (const line of out.split("\n")) {
+          const kb = Number(line.trim().split(/\s+/)[0]);
+          if (!Number.isFinite(kb)) continue;
+          if (line.includes(`/${REPO_DIR}/desktop`)) {
+            tot += kb;
+            if (kb > peakProcKb) peakProcKb = kb;
+          } else if (line.includes(`/${REPO_DIR}/backend`) && kb > peakBackendKb) peakBackendKb = kb;
+        }
+        if (tot > peakElectronKb) peakElectronKb = tot;
+      } catch {
+        /* ps が失敗しても検査は続ける */
+      }
+    }, 2000);
     const t0 = Date.now();
     await root.locator("[data-act=analyze]").click();
     let state = "";
@@ -145,6 +177,11 @@ async function main(): Promise<void> {
     const elapsed = Math.round((Date.now() - t0) / 1000);
     check(state === "result", `解析が完走する（${elapsed}s）`, { state, status: await root.locator("[data-role=status]").textContent() });
     if (state !== "result") throw new Error("解析が結果に至らなかった");
+    clearInterval(sampler);
+    const mb = (kb: number) => Math.round(kb / 1024);
+    console.log(`  メモリ（RSS）のピーク: Electron 合計 ${mb(peakElectronKb)} MB、最大の単一プロセス ${mb(peakProcKb)} MB、backend(JVM) ${mb(peakBackendKb)} MB`);
+    fs.writeFileSync(path.join(OUT_DIR, "memory.json"), JSON.stringify({ peakElectronMb: mb(peakElectronKb), peakProcessMb: mb(peakProcKb), peakBackendMb: mb(peakBackendKb) }));
+    check(peakElectronKb > 0, "メモリの測定ができている（Electron のプロセスが見つかった）", { peakElectronKb });
     await shot("3-result.png");
 
     console.log("\n[3] 一覧と 3D");
@@ -153,6 +190,14 @@ async function main(): Promise<void> {
     fs.writeFileSync(path.join(OUT_DIR, "rows.json"), JSON.stringify(rows, null, 1));
     check(rows.length >= 6, "血管の行が 6 種類以上ある", rows.length);
     check(rows.every((r) => /^\d+\.\d\d mL$/.test(r.vol)), "体積が mL で出ている（数値）");
+    const fineRow = rows.find((r) => r.label === "34");
+    const statusAfter = (await root.locator("[data-role=status]").textContent()) ?? "";
+    const cappedMsg = /雑音が多い|image is noisy/.test(statusAfter);
+    console.log(`  細い血管（名前なし）の層: 行 ${fineRow ? "あり" : "なし"}、歯止め ${cappedMsg ? "作動（理由が出る）" : "なし"}`);
+    check(!!fineRow !== cappedMsg, "細い血管の層は、行があるか、歯止めの理由が出るかの、どちらか一方（両方・どちらも無し、ではない）", { fineRow: !!fineRow, cappedMsg });
+    if (EXPECT_FINE === "yes") check(!!fineRow && !cappedMsg, "細い血管の層が出る（期待どおり）");
+    if (EXPECT_FINE === "capped") check(!fineRow && cappedMsg, "雑音が多い画像で、層の歯止めが働く（期待どおり）");
+    if (fineRow) check(/細い血管|Fine vessels/.test(fineRow.name), "層の行の名前が「細い血管（名前なし）」", fineRow.name);
     const anchorsText = (await root.locator("[data-role=anchors]").textContent()) ?? "";
     check(anchorsText.length > 0, "アンカーの状態（自動／手直し済み）が出る", anchorsText);
 
@@ -165,6 +210,17 @@ async function main(): Promise<void> {
     const noneShot = await view.screenshot({ path: path.join(OUT_DIR, "4b-3d-none.png") });
     check(Buffer.compare(allShot, noneShot) !== 0 && allShot.length > noneShot.length * 1.15, "3D に血管が描かれている（全表示と全非表示で画が違い、全表示のほうが情報量が多い）", { all: allShot.length, none: noneShot.length });
     await root.locator("[data-act=show-all]").click();
+    await v.waitForTimeout(500);
+    if (fineRow) {
+      const cb = root.locator('.gnmv-item[data-label="34"] input[type=checkbox]');
+      await cb.uncheck();
+      await v.waitForTimeout(500);
+      const noFineShot = await view.screenshot({ path: path.join(OUT_DIR, "4d-3d-no-fine.png") });
+      // 全部表示に戻した状態（allShot と同じ）から、層だけを隠す。空の画面と比べない（前の版は、全部非表示の後に入れて空振りした）
+      check(Buffer.compare(allShot, noFineShot) !== 0 && noFineShot.length < allShot.length && noFineShot.length > noneShot.length * 1.15, "細い血管の層を隠すと、3D の画が変わり、情報量が減る", { all: allShot.length, noFine: noFineShot.length });
+      await cb.check();
+      await v.waitForTimeout(500);
+    }
     await root.locator(".gnmv-item [data-act=solo]").first().click();
     await v.waitForTimeout(500);
     const soloShot = await view.screenshot({ path: path.join(OUT_DIR, "4c-3d-solo.png") });
@@ -173,6 +229,46 @@ async function main(): Promise<void> {
     check(unchecked === rows.length - 1, "「だけ表示」で、ほかの行のチェックが外れる", { unchecked, rows: rows.length });
     await root.locator("[data-act=show-all]").click();
     await v.waitForTimeout(500);
+
+    // 小さい分離物を隠す（段 6）: スライダーを上げ、離したときに適用される。Other の体積が減り、3D の画が変わり、名前付きの行は 1 つも変わらない
+    const hideSlider = root.locator("[data-role=hide-small]");
+    check((await hideSlider.count()) === 1 && !(await hideSlider.isDisabled()), "「小さい分離物を隠す」のスライダーがあり、操作できる");
+    const rowsOf = () => root.locator(".gnmv-item").evaluateAll((els) => els.map((e) => ({ label: (e as HTMLElement).dataset.label ?? "", vol: e.querySelector(".gnmv-vol")?.textContent ?? "" })));
+    const rowsBefore = await rowsOf();
+    const labelBefore = (await root.locator("[data-role=hide-label]").textContent()) ?? "";
+    await hideSlider.evaluate((el) => {
+      const input = el as HTMLInputElement;
+      const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")?.set;
+      setter?.call(input, input.max); // 最大（5 mL 未満）
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await v.waitForFunction(() => document.querySelector(".gnmv")?.getAttribute("data-state") === "result" && /個を隠しています|islands are hidden/.test(document.querySelector("[data-role=status]")?.textContent ?? ""), null, { timeout: 120000 });
+    await v.waitForTimeout(500);
+    const rowsAfter = await rowsOf();
+    const isOther = (r: { label: string }) => r.label === "31";
+    const named = (r: { label: string }) => !["31", "34"].includes(r.label);
+    check(JSON.stringify(rowsBefore.filter(named)) === JSON.stringify(rowsAfter.filter(named)), "名前付きの行（ラベルと体積）は 1 つも変わらない", { rowsBefore: rowsBefore.filter(named).length, rowsAfter: rowsAfter.filter(named).length });
+    const vol = (rs: { label: string; vol: string }[], f: (r: { label: string }) => boolean) => Number(rs.find(f)?.vol.replace(" mL", "") ?? "0");
+    const otherB = vol(rowsBefore, isOther), otherA = vol(rowsAfter, isOther);
+    check(otherA < otherB, "Other（灰色）の体積が減る", { rowsBefore: otherB, rowsAfter: otherA });
+    const labelAfter = (await root.locator("[data-role=hide-label]").textContent()) ?? "";
+    console.log(`  Other ${otherB} → ${otherA} mL / 表示: 「${labelBefore}」→「${labelAfter}」`);
+    const hiddenShot = await view.screenshot({ path: path.join(OUT_DIR, "4d2-3d-hidden-small.png") });
+    check(Buffer.compare(allShot, hiddenShot) !== 0, "3D の画が変わる（隠す前と違う）", { all: allShot.length, hidden: hiddenShot.length });
+    // 0 に戻すと、体積が元に戻る（可逆）
+    await hideSlider.evaluate((el) => {
+      const input = el as HTMLInputElement;
+      const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")?.set;
+      setter?.call(input, "0");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await v.waitForFunction(() => document.querySelector(".gnmv")?.getAttribute("data-state") === "result" && !/個を隠しています|islands are hidden/.test(document.querySelector("[data-role=status]")?.textContent ?? ""), null, { timeout: 120000 });
+    await v.waitForTimeout(500);
+    const restored = await rowsOf();
+    check(JSON.stringify(restored) === JSON.stringify(rowsBefore), "0 に戻すと、一覧が元と同じになる（可逆）");
+    // SEG に隠した分が入ることの確認は、この後の保存の検査で、隠した状態（下で再度隠す）の体積と照合する
 
     // コントラスト（暗い背景に暗い文字ではない）
     const CONTRAST_BODY = `
@@ -305,13 +401,26 @@ async function main(): Promise<void> {
     }
 
     console.log("\n[6] DICOM SEG の保存");
+    // 小さい分離物を最大まで隠した状態で保存し、SEG に隠した分が入らないことを後で照合する（その時点の一覧を控える）
+    await root.locator("[data-role=hide-small]").evaluate((el) => {
+      const input = el as HTMLInputElement;
+      const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")?.set;
+      setter?.call(input, input.max);
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await v.waitForFunction(() => document.querySelector(".gnmv")?.getAttribute("data-state") === "result" && /個を隠しています|islands are hidden/.test(document.querySelector("[data-role=status]")?.textContent ?? ""), null, { timeout: 120000 });
+    await v.waitForTimeout(500);
+    fs.writeFileSync(path.join(OUT_DIR, "rows-hidden.json"), JSON.stringify(await root.locator(".gnmv-item").evaluateAll((els) => els.map((e) => ({ label: (e as HTMLElement).dataset.label, name: e.querySelector(".gnmv-nm")?.textContent ?? "", vol: e.querySelector(".gnmv-vol")?.textContent ?? "" }))), null, 1));
     await root.locator("[data-act=save-seg]").click();
     const dialog = v.getByTestId("plugin-save-confirm");
     await dialog.waitFor({ state: "visible", timeout: 20_000 });
     check(true, "本体の保存確認ダイアログが出る（抑止されない）");
     await shot("8-confirm.png");
+    const tSeg = Date.now();
     await v.getByTestId("plugin-save-confirm-button").click();
-    await v.waitForTimeout(4000);
+    for (let i = 0; i < 120 && !RE.segSaved.test((await root.locator("[data-role=status]").textContent()) ?? ""); i++) await v.waitForTimeout(1000);
+    console.log(`  SEG の保存にかかった時間: ${Math.round((Date.now() - tSeg) / 1000)} 秒`);
     const stSeg = (await root.locator("[data-role=status]").textContent()) ?? "";
     check(RE.segSaved.test(stSeg), "SEG を保存した旨が出る", stSeg);
 
@@ -342,6 +451,8 @@ async function main(): Promise<void> {
   } catch (e) {
     console.error(e);
     if (v) await v.screenshot({ path: path.join(OUT_DIR, "error.png") }).catch(() => undefined);
+    // ビューアが開く前の失敗（メイン画面が出ない等）でも、メイン画面を撮っておく
+    await driver.page.screenshot({ path: path.join(OUT_DIR, "error-main.png") }).catch(() => undefined);
     process.exitCode = 1;
   } finally {
     await driver.stop().catch(() => undefined);
