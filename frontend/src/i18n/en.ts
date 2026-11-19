@@ -4403,7 +4403,7 @@ export const en: Record<string, string> = {
   "roiFeat.batch.kind.title": "Kind",
   "roiFeat.batch.kind.radiomics": "Features (radiomics)",
   "roiFeat.batch.kind.voiStats": "VOI statistics",
-  "roiFeat.batch.kind.voiHelp": "One row per ROI: mean, SD (population), min, max, median, voxel count and volume (mL), computed from the ROI voxels. The viewer's VOI statistics sample the ROI differently, so values can differ slightly. PET is not supported (no SUV), so those pairs are not computed and are recorded as failed.",
+  "roiFeat.batch.kind.voiHelp": "One row per ROI: mean, SD (population), min, max, median, voxel count and volume (mL), computed from the ROI voxels. The viewer's VOI statistics sample the ROI differently, so values can differ slightly. It is the feature extraction with only the first-order statistics family (IntensityBasedStatistical) switched on, taking its mean, standard deviation, minimum, maximum and median plus the volume; it uses no discretisation, resampling or range, so the values equal the same columns of a feature table made without resampling. PET is calibrated to SUV by the “Calibration (PET)” setting; PET pairs set to “No calibration (Bq/mL)” are not computed and are recorded as failed.",
   "roiFeat.batch.qc.title": "QC",
   "roiFeat.batch.qc.smallRoi": "Small ROI",
   "roiFeat.batch.qc.lossy": "Lossy compression",

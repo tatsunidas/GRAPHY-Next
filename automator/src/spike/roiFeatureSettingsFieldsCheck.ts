@@ -17,6 +17,7 @@ import type { Page } from "@playwright/test";
 
 import { DesktopDriver } from "../driver/desktopDriver.js";
 import { resetDb } from "../backend/dbReset.js";
+import { clickDismissing } from "./dismissUpdateDialog.js";
 import { AUTOMATOR_ROOT } from "../fixtures/manifest.js";
 
 const OUT_DIR = path.join(AUTOMATOR_ROOT, ".results", "roi-feature-settings-fields-check");
@@ -94,7 +95,7 @@ async function main(): Promise<void> {
     await page.getByTestId("album-select").waitFor({ state: "visible", timeout: 60_000 });
     await page.getByTestId("album-select").selectOption(String(album.id));
     await page.waitForTimeout(800);
-    await page.getByTestId("album-batch-button").click();
+    await clickDismissing(page, page.getByTestId("album-batch-button")); // 新版の窓がリロードのたびに出て、クリックを遮る
     await page.getByTestId("batch-settings").waitFor({ state: "visible", timeout: 30_000 });
     got["batch-default"] = await snapshot(page, '[data-testid="batch-settings"]');
     await page.screenshot({ path: path.join(OUT_DIR, "03-batch-default.png"), fullPage: true });

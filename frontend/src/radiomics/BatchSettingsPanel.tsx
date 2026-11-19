@@ -47,12 +47,13 @@ export function BatchSettingsPanel({
               <span>{t("roiFeat.batch.qc.smallRoi")}</span>
               <QcRadios name="qc-small" value={qc.smallRoi} disabled={disabled} testId="batch-qc-small"
                 onChange={(v) => setQc({ ...qc, smallRoi: v })} />
-              <span style={{ marginLeft: 10 }}>{t("roiFeat.batch.qc.lossy")}</span>
-              <QcRadios name="qc-lossy" value={qc.lossy} disabled={disabled} testId="batch-qc-lossy"
-                onChange={(v) => setQc({ ...qc, lossy: v })} />
-              <span style={{ marginLeft: 10 }}>{t("roiFeat.batch.qc.voxels")}</span>
+              {/* 基準値は「小さい ROI」の値なので、その項目の隣に置く（非可逆圧縮より前） */}
+              <span style={{ marginLeft: 4 }}>{t("roiFeat.batch.qc.voxels")}</span>
               <VoxelsField value={qc.smallRoiVoxels} disabled={disabled} onChange={(v) => setQc({ ...qc, smallRoiVoxels: v })} />
               <span>{t("roiFeat.batch.qc.voxelsUnit")}</span>
+              <span style={{ marginLeft: 16 }}>{t("roiFeat.batch.qc.lossy")}</span>
+              <QcRadios name="qc-lossy" value={qc.lossy} disabled={disabled} testId="batch-qc-lossy"
+                onChange={(v) => setQc({ ...qc, lossy: v })} />
             </div>
             <div style={hint}>{t("roiFeat.batch.qc.help")} {t("roiFeat.batch.qc.voxelsHelp")}</div>
           </>

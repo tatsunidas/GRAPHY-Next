@@ -158,6 +158,11 @@ async function waitText(page: Page, testId: string, re: RegExp, timeoutMs: numbe
   throw new Error(`「${re}」にならない: ${last} / 進み: ${prog}`);
 }
 
+async function caseLabelInputsOf(page: Page): Promise<{ value: string; placeholder: string }[]> {
+  return page.locator('[data-testid^="batch-caselabel-"]').evaluateAll((els) =>
+    els.map((e) => ({ value: (e as HTMLInputElement).value, placeholder: (e as HTMLInputElement).placeholder })));
+}
+
 async function main(): Promise<void> {
   fs.mkdirSync(OUT_DIR, { recursive: true });
   const synths = [0, 1, 2, 3].map((i) => makeSynth(i, PATIENT_IDS[i]));
@@ -263,7 +268,14 @@ async function main(): Promise<void> {
     check(!(await page.getByTestId(`batch-include-${swapped}`).isChecked()), "要確認の組は選ぶまで対象に入らない");
     check(await page.getByTestId(`batch-source-${swapped}`).isVisible(), "要確認の組に元画像の選択が出る");
     await page.screenshot({ path: path.join(OUT_DIR, "01-review.png"), fullPage: true });
+    // 表を開いた直後（どの行も未入力）: 欄は空のまま、行ごとに違う「予定のラベル」を placeholder に出す（全行が C001 に見えない）
+    const firstInputs = await caseLabelInputsOf(page);
+    check(firstInputs.length === 5 && firstInputs.every((x) => x.value === ""), "症例ラベルの欄は、開いた直後は 5 行とも空", firstInputs);
+    check(new Set(firstInputs.map((x) => x.placeholder)).size === 5
+      && firstInputs.map((x) => x.placeholder).join(",") === "C001,C002,C003,C004,C005", "予定のラベル（placeholder）は行ごとに違い、C001 から並ぶ", firstInputs.map((x) => x.placeholder));
+    await page.screenshot({ path: path.join(OUT_DIR, "01b-planned-labels.png"), fullPage: true });
 
+    let plannedLabels: string[] = [];
     console.log("\n[3b] 1 組だけ試す（ファイルは書かない）");
     await page.getByTestId("batch-trial").click();
     const trialText = await waitText(page, "batch-trial-result", /特徴量を計算しました/, 180_000);
@@ -278,6 +290,8 @@ async function main(): Promise<void> {
     check(await page.getByTestId(`batch-include-${swapped}`).isChecked(), "元画像を選ぶと対象に入る");
     const sum1 = await page.getByTestId("batch-summary").innerText();
     check(/対象 6/.test(sum1), "対象 6", sum1);
+    // 実行前の症例ラベル（入力済み・振り済みの値があればそれ、空なら予定のラベル＝placeholder）。書き出しの CaseLabel と比べる
+    plannedLabels = (await caseLabelInputsOf(page)).map((x) => x.value || x.placeholder);
     await page.getByTestId("batch-run").click();
     await page.waitForTimeout(600);
     await page.screenshot({ path: path.join(OUT_DIR, "02-progress.png"), fullPage: true });
@@ -334,6 +348,7 @@ async function main(): Promise<void> {
       check(compared === 6 && mismatched === 0, "6 行すべてで、同じ組の API 直呼び（キャッシュなし）と全列の差 0", { compared, mismatched });
       const labels = feat.rows.map((r) => r[0]);
       check(new Set(labels).size === 6 && labels[0] === "C001", "症例ラベルが C001… と重複なしで振られる", labels);
+      check(JSON.stringify([...plannedLabels].sort()) === JSON.stringify([...labels].sort()), "実行前に表示した予定のラベルと、書き出した CSV の症例ラベルが同じ集合", { plannedLabels, labels });
     }
 
     console.log("\n[5] 取り消しと続きからの再実行（重い設定）");
