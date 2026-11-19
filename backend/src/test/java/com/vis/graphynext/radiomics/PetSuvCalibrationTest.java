@@ -183,7 +183,9 @@ class PetSuvCalibrationTest {
         assertEquals("", hu.text(), "校正しなかったときの Provenance_Calibration は空");
         Attributes mr = new Attributes();
         mr.setString(Tag.Modality, VR.CS, "MR");
-        assertEquals(ValueCalibration.UNSET, ValueCalibration.resolve("auto", mr, null), "MR は単位が分からない");
+        ValueCalibration mrCal = ValueCalibration.resolve("auto", mr, null);
+        // 校正の記録は UNSET と同じ（判定の材料 facts だけが付く）
+        assertEquals(ValueCalibration.UNSET.withFacts(mrCal.facts()), mrCal, "MR は単位が分からない");
     }
 
     @Test

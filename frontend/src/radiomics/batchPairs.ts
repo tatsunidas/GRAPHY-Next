@@ -10,7 +10,7 @@
 import type { RoiFeatureResult } from "../api";
 import type { BatchPair, BatchQc, BatchRequest } from "./batchApi";
 import { normalizeLabels, type SpecKind } from "./batchSpec";
-import { ROI_FEATURE_FAMILIES, roiFeatureSettings, type RoiFeatureForm } from "./roiFeatureSettings";
+import { ROI_FEATURE_FAMILIES, roiFeatureSettings, valueSpecOf, type RoiFeatureForm } from "./roiFeatureSettings";
 
 export interface PairRow {
   pair: BatchPair;
@@ -166,6 +166,7 @@ export function buildBatchRequest(pairs: readonly BatchPair[], form: RoiFeatureF
     smallRoiWarnVoxels: opts.smallRoiVoxels ?? null,
     kind: opts.kind === "voiStats" ? "voiStats" : null,
     calibration: form.calibration,
+    valueSpec: opts.kind === "voiStats" ? null : valueSpecOf(form),
   };
 }
 

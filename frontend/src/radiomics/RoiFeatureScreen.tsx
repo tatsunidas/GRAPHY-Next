@@ -62,6 +62,7 @@ import {
   defaultRoiFeatureForm,
   parseSigmaList,
   roiFeatureSettings,
+  valueSpecOf,
   splitFilteredFamily,
   type LogPadding,
   type RoiFeatureForm,
@@ -310,6 +311,7 @@ export function RoiFeatureScreen() {
         timePoint,
         settings: roiFeatureSettings(form),
         calibration: form.calibration,
+        valueSpec: valueSpecOf(form),
         recompute,
         ...roiFeatureScaleRequest(form),
         roiModes: [

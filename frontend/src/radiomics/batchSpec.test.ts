@@ -22,8 +22,11 @@ import { ROI_FEATURE_FAMILIES, defaultRoiFeatureForm } from "./roiFeatureSetting
 
 const content = (over: Partial<SpecContent> = {}): SpecContent => ({ ...defaultSpecContent(), ...over });
 
-/** 校正の項目が無い従来の定義の内容（`calibration: null`。正準 JSON にキーを出さず、SHA-256 は項目が増える前のまま）。 */
-const legacy = (c: SpecContent = defaultSpecContent()): SpecContent => ({ ...c, form: { ...c.form, calibration: null } });
+/**
+ * 校正と値の種類の項目が無い従来の定義の内容（`calibration: null`・`valueKind: "legacy"`。正準 JSON にキーを出さず、
+ * SHA-256 は項目が増える前のまま）。
+ */
+const legacy = (c: SpecContent = defaultSpecContent()): SpecContent => ({ ...c, form: { ...c.form, calibration: null, valueKind: "legacy" } });
 
 /** 検証を通る定義のテキストを作り、1 か所だけ書き換えたものを返す（SHA-256 は書き換え前のまま）。 */
 async function text(mutate: (o: Record<string, any>) => void = () => undefined, c: SpecContent = content()): Promise<string> {
@@ -363,6 +366,97 @@ describe("kind in the definition", () => {
   });
 });
 
+
+describe("value kind (IVH mode and rounding) in the definition", () => {
+  // 正準 JSON のキーを足し引きして、別（Python の hashlib）で求めた値
+  const LEGACY_SHA = "9e08bec6fc61105a4113e5ea626ac8640c405c1b7ec31343b0b928419e43dced"; // 校正も値の種類も無い
+  const CAL_ONLY_SHA = "f54302dd56d8504990b9668e2ce2a2724c71476b4e7ebbf31e76eb1b5f1af659"; // 校正（auto）だけ
+  const NEW_DEFAULT_SHA = "78f5a3d4001797d079252e55cd8ff3cbcce5f2707273eade0ac5d82076994ac2"; // 校正（auto）＋値の種類（auto）
+
+  it("the new default definition has the SHA-256 computed independently", async () => {
+    expect(await contentSha256(defaultSpecContent())).toBe(NEW_DEFAULT_SHA);
+    expect(canonicalContentJson(defaultSpecContent())).toContain('"calibration":"auto","valueKind":"auto"}');
+  });
+
+  it("a definition with the calibration but no value kind keeps its SHA-256 and means 'legacy'", async () => {
+    const c = defaultSpecContent();
+    const calOnly: SpecContent = { ...c, form: { ...c.form, valueKind: "legacy" } };
+    expect(await contentSha256(calOnly)).toBe(CAL_ONLY_SHA);
+    const r = await parseSpec(specText(await buildSpec(calOnly, "p")));
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.spec.sha256).toBe(CAL_ONLY_SHA);
+    expect(r.spec.form.valueKind).toBe("legacy");
+    expect(applySpecToForm(defaultRoiFeatureForm(), r.spec).valueKind).toBe("legacy");
+  });
+
+  it("a legacy definition (no calibration, no value kind) keeps its SHA-256", async () => {
+    expect(await contentSha256(legacy())).toBe(LEGACY_SHA);
+  });
+
+  it("every choice, the bin width and the rounding change the hash and survive save and load", async () => {
+    const base = defaultSpecContent().form;
+    const variants = [
+      { ...base, valueKind: "discrete" as const },
+      { ...base, valueKind: "continuous" as const, ivhBinWidth: 0.1 },
+      { ...base, valueKind: "continuous" as const, ivhBinWidth: 0.2 },
+      { ...base, valueKind: "arbitrary" as const },
+      { ...base, valueKind: "discrete" as const, intensityRounding: true },
+      { ...base, valueKind: "legacy" as const },
+    ];
+    const seen = new Set<string>([NEW_DEFAULT_SHA]);
+    for (const form of variants) {
+      const c = content({ form });
+      const sha = await contentSha256(c);
+      expect(seen.has(sha)).toBe(false);
+      seen.add(sha);
+      const r = await parseSpec(specText(await buildSpec(c, "p")));
+      expect(r.ok).toBe(true);
+      if (r.ok) {
+        expect(r.spec.form.valueKind).toBe(form.valueKind);
+        expect(r.spec.form.ivhBinWidth).toBe(form.ivhBinWidth);
+        expect(r.spec.form.intensityRounding).toBe(form.intensityRounding);
+      }
+    }
+  });
+
+  it("the VOI statistics do not use the value kind (their SHA-256 does not change with it)", async () => {
+    const a = await contentSha256(content({ kind: "voiStats", form: { ...defaultSpecContent().form, valueKind: "auto" } }));
+    const b = await contentSha256(content({ kind: "voiStats", form: { ...defaultSpecContent().form, valueKind: "discrete", intensityRounding: true } }));
+    expect(a).toBe(b);
+  });
+
+  it("an unknown value kind, a bad bin width and a bad rounding are refused (negative)", async () => {
+    for (const [mut, detail] of [
+      [(o: any) => { o.form.valueKind = "magic"; }, "form.valueKind"],
+      [(o: any) => { o.form.ivhBinWidth = "0.1"; }, "form.ivhBinWidth"],
+      [(o: any) => { o.form.ivhBinWidth = -1; }, "form.ivhBinWidth"],
+      [(o: any) => { o.form.intensityRounding = "yes"; }, "form.intensityRounding"],
+    ] as const) {
+      const r = await parseSpec(await text(mut));
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.detail).toBe(detail);
+    }
+  });
+
+  it("a rewritten value kind is refused by the SHA-256 (negative)", async () => {
+    const r = await parseSpec(await text((o) => { o.form.valueKind = "discrete"; }));
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toBe("sha_mismatch");
+  });
+
+  it("the form's value kind, bin width and rounding go into the definition and back", () => {
+    const form = { ...defaultRoiFeatureForm(), valueKind: "continuous" as const, ivhBinWidthText: "0.25", intensityRounding: true };
+    const c = specContentFrom(form, defaultSpecContent().qc, []);
+    expect(c.form.valueKind).toBe("continuous");
+    expect(c.form.ivhBinWidth).toBe(0.25);
+    expect(c.form.intensityRounding).toBe(true);
+    const back = applySpecToForm(defaultRoiFeatureForm(), c);
+    expect(back.valueKind).toBe("continuous");
+    expect(back.ivhBinWidthText).toBe("0.25");
+    expect(back.intensityRounding).toBe(true);
+  });
+});
 
 describe("calibration (PET) in the definition", () => {
   const LEGACY_SHA = "9e08bec6fc61105a4113e5ea626ac8640c405c1b7ec31343b0b928419e43dced";

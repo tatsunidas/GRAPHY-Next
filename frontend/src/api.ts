@@ -2249,6 +2249,8 @@ export interface RoiFeatureRequest {
    * none は Bq/mL のまま（結果に旗 UNCALIBRATED_PT が付く）。
    */
   calibration?: string;
+  /** 値の種類（IVH のモードと補間後の丸め）。省略・null は従来（分類しない）。 */
+  valueSpec?: { valueKind: string; ivhBinWidth: number | null; intensityRounding: boolean } | null;
 }
 
 export type RoiMode = "WHOLE_3D" | "MAX_SECTION_2D" | "SLICES_2D";
@@ -2395,6 +2397,12 @@ export interface RoiFeatureProvenance {
   calibration?: string | null;
   /** PET を、明示して校正せずに（Bq/mL のまま）計算した。 */
   uncalibratedPet?: boolean;
+  /** 値の種類（discrete・continuous・arbitrary）。分類しなかった（従来）ときは無い。 */
+  valueKind?: string | null;
+  /** 値の種類の判定の根拠（例 `RescaleType=HU;ImageType=ORIGINAL;rescale=integer`）。 */
+  valueKindBasis?: string | null;
+  /** 値の種類の QC の旗（VALUEKIND_OVERRIDDEN・IVH_BINWIDTH_UNSET・ROUNDING_IGNORED・IVH_SETTING_EXPLICIT）。 */
+  valueKindFlags?: string[];
 }
 
 export type RoiFeatureJobState = "QUEUED" | "LOADING" | "EXTRACTING" | "DONE" | "FAILED" | "CANCELLED";

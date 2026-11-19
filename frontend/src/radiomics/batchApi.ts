@@ -63,6 +63,8 @@ export interface BatchRequest {
   kind: "radiomics" | "voiStats" | null;
   /** PET の校正（auto・none・bw・sul-james・sul-janma・bsa）。null は auto。 */
   calibration: string | null;
+  /** 値の種類（IVH のモードと補間後の丸め）。null は従来（分類しない）。VOI 統計では使わない。 */
+  valueSpec: { valueKind: string; ivhBinWidth: number | null; intensityRounding: boolean } | null;
 }
 
 export type BatchJobState = "QUEUED" | "RUNNING" | "DONE" | "STOPPED" | "CANCELLED";
