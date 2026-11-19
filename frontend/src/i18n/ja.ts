@@ -4354,6 +4354,7 @@ export const ja: Record<string, string> = {
   "roiFeat.batch.spec.legacyCalibration": "校正の項目が無い従来の定義です。PET は校正せずに（Bq/mL のまま）計算します（従来の結果を再現するため）。SUV に校正するときは、校正を選んで定義を保存し直してください。",
   "roiFeat.batch.qcflag.UNCALIBRATED_PT": "未校正の PET（Bq/mL）",
   "roiFeat.batch.qcflag.UNCALIBRATED_SPACING": "画素間隔なし（面内は pixel）",
+  "roiFeat.batch.qcflag.RECTIFIED_GRID": "取り直した格子で計算（欠損・不等間隔・チルト）",
   "roiFeat.batch.qcflag.VALUEKIND_OVERRIDDEN": "値の種類を上書き",
   "roiFeat.batch.qcflag.IVH_BINWIDTH_UNSET": "IVH のビン幅が未指定（任意単位で計算）",
   "roiFeat.batch.qcflag.ROUNDING_IGNORED": "丸めは離散の校正値だけ（無視）",

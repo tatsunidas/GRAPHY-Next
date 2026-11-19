@@ -142,10 +142,22 @@ public record RoiFeatureResult(
      * 2D の計算の記録（実際に使った設定 {@code BOOL_force2D=1} を含む）。3D と設定が違うのでハッシュも別。
      */
     public record Record2d(Instant computedAt, Discretisation discretisation, Provenance provenance,
-                           String settingsProperties) {
+                           String settingsProperties, String plane, Double tiltDeg) {
+        /** 断面の記録なし（従来の記録。キャッシュに残っている古い結果もこの形で読める）。 */
+        public Record2d(Instant computedAt, Discretisation discretisation, Provenance provenance,
+                        String settingsProperties) {
+            this(computedAt, discretisation, provenance, settingsProperties, null, null);
+        }
+
         Record2d withCalibration(ValueCalibration vc, ValueKind kind, List<String> extraFlags) {
             return new Record2d(computedAt, discretisation,
-                    provenance == null ? null : provenance.withCalibration(vc, kind, extraFlags), settingsProperties);
+                    provenance == null ? null : provenance.withCalibration(vc, kind, extraFlags), settingsProperties,
+                    plane, tiltDeg);
+        }
+
+        /** 断面の名前（AXIAL・SAGITTAL・CORONAL）と、法線がその患者軸からなす角（度）を付ける。 */
+        Record2d withPlane(String planeName, Double tilt) {
+            return new Record2d(computedAt, discretisation, provenance, settingsProperties, planeName, tilt);
         }
     }
 

@@ -4363,6 +4363,7 @@ export const en: Record<string, string> = {
   "roiFeat.batch.spec.legacyCalibration": "This definition has no calibration item. PET is computed without calibration (Bq/mL) so that the earlier results are reproduced. To calibrate to SUV, choose a calibration and save the definition again.",
   "roiFeat.batch.qcflag.UNCALIBRATED_PT": "uncalibrated PET (Bq/mL)",
   "roiFeat.batch.qcflag.UNCALIBRATED_SPACING": "no pixel spacing (in-plane in pixels)",
+  "roiFeat.batch.qcflag.RECTIFIED_GRID": "computed on a regridded volume (missing / uneven slices or tilt)",
   "roiFeat.batch.qcflag.VALUEKIND_OVERRIDDEN": "value kind overridden",
   "roiFeat.batch.qcflag.IVH_BINWIDTH_UNSET": "IVH bin width not set (computed as arbitrary units)",
   "roiFeat.batch.qcflag.ROUNDING_IGNORED": "rounding applies to discrete calibrated values only (ignored)",

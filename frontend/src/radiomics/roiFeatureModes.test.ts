@@ -22,7 +22,7 @@ const prov = {
   graphyNextVersion: "1.0", radiomicsjVersion: "2.4.1", extractedAt: "2026-10-22T00:00:00Z", settingsSha256: "ab".repeat(32),
 };
 const disc = { fixedBinNumber: true, nBins: 32, binWidth: 25, ivhMode: 0, ivhBinCount: 1000, ivhBinWidth: 2.5 };
-const rec = { computedAt: "2026-10-22T00:00:00Z", discretisation: disc, provenance: prov, settingsProperties: "BOOL_force2D=1\n" };
+const rec = { computedAt: "2026-10-22T00:00:00Z", discretisation: disc, provenance: prov, settingsProperties: "BOOL_force2D=1\n", plane: "SAGITTAL", tiltDeg: 12.5 };
 
 const MEAN = "IntensityBasedStatistical_Mean";
 const full = (): RoiFeatureResult => ({
@@ -98,12 +98,14 @@ describe("2D の CSV", () => {
       "Provenance_ValueKind", "Provenance_ValueKindBasis",
     ]);
     expect(cols.slice(15, 18)).toEqual(["Section_PositionMm", "Section_AreaMm2", "Section_Pixels"]);
-    expect(cols.slice(18)).toEqual(["Shape2D_PixelSurface", MEAN]);
+    expect(cols.slice(18, 20)).toEqual(["Plane", "Plane_TiltDeg"]);
+    expect(cols.slice(20)).toEqual(["Shape2D_PixelSurface", MEAN]);
     const vals = v.split(",");
     expect(vals.length).toBe(cols.length);
     expect(vals[0]).toBe("c1");
     expect(Number(vals[16])).toBe(147);
     expect(Number(vals[vals.length - 1])).toBe(200);
+    expect(vals.slice(18, 20)).toEqual(["SAGITTAL", "12.5"]); // 断面の名前と傾き角
     // 形態の体積は 2D では無いので大きさの列は NaN、しきい値は 150
     expect(vals[11]).toBe("NaN");
     expect(vals[13]).toBe("150");
@@ -113,9 +115,18 @@ describe("2D の CSV", () => {
     const lines = roiFeatureSlicesCsv(full().slices!, "c1").trimEnd().split("\r\n");
     expect(lines.length).toBe(1 + 2);
     const h = lines[0].split(",");
-    expect(h.slice(9, 12)).toEqual(["Slice_PositionMm", "Slice_AreaMm2", "Slice_Pixels"]);
+    expect(h.slice(9, 14)).toEqual(["Slice_PositionMm", "Slice_AreaMm2", "Slice_Pixels", "Plane", "Plane_TiltDeg"]);
+    expect(lines[1].split(",").slice(12, 14)).toEqual(["SAGITTAL", "12.5"]);
     expect(lines.slice(1).map((l) => Number(l.split(",")[9]))).toEqual([0, 2]);
     expect(lines.slice(1).map((l) => Number(l.split(",")[h.indexOf(MEAN)]))).toEqual([100, 200]);
+  });
+
+  it("断面の列: 古い記録（断面の無いもの）は空で、列は同じ並びで出る", () => {
+    const old = full();
+    old.section = { ...old.section!, record: { ...old.section!.record, plane: undefined, tiltDeg: undefined } };
+    const [h, v] = roiFeatureSectionCsv(old.section, "c1").trimEnd().split("\r\n");
+    expect(h.split(",").slice(18, 20)).toEqual(["Plane", "Plane_TiltDeg"]);
+    expect(v.split(",").slice(18, 20)).toEqual(["", ""]);
   });
 
   it("集約の CSV: mean・pixelWeightedMean・slicesUsed と、前景数・失敗数", () => {

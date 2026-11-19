@@ -12,6 +12,7 @@
 import type {
   RoiFeatureDiscretisation,
   RoiFeatureResult,
+  RoiFeatureRecord2d,
   RoiFeatureRow,
   RoiFeatureSliceRow,
   RoiFeatureSlices,
@@ -82,9 +83,19 @@ export function discretisationOf2d(family: string, d: RoiFeatureDiscretisation):
 
 const colName = (rows: RoiFeatureRow[]) => rows.map((r) => r.column);
 
+const SECTION_POSITION_COLUMNS = ["Section_PositionMm", "Section_AreaMm2", "Section_Pixels"] as const;
+const SLICE_POSITION_COLUMNS = ["Slice_PositionMm", "Slice_AreaMm2", "Slice_Pixels"] as const;
+/**
+ * 断面の名前（IOP の法線に最も近い患者軸。AXIAL・SAGITTAL・CORONAL）と、法線がその軸からなす角（度。0 なら軸に揃っている）。
+ * 位置（`*_PositionMm`）は、法線をその患者軸の正の向きに揃えた法線方向の位置（軸に揃った断面は、その軸の患者座標そのもの）。
+ */
+const PLANE_COLUMNS = ["Plane", "Plane_TiltDeg"] as const;
+/** 断面の 2 列の値。古い記録（断面の無いもの）は空。 */
+const planeValues = (r: RoiFeatureRecord2d): string[] => [r.plane ?? "", r.tiltDeg == null ? "" : value(r.tiltDeg)].map(cell);
+
 /** 最大断面 2D の CSV。3D と同じ並び（記録 5 列・大きさ 6 列・特徴）に最大断面の 3 列を挟む。1 行。 */
 export function roiFeatureSectionCsv(sec: RoiFeatureSection, caseLabel = ""): string {
-  const extra = ["Section_PositionMm", "Section_AreaMm2", "Section_Pixels"];
+  const extra = [...SECTION_POSITION_COLUMNS, ...PLANE_COLUMNS];
   const header = [...ROI_FEATURE_RECORD_COLUMNS, ...ROI_FEATURE_SIZE_COLUMNS, ...extra, ...colName(sec.rows)]
     .map(cell).join(",");
   const size = sec.roiSize
@@ -94,6 +105,7 @@ export function roiFeatureSectionCsv(sec: RoiFeatureSection, caseLabel = ""): st
     ...recordValuesOf(sec.record.provenance, caseLabel),
     ...size,
     String(sec.positionMm), String(sec.areaMm2), String(sec.pixels),
+    ...planeValues(sec.record),
     ...sec.rows.map((r) => value(r.value)),
   ].join(",");
   return `${header}\r\n${values}\r\n`;
@@ -101,7 +113,7 @@ export function roiFeatureSectionCsv(sec: RoiFeatureSection, caseLabel = ""): st
 
 /** スライス別 2D の CSV。前景のあるスライスごとに 1 行（位置の昇順）。 */
 export function roiFeatureSlicesCsv(sl: RoiFeatureSlices, caseLabel = ""): string {
-  const extra = ["Slice_PositionMm", "Slice_AreaMm2", "Slice_Pixels"];
+  const extra = [...SLICE_POSITION_COLUMNS, ...PLANE_COLUMNS];
   const cols = columnsOf(sl.rows);
   const header = [...ROI_FEATURE_RECORD_COLUMNS, ...extra, ...cols].map(cell).join(",");
   const lines = [header];
@@ -110,6 +122,7 @@ export function roiFeatureSlicesCsv(sl: RoiFeatureSlices, caseLabel = ""): strin
     lines.push([
       ...recordValuesOf(sl.record.provenance, caseLabel),
       String(r.positionMm), String(r.areaMm2), String(r.pixels),
+      ...planeValues(sl.record),
       ...cols.map((c) => (byCol.has(c) ? value(byCol.get(c)!.value) : "")),
     ].join(","));
   }
@@ -136,11 +149,12 @@ function columnsOf(rows: RoiFeatureSliceRow[]): string[] {
  */
 export function roiFeatureAggregateCsv(sl: RoiFeatureSlices, caseLabel = ""): string {
   const cols = colName(sl.mean);
-  const header = [...ROI_FEATURE_RECORD_COLUMNS, "Slices_Foreground", "Slices_Failed", "Aggregate", ...cols]
+  const header = [...ROI_FEATURE_RECORD_COLUMNS, "Slices_Foreground", "Slices_Failed", "Aggregate", ...PLANE_COLUMNS, ...cols]
     .map(cell).join(",");
   const lead = (name: string) => [
     ...recordValuesOf(sl.record.provenance, caseLabel),
     String(sl.foregroundSlices), String(sl.failures.length), name,
+    ...planeValues(sl.record),
   ];
   const w = indexOf(sl.pixelWeightedMean);
   return [
@@ -174,9 +188,9 @@ export function roiFeature2dDefinitionsCsv(
   return `${lines.join("\r\n")}\r\n`;
 }
 
-export const SECTION_EXTRA_COLUMNS = [...ROI_FEATURE_SIZE_COLUMNS, "Section_PositionMm", "Section_AreaMm2", "Section_Pixels"];
-export const SLICES_EXTRA_COLUMNS = ["Slice_PositionMm", "Slice_AreaMm2", "Slice_Pixels"];
-export const AGGREGATE_EXTRA_COLUMNS = ["Slices_Foreground", "Slices_Failed", "Aggregate"];
+export const SECTION_EXTRA_COLUMNS = [...ROI_FEATURE_SIZE_COLUMNS, ...SECTION_POSITION_COLUMNS, ...PLANE_COLUMNS];
+export const SLICES_EXTRA_COLUMNS = [...SLICE_POSITION_COLUMNS, ...PLANE_COLUMNS];
+export const AGGREGATE_EXTRA_COLUMNS = ["Slices_Foreground", "Slices_Failed", "Aggregate", ...PLANE_COLUMNS];
 
 export interface CsvFile {
   suffix: string;
