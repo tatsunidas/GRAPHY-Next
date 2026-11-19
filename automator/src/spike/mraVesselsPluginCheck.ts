@@ -270,6 +270,42 @@ async function main(): Promise<void> {
     check(JSON.stringify(restored) === JSON.stringify(rowsBefore), "0 に戻すと、一覧が元と同じになる（可逆）");
     // SEG に隠した分が入ることの確認は、この後の保存の検査で、隠した状態（下で再度隠す）の体積と照合する
 
+    // MIP 表示（段 8）: 切り替えで WebGL の MIP が描かれ、回転・半径の変更で画が変わり、メッシュへ戻すと元の画に戻る
+    const waitIdle = () => v!.waitForFunction(() => document.querySelector(".gnmv")?.getAttribute("data-state") === "result", null, { timeout: 120000 });
+    const meshShot = await view.screenshot({ path: path.join(OUT_DIR, "4e-mesh-before-mip.png") });
+    await root.locator("[data-act=mode-mip]").click();
+    const tMip = Date.now();
+    await waitIdle();
+    await v.waitForTimeout(1500);
+    console.log(`  MIP の作成: ${Math.round((Date.now() - tMip) / 1000)} 秒`);
+    const mipShot = await view.screenshot({ path: path.join(OUT_DIR, "4f-mip-r3.png") });
+    check(Buffer.compare(meshShot, mipShot) !== 0, "MIP に切り替えると、3D の画が変わる", { mesh: meshShot.length, mip: mipShot.length });
+    const box = (await view.boundingBox())!;
+    await v.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await v.mouse.down();
+    await v.mouse.move(box.x + box.width / 2 + 160, box.y + box.height / 2 + 40, { steps: 8 });
+    await v.mouse.up();
+    await v.waitForTimeout(800);
+    const rotShot = await view.screenshot({ path: path.join(OUT_DIR, "4g-mip-rotated.png") });
+    check(Buffer.compare(mipShot, rotShot) !== 0, "MIP を回転すると、画が変わる", { before: mipShot.length, after: rotShot.length });
+    await root.locator("[data-role=mip-radius]").evaluate((el) => {
+      const input = el as HTMLInputElement;
+      const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")?.set;
+      setter?.call(input, "9");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await v.waitForTimeout(500);
+    await waitIdle();
+    await v.waitForTimeout(1500);
+    const wideShot = await view.screenshot({ path: path.join(OUT_DIR, "4h-mip-r9.png") });
+    check(Buffer.compare(rotShot, wideShot) !== 0, "囲む幅を 3 → 9 mm にすると、画が変わる", { r3: rotShot.length, r9: wideShot.length });
+    await root.locator("[data-act=mode-mesh]").click();
+    await root.locator("[data-act=reset-view]").click();
+    await v.waitForTimeout(800);
+    const backShot = await view.screenshot({ path: path.join(OUT_DIR, "4i-mesh-after-mip.png") });
+    check(Buffer.compare(backShot, wideShot) !== 0 && Math.abs(backShot.length - meshShot.length) / meshShot.length < 0.1, "メッシュへ戻して視点を戻すと、MIP の前の画とほぼ同じ（サイズ差 10% 未満）", { before: meshShot.length, after: backShot.length });
+
     // コントラスト（暗い背景に暗い文字ではない）
     const CONTRAST_BODY = `
       const lum = function (c) {
