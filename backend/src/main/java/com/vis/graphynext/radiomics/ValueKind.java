@@ -18,7 +18,8 @@ import java.util.Locale;
  * 画素値が「何であるか」の判定（IBSI の 3 区分）と、それによる IVH・補間後の丸めの切り替え。
  * モダリティではなく、DICOM のメタデータで決める（計算画像はどのモダリティにも出る）。
  * <ul>
- * <li>{@link #DISCRETE}: 離散の校正値（CT の HU）。IVH は mode 0。補間後の丸めを選べる。</li>
+ * <li>{@link #DISCRETE}: 離散の校正値（CT の HU）。IVH は mode 0。補間後の丸めを選べる。CT の画素値は HU と DICOM が定めるので、
+ *     Rescale Type が空の CT（実データに多い）も、原画像で Rescale が整数なら離散とする。Rescale Type が HU 以外と書かれていれば離散にしない。</li>
  * <li>{@link #CONTINUOUS}: 連続の校正値（単位が明示されたもの。PET の SUV、計算画像の単位）。IVH は mode 1（ビン幅が要る）。丸めない。</li>
  * <li>{@link #ARBITRARY}: 任意単位・不明（MR・マンモ・SPECT・単位不明の計算画像）。IVH は mode 2。丸めない。</li>
  * </ul>
@@ -166,10 +167,12 @@ public record ValueKind(String kind, String basis, List<String> flags, Integer i
         List<String> basis = new ArrayList<>();
         String unit = unitOf(facts, vc);
         String auto;
-        if (facts != null && "HU".equalsIgnoreCase(facts.rescaleType()) && "ORIGINAL".equals(facts.imageType0())
+        boolean huLabel = facts != null && ("HU".equalsIgnoreCase(facts.rescaleType())
+                || (facts.rescaleType().isEmpty() && "CT".equals(facts.modality())));
+        if (huLabel && "ORIGINAL".equals(facts.imageType0())
                 && facts.rescaleKnown() && facts.rescaleInteger() && !facts.floatPixel()) {
             auto = DISCRETE;
-            basis.add("RescaleType=HU");
+            basis.add(facts.rescaleType().isEmpty() ? "RescaleType=absent(CT)" : "RescaleType=HU");
             basis.add("ImageType=ORIGINAL");
             basis.add("rescale=integer");
         } else if (unit != null) {

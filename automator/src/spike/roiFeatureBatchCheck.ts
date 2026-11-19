@@ -322,7 +322,7 @@ async function main(): Promise<void> {
       for (const r of feat.rows) {
         const direct = await apiFeatures(base, {
           studyInstanceUid: r[col("StudyInstanceUID")], sourceSeriesUid: r[col("SourceSeriesUID")], maskSeriesUid: r[col("MaskSeriesUID")],
-          maskChannel: Number(r[col("Roi_MaskChannel")]), channel: 0, timePoint: 0, settings: req.settings, recompute: true,
+          maskChannel: Number(r[col("Roi_MaskChannel")]), channel: 0, timePoint: 0, settings: req.settings, valueSpec: req.valueSpec, recompute: true,
         });
         const names = feat.header.slice(start);
         const values = r.slice(start).map(Number);
@@ -460,7 +460,7 @@ async function main(): Promise<void> {
         const fc = (n: string) => feat.rows[i][feat.header.indexOf(n)];
         const direct = await apiFeatures(base, {
           studyInstanceUid: fc("StudyInstanceUID"), sourceSeriesUid: fc("SourceSeriesUID"), maskSeriesUid: fc("MaskSeriesUID"),
-          maskChannel: Number(fc("Roi_MaskChannel")), channel: 0, timePoint: 0, settings: reqNow.settings, recompute: true,
+          maskChannel: Number(fc("Roi_MaskChannel")), channel: 0, timePoint: 0, settings: reqNow.settings, valueSpec: reqNow.valueSpec, recompute: true,
         });
         const names = feat.header.slice(featureStart(feat.header));
         const values = feat.rows[i].slice(featureStart(feat.header)).map(Number);
@@ -768,7 +768,7 @@ async function main(): Promise<void> {
     for (const r of featR.rows) {
       const direct = await apiFeatures(base, {
         studyInstanceUid: r[cR("StudyInstanceUID")], sourceSeriesUid: r[cR("SourceSeriesUID")], maskSeriesUid: r[cR("MaskSeriesUID")],
-        maskChannel: Number(r[cR("Roi_MaskChannel")]), channel: 0, timePoint: 0, settings: reqR.settings, recompute: true,
+        maskChannel: Number(r[cR("Roi_MaskChannel")]), channel: 0, timePoint: 0, settings: reqR.settings, valueSpec: reqR.valueSpec, recompute: true,
       });
       const names = featR.header.slice(startR);
       const values = r.slice(startR).map(Number);

@@ -127,9 +127,33 @@ class ValueKindTest {
     }
 
     @Test
-    void aCtWithoutRescaleTypeOrRescaleIsNotDiscrete() {
-        assertFalse(ValueKind.DISCRETE.equals(decide(ct("ORIGINAL", null, "1", "-1024"), AUTO).kind()));
-        assertFalse(ValueKind.DISCRETE.equals(decide(ct("ORIGINAL", "HU", null, null), AUTO).kind()));
+    void aCtWithoutRescaleIsNotDiscrete() {
+        assertFalse(ValueKind.DISCRETE.equals(decide(ct("ORIGINAL", "HU", null, null), AUTO).kind()), "傾き・切片が読めない");
+        assertFalse(ValueKind.DISCRETE.equals(decide(ct("ORIGINAL", null, null, null), AUTO).kind()));
+    }
+
+    @Test
+    void aCtWithAnotherRescaleTypeIsNotDiscrete() {
+        // Rescale Type が HU 以外と書かれた CT（単位が別）は離散にしない
+        assertFalse(ValueKind.DISCRETE.equals(decide(ct("ORIGINAL", "US", "1", "-1024"), AUTO).kind()));
+        assertFalse(ValueKind.DISCRETE.equals(decide(ct("ORIGINAL", "MGML", "1", "0"), AUTO).kind()));
+    }
+
+    @Test
+    void anOriginalCtWithoutRescaleTypeIsDiscrete() {
+        // 実データ（TCIA の CT など）は Rescale Type が空のことが多い。CT の画素値は HU と DICOM が定める
+        ValueKind k = decide(ct("ORIGINAL", null, "1", "-1024"), AUTO);
+        assertEquals(ValueKind.DISCRETE, k.kind());
+        assertEquals(0, k.ivhMode());
+        assertTrue(k.basis().contains("RescaleType=absent(CT)"), k.basis());
+    }
+
+    @Test
+    void anMrWithoutRescaleTypeIsNeverDiscreteEvenWithIntegerRescale() {
+        Attributes m = mr(null);
+        m.setString(Tag.RescaleSlope, VR.DS, "1");
+        m.setString(Tag.RescaleIntercept, VR.DS, "0");
+        assertFalse(ValueKind.DISCRETE.equals(decide(m, AUTO).kind()), "空の Rescale Type を HU とみなすのは CT だけ");
     }
 
     @Test
