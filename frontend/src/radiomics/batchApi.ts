@@ -47,6 +47,8 @@ export interface BatchRequest {
   pairs: BatchPair[];
   settings: Record<string, string>;
   roiModes: RoiMode[];
+  /** 2D の単位の断面。null・ACQUISITION は取得面だけ。ALL は取得面に加えて Axial・Sagittal・Coronal。 */
+  planes: "ACQUISITION" | "ALL" | null;
   scales: number[] | null;
   scaleNotation: string | null;
   scaleLabels: string[] | null;

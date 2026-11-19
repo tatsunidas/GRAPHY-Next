@@ -72,6 +72,29 @@ export const isScale36 = (form: RoiFeatureForm): boolean =>
   isSixStatistics(form) && form.logOn && form.logByRadius && form.scaleNotation === "RADIUS_MM"
   && form.scalesText === DEFAULT_SCALES;
 
+/** プリセット「テクスチャ」: IBSI のテクスチャ 6 族（Fractal・強度ヒストグラム・IVH などは含めない）。 */
+export const TEXTURE_FAMILIES: ReadonlySet<string> = new Set(["GLCM", "GLRLM", "GLSZM", "GLDZM", "NGTDM", "NGLDM"]);
+
+export const applyTexture = (form: RoiFeatureForm): RoiFeatureForm => ({
+  ...form,
+  families: Object.fromEntries(ROI_FEATURE_FAMILIES.map((f) => [f.key, TEXTURE_FAMILIES.has(f.key)])),
+});
+
+/**
+ * プリセット「すべて」: すべての族。ただし 2D 形状（Shape2D）は 2D の単位を選んだときだけ（3D では計算されない）。
+ * 補助統計（IBSI 外）も含める。
+ */
+export const applyAllFamilies = (form: RoiFeatureForm): RoiFeatureForm => ({
+  ...form,
+  families: Object.fromEntries(ROI_FEATURE_FAMILIES.map((f) => [f.key, f.key !== "Shape2D" || form.units2d.length > 0])),
+});
+
+export const isTexture = (form: RoiFeatureForm): boolean =>
+  ROI_FEATURE_FAMILIES.every((f) => !!form.families[f.key] === TEXTURE_FAMILIES.has(f.key));
+
+export const isAllFamilies = (form: RoiFeatureForm): boolean =>
+  ROI_FEATURE_FAMILIES.every((f) => !!form.families[f.key] === (f.key !== "Shape2D" || form.units2d.length > 0));
+
 /** 「6 統計」のプリセットがいま当たっているか。 */
 export const isSixStatistics = (form: RoiFeatureForm): boolean =>
   ROI_FEATURE_FAMILIES.every((f) => !!form.families[f.key] === SIX_STATISTICS_FAMILIES.has(f.key));
@@ -100,7 +123,15 @@ export type CalibrationChoice = (typeof CALIBRATION_CHOICES)[number];
 export const VALUE_KIND_CHOICES = ["auto", "discrete", "continuous", "arbitrary", "legacy"] as const;
 export type ValueKindChoice = (typeof VALUE_KIND_CHOICES)[number];
 
+/** 3D のほかに計算する 2D の単位（一括抽出）。画面（ROI 特徴量）は別の状態で持つ。 */
+export const UNITS_2D = ["MAX_SECTION_2D", "SLICES_2D"] as const;
+export type Unit2d = (typeof UNITS_2D)[number];
+
 export interface RoiFeatureForm {
+  /** 3D のほかに計算する 2D の単位（一括抽出）。空は 3D だけ。並びは UNITS_2D の順。 */
+  units2d: Unit2d[];
+  /** 2D の単位を、取得面に加えて Axial・Sagittal・Coronal（患者の LPS 軸）でも計算する。units2d が空なら無効。 */
+  planesAll: boolean;
   /** PET の校正。範囲・離散化・特徴量は、校正後の値に対して働く。 */
   calibration: CalibrationChoice;
   /** 詳細設定（上級者向け）。RadiomicsJ の設定キーを `KEY=値` で 1 行 1 項目。他の欄が決めるキーは書けない（advancedSettings.ts）。 */
@@ -161,6 +192,8 @@ export function splitFilteredFamily(family: string): { sigma: string; base: stri
 /** RadiomicsJ の既定（ビン数 32・ビン幅 25・リサンプリングなし・GLAM と Shape2D はオフ）。 */
 export function defaultRoiFeatureForm(): RoiFeatureForm {
   return {
+    units2d: [],
+    planesAll: false,
     calibration: "auto",
     advancedText: "",
     valueKind: "auto",

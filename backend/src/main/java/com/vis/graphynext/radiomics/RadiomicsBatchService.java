@@ -90,7 +90,18 @@ public class RadiomicsBatchService {
                                List<String> scaleLabels, String scaleConversion, Double scaleCoefficient,
                                int channel, int timePoint, boolean recompute, Qc qc, List<String> qcAcknowledged,
                                Integer smallRoiWarnVoxels, String kind, String calibration,
-                               ValueKind.Spec valueSpec) {
+                               ValueKind.Spec valueSpec, String planes) {
+        /** 断面を指定しない（従来の要求。2D の単位は取得面だけ）。 */
+        public BatchRequest(List<BatchPair> pairs, Map<String, String> settings,
+                            Set<RoiFeatureRequest.RoiMode> roiModes, List<Double> scales, String scaleNotation,
+                            List<String> scaleLabels, String scaleConversion, Double scaleCoefficient,
+                            int channel, int timePoint, boolean recompute, Qc qc, List<String> qcAcknowledged,
+                            Integer smallRoiWarnVoxels, String kind, String calibration, ValueKind.Spec valueSpec) {
+            this(pairs, settings, roiModes, scales, scaleNotation, scaleLabels, scaleConversion, scaleCoefficient,
+                    channel, timePoint, recompute, qc, qcAcknowledged, smallRoiWarnVoxels, kind, calibration,
+                    valueSpec, null);
+        }
+
         /** 値の種類を指定しない（従来の要求）。 */
         public BatchRequest(List<BatchPair> pairs, Map<String, String> settings,
                             Set<RoiFeatureRequest.RoiMode> roiModes, List<Double> scales, String scaleNotation,
@@ -98,7 +109,8 @@ public class RadiomicsBatchService {
                             int channel, int timePoint, boolean recompute, Qc qc, List<String> qcAcknowledged,
                             Integer smallRoiWarnVoxels, String kind, String calibration) {
             this(pairs, settings, roiModes, scales, scaleNotation, scaleLabels, scaleConversion, scaleCoefficient,
-                    channel, timePoint, recompute, qc, qcAcknowledged, smallRoiWarnVoxels, kind, calibration, null);
+                    channel, timePoint, recompute, qc, qcAcknowledged, smallRoiWarnVoxels, kind, calibration, null,
+                    null);
         }
 
         /** PET の校正を指定しない（従来の要求。{@code auto}）。 */
@@ -334,7 +346,7 @@ public class RadiomicsBatchService {
         return new RoiFeatureRequest(p.studyUid(), p.sourceSeriesUid(), p.maskSeriesUid(), p.maskChannel(),
                 req.channel(), req.timePoint(), req.settings(), req.recompute(), req.roiModes(), req.scales(),
                 req.scaleNotation(), req.scaleLabels(), req.scaleConversion(), req.scaleCoefficient(),
-                req.smallRoiWarnVoxels(), req.calibration(), req.valueSpec());
+                req.smallRoiWarnVoxels(), req.calibration(), req.valueSpec(), req.planes());
     }
 
     private void set(Job job, int i, PairState state, FailureKind kind, String error, boolean fromCache, long ms) {

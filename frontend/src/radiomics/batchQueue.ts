@@ -65,6 +65,7 @@ export function buildDatasetOutput(
   return datasetFiles(rows, out.subjects, {
     albumName: out.albumName, specSha256: spec.sha256, includePatientId: out.includePatientId, base: batchFileBase(prefix),
     specText: specText({ ...spec, output: { prefix } }), subjectsFile: out.subjectsFile, bom: out.bom, kind: spec.kind,
+    twoD: spec.kind !== "voiStats" && spec.form.units2d.length > 0,
   });
 }
 

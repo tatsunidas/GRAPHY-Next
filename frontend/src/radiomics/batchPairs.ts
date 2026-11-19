@@ -152,7 +152,9 @@ export function buildBatchRequest(pairs: readonly BatchPair[], form: RoiFeatureF
   return {
     pairs: [...pairs],
     settings: roiFeatureSettings(opts.kind === "voiStats" ? voiStatsForm(form) : { ...form, logOn: false }),
-    roiModes: ["WHOLE_3D"],
+    // VOI 統計は 3D の一次統計だけ。2D の単位は特徴量の抽出のときだけ
+    roiModes: opts.kind === "voiStats" ? ["WHOLE_3D"] : ["WHOLE_3D", ...form.units2d],
+    planes: opts.kind !== "voiStats" && form.units2d.length > 0 && form.planesAll ? "ALL" : null,
     scales: null,
     scaleNotation: null,
     scaleLabels: null,
