@@ -214,7 +214,9 @@ export function RoiFeatureBatchDialog({
   const locked = running || queueRunning;
   /** 範囲の欄が数でない・下限が上限より大きい間は、実行も定義の保存もしない（範囲なしの定義が黙って作られるのを防ぐ）。 */
   const rangeProblem = kind === "voiStats" ? null : rangeBounds(form).problem;
-  const dup = rows ? duplicateLabels(assignCaseLabels(rows)) : [];
+  // 実行時に振られる症例ラベル。空欄の行の placeholder に出す（振り方は assignCaseLabels の 1 つだけ。表示と実行で食い違わない）
+  const planned = rows ? assignCaseLabels(rows) : [];
+  const dup = rows ? duplicateLabels(planned) : [];
 
   const start = async (isTrial: boolean, ack: readonly string[] = acknowledged, from?: readonly PairRow[]) => {
     const base = from ?? rows;
@@ -478,7 +480,8 @@ export function RoiFeatureBatchDialog({
                           </td>
                           <td style={td}>
                             {r.included && runnable(r) && (
-                              <input value={r.caseLabel} placeholder="C001" disabled={locked} style={{ ...input, width: 80 }}
+                              <input value={r.caseLabel} placeholder={planned[i]?.caseLabel ?? ""} disabled={locked}
+                                data-testid={`batch-caselabel-${i}`} style={{ ...input, width: 80 }}
                                 onChange={(e) => setRows(rows.map((x, j) => (j === i ? { ...x, caseLabel: cleanLabel(e.target.value) } : x)))} />
                             )}
                           </td>

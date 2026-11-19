@@ -4414,7 +4414,7 @@ export const ja: Record<string, string> = {
   "roiFeat.batch.kind.title": "種類",
   "roiFeat.batch.kind.radiomics": "特徴量（radiomics）",
   "roiFeat.batch.kind.voiStats": "VOI 統計",
-  "roiFeat.batch.kind.voiHelp": "平均・SD（母集団）・最小・最大・中央値・ボクセル数・体積（mL）を、1 ROI = 1 行で出します（ROI 内のボクセルを数えた値です。画面の VOI 統計とは ROI の取り方が違い、値が少し異なることがあります）。PET は SUV に未対応のため、その組は計算せず失敗として記録します。",
+  "roiFeat.batch.kind.voiHelp": "平均・SD（母集団）・最小・最大・中央値・ボクセル数・体積（mL）を、1 ROI = 1 行で出します（ROI 内のボクセルを数えた値です。画面の VOI 統計とは ROI の取り方が違い、値が少し異なることがあります）。特徴量の抽出から一次統計（IntensityBasedStatistical）の族だけをオンにして、その平均・標準偏差・最小・最大・中央値と体積を取り出したもので、離散化・リサンプリング・範囲を使いません。リサンプリングなしで特徴量の表を作ったときの同じ列と、同じ値です。PET は「校正（PET）」の指定で SUV に校正して計算します。「校正しない（Bq/mL のまま）」の PET の組は、計算せず失敗として記録します。",
   "roiFeat.batch.qc.title": "QC",
   "roiFeat.batch.qc.smallRoi": "小さい ROI",
   "roiFeat.batch.qc.lossy": "非可逆圧縮",
