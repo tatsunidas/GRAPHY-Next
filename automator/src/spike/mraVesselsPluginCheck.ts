@@ -14,9 +14,14 @@
  *   AUTOMATOR_DATA_DIR=<専用のデータ置き場> npx tsx src/spike/mraVesselsPluginCheck.ts \
  *     --plugin=<プラグインリポジトリ> --dicom=<DICOM ディレクトリ> [--name=<出力名>] [--no-edit]
  *
+ * 注意: **実行のたびに `frontend/node_modules/.vite`（Vite の依存キャッシュ）を消す**。連続して走らせると、古いキャッシュとの食い違いで
+ * メイン画面が真っ白になる（依存モジュールの 404。メイン画面の `search-patientid-input` が出ず、匿名化データでも落ちる）。
+ * 細い血管の層の期待は `--expect-fine=yes|capped|any`。解析中のメモリ（RSS）のピークと、SEG の保存時間を出す。
+ *
  * 専用ポートは 28771 番台。結果は `automator/.results/mra-vessels-check/<name>/` に出る
  * （スクリーンショットと、取り出した SEG）。
  */
+import { execSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import type { Page } from "@playwright/test";
@@ -44,6 +49,8 @@ const PLUGIN_REPO = requireDir(arg("plugin"), "plugin");
 const DICOM_DIR = requireDir(arg("dicom"), "dicom");
 const NAME = arg("name") ?? "case";
 const DO_EDIT = !process.argv.includes("--no-edit");
+/** 細い血管（名前なし）の層の期待: yes = 出る、capped = 雑音で歯止めが働く、any = どちらでもよい（どちらか一方であること）。 */
+const EXPECT_FINE = arg("expect-fine") ?? "any";
 const OUT_DIR = path.join(AUTOMATOR_ROOT, ".results", "mra-vessels-check", NAME);
 const PLUGIN_ID = JSON.parse(fs.readFileSync(path.join(PLUGIN_REPO, "plugin.json"), "utf8")).id as string;
 const RESULT_TIMEOUT_MS = 25 * 60_000;
@@ -99,6 +106,7 @@ async function main(): Promise<void> {
     console.log(`import: ${JSON.stringify(imported)}`);
     const main = driver.page;
     main.on("console", (m) => m.type() === "error" && console.log(`  [renderer error] ${m.text()}`));
+    main.on("pageerror", (e) => console.log(`  [main pageerror] ${e.message}\n${(e.stack ?? "").split("\n").slice(0, 6).join("\n")}`));
     try {
       await main.getByTestId("search-patientid-input").waitFor({ state: "visible", timeout: 30_000 });
     } catch {
@@ -132,6 +140,27 @@ async function main(): Promise<void> {
     await shot("2-window.png");
 
     console.log("\n[2] 既定のまま（何も選ばずに）解析を押す");
+    // 解析中のメモリ（RSS）を 2 秒ごとに記録する。Electron はこの worktree の desktop 配下のプロセス、backend は JVM。
+    let peakElectronKb = 0;
+    let peakProcKb = 0;
+    let peakBackendKb = 0;
+    const sampler = setInterval(() => {
+      try {
+        const out = execSync("ps -eo rss=,args=", { encoding: "utf8", maxBuffer: 1 << 26 });
+        let tot = 0;
+        for (const line of out.split("\n")) {
+          const kb = Number(line.trim().split(/\s+/)[0]);
+          if (!Number.isFinite(kb)) continue;
+          if (line.includes("/gn-mrav/desktop")) {
+            tot += kb;
+            if (kb > peakProcKb) peakProcKb = kb;
+          } else if (line.includes("/gn-mrav/backend") && kb > peakBackendKb) peakBackendKb = kb;
+        }
+        if (tot > peakElectronKb) peakElectronKb = tot;
+      } catch {
+        /* ps が失敗しても検査は続ける */
+      }
+    }, 2000);
     const t0 = Date.now();
     await root.locator("[data-act=analyze]").click();
     let state = "";
@@ -145,6 +174,11 @@ async function main(): Promise<void> {
     const elapsed = Math.round((Date.now() - t0) / 1000);
     check(state === "result", `解析が完走する（${elapsed}s）`, { state, status: await root.locator("[data-role=status]").textContent() });
     if (state !== "result") throw new Error("解析が結果に至らなかった");
+    clearInterval(sampler);
+    const mb = (kb: number) => Math.round(kb / 1024);
+    console.log(`  メモリ（RSS）のピーク: Electron 合計 ${mb(peakElectronKb)} MB、最大の単一プロセス ${mb(peakProcKb)} MB、backend(JVM) ${mb(peakBackendKb)} MB`);
+    fs.writeFileSync(path.join(OUT_DIR, "memory.json"), JSON.stringify({ peakElectronMb: mb(peakElectronKb), peakProcessMb: mb(peakProcKb), peakBackendMb: mb(peakBackendKb) }));
+    check(peakElectronKb > 0, "メモリの測定ができている（Electron のプロセスが見つかった）", { peakElectronKb });
     await shot("3-result.png");
 
     console.log("\n[3] 一覧と 3D");
@@ -153,6 +187,14 @@ async function main(): Promise<void> {
     fs.writeFileSync(path.join(OUT_DIR, "rows.json"), JSON.stringify(rows, null, 1));
     check(rows.length >= 6, "血管の行が 6 種類以上ある", rows.length);
     check(rows.every((r) => /^\d+\.\d\d mL$/.test(r.vol)), "体積が mL で出ている（数値）");
+    const fineRow = rows.find((r) => r.label === "34");
+    const statusAfter = (await root.locator("[data-role=status]").textContent()) ?? "";
+    const cappedMsg = /雑音が多い|image is noisy/.test(statusAfter);
+    console.log(`  細い血管（名前なし）の層: 行 ${fineRow ? "あり" : "なし"}、歯止め ${cappedMsg ? "作動（理由が出る）" : "なし"}`);
+    check(!!fineRow !== cappedMsg, "細い血管の層は、行があるか、歯止めの理由が出るかの、どちらか一方（両方・どちらも無し、ではない）", { fineRow: !!fineRow, cappedMsg });
+    if (EXPECT_FINE === "yes") check(!!fineRow && !cappedMsg, "細い血管の層が出る（期待どおり）");
+    if (EXPECT_FINE === "capped") check(!fineRow && cappedMsg, "雑音が多い画像で、層の歯止めが働く（期待どおり）");
+    if (fineRow) check(/細い血管|Fine vessels/.test(fineRow.name), "層の行の名前が「細い血管（名前なし）」", fineRow.name);
     const anchorsText = (await root.locator("[data-role=anchors]").textContent()) ?? "";
     check(anchorsText.length > 0, "アンカーの状態（自動／手直し済み）が出る", anchorsText);
 
@@ -165,6 +207,17 @@ async function main(): Promise<void> {
     const noneShot = await view.screenshot({ path: path.join(OUT_DIR, "4b-3d-none.png") });
     check(Buffer.compare(allShot, noneShot) !== 0 && allShot.length > noneShot.length * 1.15, "3D に血管が描かれている（全表示と全非表示で画が違い、全表示のほうが情報量が多い）", { all: allShot.length, none: noneShot.length });
     await root.locator("[data-act=show-all]").click();
+    await v.waitForTimeout(500);
+    if (fineRow) {
+      const cb = root.locator('.gnmv-item[data-label="34"] input[type=checkbox]');
+      await cb.uncheck();
+      await v.waitForTimeout(500);
+      const noFineShot = await view.screenshot({ path: path.join(OUT_DIR, "4d-3d-no-fine.png") });
+      // 全部表示に戻した状態（allShot と同じ）から、層だけを隠す。空の画面と比べない（前の版は、全部非表示の後に入れて空振りした）
+      check(Buffer.compare(allShot, noFineShot) !== 0 && noFineShot.length < allShot.length && noFineShot.length > noneShot.length * 1.15, "細い血管の層を隠すと、3D の画が変わり、情報量が減る", { all: allShot.length, noFine: noFineShot.length });
+      await cb.check();
+      await v.waitForTimeout(500);
+    }
     await root.locator(".gnmv-item [data-act=solo]").first().click();
     await v.waitForTimeout(500);
     const soloShot = await view.screenshot({ path: path.join(OUT_DIR, "4c-3d-solo.png") });
@@ -310,8 +363,10 @@ async function main(): Promise<void> {
     await dialog.waitFor({ state: "visible", timeout: 20_000 });
     check(true, "本体の保存確認ダイアログが出る（抑止されない）");
     await shot("8-confirm.png");
+    const tSeg = Date.now();
     await v.getByTestId("plugin-save-confirm-button").click();
-    await v.waitForTimeout(4000);
+    for (let i = 0; i < 120 && !RE.segSaved.test((await root.locator("[data-role=status]").textContent()) ?? ""); i++) await v.waitForTimeout(1000);
+    console.log(`  SEG の保存にかかった時間: ${Math.round((Date.now() - tSeg) / 1000)} 秒`);
     const stSeg = (await root.locator("[data-role=status]").textContent()) ?? "";
     check(RE.segSaved.test(stSeg), "SEG を保存した旨が出る", stSeg);
 
@@ -342,6 +397,8 @@ async function main(): Promise<void> {
   } catch (e) {
     console.error(e);
     if (v) await v.screenshot({ path: path.join(OUT_DIR, "error.png") }).catch(() => undefined);
+    // ビューアが開く前の失敗（メイン画面が出ない等）でも、メイン画面を撮っておく
+    await driver.page.screenshot({ path: path.join(OUT_DIR, "error-main.png") }).catch(() => undefined);
     process.exitCode = 1;
   } finally {
     await driver.stop().catch(() => undefined);
