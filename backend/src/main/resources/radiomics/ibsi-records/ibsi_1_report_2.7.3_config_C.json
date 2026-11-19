@@ -1,6 +1,6 @@
 {
   "dataSet": "configuration C",
-  "radiomicsjVersion": "2.7.2",
+  "radiomicsjVersion": "2.7.3",
   "referenceFile": "validation/IBSI_ValidationFile.xlsx",
   "referenceSha256": "06d2212c529f9bbfb1ca6ff9e82828254f636143fe79d367f43f100343dacb7c",
   "settingsFile": "validation/ParamsTestCT_PAT1_Config_C.properties",
@@ -8,7 +8,7 @@
   "rule": "tolerance > 0: pass when |computed - reference| <= tolerance. No tolerance: the IBSI manual states neither a tolerance nor a rounding rule, so this library uses its own criterion (computed value and reference rounded half up to N = max(3, digits of the printed reference) significant digits are equal), counted separately from a pass. The relative 1%/20% rules of Validation.ibsiDigitalPhantom() are not used.",
   "skippedDiagnostics": 60,
   "checked": 165,
-  "counts": {"PASS": 160, "PASS_AT_REFERENCE_DIGITS": 4, "FAIL": 1, "NOT_COMPUTED": 3, "NOT_SUPPORTED": 41, "NO_MANUAL_REFERENCE": 2},
+  "counts": {"PASS": 161, "PASS_AT_REFERENCE_DIGITS": 4, "FAIL": 0, "NOT_COMPUTED": 3, "NOT_SUPPORTED": 41, "NO_MANUAL_REFERENCE": 2},
   "rows": [
     {"family": "Morphology", "imageBiomarker": "Volume (mesh-based)", "radiomicsjName": "VolumeMesh", "column": "Morphology_VolumeMesh", "consensus": "6-9", "reference": 367000.0, "tolerance": 6000.0, "computed": 367453.6666666667, "verdict": "PASS", "referenceStatus": null},
     {"family": "Morphology", "imageBiomarker": "Volume (counting)", "radiomicsjName": "VolumeVoxelCounting", "column": "Morphology_VolumeVoxelCounting", "consensus": "6-9", "reference": 368000.0, "tolerance": 6000.0, "computed": 367880.0, "verdict": "PASS", "referenceStatus": null},
@@ -80,8 +80,8 @@
     {"family": "Intensity histogram", "imageBiomarker": "Minimum gradient grey level", "radiomicsjName": "MinimumHistogramGradientIntensity", "column": "IntensityHistogram_MinimumHistogramGradientIntensity", "consensus": "3-5", "reference": 44.0, "tolerance": null, "computed": 44.0, "verdict": "PASS_AT_REFERENCE_DIGITS", "referenceStatus": null},
     {"family": "Intensity volume histogram", "imageBiomarker": "Volume fraction at 10% intensity", "radiomicsjName": "VolumeAtIntensityFraction10", "column": "IntensityVolumeHistogram_VolumeAtIntensityFraction10", "consensus": "3-5", "reference": 0.998, "tolerance": 0.001, "computed": 0.9975642113046693, "verdict": "PASS", "referenceStatus": null},
     {"family": "Intensity volume histogram", "imageBiomarker": "Volume fraction at 90% intensity", "radiomicsjName": "VolumeAtIntensityFraction90", "column": "IntensityVolumeHistogram_VolumeAtIntensityFraction90", "consensus": "6-9", "reference": 1.52E-4, "tolerance": 2.0E-5, "computed": 1.522367934581675E-4, "verdict": "PASS", "referenceStatus": null},
-    {"family": "Intensity volume histogram", "imageBiomarker": "Intensity at 10% volume", "radiomicsjName": "IntensityAtVolumeFraction10", "column": "IntensityVolumeHistogram_IntensityAtVolumeFraction10", "consensus": "3-5", "reference": 88.8, "tolerance": 0.2, "computed": 86.25, "verdict": "FAIL", "referenceStatus": null},
-    {"family": "Intensity volume histogram", "imageBiomarker": "Intensity at 90% volume", "radiomicsjName": "IntensityAtVolumeFraction90", "column": "IntensityVolumeHistogram_IntensityAtVolumeFraction90", "consensus": "6-9", "reference": -421.0, "tolerance": 14.0, "computed": -423.75, "verdict": "PASS", "referenceStatus": null},
+    {"family": "Intensity volume histogram", "imageBiomarker": "Intensity at 10% volume", "radiomicsjName": "IntensityAtVolumeFraction10", "column": "IntensityVolumeHistogram_IntensityAtVolumeFraction10", "consensus": "3-5", "reference": 88.8, "tolerance": 0.2, "computed": 88.75, "verdict": "PASS", "referenceStatus": null},
+    {"family": "Intensity volume histogram", "imageBiomarker": "Intensity at 90% volume", "radiomicsjName": "IntensityAtVolumeFraction90", "column": "IntensityVolumeHistogram_IntensityAtVolumeFraction90", "consensus": "6-9", "reference": -421.0, "tolerance": 14.0, "computed": -421.25, "verdict": "PASS", "referenceStatus": null},
     {"family": "Intensity volume histogram", "imageBiomarker": "Volume fraction difference between 10% and 90% intensity", "radiomicsjName": "VolumeFractionDifferenceBetweenIntensityFractions", "column": "IntensityVolumeHistogram_VolumeFractionDifferenceBetweenIntensityFractions", "consensus": "3-5", "reference": 0.997, "tolerance": 0.001, "computed": 0.9974119745112111, "verdict": "PASS", "referenceStatus": null},
     {"family": "Intensity volume histogram", "imageBiomarker": "Intensity difference between 10% and 90% volume", "radiomicsjName": "IntensityFractionDifferenceBetweenVolumeFractions", "column": "IntensityVolumeHistogram_IntensityFractionDifferenceBetweenVolumeFractions", "consensus": "6-9", "reference": 510.0, "tolerance": 14.0, "computed": 510.0, "verdict": "PASS", "referenceStatus": null},
     {"family": "Intensity volume histogram", "imageBiomarker": "Area under the IVH curve", "radiomicsjName": "AreaUnderTheIVHCurve", "column": null, "consensus": "3-5", "reference": 0.681, "tolerance": 0.003, "computed": null, "verdict": "NO_MANUAL_REFERENCE", "referenceStatus": "not-in-ibsi1-manual"},
