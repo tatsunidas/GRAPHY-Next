@@ -37,16 +37,16 @@ export function BatchSettingsPanel({
   const labelsAndQc = (
           <>
             <div style={row}>
-              <span style={label}>{t("roiFeat.batch.labels")}</span>
+              <span style={label} title={t("roiFeat.tip.bLabels")}>{t("roiFeat.batch.labels")}</span>
               <input data-testid="batch-labels" value={labelsText} placeholder="GTV, tumor" disabled={disabled}
                 style={{ ...input, width: 300 }} onChange={(e) => setLabelsText(e.target.value)} />
               <span style={hint}>{t("roiFeat.batch.labelsHelp")}</span>
             </div>
             <div style={row} data-testid="batch-qc">
-              <span style={label}>{t("roiFeat.batch.qc.title")}</span>
+              <span style={label} title={t("roiFeat.tip.bQc")}>{t("roiFeat.batch.qc.title")}</span>
               {/* 項目ごとのまとまりは折り返さない（幅が足りないときは、まとまりの間で折り返す） */}
               <span style={qcGroup}>
-                <span>{t("roiFeat.batch.qc.smallRoi")}</span>
+                <span title={t("roiFeat.tip.bQcSmall")}>{t("roiFeat.batch.qc.smallRoi")}</span>
                 <QcRadios name="qc-small" value={qc.smallRoi} disabled={disabled} testId="batch-qc-small"
                   onChange={(v) => setQc({ ...qc, smallRoi: v })} />
                 {/* 基準値は「小さい ROI」の値なので、その項目の隣に置く（非可逆圧縮より前） */}
@@ -55,7 +55,7 @@ export function BatchSettingsPanel({
                 <span>{t("roiFeat.batch.qc.voxelsUnit")}</span>
               </span>
               <span style={qcGroup}>
-                <span>{t("roiFeat.batch.qc.lossy")}</span>
+                <span title={t("roiFeat.tip.bQcLossy")}>{t("roiFeat.batch.qc.lossy")}</span>
                 <QcRadios name="qc-lossy" value={qc.lossy} disabled={disabled} testId="batch-qc-lossy"
                   onChange={(v) => setQc({ ...qc, lossy: v })} />
               </span>
@@ -66,7 +66,7 @@ export function BatchSettingsPanel({
   return (
     <div data-testid="batch-settings" style={{ fontSize: 12 }}>
       <div style={row} data-testid="batch-kind">
-        <span style={label}>{t("roiFeat.batch.kind.title")}</span>
+        <span style={label} title={t("roiFeat.tip.bKind")}>{t("roiFeat.batch.kind.title")}</span>
         {(["radiomics", "voiStats"] as const).map((k) => (
           <label key={k}>
             <input type="radio" name="batch-kind" checked={kind === k} disabled={disabled} data-testid={`batch-kind-${k}`}
@@ -84,7 +84,7 @@ export function BatchSettingsPanel({
       ) : (
         <>
           <div style={row} data-testid="batch-units">
-            <span style={label}>{t("roiFeat.field.modes")}</span>
+            <span style={label} title={t("roiFeat.tip.modes")}>{t("roiFeat.field.modes")}</span>
             <label title={t("roiFeat.mode.alwaysOn")}>
               <input type="checkbox" checked disabled /> {t("roiFeat.mode.whole")}
             </label>
@@ -101,7 +101,7 @@ export function BatchSettingsPanel({
           {form.units2d.length > 0 && (
             <>
               <div style={row} data-testid="batch-planes">
-                <span style={label}>{t("roiFeat.field.planes")}</span>
+                <span style={label} title={t("roiFeat.tip.planes")}>{t("roiFeat.field.planes")}</span>
                 <label><input type="radio" name="batch-planes" checked={!form.planesAll} disabled={disabled} data-testid="batch-planes-acquisition"
                   onChange={() => setForm((f) => ({ ...f, planesAll: false }))} /> {t("roiFeat.planes.acquisition")}</label>
                 <label><input type="radio" name="batch-planes" checked={form.planesAll} disabled={disabled} data-testid="batch-planes-all"

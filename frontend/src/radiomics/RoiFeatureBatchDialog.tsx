@@ -415,10 +415,10 @@ export function RoiFeatureBatchDialog({
           <div style={note}>{t("roiFeat.researchOnly")}</div>
           <div style={note}>{t("roiFeat.batch.privacy")}</div>
           <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 8 }}>
-            <button type="button" style={btn} data-testid="batch-spec-save" disabled={locked || inputProblem !== null} onClick={() => void saveSpec()}>
+            <button type="button" style={btn} data-testid="batch-spec-save" title={t("roiFeat.tip.bSpecSave")} disabled={locked || inputProblem !== null} onClick={() => void saveSpec()}>
               {t("roiFeat.batch.spec.save")}
             </button>
-            <button type="button" style={btn} data-testid="batch-spec-load" disabled={locked} onClick={() => fileRef.current?.click()}>
+            <button type="button" style={btn} data-testid="batch-spec-load" title={t("roiFeat.tip.bSpecLoad")} disabled={locked} onClick={() => fileRef.current?.click()}>
               {t("roiFeat.batch.spec.load")}
             </button>
             <input ref={fileRef} data-testid="batch-spec-file" type="file" accept=".json,application/json" style={{ display: "none" }}
@@ -442,11 +442,11 @@ export function RoiFeatureBatchDialog({
                   <thead>
                     <tr>
                       <th style={th} />
-                      <th style={th}>{t("roiFeat.batch.col.study")}</th>
-                      <th style={th}>{t("roiFeat.batch.col.source")}</th>
-                      <th style={th}>{t("roiFeat.batch.col.mask")}</th>
-                      <th style={th}>{t("roiFeat.batch.col.state")}</th>
-                      <th style={th}>{t("roiFeat.batch.col.label")}</th>
+                      <th style={th} title={t("roiFeat.tip.bColStudy")}>{t("roiFeat.batch.col.study")}</th>
+                      <th style={th} title={t("roiFeat.tip.bColSource")}>{t("roiFeat.batch.col.source")}</th>
+                      <th style={th} title={t("roiFeat.tip.bColMask")}>{t("roiFeat.batch.col.mask")}</th>
+                      <th style={th} title={t("roiFeat.tip.bColState")}>{t("roiFeat.batch.col.state")}</th>
+                      <th style={th} title={t("roiFeat.tip.bColLabel")}>{t("roiFeat.batch.col.label")}</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -511,23 +511,23 @@ export function RoiFeatureBatchDialog({
               <div style={note}>{t("roiFeat.batch.scope")}</div>
 
               <div style={section}>{t("roiFeat.batch.step3")}</div>
-              <label>
+              <label title={t("roiFeat.tip.bPrefix")}>
                 {t("roiFeat.batch.prefix")}{" "}
                 <input data-testid="batch-prefix" value={prefix} placeholder="roi-features-batch" disabled={locked}
                   style={{ ...input, width: 220 }} onChange={(e) => setPrefix(e.target.value)} />
               </label>
               <div style={{ marginTop: 6, display: "flex", flexDirection: "column", gap: 3 }} data-testid="batch-output-options">
-                <label>
+                <label title={t("roiFeat.tip.bSubjects")}>
                   <input type="checkbox" data-testid="batch-out-subjects" checked={subjectsFile} disabled={locked}
                     onChange={(e) => setSubjectsFile(e.target.checked)} /> {t("roiFeat.batch.out.subjects")}
                 </label>
                 <div style={note}>{t("roiFeat.batch.out.subjectsHelp")}</div>
-                <label>
+                <label title={t("roiFeat.tip.bPatientId")}>
                   <input type="checkbox" data-testid="batch-out-patientid" checked={includePatientId} disabled={locked}
                     onChange={(e) => setIncludePatientId(e.target.checked)} /> {t("roiFeat.batch.out.patientId")}
                 </label>
                 {includePatientId && <div style={{ ...note, color: "#b00020" }} data-testid="batch-out-patientid-warn">{t("roiFeat.batch.out.patientIdWarn")}</div>}
-                <label>
+                <label title={t("roiFeat.tip.bBom")}>
                   <input type="checkbox" data-testid="batch-out-bom" checked={bom} disabled={locked}
                     onChange={(e) => setBom(e.target.checked)} /> {t("roiFeat.batch.out.bom")}
                 </label>
@@ -582,12 +582,12 @@ export function RoiFeatureBatchDialog({
           {written != null && <div style={{ ...note, color: "#2f6b2f" }} data-testid="batch-written">{t("roiFeat.batch.written", { n: written })}</div>}
         </div>
         <div style={footer}>
-          <button type="button" style={btn} data-testid="batch-trial" disabled={inputProblem !== null || locked || starting || !summary || summary.selected === 0}
+          <button type="button" style={btn} data-testid="batch-trial" title={t("roiFeat.tip.bTrial")} disabled={inputProblem !== null || locked || starting || !summary || summary.selected === 0}
             onClick={() => void start(true)}>{t("roiFeat.batch.trial")}</button>
-          <button type="button" style={btnPrimary} data-testid="batch-run" disabled={inputProblem !== null || locked || starting || !summary || summary.selected === 0}
+          <button type="button" style={btnPrimary} data-testid="batch-run" title={t("roiFeat.tip.bRun")} disabled={inputProblem !== null || locked || starting || !summary || summary.selected === 0}
             onClick={() => void start(false)}>{t("roiFeat.batch.run")}</button>
           {running && <button type="button" style={btn} data-testid="batch-cancel" onClick={cancel}>{t("roiFeat.batch.cancel")}</button>}
-          <button type="button" style={btn} data-testid="batch-write"
+          <button type="button" style={btn} data-testid="batch-write" title={t("roiFeat.tip.bWrite")}
             disabled={locked || !results || results.length === 0} onClick={write}>{t("roiFeat.batch.write")}</button>
         </div>
       </div>
