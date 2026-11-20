@@ -45,6 +45,30 @@ async function snapshot(page: Page, rootSelector: string): Promise<Snapshot> {
   }));
 }
 
+/**
+ * 項目に意味のツールチップ（title）があるか。入力欄そのもの、または祖先の行のどこかに title が付いていること
+ * （行の見出しの span に付けるので、入力欄の祖先の子に title つきの要素があるかも見る）。無い項目の testid を返す。
+ */
+async function missingTips(page: Page, testIds: string[]): Promise<string[]> {
+  return (await page.evaluate((ids) => {
+    const missing: string[] = [];
+    for (const id of ids) {
+      const el = document.querySelector(`[data-testid="${id}"]`);
+      if (!el) { missing.push(`${id}(無い)`); continue; }
+      let ok = false;
+      // 入力欄・ボタン・チェックボックスの label 自身の title、または行（先頭の子が見出し）の見出しの title。兄弟の行の title は数えない
+      // （tsx が名前つきの関数に __name を足し、ページ内で未定義になるので、関数にせず書く）
+      if ((el.getAttribute("title") ?? "").trim() !== "" || (el.closest("label")?.getAttribute("title") ?? "").trim() !== "") ok = true;
+      for (let n: Element | null = el, depth = 0; n && depth < 6 && !ok && !id.includes("-family-"); n = n.parentElement, depth++) {
+        const head = n.firstElementChild;
+        if (head && !head.contains(el) && (head.getAttribute("title") ?? "").trim() !== "" && n.tagName === "DIV") ok = true;
+      }
+      if (!ok) missing.push(id);
+    }
+    return missing;
+  }, testIds)) as string[];
+}
+
 async function main(): Promise<void> {
   fs.mkdirSync(OUT_DIR, { recursive: true });
   const d = new DesktopDriver();
@@ -74,6 +98,21 @@ async function main(): Promise<void> {
     await page.evaluate("window.location.hash = 'radiomics-features'");
     await page.getByTestId("roifeat-bincount").waitFor({ state: "visible", timeout: 20_000 });
     got["screen-default"] = await snapshot(page, "body");
+    const FAMS = ["Morphology", "LocalIntensity", "IntensityBasedStatistical", "IntensityHistogram", "IntensityVolumeHistogram", "Shape2D", "GLCM", "GLRLM", "GLSZM", "GLDZM", "NGTDM", "NGLDM", "Fractal", "GLAM", "AuxiliaryStatistics"];
+    const screenIds = ["roifeat-mask", "roifeat-caselabel", "roifeat-mode-section", "roifeat-planes-all", "roifeat-calibration", "roifeat-valuekind", "roifeat-bincount", "roifeat-resampling", "roifeat-preset", "roifeat-filter-radius",
+      ...FAMS.map((f) => `roifeat-family-${f}`)];
+    const miss1 = await missingTips(page, screenIds);
+    check(miss1.length === 0, "画面の主要な項目と族 15 個に、ツールチップがある", miss1);
+    check((await missingTips(page, ["no-such-testid"])).join() === "no-such-testid(無い)", "負例: 存在しない項目は検出される");
+    await page.evaluate("document.querySelector('[data-testid=\"roifeat-family-GLCM\"]').closest('label').removeAttribute('title')");
+    check((await missingTips(page, ["roifeat-family-GLCM"])).join() === "roifeat-family-GLCM", "負例: title を外した族は検出される");
+    // 負例（行の見出し）: リサンプリング行の見出しの title を外すと、その行は検出される（兄弟の行の title では通らない）
+    await page.evaluate("(function(){var e=document.querySelector('[data-testid=\"roifeat-resampling\"]');while(e){var h=e.firstElementChild;if(h&&!h.contains(document.querySelector('[data-testid=\"roifeat-resampling\"]'))&&h.getAttribute('title')){h.removeAttribute('title');return;}e=e.parentElement;}})()");
+    check((await missingTips(page, ["roifeat-resampling"])).join() === "roifeat-resampling", "負例: 行の見出しの title を外した項目は検出される");
+    await page.reload();
+    await page.evaluate("window.location.hash = 'radiomics-features'");
+    await page.getByTestId("roifeat-bincount").waitFor({ state: "visible", timeout: 20_000 });
+
     await page.screenshot({ path: path.join(OUT_DIR, "01-screen-default.png"), fullPage: true });
     await page.getByTestId("roifeat-resampling").selectOption("none");
     await page.waitForTimeout(300);
@@ -98,6 +137,8 @@ async function main(): Promise<void> {
     await clickDismissing(page, page.getByTestId("album-batch-button")); // 新版の窓がリロードのたびに出て、クリックを遮る
     await page.getByTestId("batch-settings").waitFor({ state: "visible", timeout: 30_000 });
     got["batch-default"] = await snapshot(page, '[data-testid="batch-settings"]');
+    const miss2 = await missingTips(page, ["batch-kind", "batch-units", "batch-labels", "batch-qc", "batch-bincount", "batch-resampling", "batch-preset", "batch-calibration", "batch-valuekind", "batch-spec-save", "batch-spec-load", "batch-prefix", "batch-out-subjects", "batch-out-patientid", "batch-out-bom", "batch-run", "batch-trial", "batch-write", ...FAMS.map((f) => `batch-family-${f}`)]);
+    check(miss2.length === 0, "一括抽出の主要な項目・ボタン・族 15 個に、ツールチップがある", miss2);
     await page.screenshot({ path: path.join(OUT_DIR, "03-batch-default.png"), fullPage: true });
     await page.getByTestId("batch-resampling").selectOption("none");
     await page.waitForTimeout(300);

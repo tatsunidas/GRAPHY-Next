@@ -444,7 +444,7 @@ export function RoiFeatureScreen() {
       {!studyUid && <div style={errText}>{t("roiFeat.err.noContext")}</div>}
 
       <div style={panel}>
-        <Field label={t("roiFeat.field.target")}>
+        <Field label={t("roiFeat.field.target")} tip={t("roiFeat.tip.target")}>
           <select value={sourceSeriesUid} onChange={(e) => setSourceSeriesUid(e.target.value)}
             disabled={busy} style={input} data-testid="roifeat-target">
             {allSeries.map((s) => (
@@ -466,7 +466,7 @@ export function RoiFeatureScreen() {
             </select>
           </Field>
         )}
-        <Field label={t("roiFeat.field.mask")}>
+        <Field label={t("roiFeat.field.mask")} tip={t("roiFeat.tip.mask")}>
           <select value={maskSeriesUid} onChange={(e) => setMaskSeriesUid(e.target.value)}
             disabled={busy} style={input} data-testid="roifeat-mask">
             <option value="">{t("roiFeat.mask.none")}</option>
@@ -512,13 +512,13 @@ export function RoiFeatureScreen() {
             ) : maxSection.error}
           </div>
         )}
-        <Field label={t("roiFeat.field.caseLabel")}>
+        <Field label={t("roiFeat.field.caseLabel")} tip={t("roiFeat.tip.caseLabel")}>
           <input value={caseLabel} onChange={(e) => setCaseLabel(e.target.value)} placeholder="case-012"
             style={input} data-testid="roifeat-caselabel" />
         </Field>
         <div style={note}>{t("roiFeat.caseLabel.help")}</div>
 
-        <Field label={t("roiFeat.field.modes")}>
+        <Field label={t("roiFeat.field.modes")} tip={t("roiFeat.tip.modes")}>
           <span style={{ display: "inline-flex", gap: 10, alignItems: "center", justifyContent: "flex-end", flexWrap: "wrap" }}>
             <label title={t("roiFeat.mode.alwaysOn")}>
               <input type="checkbox" checked disabled data-testid="roifeat-mode-whole" /> {t("roiFeat.mode.whole")}
@@ -534,7 +534,7 @@ export function RoiFeatureScreen() {
           </span>
         </Field>
         {(sectionOn || slicesOn) && <div style={note}>{t("roiFeat.mode.note2d")}</div>}
-        <Field label={t("roiFeat.field.planes")}>
+        <Field label={t("roiFeat.field.planes")} tip={t("roiFeat.tip.planes")}>
           <span style={{ display: "inline-flex", gap: 10, alignItems: "center", justifyContent: "flex-end", flexWrap: "wrap" }}
             title={sectionOn || slicesOn ? undefined : t("roiFeat.planes.needs2d")}>
             <label>
@@ -553,7 +553,7 @@ export function RoiFeatureScreen() {
           layout={{ labelMinWidth: 150, align: "right" }} showRange showPreset twoDSelected={sectionOn || slicesOn}
           middleSlot={(
             <>
-        <Field label={t("roiFeat.field.filter")}>
+        <Field label={t("roiFeat.field.filter")} tip={t("roiFeat.tip.filter")}>
           <span style={{ display: "inline-flex", gap: 8, alignItems: "center", justifyContent: "flex-end", flexWrap: "wrap" }}>
             <label>
               <input type="radio" checked={!form.logOn} disabled={busy} data-testid="roifeat-filter-none"
@@ -573,19 +573,19 @@ export function RoiFeatureScreen() {
           <>
             {form.logByRadius ? (
               <>
-                <Field label={t("roiFeat.scale.notation")}>
+                <Field label={t("roiFeat.scale.notation")} tip={t("roiFeat.tip.scaleNotation")}>
                   <select value={form.scaleNotation} disabled={busy} style={{ ...input, width: 160 }}
                     data-testid="roifeat-scale-notation"
                     onChange={(e) => setForm((f) => ({ ...f, scaleNotation: e.target.value as ScaleNotation }))}>
                     {SCALE_NOTATIONS.map((n) => <option key={n} value={n}>{t(`roiFeat.scale.notation.${n}`)}</option>)}
                   </select>
                 </Field>
-                <Field label={t("roiFeat.scale.values")}>
+                <Field label={t("roiFeat.scale.values")} tip={t("roiFeat.tip.scaleValues")}>
                   <input value={form.scalesText} disabled={busy} style={{ ...input, width: 220 }} data-testid="roifeat-scales"
                     onChange={(e) => setForm((f) => ({ ...f, scalesText: e.target.value }))} />
                 </Field>
                 <div style={note}>{t("roiFeat.scale.valuesHint")}</div>
-                <Field label={t("roiFeat.scale.labels")}>
+                <Field label={t("roiFeat.scale.labels")} tip={t("roiFeat.tip.scaleLabels")}>
                   <input value={form.scaleLabelsText} disabled={busy} style={{ ...input, width: 220 }} data-testid="roifeat-scale-labels"
                     onChange={(e) => setForm((f) => ({ ...f, scaleLabelsText: e.target.value }))} />
                 </Field>
@@ -608,7 +608,7 @@ export function RoiFeatureScreen() {
                   )}
                 </div>
                 {form.scaleNotation === "WIDTH_PX" && <div style={note} data-testid="roifeat-scale-width-note">{t("roiFeat.scale.noteWidth")}</div>}
-                <Field label={t("roiFeat.scale.conversion")}>
+                <Field label={t("roiFeat.scale.conversion")} tip={t("roiFeat.tip.scaleConversion")}>
                   <select value={form.scaleConversion} disabled={busy} style={{ ...input, width: 260 }}
                     data-testid="roifeat-scale-conversion"
                     onChange={(e) => setForm((f) => ({ ...f, scaleConversion: e.target.value as ScaleConversion }))}>
@@ -616,7 +616,7 @@ export function RoiFeatureScreen() {
                   </select>
                 </Field>
                 {form.scaleConversion === "COEFFICIENT" && (
-                  <Field label={t("roiFeat.scale.k")}>
+                  <Field label={t("roiFeat.scale.k")} tip={t("roiFeat.tip.scaleK")}>
                     <NumberField value={form.scaleK} onChange={(v) => setForm((f) => ({ ...f, scaleK: v }))}
                       min={0.1} max={10} step={0.1} disabled={busy} style={{ ...input, width: 64 }} />
                   </Field>
@@ -624,16 +624,16 @@ export function RoiFeatureScreen() {
                 <div style={note} data-testid="roifeat-scale-note">{t("roiFeat.scale.note")}</div>
               </>
             ) : (
-              <Field label={t("roiFeat.filter.sigma")}>
+              <Field label={t("roiFeat.filter.sigma")} tip={t("roiFeat.tip.sigma")}>
                 <input value={form.logSigmaMm} disabled={busy} style={{ ...input, width: 120 }} data-testid="roifeat-log-sigma"
                   onChange={(e) => setForm((f) => ({ ...f, logSigmaMm: e.target.value }))} />
               </Field>
             )}
-            <Field label={t("roiFeat.filter.truncate")}>
+            <Field label={t("roiFeat.filter.truncate")} tip={t("roiFeat.tip.truncate")}>
               <NumberField value={form.logTruncate} onChange={(v) => setForm((f) => ({ ...f, logTruncate: v }))}
                 min={1} max={10} step={0.5} disabled={busy} style={{ ...input, width: 64 }} />
             </Field>
-            <Field label={t("roiFeat.filter.padding")}>
+            <Field label={t("roiFeat.filter.padding")} tip={t("roiFeat.tip.padding")}>
               <select value={form.logPadding} disabled={busy} style={{ ...input, width: 120 }} data-testid="roifeat-log-padding"
                 onChange={(e) => setForm((f) => ({ ...f, logPadding: e.target.value as LogPadding }))}>
                 {LOG_PADDINGS.map((pd) => <option key={pd} value={pd}>{pd}</option>)}
@@ -984,10 +984,10 @@ function FamilyRows({ label, raw, discretisation, rows, t }: {
   );
 }
 
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
+function Field({ label, children, tip }: { label: string; children: React.ReactNode; tip?: string }) {
   return (
     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, padding: "3px 0" }}>
-      <span style={{ ...fieldLabel, flex: "none", minWidth: 150 }}>{label}</span>
+      <span style={{ ...fieldLabel, flex: "none", minWidth: 150 }} title={tip}>{label}</span>
       <span style={{ flex: 1, textAlign: "right" }}>{children}</span>
     </div>
   );

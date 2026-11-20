@@ -28,7 +28,7 @@ export function CalibrationField({ form, setForm, disabled, testIdPrefix, layout
   const { t } = useI18n();
   return (
     <>
-      <Row label={t("roiFeat.field.calibration")} layout={layout} gap={8}>
+      <Row label={t("roiFeat.field.calibration")} layout={layout} gap={8} tip={t("roiFeat.calibration.tooltip")}>
         <select value={form.calibration} disabled={disabled} style={{ ...input, width: 320, maxWidth: "100%" }}
           data-testid={`${testIdPrefix}-calibration`} title={t("roiFeat.calibration.tooltip")}
           onChange={(e) => setForm((f) => ({ ...f, calibration: e.target.value as CalibrationChoice }))}>
@@ -77,7 +77,7 @@ export function AdvancedSettingsField({ form, setForm, disabled, testIdPrefix }:
     });
   return (
     <details open={form.advancedText.trim() !== ""} style={{ marginTop: 8 }} data-testid={`${p}-advanced`}>
-      <summary style={{ cursor: "pointer", color: "#5a6672" }}>{t("roiFeat.advanced.title")}</summary>
+      <summary style={{ cursor: "pointer", color: "#5a6672" }} title={t("roiFeat.tip.advanced")}>{t("roiFeat.advanced.title")}</summary>
       <div style={{ color: "#5a6672", fontSize: 11, margin: "4px 0" }} data-testid={`${p}-advanced-help`}>{t("roiFeat.advanced.help")}</div>
       <textarea value={form.advancedText} disabled={disabled} rows={4} spellCheck={false}
         placeholder={t("roiFeat.advanced.placeholder")} data-testid={`${p}-advanced-text`}
@@ -132,7 +132,7 @@ export function ValueKindField({ form, setForm, disabled, testIdPrefix, layout }
   const showRounding = k === "auto" || k === "discrete";
   return (
     <>
-      <Row label={t("roiFeat.field.valueKind")} layout={layout} gap={8}>
+      <Row label={t("roiFeat.field.valueKind")} layout={layout} gap={8} tip={t("roiFeat.valueKind.tooltip")}>
         <select value={k} disabled={disabled} style={{ ...input, width: 320, maxWidth: "100%" }}
           data-testid={`${testIdPrefix}-valuekind`} title={t("roiFeat.valueKind.tooltip")}
           onChange={(e) => setForm((f) => ({ ...f, valueKind: e.target.value as ValueKindChoice }))}>
@@ -143,7 +143,7 @@ export function ValueKindField({ form, setForm, disabled, testIdPrefix, layout }
         {t(`roiFeat.valueKind.help.${k}`)}
       </div>
       {showBinWidth && (
-        <Row label={t("roiFeat.field.ivhBinWidth")} layout={layout} gap={8}>
+        <Row label={t("roiFeat.field.ivhBinWidth")} layout={layout} gap={8} tip={t("roiFeat.ivhBinWidth.tooltip")}>
           <input value={form.ivhBinWidthText} disabled={disabled} style={{ ...input, width: 90 }} inputMode="decimal"
             placeholder={t("roiFeat.ivhBinWidth.placeholder")} data-testid={`${testIdPrefix}-ivh-binwidth`}
             title={t("roiFeat.ivhBinWidth.tooltip")}
@@ -155,7 +155,7 @@ export function ValueKindField({ form, setForm, disabled, testIdPrefix, layout }
         <div style={warnBand} data-testid={`${testIdPrefix}-ivh-binwidth-warn`}>{t("roiFeat.ivhBinWidth.invalid")}</div>
       )}
       {showRounding && (
-        <Row label={t("roiFeat.field.intensityRounding")} layout={layout} gap={8}>
+        <Row label={t("roiFeat.field.intensityRounding")} layout={layout} gap={8} tip={t("roiFeat.rounding.tooltip")}>
           <label title={t("roiFeat.rounding.tooltip")}>
             <input type="checkbox" checked={form.intensityRounding} disabled={disabled}
               data-testid={`${testIdPrefix}-rounding`}
@@ -211,8 +211,8 @@ export function RoiFeatureSettingsFields({
     return v === k ? key : v;
   };
   const rangeProblem = rangeBounds(form).problem;
-  const row = (labelText: string, gap: number, children: ReactNode) => (
-    <Row label={labelText} layout={layout} gap={gap}>{children}</Row>
+  const row = (labelText: string, gap: number, children: ReactNode, tip?: string) => (
+    <Row label={labelText} layout={layout} gap={gap} tip={tip}>{children}</Row>
   );
   return (
     <>
@@ -235,7 +235,7 @@ export function RoiFeatureSettingsFields({
           <NumberField value={form.binWidth} onChange={(v) => setForm((f) => ({ ...f, binWidth: v }))}
             min={0.001} max={100000} step={0.5} disabled={disabled || form.fixedBinNumber} style={{ ...input, width: 64 }} />
         </>
-      ))}
+      ), t("roiFeat.tip.discretisation"))}
       {row(t("roiFeat.field.resampling"), 8, (
         <>
           <select value={form.resampleMm == null ? "none" : "iso"} disabled={disabled} style={{ ...input, width: 110 }}
@@ -254,7 +254,7 @@ export function RoiFeatureSettingsFields({
             </>
           )}
         </>
-      ))}
+      ), t("roiFeat.tip.resampling"))}
       {showRange && (
         <>
           {row(t("roiFeat.field.range"), 6, (
@@ -268,7 +268,7 @@ export function RoiFeatureSettingsFields({
                 onChange={(e) => setForm((f) => ({ ...f, rangeMaxText: e.target.value }))} />
               <span style={{ color: "#5a6672", fontSize: 11 }} data-testid={`${p}-range-unit`}>{t("roiFeat.range.unit")}</span>
             </>
-          ))}
+          ), t("roiFeat.tip.range"))}
           {rangeProblem && (
             <div style={warnBand} data-testid={`${p}-range-problem`}>{t(`roiFeat.range.problem.${rangeProblem}`)}</div>
           )}
@@ -290,8 +290,8 @@ export function RoiFeatureSettingsFields({
           <option value="all">{t("roiFeat.preset.all")}</option>
           {presetScale36 && <option value="scale36">{t("roiFeat.preset.scale36")}</option>}
         </select>
-      ))}
-      <div style={{ color: "#5a6672", marginTop: 6 }}>{t("roiFeat.field.families")}</div>
+      ), t("roiFeat.tip.preset"))}
+      <div style={{ color: "#5a6672", marginTop: 6 }} title={t("roiFeat.tip.families")}>{t("roiFeat.field.families")}</div>
       <div style={familyGrid}>
         {ROI_FEATURE_FAMILIES.map((fam) => {
           const u = familyUnits(fam.key);
@@ -299,7 +299,7 @@ export function RoiFeatureSettingsFields({
           const blocked = gated && !u.in3d && !twoDSelected;
           const unitNote = !gated || (u.in3d && u.in2d) ? "" : u.in3d ? t("roiFeat.family.only3d") : t("roiFeat.family.only2d");
           return (
-            <label key={fam.key} title={blocked ? t("roiFeat.family.needs2d") : undefined}
+            <label key={fam.key} title={blocked ? t("roiFeat.family.needs2d") : t(`roiFeat.tip.fam.${fam.key}`)}
               style={blocked ? { opacity: 0.55 } : undefined}>
               <input type="checkbox" checked={!!form.families[fam.key] && !blocked} disabled={disabled || blocked}
                 data-testid={`${p}-family-${fam.key}`}
@@ -315,13 +315,15 @@ export function RoiFeatureSettingsFields({
 }
 
 /** 項目名と値の 1 行。右寄せは ROI 特徴量の画面の `Field`、左詰めは一括抽出の設定欄の行と同じ見た目。 */
-function Row({ label, layout, gap, children }: {
+function Row({ label, layout, gap, children, tip }: {
   label: string; layout: { labelMinWidth: number; align: "left" | "right" }; gap: number; children: ReactNode;
+  /** 行の見出しに付けるツールチップ（意味の概要）。 */
+  tip?: string;
 }) {
   if (layout.align === "right") {
     return (
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, padding: "3px 0" }}>
-        <span style={{ color: "#5a6672", flex: "none", minWidth: layout.labelMinWidth }}>{label}</span>
+        <span style={{ color: "#5a6672", flex: "none", minWidth: layout.labelMinWidth }} title={tip}>{label}</span>
         <span style={{ flex: 1, textAlign: "right" }}>
           <span style={{ display: "inline-flex", gap, alignItems: "center", justifyContent: "flex-end" }}>{children}</span>
         </span>
@@ -330,7 +332,7 @@ function Row({ label, layout, gap, children }: {
   }
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "3px 0", flexWrap: "wrap" }}>
-      <span style={{ color: "#5a6672", minWidth: layout.labelMinWidth }}>{label}</span>
+      <span style={{ color: "#5a6672", minWidth: layout.labelMinWidth }} title={tip}>{label}</span>
       {children}
     </div>
   );
