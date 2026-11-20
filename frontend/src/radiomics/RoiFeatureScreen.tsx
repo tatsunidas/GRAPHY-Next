@@ -518,6 +518,13 @@ export function RoiFeatureScreen() {
         </Field>
         <div style={note}>{t("roiFeat.caseLabel.help")}</div>
 
+        <RoiFeatureSettingsFields form={form} setForm={setForm} disabled={busy} testIdPrefix="roifeat"
+          layout={{ labelMinWidth: 150, align: "right" }} showRange showPreset twoDSelected={sectionOn || slicesOn}
+          contentSummary={[t("roiFeat.mode.whole"), ...(sectionOn ? [t("roiFeat.mode.section")] : []), ...(slicesOn ? [t("roiFeat.mode.slices")] : []),
+            ...((sectionOn || slicesOn) && allPlanes ? [t("roiFeat.planes.all")] : [])].join(" + ")}
+          preprocessSummary={`${t("roiFeat.field.filter")} ${form.logOn ? (form.logByRadius ? t("roiFeat.filter.logRadius") : t("roiFeat.filter.log")) : t("roiFeat.filter.none")}`}
+          contentSlot={(
+            <>
         <Field label={t("roiFeat.field.modes")} tip={t("roiFeat.tip.modes")}>
           <span style={{ display: "inline-flex", gap: 10, alignItems: "center", justifyContent: "flex-end", flexWrap: "wrap" }}>
             <label title={t("roiFeat.mode.alwaysOn")}>
@@ -549,9 +556,9 @@ export function RoiFeatureScreen() {
         </Field>
         {(sectionOn || slicesOn) && allPlanes && <div style={note}>{t("roiFeat.planes.noteAll")}</div>}
 
-        <RoiFeatureSettingsFields form={form} setForm={setForm} disabled={busy} testIdPrefix="roifeat"
-          layout={{ labelMinWidth: 150, align: "right" }} showRange showPreset twoDSelected={sectionOn || slicesOn}
-          middleSlot={(
+            </>
+          )}
+          preprocessSlot={(
             <>
         <Field label={t("roiFeat.field.filter")} tip={t("roiFeat.tip.filter")}>
           <span style={{ display: "inline-flex", gap: 8, alignItems: "center", justifyContent: "flex-end", flexWrap: "wrap" }}>
@@ -646,7 +653,7 @@ export function RoiFeatureScreen() {
           )} />
         {form.families.GLAM && <div style={note}>{t("roiFeat.glamNote")}</div>}
 
-        <div style={{ display: "flex", gap: 6, marginTop: 10, justifyContent: "flex-end" }}>
+        <div style={{ display: "flex", gap: 6, marginTop: 10, justifyContent: "flex-end", position: "sticky", bottom: 0, background: "#fff", padding: "8px 0", borderTop: "1px solid #dfe5ec" }}>
           <button onClick={() => void run(false)} disabled={busy || !studyUid || rangeProblem !== null}
             style={{ ...btnPrimary, opacity: busy ? 0.6 : 1 }} data-testid="roifeat-run">
             {t("roiFeat.run")}

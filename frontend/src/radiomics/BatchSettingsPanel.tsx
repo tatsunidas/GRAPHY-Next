@@ -5,7 +5,7 @@
 import { useEffect, useState } from "react";
 import { useI18n } from "../i18n/i18n";
 import { SMALL_ROI_VOXELS_MAX, type SpecKind, type SpecQc, type SpecQcMode } from "./batchSpec";
-import { CalibrationField, RoiFeatureSettingsFields } from "./RoiFeatureSettingsFields";
+import { CalibrationField, RoiFeatureSettingsFields, SettingsGroup } from "./RoiFeatureSettingsFields";
 import { UNITS_2D, type RoiFeatureForm } from "./roiFeatureSettings";
 
 /**
@@ -34,6 +34,11 @@ export function BatchSettingsPanel({
   setKind: (k: SpecKind) => void;
 }) {
   const { t } = useI18n();
+  const unitsSummary = [
+    t("roiFeat.mode.whole"),
+    ...UNITS_2D.filter((u) => form.units2d.includes(u)).map((u) => t(u === "MAX_SECTION_2D" ? "roiFeat.mode.section" : "roiFeat.mode.slices")),
+    ...(form.units2d.length > 0 && form.planesAll ? [t("roiFeat.planes.all")] : []),
+  ].join(" + ");
   const labelsAndQc = (
           <>
             <div style={row}>
@@ -82,38 +87,50 @@ export function BatchSettingsPanel({
           {labelsAndQc}
         </>
       ) : (
-        <>
-          <div style={row} data-testid="batch-units">
-            <span style={label} title={t("roiFeat.tip.modes")}>{t("roiFeat.field.modes")}</span>
-            <label title={t("roiFeat.mode.alwaysOn")}>
-              <input type="checkbox" checked disabled /> {t("roiFeat.mode.whole")}
-            </label>
-            {UNITS_2D.map((u) => (
-              <label key={u}>
-                <input type="checkbox" checked={form.units2d.includes(u)} disabled={disabled} data-testid={`batch-unit-${u}`}
-                  onChange={(e) => setForm((f) => {
-                    const next = UNITS_2D.filter((x) => (x === u ? e.target.checked : f.units2d.includes(x)));
-                    return { ...f, units2d: [...next], planesAll: next.length > 0 && f.planesAll };
-                  })} /> {t(u === "MAX_SECTION_2D" ? "roiFeat.mode.section" : "roiFeat.mode.slices")}
-              </label>
-            ))}
-          </div>
-          {form.units2d.length > 0 && (
+        <RoiFeatureSettingsFields form={form} setForm={setForm} disabled={disabled} testIdPrefix="batch"
+          layout={{ labelMinWidth: 110, align: "left" }} showRange showPreset presetScale36={false}
+          twoDSelected={form.units2d.length > 0}
+          contentSummary={unitsSummary}
+          contentSlot={(
             <>
-              <div style={row} data-testid="batch-planes">
-                <span style={label} title={t("roiFeat.tip.planes")}>{t("roiFeat.field.planes")}</span>
-                <label><input type="radio" name="batch-planes" checked={!form.planesAll} disabled={disabled} data-testid="batch-planes-acquisition"
-                  onChange={() => setForm((f) => ({ ...f, planesAll: false }))} /> {t("roiFeat.planes.acquisition")}</label>
-                <label><input type="radio" name="batch-planes" checked={form.planesAll} disabled={disabled} data-testid="batch-planes-all"
-                  onChange={() => setForm((f) => ({ ...f, planesAll: true }))} /> {t("roiFeat.planes.all")}</label>
+              <div style={row} data-testid="batch-units">
+                <span style={label} title={t("roiFeat.tip.modes")}>{t("roiFeat.field.modes")}</span>
+                <label title={t("roiFeat.mode.alwaysOn")}>
+                  <input type="checkbox" checked disabled /> {t("roiFeat.mode.whole")}
+                </label>
+                {UNITS_2D.map((u) => (
+                  <label key={u}>
+                    <input type="checkbox" checked={form.units2d.includes(u)} disabled={disabled} data-testid={`batch-unit-${u}`}
+                      onChange={(e) => setForm((f) => {
+                        const next = UNITS_2D.filter((x) => (x === u ? e.target.checked : f.units2d.includes(x)));
+                        return { ...f, units2d: [...next], planesAll: next.length > 0 && f.planesAll };
+                      })} /> {t(u === "MAX_SECTION_2D" ? "roiFeat.mode.section" : "roiFeat.mode.slices")}
+                  </label>
+                ))}
               </div>
-              <div style={hint} data-testid="batch-units-help">{t("roiFeat.batch.units.help")}</div>
+              {form.units2d.length > 0 && (
+                <>
+                  <div style={row} data-testid="batch-planes">
+                    <span style={label} title={t("roiFeat.tip.planes")}>{t("roiFeat.field.planes")}</span>
+                    <label><input type="radio" name="batch-planes" checked={!form.planesAll} disabled={disabled} data-testid="batch-planes-acquisition"
+                      onChange={() => setForm((f) => ({ ...f, planesAll: false }))} /> {t("roiFeat.planes.acquisition")}</label>
+                    <label><input type="radio" name="batch-planes" checked={form.planesAll} disabled={disabled} data-testid="batch-planes-all"
+                      onChange={() => setForm((f) => ({ ...f, planesAll: true }))} /> {t("roiFeat.planes.all")}</label>
+                  </div>
+                  <div style={hint} data-testid="batch-units-help">{t("roiFeat.batch.units.help")}</div>
+                </>
+              )}
             </>
           )}
-          <RoiFeatureSettingsFields form={form} setForm={setForm} disabled={disabled} testIdPrefix="batch"
-            layout={{ labelMinWidth: 110, align: "left" }} showRange showPreset presetScale36={false}
-            twoDSelected={form.units2d.length > 0} middleSlot={labelsAndQc} />
-        </>
+          qcSlot={(
+            <SettingsGroup id="qc" prefix="batch" defaultOpen={false} title={t("roiFeat.group.qc")}
+              summary={t("roiFeat.group.qc.summary", {
+                small: t(`roiFeat.group.qcMode.${qc.smallRoi}`), lossy: t(`roiFeat.group.qcMode.${qc.lossy}`),
+                labels: labelsText.trim() === "" ? t("roiFeat.resampling.none") : labelsText.trim() })}
+              nonDefault={qc.smallRoi !== "FLAG" || qc.lossy !== "FLAG" || qc.smallRoiVoxels != null || labelsText.trim() !== ""}>
+              {labelsAndQc}
+            </SettingsGroup>
+          )} />
       )}
     </div>
   );

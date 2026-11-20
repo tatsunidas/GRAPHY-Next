@@ -22,6 +22,7 @@ import { DesktopDriver, DESKTOP_RUN_DATA_DIR } from "../driver/desktopDriver.js"
 import { resetDb } from "../backend/dbReset.js";
 import { importPaths } from "../fixtures/importFixtures.js";
 import { AUTOMATOR_ROOT } from "../fixtures/manifest.js";
+import { openAllGroups } from "./openGroups.js";
 import { dismissUpdateDialog } from "./dismissUpdateDialog.js";
 import { PY, PY_FLAGS } from "./pythonCmd.js";
 
@@ -265,6 +266,7 @@ async function main(): Promise<void> {
     await page.getByTestId("batch-kind-radiomics").check();
     await page.getByTestId("batch-prefix").fill("r2rad");
     specSha.r2rad = await saveSpec("r2_spec.json");
+    await openAllGroups(page);
     await page.getByTestId("batch-labels").fill("Nothing");
     await page.getByTestId("batch-prefix").fill("r3none");
     specSha.r3none = await saveSpec("r3_spec.json");

@@ -2,7 +2,7 @@
  * Copyright (c) Visionary Imaging Services, Inc. All rights reserved.
  * Author: Tatsuaki Kobayashi
  */
-import { useState, type CSSProperties, type ReactNode } from "react";
+import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
 import { NumberField } from "../hooks/NumberField";
 import { useI18n } from "../i18n/i18n";
 import { advancedToText, managedKeys, parseAdvanced } from "./advancedSettings";
@@ -181,7 +181,11 @@ export function RoiFeatureSettingsFields({
   showRange,
   showPreset,
   presetScale36 = true,
-  middleSlot,
+  contentSlot,
+  contentSummary,
+  preprocessSlot,
+  preprocessSummary,
+  qcSlot,
   twoDSelected,
 }: {
   form: RoiFeatureForm;
@@ -195,8 +199,14 @@ export function RoiFeatureSettingsFields({
   showPreset: boolean;
   /** プリセットに「36 特徴」（LoG が前提）を出すか。画像フィルタを使わない一括抽出は false。 */
   presetScale36?: boolean;
-  /** 範囲（無ければリサンプリング）の後、プリセット（無ければ族）の前に差し込む。 */
-  middleSlot?: ReactNode;
+  /** 群「計算する内容」の先頭に差し込む（計算の単位・断面）。`contentSummary` は閉じた見出しに出す単位・断面の要約。 */
+  contentSlot?: ReactNode;
+  contentSummary?: string;
+  /** 群「前処理」の末尾に差し込む（画像フィルタ）。`preprocessSummary` は見出しの要約に足す。 */
+  preprocessSlot?: ReactNode;
+  preprocessSummary?: string;
+  /** 群「値の扱い」の後に差し込む（一括抽出の絞り込み・QC。呼び出し側が `SettingsGroup` で包む）。 */
+  qcSlot?: ReactNode;
   /**
    * 2D の単位を選んでいるか。渡すと、族の欄に計算される単位（3D のみ・2D のみ）を注記し、2D の単位を選んでいないときは
    * Shape2D を選べなくする。渡さない（一括抽出）ときは従来どおり注記も制限もしない。
@@ -211,70 +221,21 @@ export function RoiFeatureSettingsFields({
     return v === k ? key : v;
   };
   const rangeProblem = rangeBounds(form).problem;
+  const range = [form.rangeMinText.trim(), form.rangeMaxText.trim()];
+  const preprocessText = [
+    form.resampleMm == null ? `${t("roiFeat.field.resampling")} ${t("roiFeat.resampling.none")}` : `${t("roiFeat.field.resampling")} ${t("roiFeat.resampling.iso")} ${form.resampleMm} mm`,
+    form.fixedBinNumber ? `${t("roiFeat.field.discretisation")} ${t("roiFeat.disc.binCount")} ${form.binCount}` : `${t("roiFeat.field.discretisation")} ${t("roiFeat.disc.binWidth")} ${form.binWidth}`,
+    ...(showRange ? [`${t("roiFeat.field.range")} ${range[0] === "" && range[1] === "" ? t("roiFeat.resampling.none") : `${range[0]}〜${range[1]}`}`] : []),
+    ...(preprocessSummary ? [preprocessSummary] : []),
+  ].join("・");
   const row = (labelText: string, gap: number, children: ReactNode, tip?: string) => (
     <Row label={labelText} layout={layout} gap={gap} tip={tip}>{children}</Row>
   );
   return (
     <>
-      <CalibrationField form={form} setForm={setForm} disabled={disabled} testIdPrefix={testIdPrefix} layout={layout} />
-      <ValueKindField form={form} setForm={setForm} disabled={disabled} testIdPrefix={testIdPrefix} layout={layout} />
-      {row(t("roiFeat.field.discretisation"), 8, (
-        <>
-          <label>
-            <input type="radio" checked={form.fixedBinNumber} disabled={disabled}
-              onChange={() => setForm((f) => ({ ...f, fixedBinNumber: true }))} /> {t("roiFeat.disc.binCount")}
-          </label>
-          <span data-testid={`${p}-bincount`}>
-            <NumberField value={form.binCount} onChange={(v) => setForm((f) => ({ ...f, binCount: v }))}
-              min={2} max={1024} disabled={disabled || !form.fixedBinNumber} style={{ ...input, width: 64 }} />
-          </span>
-          <label>
-            <input type="radio" checked={!form.fixedBinNumber} disabled={disabled}
-              onChange={() => setForm((f) => ({ ...f, fixedBinNumber: false }))} /> {t("roiFeat.disc.binWidth")}
-          </label>
-          <NumberField value={form.binWidth} onChange={(v) => setForm((f) => ({ ...f, binWidth: v }))}
-            min={0.001} max={100000} step={0.5} disabled={disabled || form.fixedBinNumber} style={{ ...input, width: 64 }} />
-        </>
-      ), t("roiFeat.tip.discretisation"))}
-      {row(t("roiFeat.field.resampling"), 8, (
-        <>
-          <select value={form.resampleMm == null ? "none" : "iso"} disabled={disabled} style={{ ...input, width: 110 }}
-            data-testid={`${p}-resampling`}
-            onChange={(e) => setForm((f) => ({ ...f, resampleMm: e.target.value === "none" ? null : 1 }))}>
-            <option value="none">{t("roiFeat.resampling.none")}</option>
-            <option value="iso">{t("roiFeat.resampling.iso")}</option>
-          </select>
-          {form.resampleMm != null && (
-            <>
-              <span data-testid={`${p}-resample-mm`}>
-                <NumberField value={form.resampleMm} onChange={(v) => setForm((f) => ({ ...f, resampleMm: v }))}
-                  min={0.05} max={20} step={0.1} disabled={disabled} style={{ ...input, width: 64 }} />
-              </span>
-              <span>mm</span>
-            </>
-          )}
-        </>
-      ), t("roiFeat.tip.resampling"))}
-      {showRange && (
-        <>
-          {row(t("roiFeat.field.range"), 6, (
-            <>
-              <input value={form.rangeMinText} disabled={disabled} style={{ ...input, width: 72 }} inputMode="decimal"
-                placeholder={t("roiFeat.range.min")} data-testid={`${p}-range-min`}
-                onChange={(e) => setForm((f) => ({ ...f, rangeMinText: e.target.value }))} />
-              <span>〜</span>
-              <input value={form.rangeMaxText} disabled={disabled} style={{ ...input, width: 72 }} inputMode="decimal"
-                placeholder={t("roiFeat.range.max")} data-testid={`${p}-range-max`}
-                onChange={(e) => setForm((f) => ({ ...f, rangeMaxText: e.target.value }))} />
-              <span style={{ color: "#5a6672", fontSize: 11 }} data-testid={`${p}-range-unit`}>{t("roiFeat.range.unit")}</span>
-            </>
-          ), t("roiFeat.tip.range"))}
-          {rangeProblem && (
-            <div style={warnBand} data-testid={`${p}-range-problem`}>{t(`roiFeat.range.problem.${rangeProblem}`)}</div>
-          )}
-        </>
-      )}
-      {middleSlot}
+      <SettingsGroup id="content" prefix={p} defaultOpen title={t("roiFeat.group.content")}
+        summary={t("roiFeat.group.content.summary", { units: contentSummary ?? "", n: String(ROI_FEATURE_FAMILIES.filter((f) => form.families[f.key]).length) })}>
+        {contentSlot}
       {showPreset && row(t("roiFeat.field.preset"), 8, (
         <select value={presetScale36 && isScale36(form) ? "scale36" : isSixStatistics(form) ? "six" : isTexture(form) ? "texture" : isAllFamilies(form) ? "all" : "custom"} disabled={disabled}
           style={{ ...input, width: 260 }} data-testid={`${p}-preset`}
@@ -309,10 +270,122 @@ export function RoiFeatureSettingsFields({
           );
         })}
       </div>
+      </SettingsGroup>
+      <SettingsGroup id="preprocess" prefix={p} defaultOpen title={t("roiFeat.group.preprocess")}
+        summary={preprocessText}>
+      {row(t("roiFeat.field.resampling"), 8, (
+        <>
+          <select value={form.resampleMm == null ? "none" : "iso"} disabled={disabled} style={{ ...input, width: 110 }}
+            data-testid={`${p}-resampling`}
+            onChange={(e) => setForm((f) => ({ ...f, resampleMm: e.target.value === "none" ? null : 1 }))}>
+            <option value="none">{t("roiFeat.resampling.none")}</option>
+            <option value="iso">{t("roiFeat.resampling.iso")}</option>
+          </select>
+          {form.resampleMm != null && (
+            <>
+              <span data-testid={`${p}-resample-mm`}>
+                <NumberField value={form.resampleMm} onChange={(v) => setForm((f) => ({ ...f, resampleMm: v }))}
+                  min={0.05} max={20} step={0.1} disabled={disabled} style={{ ...input, width: 64 }} />
+              </span>
+              <span>mm</span>
+            </>
+          )}
+        </>
+      ), t("roiFeat.tip.resampling"))}
+      {row(t("roiFeat.field.discretisation"), 8, (
+        <>
+          <label>
+            <input type="radio" checked={form.fixedBinNumber} disabled={disabled}
+              onChange={() => setForm((f) => ({ ...f, fixedBinNumber: true }))} /> {t("roiFeat.disc.binCount")}
+          </label>
+          <span data-testid={`${p}-bincount`}>
+            <NumberField value={form.binCount} onChange={(v) => setForm((f) => ({ ...f, binCount: v }))}
+              min={2} max={1024} disabled={disabled || !form.fixedBinNumber} style={{ ...input, width: 64 }} />
+          </span>
+          <label>
+            <input type="radio" checked={!form.fixedBinNumber} disabled={disabled}
+              onChange={() => setForm((f) => ({ ...f, fixedBinNumber: false }))} /> {t("roiFeat.disc.binWidth")}
+          </label>
+          <NumberField value={form.binWidth} onChange={(v) => setForm((f) => ({ ...f, binWidth: v }))}
+            min={0.001} max={100000} step={0.5} disabled={disabled || form.fixedBinNumber} style={{ ...input, width: 64 }} />
+        </>
+      ), t("roiFeat.tip.discretisation"))}
+      {showRange && (
+        <>
+          {row(t("roiFeat.field.range"), 6, (
+            <>
+              <input value={form.rangeMinText} disabled={disabled} style={{ ...input, width: 72 }} inputMode="decimal"
+                placeholder={t("roiFeat.range.min")} data-testid={`${p}-range-min`}
+                onChange={(e) => setForm((f) => ({ ...f, rangeMinText: e.target.value }))} />
+              <span>〜</span>
+              <input value={form.rangeMaxText} disabled={disabled} style={{ ...input, width: 72 }} inputMode="decimal"
+                placeholder={t("roiFeat.range.max")} data-testid={`${p}-range-max`}
+                onChange={(e) => setForm((f) => ({ ...f, rangeMaxText: e.target.value }))} />
+              <span style={{ color: "#5a6672", fontSize: 11 }} data-testid={`${p}-range-unit`}>{t("roiFeat.range.unit")}</span>
+            </>
+          ), t("roiFeat.tip.range"))}
+          {rangeProblem && (
+            <div style={warnBand} data-testid={`${p}-range-problem`}>{t(`roiFeat.range.problem.${rangeProblem}`)}</div>
+          )}
+        </>
+      )}
+        {preprocessSlot}
+      </SettingsGroup>
+      <SettingsGroup id="values" prefix={p} defaultOpen={false} title={t("roiFeat.group.values")}
+        summary={t("roiFeat.group.values.summary", {
+          cal: shortLabel(t(`roiFeat.calibration.${form.calibration}`)), kind: shortLabel(t(`roiFeat.valueKind.${form.valueKind}`)),
+          rounding: t(form.intensityRounding ? "roiFeat.group.rounding.on" : "roiFeat.group.rounding.off") })}
+        nonDefault={form.calibration !== "auto" || form.valueKind !== "auto" || form.ivhBinWidthText.trim() !== "" || form.intensityRounding}
+        error={ivhBinWidthOf(form).problem !== null}>
+        <CalibrationField form={form} setForm={setForm} disabled={disabled} testIdPrefix={testIdPrefix} layout={layout} />
+        <ValueKindField form={form} setForm={setForm} disabled={disabled} testIdPrefix={testIdPrefix} layout={layout} />
+      </SettingsGroup>
+      {qcSlot}
       <AdvancedSettingsField form={form} setForm={setForm} disabled={disabled} testIdPrefix={testIdPrefix} />
     </>
   );
 }
+
+/** 選択肢の長い名前（「自動（PET は SUVbw、…）」）の、括弧の前だけ。群の要約に使う。 */
+const shortLabel = (label: string): string => label.split("（")[0];
+
+/**
+ * 設定の群（折りたたみ）。閉じても中の入力は DOM に残る（`details`）。見出しには名前と、いまの値の要約を出す。
+ * `nonDefault` なら「既定と異なる」の印、`error` なら自動で開いて赤の印を出す。
+ */
+export function SettingsGroup({ id, prefix, title, summary, defaultOpen, nonDefault, error, children }: {
+  id: string;
+  prefix: "roifeat" | "batch";
+  title: string;
+  summary: string;
+  defaultOpen: boolean;
+  nonDefault?: boolean;
+  error?: boolean;
+  children: ReactNode;
+}) {
+  const { t } = useI18n();
+  const [open, setOpen] = useState(defaultOpen);
+  useEffect(() => {
+    if (error) setOpen(true);
+  }, [error]);
+  return (
+    <details open={open} data-testid={`${prefix}-group-${id}`} style={groupBox}
+      onToggle={(e) => setOpen((e.currentTarget as HTMLDetailsElement).open)}>
+      <summary style={groupSummary}>
+        <span style={{ fontWeight: 600, color: open ? "#0b5cad" : "#1d2733" }}>{title}</span>
+        <span style={{ color: "#5a6672", fontSize: 11, fontWeight: 400 }} data-testid={`${prefix}-group-${id}-summary`}>{summary}</span>
+        {nonDefault && (
+          <span style={{ color: "#0b5cad", fontSize: 11 }} data-testid={`${prefix}-group-${id}-changed`}>● {t("roiFeat.group.changed")}</span>
+        )}
+        {error && <span style={{ color: "#c0392b", fontSize: 11 }} data-testid={`${prefix}-group-${id}-error`}>● {t("roiFeat.group.error")}</span>}
+      </summary>
+      <div style={{ paddingTop: 4 }}>{children}</div>
+    </details>
+  );
+}
+
+const groupBox: CSSProperties = { borderTop: "1px solid #dfe5ec", padding: "6px 0", marginTop: 4 };
+const groupSummary: CSSProperties = { cursor: "pointer", display: "flex", gap: 8, alignItems: "baseline", flexWrap: "wrap", padding: "2px 0" };
 
 /** 項目名と値の 1 行。右寄せは ROI 特徴量の画面の `Field`、左詰めは一括抽出の設定欄の行と同じ見た目。 */
 function Row({ label, layout, gap, children, tip }: {
