@@ -16,6 +16,7 @@ import { importPaths } from "../fixtures/importFixtures.js";
 import { openFirstSeriesInViewer } from "../checklist/items/shared/helpers.js";
 import { createStepRecorder } from "../checklist/types.js";
 import { AUTOMATOR_ROOT } from "../fixtures/manifest.js";
+import { openAllGroups } from "./openGroups.js";
 
 const OUT_DIR = path.join(AUTOMATOR_ROOT, ".results", "roi-modes-check");
 
@@ -184,6 +185,7 @@ async function main(): Promise<void> {
     // 基準の API の要求はリサンプリングなし（settings: {}）。画面の既定は等方 1 mm なので、そろえる
     await page.getByTestId("roifeat-resampling").selectOption("none");
     // 値の種類の既定は「自動」（CT は離散で IVH の格子が変わる）。基準の API は従来どおりなので、そろえる
+    await openAllGroups(page);
     await page.getByTestId("roifeat-valuekind").selectOption("legacy");
     check(await page.getByTestId("roifeat-mode-whole").isDisabled(), "3D のチェックは外せない（常に計算）");
     check(!(await page.getByTestId("roifeat-mode-section").isChecked()) && !(await page.getByTestId("roifeat-mode-slices").isChecked()), "既定は 2D の単位がオフ");

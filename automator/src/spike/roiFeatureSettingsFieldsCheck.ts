@@ -18,6 +18,7 @@ import type { Page } from "@playwright/test";
 import { DesktopDriver } from "../driver/desktopDriver.js";
 import { resetDb } from "../backend/dbReset.js";
 import { clickDismissing } from "./dismissUpdateDialog.js";
+import { openAllGroups } from "./openGroups.js";
 import { AUTOMATOR_ROOT } from "../fixtures/manifest.js";
 
 const OUT_DIR = path.join(AUTOMATOR_ROOT, ".results", "roi-feature-settings-fields-check");
@@ -97,6 +98,13 @@ async function main(): Promise<void> {
     await page.evaluate("localStorage.removeItem('graphy-roifeat-ctx')");
     await page.evaluate("window.location.hash = 'radiomics-features'");
     await page.getByTestId("roifeat-bincount").waitFor({ state: "visible", timeout: 20_000 });
+    // 群の既定: ① 計算する内容・② 前処理は開き、③ 値の扱いは閉じる（閉じた群の中の入力は DOM に残る）。スナップショットは全部開いて取る
+    const openState = async (pre: string) => (await page.evaluate(`["content","preprocess","values","qc"].map(function(g){var d=document.querySelector('[data-testid="${pre}-group-'+g+'"]');return d?(d.open?"open":"closed"):"none"}).join()`)) as string;
+    check((await openState("roifeat")) === "open,open,closed,none", "画面の群の既定: 計算する内容・前処理は開き、値の扱いは閉じる（④ は無い）", await openState("roifeat"));
+    check((await page.locator('[data-testid="roifeat-calibration"]').count()) === 1 && !(await page.locator('[data-testid="roifeat-calibration"]').isVisible()), "閉じた「値の扱い」の入力は DOM にあり、見えない");
+    check(/校正 自動・値の種類 自動・丸め なし/.test(await page.getByTestId("roifeat-group-values-summary").innerText()), "閉じた「値の扱い」の見出しに、いまの値の要約が出る");
+    await page.screenshot({ path: path.join(OUT_DIR, "00-screen-groups-default.png"), fullPage: true });
+    await openAllGroups(page);
     got["screen-default"] = await snapshot(page, "body");
     const FAMS = ["Morphology", "LocalIntensity", "IntensityBasedStatistical", "IntensityHistogram", "IntensityVolumeHistogram", "Shape2D", "GLCM", "GLRLM", "GLSZM", "GLDZM", "NGTDM", "NGLDM", "Fractal", "GLAM", "AuxiliaryStatistics"];
     const screenIds = ["roifeat-mask", "roifeat-caselabel", "roifeat-mode-section", "roifeat-planes-all", "roifeat-calibration", "roifeat-valuekind", "roifeat-bincount", "roifeat-resampling", "roifeat-preset", "roifeat-filter-radius",
@@ -116,6 +124,7 @@ async function main(): Promise<void> {
     await page.screenshot({ path: path.join(OUT_DIR, "01-screen-default.png"), fullPage: true });
     await page.getByTestId("roifeat-resampling").selectOption("none");
     await page.waitForTimeout(300);
+    await openAllGroups(page); // 前の手順で再読み込みしたので、群は既定の開閉に戻っている
     got["screen-none"] = await snapshot(page, "body");
     await page.getByTestId("roifeat-filter-radius").check();
     await page.waitForTimeout(300);
@@ -136,6 +145,9 @@ async function main(): Promise<void> {
     await page.waitForTimeout(800);
     await clickDismissing(page, page.getByTestId("album-batch-button")); // 新版の窓がリロードのたびに出て、クリックを遮る
     await page.getByTestId("batch-settings").waitFor({ state: "visible", timeout: 30_000 });
+    check((await openState("batch")) === "open,open,closed,closed", "一括抽出の群の既定: 計算する内容・前処理は開き、値の扱い・QC は閉じる", await openState("batch"));
+    await page.screenshot({ path: path.join(OUT_DIR, "03a-batch-groups-default.png"), fullPage: true });
+    await openAllGroups(page);
     got["batch-default"] = await snapshot(page, '[data-testid="batch-settings"]');
     const miss2 = await missingTips(page, ["batch-kind", "batch-units", "batch-labels", "batch-qc", "batch-bincount", "batch-resampling", "batch-preset", "batch-calibration", "batch-valuekind", "batch-spec-save", "batch-spec-load", "batch-prefix", "batch-out-subjects", "batch-out-patientid", "batch-out-bom", "batch-run", "batch-trial", "batch-write", ...FAMS.map((f) => `batch-family-${f}`)]);
     check(miss2.length === 0, "一括抽出の主要な項目・ボタン・族 15 個に、ツールチップがある", miss2);

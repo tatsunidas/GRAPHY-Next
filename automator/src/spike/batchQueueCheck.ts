@@ -20,6 +20,7 @@ import { DesktopDriver } from "../driver/desktopDriver.js";
 import { resetDb } from "../backend/dbReset.js";
 import { importPaths } from "../fixtures/importFixtures.js";
 import { AUTOMATOR_ROOT } from "../fixtures/manifest.js";
+import { openAllGroups } from "./openGroups.js";
 import { dismissUpdateDialog } from "./dismissUpdateDialog.js";
 import { PY, PY_FLAGS } from "./pythonCmd.js";
 
@@ -217,6 +218,7 @@ async function main(): Promise<void> {
     await page.getByTestId("batch-kind-voiStats").check();
     const s1 = await saveSpec("q1_spec.json");
     await page.getByTestId("batch-kind-radiomics").check();
+    await openAllGroups(page);
     await page.getByTestId("batch-labels").fill("Nothing");
     await page.getByTestId("batch-prefix").fill("q2none");
     const s2 = await saveSpec("q2_spec.json");

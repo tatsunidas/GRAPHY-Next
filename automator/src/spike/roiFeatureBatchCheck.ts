@@ -31,6 +31,7 @@ import { DesktopDriver } from "../driver/desktopDriver.js";
 import { resetDb } from "../backend/dbReset.js";
 import { importPaths } from "../fixtures/importFixtures.js";
 import { AUTOMATOR_ROOT } from "../fixtures/manifest.js";
+import { openAllGroups } from "./openGroups.js";
 import { dismissUpdateDialog } from "./dismissUpdateDialog.js";
 import { PY, PY_FLAGS } from "./pythonCmd.js";
 
@@ -408,6 +409,7 @@ async function main(): Promise<void> {
       await btn.click();
       await page.getByTestId("batch-row-5").waitFor({ state: "visible", timeout: 30_000 });
       await page.waitForTimeout(1500);
+      await openAllGroups(page); // ③ 値の扱い・④ QC は既定で閉じている。中の入力を触るので開く
       if (!keepDefaults) {
         await page.getByTestId("batch-resampling").selectOption("none");
         await page.waitForTimeout(300);

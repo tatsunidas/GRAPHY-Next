@@ -245,3 +245,71 @@ describe("QC の 3 択", () => {
     expect(q("batch-qc")?.textContent).toContain("スキップ");
   });
 });
+
+describe("設定の群（折りたたみ）", () => {
+  const open = (id: string) => (q(`batch-group-${id}`) as HTMLDetailsElement).open;
+
+  it("既定: ① 計算する内容・② 前処理は開き、③ 値の扱いは閉じる。要約が値に追従し、既定のままなら印は出ない", async () => {
+    await render(Full);
+    expect(open("content")).toBe(true);
+    expect(open("preprocess")).toBe(true);
+    expect(open("values")).toBe(false);
+    expect(q("batch-group-values-summary")?.textContent).toContain("校正 自動");
+    expect(q("batch-group-values-summary")?.textContent).toContain("値の種類 自動");
+    expect(q("batch-group-values-summary")?.textContent).toContain("丸め なし");
+    expect(q("batch-group-preprocess-summary")?.textContent).toContain("等方 1 mm");
+    expect(q("batch-group-preprocess-summary")?.textContent).toContain("ビン数 32");
+    expect(q("batch-group-values-changed")).toBeNull();
+    // 閉じた群の中の入力も DOM に残る（検査・読み込みで触れる）
+    expect(q("batch-calibration")).not.toBeNull();
+    expect(q("batch-valuekind")).not.toBeNull();
+  });
+
+  it("値を既定から変えると、要約が追従し、閉じたままでも「既定と異なる」の印が出る（要約は固定値ではない）", async () => {
+    await render(Full);
+    await choose("batch-calibration", "sul-james");
+    expect(q("batch-group-values-summary")?.textContent).toContain("校正 SUL");
+    expect(q("batch-group-values-summary")?.textContent).not.toContain("校正 自動");
+    expect(q("batch-group-values-changed")).not.toBeNull();
+    expect(open("values")).toBe(false);
+    await choose("batch-calibration", "auto");
+    expect(q("batch-group-values-changed")).toBeNull();
+    await choose("batch-resampling", "none");
+    expect(q("batch-group-preprocess-summary")?.textContent).toContain("リサンプリング なし");
+  });
+
+  it("IVH のビン幅に誤りを入れると、閉じた ③ が自動で開き、赤の印が出る。直すと印は消える", async () => {
+    await render(Full);
+    expect(open("values")).toBe(false);
+    await choose("batch-valuekind", "continuous");
+    await typeInto("batch-ivh-binwidth", "abc");
+    expect(q("batch-group-values-error")).not.toBeNull();
+    expect(open("values")).toBe(true);
+    await typeInto("batch-ivh-binwidth", "0.1");
+    expect(q("batch-group-values-error")).toBeNull();
+  });
+
+  it("一括抽出のパネル: ④ QC は既定で閉じ、止めるに変えると印が出る。計算の単位は ① の中にある", async () => {
+    function Panel() {
+      const [form, setForm] = useState(defaultRoiFeatureForm());
+      const [qc, setQc] = useState<SpecQc>(defaultSpecContent().qc);
+      const [labels, setLabels] = useState("");
+      const [kind, setKind] = useState<"radiomics" | "voiStats">("radiomics");
+      return createElement(BatchSettingsPanel, { form, setForm, disabled: false, qc, setQc, labelsText: labels, setLabelsText: setLabels, kind, setKind });
+    }
+    await render(Panel);
+    expect(open("qc")).toBe(false);
+    expect(q("batch-group-qc-summary")?.textContent).toContain("小さい ROI 印のみ");
+    expect(q("batch-group-qc-changed")).toBeNull();
+    expect(q("batch-group-content")?.contains(q("batch-units"))).toBe(true);
+    expect(q("batch-group-content-summary")?.textContent).toContain("全腫瘍（3D）");
+    await click("batch-unit-SLICES_2D");
+    expect(q("batch-group-content-summary")?.textContent).toContain("スライス別（2D）");
+    const stop = host.querySelector<HTMLInputElement>('[data-testid="batch-qc-small"] input[type="radio"]:nth-of-type(1)');
+    expect(stop).not.toBeNull();
+    const radios = host.querySelectorAll<HTMLInputElement>('[data-testid="batch-qc-small"] input[type="radio"]');
+    await act(async () => { radios[1].click(); });
+    expect(q("batch-group-qc-summary")?.textContent).toContain("小さい ROI 止める");
+    expect(q("batch-group-qc-changed")).not.toBeNull();
+  });
+});
