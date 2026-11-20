@@ -280,6 +280,32 @@ async function main(): Promise<void> {
     console.log(`  MIP の作成: ${Math.round((Date.now() - tMip) / 1000)} 秒`);
     const mipShot = await view.screenshot({ path: path.join(OUT_DIR, "4f-mip-r3.png") });
     check(Buffer.compare(meshShot, mipShot) !== 0, "MIP に切り替えると、3D の画が変わる", { mesh: meshShot.length, mip: mipShot.length });
+    // MIP の輝度の窓（段 9）: 上限・下限・ガンマを動かすと画が変わり、［窓を戻す］で既定の画に戻る（即時。再計算なし）
+    const setRange = (role: string, value: string) =>
+      root.locator(`[data-role=${role}]`).evaluate((el, val) => {
+        const input = el as HTMLInputElement;
+        const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")?.set;
+        setter?.call(input, val);
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+      }, value);
+    check(!(await root.locator("[data-role=mip-hi]").isDisabled()), "MIP のとき、窓のスライダーが操作できる");
+    await setRange("mip-hi", "0.5");
+    await v.waitForTimeout(600);
+    const winHi = await view.screenshot({ path: path.join(OUT_DIR, "4f2-win-hi0.5.png") });
+    check(Buffer.compare(mipShot, winHi) !== 0, "上限を 0.5 にすると、画が変わる", { default: mipShot.length, hi: winHi.length });
+    await setRange("mip-gamma", "0.5");
+    await v.waitForTimeout(600);
+    const winGamma = await view.screenshot({ path: path.join(OUT_DIR, "4f3-win-hi0.5-gamma0.5.png") });
+    check(Buffer.compare(winHi, winGamma) !== 0, "ガンマを 0.5 にすると、画が変わる", { before: winHi.length, after: winGamma.length });
+    await setRange("mip-lo", "0.4");
+    await v.waitForTimeout(600);
+    const winLo = await view.screenshot({ path: path.join(OUT_DIR, "4f4-win-lo0.4.png") });
+    check(Buffer.compare(winGamma, winLo) !== 0, "下限を 0.4 にすると、画が変わる", { before: winGamma.length, after: winLo.length });
+    await root.locator("[data-act=mip-window-reset]").click();
+    await v.waitForTimeout(800);
+    const winReset = await view.screenshot({ path: path.join(OUT_DIR, "4f5-win-reset.png") });
+    check(Buffer.compare(mipShot, winReset) === 0, "［窓を戻す］で、既定の画とバイト単位で同じに戻る", { default: mipShot.length, reset: winReset.length });
+
     const box = (await view.boundingBox())!;
     await v.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
     await v.mouse.down();
