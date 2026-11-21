@@ -138,6 +138,8 @@ export interface BatchRunOptions {
   acknowledged?: readonly string[];
   /** 小さい ROI の基準値（ボクセル数）。null か無しは環境設定の値。 */
   smallRoiVoxels?: number | null;
+  /** 2D の小さい ROI の基準値（画素数）。null か無しは環境設定の 2D の値。 */
+  smallRoiPixels?: number | null;
   /** 抽出の種類。`voiStats` は族を一次統計だけ・元の格子・範囲なしにして送る。 */
   kind?: SpecKind;
 }
@@ -166,6 +168,7 @@ export function buildBatchRequest(pairs: readonly BatchPair[], form: RoiFeatureF
     qc: opts.qc ?? null,
     qcAcknowledged: opts.acknowledged ? [...opts.acknowledged] : null,
     smallRoiWarnVoxels: opts.smallRoiVoxels ?? null,
+    smallRoiWarnPixels: opts.kind !== "voiStats" && form.units2d.length > 0 ? opts.smallRoiPixels ?? null : null,
     kind: opts.kind === "voiStats" ? "voiStats" : null,
     calibration: form.calibration,
     valueSpec: opts.kind === "voiStats" ? null : valueSpecOf(form),
@@ -178,6 +181,14 @@ export function buildBatchRequest(pairs: readonly BatchPair[], form: RoiFeatureF
  */
 export function smallRoiThresholdUnset(results: readonly RoiFeatureResult[]): boolean {
   return results.length > 0 && results.every((r) => r.roiSize?.smallRoiWarnVoxels == null);
+}
+
+/**
+ * 2D の小さい ROI の基準値（画面の値も環境設定の 2D の値も）が未設定で、2D のどの結果でも判定していないか。2D の結果が 1 つも無いときは false。
+ */
+export function smallRoi2dThresholdUnset(results: readonly RoiFeatureResult[]): boolean {
+  const with2d = results.filter((r) => r.section || r.slices);
+  return with2d.length > 0 && with2d.every((r) => r.section?.roiSize?.smallRoiWarnVoxels == null && r.slices?.smallRoiWarnPixels == null);
 }
 
 /** ファイル名の接頭辞に使えない文字を `_` にする。空なら `roi-features-batch`。 */

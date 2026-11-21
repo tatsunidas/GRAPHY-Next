@@ -108,7 +108,7 @@ async function runOne(
   if (chosen.length === 0) return { state: "failed", message: ERR_NO_PAIRS, files: 0 };
   const form = applySpecToForm(ctx.baseForm, spec);
   const req = buildBatchRequest(chosen.map((c) => c.pair), form, {
-    qc: { smallRoi: spec.qc.smallRoi, lossy: spec.qc.lossy }, acknowledged: [], smallRoiVoxels: spec.qc.smallRoiVoxels, kind: spec.kind,
+    qc: { smallRoi: spec.qc.smallRoi, lossy: spec.qc.lossy }, acknowledged: [], smallRoiVoxels: spec.qc.smallRoiVoxels, smallRoiPixels: spec.qc.smallRoiPixels, kind: spec.kind,
     recompute: ctx.recompute ?? false,
   });
   let job = await api.submit(req);

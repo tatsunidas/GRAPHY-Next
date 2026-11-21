@@ -15,6 +15,7 @@ import {
   selectedPairs,
   setIncluded,
   setSource,
+  smallRoi2dThresholdUnset,
   smallRoiThresholdUnset,
   summarize,
 } from "./batchPairs";
@@ -272,5 +273,25 @@ describe("buildBatchRequest: 2D の単位と断面", () => {
     const r = buildBatchRequest(p, { ...f, units2d: ["SLICES_2D"], planesAll: true }, { kind: "voiStats" });
     expect(r.roiModes).toEqual(["WHOLE_3D"]);
     expect(r.planes).toBeNull();
+  });
+});
+
+describe("2D の小さい ROI の基準値", () => {
+  const f = defaultRoiFeatureForm();
+  it("2D の単位があるときだけ要求に入れる（3D だけ・VOI 統計では送らない）", () => {
+    expect(buildBatchRequest([], f, { smallRoiPixels: 150 }).smallRoiWarnPixels).toBeNull();
+    expect(buildBatchRequest([], { ...f, units2d: ["SLICES_2D"] }, { smallRoiPixels: 150 }).smallRoiWarnPixels).toBe(150);
+    expect(buildBatchRequest([], { ...f, units2d: ["SLICES_2D"] }, {}).smallRoiWarnPixels).toBeNull();
+    expect(buildBatchRequest([], { ...f, units2d: ["SLICES_2D"] }, { smallRoiPixels: 150, kind: "voiStats" }).smallRoiWarnPixels).toBeNull();
+  });
+  const res = (sec: number | null, sl: number | null, with2d = true) => ({
+    ...(with2d ? { section: { roiSize: { smallRoiWarnVoxels: sec } }, slices: { smallRoiWarnPixels: sl } } : {}),
+  }) as unknown as RoiFeatureResult;
+  it("基準値が 2D のどの結果にも無いときだけ「未設定」。2D の結果が無ければ false", () => {
+    expect(smallRoi2dThresholdUnset([res(null, null)])).toBe(true);
+    expect(smallRoi2dThresholdUnset([res(150, null)])).toBe(false);
+    expect(smallRoi2dThresholdUnset([res(null, 150)])).toBe(false);
+    expect(smallRoi2dThresholdUnset([res(null, null, false)])).toBe(false);
+    expect(smallRoi2dThresholdUnset([])).toBe(false);
   });
 });

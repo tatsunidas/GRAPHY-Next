@@ -58,6 +58,10 @@ export function BatchSettingsPanel({
                 <span style={{ marginLeft: 4 }}>{t("roiFeat.batch.qc.voxels")}</span>
                 <VoxelsField value={qc.smallRoiVoxels} disabled={disabled} onChange={(v) => setQc({ ...qc, smallRoiVoxels: v })} />
                 <span>{t("roiFeat.batch.qc.voxelsUnit")}</span>
+                <span style={{ marginLeft: 4 }} title={t("roiFeat.batch.qc.pixelsHelp")}>{t("roiFeat.batch.qc.pixels")}</span>
+                <VoxelsField value={qc.smallRoiPixels} disabled={disabled} testId="batch-qc-pixels" help={t("roiFeat.batch.qc.pixelsHelp")}
+                  onChange={(v) => setQc({ ...qc, smallRoiPixels: v })} />
+                <span>{t("roiFeat.batch.qc.pixelsUnit")}</span>
               </span>
               <span style={qcGroup}>
                 <span title={t("roiFeat.tip.bQcLossy")}>{t("roiFeat.batch.qc.lossy")}</span>
@@ -127,7 +131,7 @@ export function BatchSettingsPanel({
               summary={t("roiFeat.group.qc.summary", {
                 small: t(`roiFeat.group.qcMode.${qc.smallRoi}`), lossy: t(`roiFeat.group.qcMode.${qc.lossy}`),
                 labels: labelsText.trim() === "" ? t("roiFeat.resampling.none") : labelsText.trim() })}
-              nonDefault={qc.smallRoi !== "FLAG" || qc.lossy !== "FLAG" || qc.smallRoiVoxels != null || labelsText.trim() !== ""}>
+              nonDefault={qc.smallRoi !== "FLAG" || qc.lossy !== "FLAG" || qc.smallRoiVoxels != null || qc.smallRoiPixels != null || labelsText.trim() !== ""}>
               {labelsAndQc}
             </SettingsGroup>
           )} />
@@ -137,7 +141,9 @@ export function BatchSettingsPanel({
 }
 
 /** 基準値の入力欄。空欄は null（環境設定の値を使う）。整数以外・範囲外の打鍵は確定せず、赤枠で知らせる。 */
-function VoxelsField({ value, disabled, onChange }: { value: number | null; disabled: boolean; onChange: (v: number | null) => void }) {
+function VoxelsField({ value, disabled, onChange, testId = "batch-qc-voxels", help }: {
+  value: number | null; disabled: boolean; onChange: (v: number | null) => void; testId?: string; help?: string;
+}) {
   const { t } = useI18n();
   const [text, setText] = useState(value == null ? "" : String(value));
   useEffect(() => {
@@ -154,8 +160,8 @@ function VoxelsField({ value, disabled, onChange }: { value: number | null; disa
   };
   const bad = parsed(text) === undefined;
   return (
-    <input data-testid="batch-qc-voxels" type="text" inputMode="numeric" value={text} disabled={disabled}
-      placeholder={t("roiFeat.batch.qc.voxelsEmpty")} title={t("roiFeat.batch.qc.voxelsHelp")}
+    <input data-testid={testId} type="text" inputMode="numeric" value={text} disabled={disabled}
+      placeholder={t("roiFeat.batch.qc.voxelsEmpty")} title={help ?? t("roiFeat.batch.qc.voxelsHelp")}
       style={{ ...input, width: 110, ...(bad ? { border: "1px solid #c0392b" } : {}) }}
       onChange={(e) => {
         setText(e.target.value);

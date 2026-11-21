@@ -131,7 +131,7 @@ describe("runBatchCli", () => {
 
   it("QC で止まった定義だけがあれば終了コード 2（表は書かない）", async () => {
     const { api, io, log } = fake(pairs, () => "qc");
-    await putSpec(log, "a.json", "ra", { qc: { smallRoi: "STOP", lossy: "FLAG", smallRoiVoxels: 5 } });
+    await putSpec(log, "a.json", "ra", { qc: { smallRoi: "STOP", lossy: "FLAG", smallRoiVoxels: 5, smallRoiPixels: null } });
     const r = await runBatchCli({ ...OPTS, specFiles: ["a.json"] }, api, io);
     expect(r.code).toBe(EXIT_ATTENTION);
     expect(r.report.specs[0].state).toBe("qcStopped");
@@ -179,7 +179,7 @@ describe("runBatchCli", () => {
   it("読めない定義・同じ接頭辞の定義・定義なしは終了コード 3", async () => {
     const { api, io, log } = fake(pairs);
     await putSpec(log, "a.json", "same");
-    await putSpec(log, "b.json", "same", { qc: { smallRoi: "STOP", lossy: "FLAG", smallRoiVoxels: 3 } });
+    await putSpec(log, "b.json", "same", { qc: { smallRoi: "STOP", lossy: "FLAG", smallRoiVoxels: 3, smallRoiPixels: null } });
     expect((await runBatchCli({ ...OPTS, specFiles: ["a.json", "missing.json"] }, api, io)).code).toBe(EXIT_USAGE);
     const dup = await runBatchCli({ ...OPTS, specFiles: ["a.json", "b.json"] }, api, io);
     expect(dup.code).toBe(EXIT_USAGE);

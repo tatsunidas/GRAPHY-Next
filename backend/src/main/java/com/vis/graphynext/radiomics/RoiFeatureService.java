@@ -134,7 +134,7 @@ public class RoiFeatureService {
                     + req.calibration());
         }
         smallRoiThreshold(req);
-        threshold(smallRoiSetting2d, "小さい ROI の警告（画素数、2D）");
+        smallRoiThreshold2d(req);
         if (req.planes() != null && !req.planes().isBlank()
                 && !RoiFeatureRequest.PLANES.contains(req.planes().trim().toUpperCase(java.util.Locale.ROOT))) {
             throw new IllegalArgumentException("断面（planes）は ACQUISITION・ALL のどちらかです: " + req.planes());
@@ -154,6 +154,18 @@ public class RoiFeatureService {
         }
         if (own < 1) {
             throw new IllegalArgumentException("要求の「小さい ROI の警告（ボクセル数）」は 1 以上の整数にしてください: " + own);
+        }
+        return own;
+    }
+
+    /** 2D の基準値（画素数）。要求の値があればそれ（1 以上）、無ければ環境設定の値。 */
+    Integer smallRoiThreshold2d(RoiFeatureRequest req) {
+        Integer own = req.smallRoiWarnPixels();
+        if (own == null) {
+            return threshold(smallRoiSetting2d, "小さい ROI の警告（画素数、2D）");
+        }
+        if (own < 1) {
+            throw new IllegalArgumentException("要求の「小さい ROI の警告（画素数、2D）」は 1 以上の整数にしてください: " + own);
         }
         return own;
     }
@@ -765,7 +777,7 @@ public class RoiFeatureService {
                 break;
             }
         }
-        Integer threshold = threshold(smallRoiSetting2d, "小さい ROI の警告（画素数、2D）");
+        Integer threshold = smallRoiThreshold2d(req);
         Map<String, String> s2 = settings2d(settings);
         Map<String, String> keySettings = new TreeMap<>(s2);
         keySettings.put("NEXT_sectionPositionMm", Double.toString(max.best().positionMm()));
@@ -821,7 +833,7 @@ public class RoiFeatureService {
             }
         }
         fg.sort(java.util.Comparator.comparingDouble(z -> pos[z]));
-        Integer threshold = threshold(smallRoiSetting2d, "小さい ROI の警告（画素数、2D）");
+        Integer threshold = smallRoiThreshold2d(req);
         Map<String, String> s2 = settings2d(settings);
         Map<String, String> keySettings = new TreeMap<>(s2);
         keySettings.put("NEXT_geometry", geometryKey(vol));

@@ -920,6 +920,59 @@ async function main(): Promise<void> {
     const defs10 = dl10.find((f) => f.name === "units2d_definitions.csv")!.text;
     check(/Shape2D_PixelSurface[^\n]*MAX_SECTION_2D;SLICE_2D/.test(defs10) && /IntensityBasedStatistical_Mean[^\n]*WHOLE_3D;MAX_SECTION_2D;SLICE_2D/.test(defs10), "定義表に、列ごとの計算した単位が付く");
     check(!dl10.some((f) => f.text.includes(PATIENT_NAME)), "どのファイルにも患者名が無い");
+
+    console.log("  -- 11. 2D の小さい ROI の QC（基準値を定義に入れる）");
+    // 合成 CT の箱（独立の予測値）: BigBox は各スライス 24×24=576 画素、SmallBox は 10×10=100 画素。基準値 150 画素なら SmallBox だけが小さい
+    await reopen();
+    await page.getByTestId("batch-preset").selectOption("six");
+    await page.getByTestId("batch-unit-MAX_SECTION_2D").check();
+    await page.getByTestId("batch-unit-SLICES_2D").check();
+    // 3D の基準値は、前の節で環境設定に入れた 1000 ボクセルが残っていて 3D の旗が立つ。この節は 2D だけを見るので、画面の値で 1 ボクセルにして 3D を外す
+    await page.getByTestId("batch-qc-voxels").fill("1");
+    // 負例: 2D の基準値が未設定（画面の値も環境設定も無い）なら、止める指定でも止まらず、「判定していない」の注記が出る
+    await radio("batch-qc-small", 1).check();
+    await page.getByTestId("batch-run").click();
+    await waitText(page, "batch-progress", /完了 — 5\/5 完了/, 900_000);
+    check(!(await page.getByTestId("batch-qc-hold").isVisible().catch(() => false)), "2D の基準値が未設定なら、止める指定でも止まらない");
+    check(await page.getByTestId("batch-unset-threshold-2d").isVisible().catch(() => false), "未設定のときは「2D の小さい ROI は判定していません」の注記が出る");
+    // 基準値 150 画素を入れて「止める」
+    await page.getByTestId("batch-qc-pixels").fill("150");
+    await page.waitForTimeout(300);
+    const sha11 = await shaOf();
+    await page.getByTestId("batch-run").click();
+    await page.getByTestId("batch-qc-hold").waitFor({ state: "visible", timeout: 600_000 });
+    const holdA = await page.getByTestId("batch-qc-hold").innerText();
+    check(/C002/.test(holdA) && /小さい ROI（2D）/.test(holdA) && /2D/.test(holdA), "最初の小さい組（C002）で、2D の旗で止まる", holdA);
+    const progA = await page.getByTestId("batch-progress").innerText();
+    check(/停止 — 2\/5 完了/.test(progA), "C001（BigBox）は通って、C002 で止まる（大きい 2D は旗なし）", progA);
+    check(/小さい ROI（2D）/.test(await page.getByTestId("batch-flags-1").innerText()), "止めた組に 2D の旗が付く");
+    await page.screenshot({ path: path.join(OUT_DIR, "17-qc-2d-hold.png"), fullPage: true });
+    await page.getByTestId("batch-qc-continue").click();
+    await waitText(page, "batch-progress", /停止 — 5\/5 完了/, 600_000);
+    await page.getByTestId("batch-qc-continue").click();
+    await waitText(page, "batch-progress", /完了 — 5\/5 完了/, 600_000);
+    await page.getByTestId("batch-prefix").fill("qc2d");
+    await page.getByTestId("batch-write").click();
+    const dl11 = await takeDownloads(page, 6);
+    const t11 = parseFeatures(dl11.find((f) => f.name === "qc2d.csv")!.text);
+    const c11 = (n: string) => t11.header.indexOf(n);
+    const flagsOf = (label: string) => t11.rows.filter((r) => r[c11("CaseLabel")] === label).map((r) => r[c11("Provenance_QcFlags")]);
+    const bigLabels = ["C001", "C003", "C004"];
+    check(flagsOf("C002").length > 1 && flagsOf("C002").every((f) => f.includes("SMALL_ROI_2D")) && flagsOf("C005").every((f) => f.includes("SMALL_ROI_2D")),
+      "SmallBox の組（C002・C005）の全行に SMALL_ROI_2D が記録される（正例）", [flagsOf("C002")[0], flagsOf("C005")[0]]);
+    check(bigLabels.every((l) => flagsOf(l).length > 1 && flagsOf(l).every((f) => !f.includes("SMALL_ROI_2D"))), "BigBox の組には SMALL_ROI_2D が付かない（負例）", bigLabels.map((l) => flagsOf(l)[0]));
+    const spec11 = JSON.parse(dl11.find((f) => f.name === "qc2d_spec.json")!.text) as { sha256: string; qc: Record<string, unknown> };
+    check(spec11.qc.smallRoiPixels === 150 && spec11.qc.smallRoiVoxels === 1 && spec11.sha256 === sha11, "定義に smallRoiPixels=150（と、3D を外すための smallRoiVoxels=1）が入り、SHA-256 が画面と一致", spec11.qc);
+    // 定義の保存 → 開き直し → 読み込みで、基準値が復元される
+    await page.getByTestId("batch-spec-save").click();
+    const [saved11] = await takeDownloads(page, 1);
+    fs.writeFileSync(path.join(OUT_DIR, "qc2d_spec.json"), saved11.text);
+    await reopen();
+    check((await page.getByTestId("batch-qc-pixels").inputValue()) === "" && (await page.getByTestId("batch-qc-voxels").inputValue()) === "", "開き直すと基準値は空に戻る");
+    await page.getByTestId("batch-spec-file").setInputFiles(path.join(OUT_DIR, "qc2d_spec.json"));
+    await waitText(page, "batch-info", /読み込みました/, 20_000);
+    await page.waitForTimeout(400);
+    check((await page.getByTestId("batch-qc-pixels").inputValue()) === "150" && (await shaOf()) === sha11, "定義を読み込むと 2D の基準値が復元され、SHA-256 が保存時と同じ");
   } finally {
     // resetDb はアルバムを消さないので、自分で作ったものは自分で消す
     if (albumId) await fetch(`${base}/api/albums/${albumId}`, { method: "DELETE" }).catch(() => {});
