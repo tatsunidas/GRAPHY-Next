@@ -1056,6 +1056,11 @@ function createWindow() {
     if (mainWin === win) {
       mainWin = null;
       externalReady = false;
+      // メインを閉じたら、開いている機能別ウィンドウ（QR・ビューア等）も閉じる。全部閉じると
+      // window-all-closed でバックエンドも止まる。close() なので位置記憶の保存などは通常どおり走る。
+      for (const w of BrowserWindow.getAllWindows()) {
+        if (!w.isDestroyed()) w.close();
+      }
     }
   });
 

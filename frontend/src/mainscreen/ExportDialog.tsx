@@ -105,6 +105,17 @@ export function ExportDialog({
     };
   }, [open, patientId, study]);
 
+  // 閉じたら完了・失敗・進捗の表示を消す（開き直したとき、前回のメッセージを残さない）。
+  // 選択肢（portable 同梱・ZIP）は覚えておく。
+  useEffect(() => {
+    if (open) return;
+    setDoneMsg(null);
+    setJob(null);
+    setError(null);
+    setCancelling(false);
+    cancelRequested.current = false;
+  }, [open]);
+
   if (!open) return null;
 
   const loadSeries = async (studyUid: string): Promise<Series[]> => {

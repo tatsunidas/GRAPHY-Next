@@ -7,7 +7,6 @@ import { type StudyFilters } from "../api";
 import { useI18n } from "../i18n/i18n";
 import { fetchSettings, saveSettings } from "../settings/settingsApi";
 import {
-  addDays,
   buildSavedSearch,
   extractSavedSearches,
   resolveFilters,
@@ -17,6 +16,7 @@ import {
   type SavedDateMode,
   type SavedSearch,
 } from "./savedSearch";
+import { makeRel, rollRel, type RelRange } from "./relativeDateRange";
 
 /** チェックボックスグリッドに出すモダリティ候補（放射線でよく使うもの）。 */
 export const MODALITY_OPTIONS = [
@@ -43,14 +43,17 @@ export function SearchPanel({
   isDemo?: boolean;
 }) {
   const { t } = useI18n();
-  const todayStr = useMemo(() => ymd(new Date()), []);
+  // 「今日」は起動時に固定せず、使う時点の日付から作る（数日起動し続けても、押した日・今日の日付になる）。
+  // 初期条件（デモ以外）は今日のみ。触らない間は、日付が変わったら新しい今日へ追従する（relRef）。
+  const [initRel] = useState<RelRange | null>(() => (isDemo ? null : makeRel(0, 0, new Date())));
+  const relRef = useRef<RelRange | null>(initRel);
 
   // 初期検索条件は「今日のみ」。ただし公開デモはサンプルデータの撮影日が「今日」ではないため、
   // 全期間（1900/01/01〜今日）をデフォルトにする。
   const [patientId, setPatientId] = useState("");
   const [patientName, setPatientName] = useState("");
-  const [dateFrom, setDateFrom] = useState(isDemo ? "19000101" : todayStr);
-  const [dateTo, setDateTo] = useState(todayStr);
+  const [dateFrom, setDateFrom] = useState(initRel ? initRel.from : "19000101");
+  const [dateTo, setDateTo] = useState(initRel ? initRel.to : ymd(new Date()));
   const [modalities, setModalities] = useState<string[]>([]);
   const [accession, setAccession] = useState("");
   const [onlyMissing, setOnlyMissing] = useState(false);
@@ -122,7 +125,8 @@ export function SearchPanel({
     onSearchRef.current(filters);
   };
 
-  const setRange = (from: string, to: string) => {
+  const setRange = (from: string, to: string, rel: RelRange | null = null) => {
+    relRef.current = rel;
     setDateFrom(from);
     setDateTo(to);
     // 期間ボタン押下時は即検索（filters の変化でデバウンス検索も走るが、即時実行で体感を上げる）。
@@ -134,6 +138,7 @@ export function SearchPanel({
   // 検査日の無いスタディは必ず除外される。日付欄を空にする経路が無いと、取り込めているのに
   // 一覧から永久に見えない（実際に「インポートに失敗した」と誤読された・2026-08-25）。
   const pickAll = () => {
+    relRef.current = null;
     setDateFrom("");
     setDateTo("");
     const f: StudyFilters = { ...filters };
@@ -142,12 +147,35 @@ export function SearchPanel({
     // 他条件も空なら {} ＝無条件検索。明示操作なので runSearch の確認ダイアログは挟まない。
     onSearchRef.current(f);
   };
-  const pickToday = () => setRange(todayStr, todayStr);
-  const pickYesterday = () => {
-    const y = ymd(addDays(new Date(), -1));
-    setRange(y, y);
+  const pickRel = (fromOffset: number, toOffset: number) => {
+    const r = makeRel(fromOffset, toOffset, new Date());
+    setRange(r.from, r.to, r);
   };
-  const pickWeek = () => setRange(ymd(addDays(new Date(), -6)), todayStr);
+  const pickToday = () => pickRel(0, 0);
+  const pickYesterday = () => pickRel(-1, -1);
+  const pickWeek = () => pickRel(-6, 0);
+
+  // 長く起動したまま日付が変わったとき、期間を触っていなければ新しい今日へ移して検索し直す。
+  // 日付が変わった直後に見るため、60 秒ごと・ウィンドウを前面にしたとき・表示に戻ったときに確かめる。
+  const rollRef = useRef<() => void>(() => {});
+  rollRef.current = () => {
+    const next = rollRel(relRef.current, { from: dateFrom, to: dateTo }, new Date());
+    if (next) setRange(next.from, next.to, next);
+  };
+  useEffect(() => {
+    const tick = () => rollRef.current();
+    const onVisible = () => {
+      if (document.visibilityState === "visible") tick();
+    };
+    const id = setInterval(tick, 60_000);
+    window.addEventListener("focus", tick);
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      clearInterval(id);
+      window.removeEventListener("focus", tick);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, []);
 
   const toggleModality = (m: string) =>
     setModalities((prev) => (prev.includes(m) ? prev.filter((x) => x !== m) : [...prev, m]));
@@ -157,7 +185,10 @@ export function SearchPanel({
     setSavedId(id);
     const s = savedList.find((x) => x.id === id);
     if (!s) return;
-    const f = resolveFilters(s, new Date());
+    const now = new Date();
+    const f = resolveFilters(s, now);
+    const span = s.dateMode === "today" ? 0 : s.dateMode === "last7" ? 6 : s.dateMode === "last30" ? 29 : -1;
+    relRef.current = span >= 0 ? makeRel(-span, 0, now) : null;
     setPatientId(f.patientId ?? "");
     setPatientName(f.patientName ?? "");
     setDateFrom(f.studyDateFrom ?? "");
@@ -202,6 +233,7 @@ export function SearchPanel({
   };
 
   const clear = () => {
+    relRef.current = null;
     setPatientId("");
     setPatientName("");
     setDateFrom("");
