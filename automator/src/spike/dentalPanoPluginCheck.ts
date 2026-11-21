@@ -3,9 +3,14 @@
  *
  * 実行:  cd automator && GRAPHY_DENTAL_PYBIN=<ultralytics・torch・jupyter_server・ipykernel の入った venv の bin> \
  *          GRAPHY_DENTAL_DCM=<Modality PX の DICOM 1 枚> \
+ *          GRAPHY_DENTAL_WEIGHTS_DIR=<teeth-seg.pt（と dx-det.pt）を置いたフォルダ> GRAPHY_DENTAL_REF=<ref.json> GRAPHY_DENTAL_BAD_TEETH=<固定と違う歯の重み> \
  *          GRAPHY_AUTOMATOR_HTTP_PORT=28710 GRAPHY_AUTOMATOR_SCP_PORT=28711 GRAPHY_AUTOMATOR_VITE_PORT=28713 \
- *          npx tsx src/spike/dentalPanoPluginCheck.ts [ok|no-spacing|missing-deps|missing-weights]
- *   ok              : 既定のまま（選択欄・チェックは触らない）事前チェック → 本処理 → 結果。本体の ROI が実際に置かれる
+ *          npx tsx src/spike/dentalPanoPluginCheck.ts [ok|ok-dx|bad-weights|no-spacing|missing-deps|missing-weights]
+ *   重みは WEIGHTS_DIR から一時の HOME（~/.graphy-next/models/vis-dental-pano/）へ symlink する（本物の HOME の重みに依存しない）。
+ *   REF: 同じ重み・同じ画素を、本体を通さず ultralytics で直接動かした結果 {teeth:[{fdi,conf,bbox}], dx:[{cls,conf,bbox}]}（真値の代わり）。
+ *   ok              : 診断の重み無し（dx-det.pt を置かない）。既定のまま（選択欄・チェックは触らない）事前チェック → 本処理 → 結果。本体の ROI が実際に置かれる
+ *   ok-dx           : 診断の重みあり。結果が REF と一致（本数・番号・クラス・枠）、チャートの印・表・レポート・SR の所見数・ROI の数が結果と一致
+ *   bad-weights     : 歯の重みが固定した sha256 と違う（GRAPHY_DENTAL_BAD_TEETH）。事前チェックが止まり、本処理は出ない（負例）
  *   no-spacing      : 画素間隔の無い DICOM（GRAPHY_DENTAL_DCM に指定）で、本体が ROI を置けない（no-geometry）とき、理由が画面に出て、チャートとレポートは使える（負例）
  *   missing-deps    : ultralytics・torch などが何も入っていない環境（GRAPHY_DENTAL_BAREBIN: jupyter_server と ipykernel だけの venv の bin）で、
  *                     事前チェックが不足と導入コマンドを出して止まる → 入れた（.pth で GRAPHY_DENTAL_PYBIN の site-packages を見せる）あと、
@@ -68,6 +73,18 @@ async function main(): Promise<void> {
   process.env.PATH = `${MODE === "missing-deps" ? (bare as string) : bin}${path.delimiter}${process.env.PATH}`;
   const emptyHome = fs.mkdtempSync(path.join(os.tmpdir(), "dental-home-"));
   if (MODE === "missing-weights") process.env.HOME = emptyHome; // 重みの置き場 ~/.graphy-next/models/... を空にする
+  else {
+    const wdir = process.env.GRAPHY_DENTAL_WEIGHTS_DIR;
+    if (!wdir || !fs.existsSync(path.join(wdir, "teeth-seg.pt"))) throw new Error("GRAPHY_DENTAL_WEIGHTS_DIR に teeth-seg.pt を置いたフォルダを指定してください");
+    const bad = process.env.GRAPHY_DENTAL_BAD_TEETH;
+    if (MODE === "bad-weights" && (!bad || !fs.existsSync(bad))) throw new Error("bad-weights には GRAPHY_DENTAL_BAD_TEETH（固定と違う歯の重み）が要る");
+    if (MODE === "ok-dx" && !fs.existsSync(path.join(wdir, "dx-det.pt"))) throw new Error("ok-dx には WEIGHTS_DIR に dx-det.pt が要る");
+    const md = path.join(emptyHome, ".graphy-next", "models", PLUGIN_ID);
+    fs.mkdirSync(md, { recursive: true });
+    fs.symlinkSync(MODE === "bad-weights" ? (bad as string) : path.join(wdir, "teeth-seg.pt"), path.join(md, "teeth-seg.pt"));
+    if (MODE === "ok-dx") fs.symlinkSync(path.join(wdir, "dx-det.pt"), path.join(md, "dx-det.pt"));
+    process.env.HOME = emptyHome;
+  }
   fs.mkdirSync(OUT_DIR, { recursive: true });
   installPlugin();
   fs.rmSync(AUDIT, { force: true });
@@ -162,6 +179,18 @@ async function main(): Promise<void> {
       await viewer.screenshot({ path: path.join(OUT_DIR, "viewer-env-fixed.png") });
       await viewer.getByTestId("dp-run").click();
     }
+    if (MODE === "bad-weights") {
+      await viewer.getByTestId("dp-env").waitFor({ state: "visible", timeout: 120_000 });
+      const prob = (await viewer.getByTestId("dp-env-problem").textContent()) ?? "";
+      await viewer.screenshot({ path: path.join(OUT_DIR, "viewer-bad-weights.png") });
+      const st0 = await state(viewer);
+      check(/teeth-seg\.pt/.test(prob) && /(sha256|固定した版|pinned|differs)/i.test(prob), "固定した版と違う歯の重みが理由つきで止まる", prob.slice(0, 200));
+      check(st0.phase === "idle" && !(await viewer.getByTestId("dp-result").isVisible()), "止まったとき本処理は出ない（結果の欄も出ない）", st0.phase);
+      const events0 = fs.readFileSync(AUDIT, "utf8").trim().split("\n").map((l) => JSON.parse(l));
+      check(events0.filter((e: { event: string }) => e.event === "egress-requested").length === 1, "監査: 送信の要求は事前チェックの 1 件だけ（画像は出ていない）");
+      if (summary() > 0) process.exitCode = 1;
+      return;
+    }
     if (MODE === "missing-weights") {
       await viewer.getByTestId("dp-env").waitFor({ state: "visible", timeout: 120_000 });
       const box = (await viewer.getByTestId("dp-env").textContent()) ?? "";
@@ -202,12 +231,34 @@ async function main(): Promise<void> {
     const nTeeth: number = res.teeth?.length ?? 0;
     check(nTeeth >= 20 && nTeeth <= 32, "歯が 20〜32 本検出される（この画像は 26 本前後）", nTeeth);
     check(res.teeth?.every((t: { fdi: number }) => t.fdi >= 11 && t.fdi <= 48 && t.fdi % 10 >= 1 && t.fdi % 10 <= 8), "番号はすべて永久歯の FDI");
-    check(res.dx === null, "診断モデルが無いので dx は null（空配列ではない）", res.dx);
+    const wantDx = MODE === "ok-dx";
+    check(wantDx ? Array.isArray(res.dx) : res.dx === null, wantDx ? "診断モデルがあるので dx は配列" : "診断モデルが無いので dx は null（空配列ではない）", res.dx);
+    check(String(res.model).includes("teeth=teeth-seg.pt@75dd697a") && String(res.model).includes(wantDx ? "dx=dx-det.pt@62a498a7" : "dx=none"), "使った重みの版（sha256 の先頭）が結果に残る", res.model);
+    const nDx: number = res.dx?.length ?? 0;
+    if (wantDx) {
+      const refPath = process.env.GRAPHY_DENTAL_REF;
+      if (!refPath || !fs.existsSync(refPath)) throw new Error("ok-dx には GRAPHY_DENTAL_REF が要る");
+      const ref = JSON.parse(fs.readFileSync(refPath, "utf8")) as { teeth: { fdi: number; bbox: number[] }[]; dx: { cls: string; bbox: number[] }[] };
+      const near = (a: number[], b: number[]) => a.every((v, i) => Math.abs(v - b[i]) <= 3);
+      check(res.teeth.length === ref.teeth.length && ref.teeth.every((r) => res.teeth.some((t: { fdi: number; bbox: number[] }) => t.fdi === r.fdi && near(t.bbox, r.bbox))), "歯: 本数・番号・枠が、直接動かした結果（参照）と一致（枠の差 3 px 以内）", { app: res.teeth.length, ref: ref.teeth.length });
+      check(nDx === ref.dx.length && ref.dx.every((r) => res.dx.some((d: { cls: string; bbox: number[] }) => d.cls === r.cls && near(d.bbox, r.bbox))), "診断: 件数・クラス・枠が、直接動かした結果（参照）と一致（枠の差 3 px 以内）", { app: res.dx?.map((d: { cls: string }) => d.cls), ref: ref.dx.map((d) => d.cls) });
+      check(res.dx.every((d: { fdi: number | null; overlap: number }) => d.fdi !== null && d.overlap > 0.5), "どの診断も、重なりの大きい歯に割り当てられている（歯を特定できずが 0 件）", res.dx.map((d: { fdi: number | null; overlap: number }) => `${d.fdi}:${d.overlap.toFixed(2)}`));
+    }
     const detected = await viewer.locator('[data-testid^="fdi-"][data-state="detected"]').count();
     const missing = await viewer.locator('[data-testid^="fdi-"][data-state="missing"]').count();
     check(detected === nTeeth && detected + missing === 32, "チャート: 検出の数が結果と一致し、合計 32 マス", { detected, missing, nTeeth });
     const report = await viewer.getByTestId("dp-report").inputValue();
-    check(new RegExp(`(検出した歯: ${nTeeth} 本|Detected teeth: ${nTeeth} )`).test(report) && /(診断モデルは使っていません|No diagnosis model was used)/.test(report), "レポートの本数と『診断モデル無し』が結果と一致（本体のロケールの言語で）", report.slice(0, 120));
+    const noModelText = /(診断モデルは使っていません|No diagnosis model was used)/.test(report);
+    check(new RegExp(`(検出した歯: ${nTeeth} 本|Detected teeth: ${nTeeth} )`).test(report) && noModelText === !wantDx, wantDx ? "レポートの本数が結果と一致し、『診断モデル無し』が出ていない" : "レポートの本数と『診断モデル無し』が結果と一致（本体のロケールの言語で）", report.slice(0, 200));
+    if (wantDx) {
+      const pairs = new Set<string>(res.dx.map((d: { fdi: number; cls: string }) => `${d.fdi}:${d.cls}`));
+      check((await viewer.locator("[data-dx-key]").count()) === pairs.size, "チャート: 診断の印の数が、（歯, クラス）の組の数と一致", { marks: await viewer.locator("[data-dx-key]").count(), pairs: pairs.size });
+      check((await viewer.getByTestId("dp-dx-row").count()) === nDx, "診断の表の行数が結果の件数と一致", await viewer.getByTestId("dp-dx-row").count());
+      for (const g of new Set<string>(res.dx.map((d: { cls: string }) => d.cls))) {
+        const teeth = [...new Set<number>(res.dx.filter((d: { cls: string }) => d.cls === g).map((d: { fdi: number }) => d.fdi))].sort((a, b) => a - b);
+        check(teeth.every((f) => report.includes(String(f))), `レポートに ${g} の歯の番号が全部載る`, { g, teeth });
+      }
+    }
     check(((await viewer.getByTestId("dp-disclaimer").textContent()) ?? "").length > 20, "結果が出た後も免責が残る");
 
     if (MODE === "no-spacing") {
@@ -223,20 +274,30 @@ async function main(): Promise<void> {
 
     console.log("\n[5] 画像への重ね表示（既定のまま）");
     const after = await annotationCount(viewer);
-    check(st.overlay?.placed === nTeeth && st.overlay?.failed === 0, "歯の輪郭がすべて置かれた（失敗 0）", st.overlay);
-    check(after - before === nTeeth, "本体の注釈が歯の数だけ増えた（実際に置かれている）", { before, after, nTeeth });
+    check(st.overlay?.placed === nTeeth + nDx && st.overlay?.failed === 0, "歯の輪郭と診断の枠がすべて置かれた（失敗 0）", st.overlay);
+    check(after - before === nTeeth + nDx, "本体の注釈が歯と診断の数だけ増えた（実際に置かれている）", { before, after, nTeeth, nDx });
+    if (wantDx) {
+      await viewer.getByTestId("dp-show-dx").uncheck();
+      await viewer.waitForTimeout(800);
+      check((await annotationCount(viewer)) - before === nTeeth, "診断の枠のチェックだけを外すと、歯の輪郭だけが残る", (await annotationCount(viewer)) - before);
+      await viewer.getByTestId("dp-show-dx").check();
+      await viewer.waitForTimeout(800);
+      check((await annotationCount(viewer)) - before === nTeeth + nDx, "チェックを戻すと診断の枠が再び置かれる");
+    }
     const firstFdi: number = res.teeth[0].fdi;
     await viewer.getByTestId(`fdi-${firstFdi}`).click();
     await viewer.waitForTimeout(500);
     check((await state(viewer)).selectedFdi === firstFdi, "チャートの歯を押すと、その歯が選ばれる", (await state(viewer)).selectedFdi);
     await viewer.screenshot({ path: path.join(OUT_DIR, "viewer-selected.png") });
     await viewer.getByTestId("dp-show-teeth").uncheck();
+    if (wantDx) await viewer.getByTestId("dp-show-dx").uncheck();
     await viewer.waitForTimeout(800);
     const off = await annotationCount(viewer);
-    check(off === before, "輪郭のチェックを外すと注釈が元の数に戻る", { before, off });
+    check(off === before, "チェックを全部外すと注釈が元の数に戻る", { before, off });
     await viewer.getByTestId("dp-show-teeth").check();
+    if (wantDx) await viewer.getByTestId("dp-show-dx").check();
     await viewer.waitForTimeout(800);
-    check((await annotationCount(viewer)) - before === nTeeth, "チェックを戻すと再び置かれる");
+    check((await annotationCount(viewer)) - before === nTeeth + nDx, "チェックを戻すと再び置かれる");
     await viewer.screenshot({ path: path.join(OUT_DIR, "viewer-result-final.png") });
 
     console.log("\n[6] 保存");
@@ -244,7 +305,10 @@ async function main(): Promise<void> {
     const dlg = viewer.getByRole("button", { name: "Save", exact: true });
     await dlg.waitFor({ state: "visible", timeout: 15_000 });
     const dlgText = (await viewer.locator("body").innerText()).replace(/\s+/g, " ");
-    check(/Measurement groups \(lesions\) 0/.test(dlgText) && /Finding texts 4/.test(dlgText), "SR の確認ダイアログ: 計測グループ 0・所見 4（偽の計測を入れていない）");
+    const classes = new Set<string>((res.dx ?? []).map((d: { cls: string }) => d.cls)).size;
+    const wantFindings = 3 + classes; // 検出した歯・検出されなかった歯・注意 + （dx なし: 診断の候補の注記 1 件 / dx あり: 見つかったクラスごとに 1 件）
+    const findingsExpected = wantDx ? wantFindings : 4;
+    check(/Measurement groups \(lesions\) 0/.test(dlgText) && new RegExp(`Finding texts ${findingsExpected}\\b`).test(dlgText), `SR の確認ダイアログ: 計測グループ 0・所見 ${findingsExpected}（偽の計測を入れていない）`, dlgText.match(/Finding texts \d+/)?.[0]);
     await dlg.click();
     await viewer.waitForFunction(() => (window as unknown as { __dentalPanoState?: { sr?: unknown } }).__dentalPanoState?.sr !== undefined, null, { timeout: 30_000 });
     const sr = (await state(viewer)).sr;
@@ -264,7 +328,7 @@ async function main(): Promise<void> {
     throw e;
   } finally {
     await driver.stop();
-    fs.rmSync(emptyHome, { recursive: true, force: true });
+    fs.rmSync(emptyHome, { recursive: true, force: true }); // 一時の HOME（重みは symlink なので実体は消えない）
   }
   if (summary() > 0) process.exitCode = 1;
 }
