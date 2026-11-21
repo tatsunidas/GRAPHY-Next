@@ -40,7 +40,7 @@ export interface BatchQc {
 
 /** QC の旗。SMALL_ROI は環境設定の基準値が未設定なら立たない（「判定していない」）。 */
 export type BatchQcFlag =
-  | "SMALL_ROI" | "LOSSY_COMPRESSION" | "UNCALIBRATED_PT" | "UNCALIBRATED_SPACING" | "RECTIFIED_GRID"
+  | "SMALL_ROI" | "SMALL_ROI_2D" | "LOSSY_COMPRESSION" | "UNCALIBRATED_PT" | "UNCALIBRATED_SPACING" | "RECTIFIED_GRID"
   | "VALUEKIND_OVERRIDDEN" | "IVH_BINWIDTH_UNSET" | "ROUNDING_IGNORED" | "IVH_SETTING_EXPLICIT";
 
 export interface BatchRequest {
@@ -49,6 +49,8 @@ export interface BatchRequest {
   roiModes: RoiMode[];
   /** 2D の単位の断面。null・ACQUISITION は取得面だけ。ALL は取得面に加えて Axial・Sagittal・Coronal。 */
   planes: "ACQUISITION" | "ALL" | null;
+  /** 2D の小さい ROI の基準値（画素数）。null は環境設定の 2D の値。 */
+  smallRoiWarnPixels: number | null;
   scales: number[] | null;
   scaleNotation: string | null;
   scaleLabels: string[] | null;

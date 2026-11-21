@@ -45,11 +45,11 @@ describe("small-ROI threshold in the definition", () => {
   // 基準値を足す前に取った値（コミット前のコードで計算して固定）。基準値の無い従来の定義の SHA-256 は変わらない
   const BASE_DEFAULT = "9e08bec6fc61105a4113e5ea626ac8640c405c1b7ec31343b0b928419e43dced";
   const BASE_STOP_LABELS = "673da998ba6bff623ef058121cffeb17a9175bb45d7b01efa4309e9246ac636f";
-  const withVoxels = (n: number | null): SpecContent => content({ qc: { smallRoi: "STOP", lossy: "FLAG", smallRoiVoxels: n } });
+  const withVoxels = (n: number | null): SpecContent => content({ qc: { smallRoi: "STOP", lossy: "FLAG", smallRoiVoxels: n, smallRoiPixels: null } });
 
   it("a definition without a threshold keeps the SHA-256 it had before the field existed", async () => {
     expect(await contentSha256(legacy())).toBe(BASE_DEFAULT);
-    expect(await contentSha256(legacy(content({ qc: { smallRoi: "STOP", lossy: "FLAG", smallRoiVoxels: null }, selection: { segmentLabels: ["GTV", "tumor"] } })))).toBe(BASE_STOP_LABELS);
+    expect(await contentSha256(legacy(content({ qc: { smallRoi: "STOP", lossy: "FLAG", smallRoiVoxels: null, smallRoiPixels: null }, selection: { segmentLabels: ["GTV", "tumor"] } })))).toBe(BASE_STOP_LABELS);
   });
   it("null leaves the key out of the canonical JSON and the saved file; a value writes it", async () => {
     expect(canonicalContentJson(withVoxels(null))).not.toContain("smallRoiVoxels");
@@ -166,7 +166,7 @@ describe("round trip", () => {
   it("save then load gives the same content and the same SHA-256", async () => {
     const c = content({
       form: { ...defaultSpecContent().form, fixedBinNumber: false, binWidth: 12.5, resampleMm: 1.5, families: { ...defaultSpecContent().form.families, GLAM: true } },
-      qc: { smallRoi: "STOP", lossy: "STOP", smallRoiVoxels: null },
+      qc: { smallRoi: "STOP", lossy: "STOP", smallRoiVoxels: null, smallRoiPixels: null },
       selection: { segmentLabels: ["GTV", "tumor"] },
     });
     const spec = await buildSpec(c, "lung-ct");
@@ -175,7 +175,7 @@ describe("round trip", () => {
     if (!back.ok) return;
     expect(back.spec.sha256).toBe(spec.sha256);
     expect(back.spec.form).toEqual(spec.form);
-    expect(back.spec.qc).toEqual({ smallRoi: "STOP", lossy: "STOP", smallRoiVoxels: null });
+    expect(back.spec.qc).toEqual({ smallRoi: "STOP", lossy: "STOP", smallRoiVoxels: null, smallRoiPixels: null });
     expect(back.spec.selection.segmentLabels).toEqual(["GTV", "tumor"]);
     expect(back.spec.output.prefix).toBe("lung-ct");
     expect(back.ignoredFamilies).toBe(0);
@@ -192,7 +192,7 @@ describe("round trip", () => {
     const form = defaultSpecContent().form;
     expect(await contentSha256(content({ form: { ...form, binCount: 33 } }))).not.toBe(base);
     expect(await contentSha256(content({ form: { ...form, families: { ...form.families, GLCM: !form.families.GLCM } } }))).not.toBe(base);
-    expect(await contentSha256(content({ qc: { smallRoi: "STOP", lossy: "FLAG", smallRoiVoxels: null } }))).not.toBe(base);
+    expect(await contentSha256(content({ qc: { smallRoi: "STOP", lossy: "FLAG", smallRoiVoxels: null, smallRoiPixels: null } }))).not.toBe(base);
     expect(await contentSha256(content({ selection: { segmentLabels: ["GTV"] } }))).not.toBe(base);
   });
 
@@ -206,7 +206,7 @@ describe("round trip", () => {
 
   it("the form round-trips through the input fields", () => {
     const base = defaultRoiFeatureForm();
-    const c = specContentFrom({ ...base, binCount: 16, resampleMm: 2 }, { smallRoi: "FLAG", lossy: "STOP", smallRoiVoxels: null }, ["a", " a ", ""]);
+    const c = specContentFrom({ ...base, binCount: 16, resampleMm: 2 }, { smallRoi: "FLAG", lossy: "STOP", smallRoiVoxels: null, smallRoiPixels: null }, ["a", " a ", ""]);
     expect(c.selection.segmentLabels).toEqual(["a"]);
     const next = applySpecToForm({ ...base, logOn: true }, c);
     expect(next.binCount).toBe(16);
@@ -337,10 +337,10 @@ describe("kind in the definition", () => {
   });
 
   it("round-trips through save and load", async () => {
-    const r = await parseSpec(specText(await buildSpec(voi({ qc: { smallRoi: "STOP", lossy: "FLAG", smallRoiVoxels: 50 } }), "x")));
+    const r = await parseSpec(specText(await buildSpec(voi({ qc: { smallRoi: "STOP", lossy: "FLAG", smallRoiVoxels: 50, smallRoiPixels: null } }), "x")));
     expect(r.ok && r.spec.kind).toBe("voiStats");
     expect(r.ok && r.spec.qc.smallRoiVoxels).toBe(50);
-    expect(r.ok && r.spec.sha256).toBe(await contentSha256(voi({ qc: { smallRoi: "STOP", lossy: "FLAG", smallRoiVoxels: 50 } })));
+    expect(r.ok && r.spec.sha256).toBe(await contentSha256(voi({ qc: { smallRoi: "STOP", lossy: "FLAG", smallRoiVoxels: 50, smallRoiPixels: null } })));
   });
 
   it("accepts an explicit radiomics or null kind (same SHA-256), rejects anything else", async () => {
@@ -593,7 +593,7 @@ describe("detail settings and the QC skip mode in the definition", () => {
   });
 
   it("the QC skip mode is written as it is, has its own SHA-256 (independent), loads, and an unknown mode is refused", async () => {
-    const q = { smallRoi: "SKIP" as const, lossy: "STOP" as const, smallRoiVoxels: null };
+    const q = { smallRoi: "SKIP" as const, lossy: "STOP" as const, smallRoiVoxels: null, smallRoiPixels: null };
     expect(await contentSha256(content({ qc: q }))).toBe(SKIP_SHA);
     const r = await parseSpec(specText(await buildSpec(content({ qc: q }), "p")));
     expect(r.ok).toBe(true);
@@ -601,7 +601,7 @@ describe("detail settings and the QC skip mode in the definition", () => {
     const bad = await parseSpec(await text((o) => { o.qc.smallRoi = "PAUSE"; }));
     expect(bad.ok).toBe(false);
     // 従来の STOP の定義は、そのまま読める（SHA も変わらない）
-    expect(await contentSha256(legacy(content({ qc: { smallRoi: "STOP", lossy: "FLAG", smallRoiVoxels: null }, selection: { segmentLabels: ["GTV", "tumor"] } })))).toBe("673da998ba6bff623ef058121cffeb17a9175bb45d7b01efa4309e9246ac636f");
+    expect(await contentSha256(legacy(content({ qc: { smallRoi: "STOP", lossy: "FLAG", smallRoiVoxels: null, smallRoiPixels: null }, selection: { segmentLabels: ["GTV", "tumor"] } })))).toBe("673da998ba6bff623ef058121cffeb17a9175bb45d7b01efa4309e9246ac636f");
   });
 });
 
@@ -645,5 +645,35 @@ describe("2D の単位と断面（units・planes）", () => {
     expect(await bad((o) => { o.form.units = ["SLICES_2D", "SLICES_2D"]; })).toMatchObject({ ok: false, error: "type" });
     expect(await bad((o) => { o.form.planes = "SIDEWAYS"; })).toMatchObject({ ok: false, error: "type" });
     expect(await bad((o) => { delete o.form.units; o.form.planes = "ALL"; })).toMatchObject({ ok: false, error: "type" });
+  });
+});
+
+describe("2D の小さい ROI の基準値（qc.smallRoiPixels）", () => {
+  // Python（hashlib・json）で、正準 JSON を独立に組み立てて求めた値
+  const PX150_SHA = "c8acc416e7a0f1dbb0bad85fe9c3cbffa672d9c56a07a96a1b0b340128480272";
+  const BOTH_SHA = "4fa035371d437b7180f19125757ab3e2b5299c7c9283058ce0f4f1e2afb54d29";
+  const withQc = (qc: SpecContent["qc"]) => content({ qc });
+
+  it("無い定義の SHA-256 は変わらない。指定した値の SHA-256 は独立の計算と一致（ボクセルの基準値と併用も）", async () => {
+    expect(await contentSha256(defaultSpecContent())).toBe("f0f8273683f4304a247ca1ccad7d54687be5fa5ab313c4ce2613feb1776de81c");
+    expect(await contentSha256(withQc({ smallRoi: "FLAG", lossy: "FLAG", smallRoiVoxels: null, smallRoiPixels: 150 }))).toBe(PX150_SHA);
+    expect(await contentSha256(withQc({ smallRoi: "STOP", lossy: "FLAG", smallRoiVoxels: 1000, smallRoiPixels: 150 }))).toBe(BOTH_SHA);
+  });
+
+  it("保存して読み直すと同じ。値が違えば SHA-256 も違う", async () => {
+    const c = withQc({ smallRoi: "STOP", lossy: "FLAG", smallRoiVoxels: 1000, smallRoiPixels: 150 });
+    const r = await parseSpec(specText(await buildSpec(c, "p")));
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.spec.qc.smallRoiPixels).toBe(150);
+    expect(await contentSha256(withQc({ smallRoi: "FLAG", lossy: "FLAG", smallRoiVoxels: null, smallRoiPixels: 151 }))).not.toBe(PX150_SHA);
+  });
+
+  it("不正な値（0・小数・文字・大きすぎる）は理由つきで断る", async () => {
+    const c = withQc({ smallRoi: "FLAG", lossy: "FLAG", smallRoiVoxels: null, smallRoiPixels: 150 });
+    const bad = async (v: unknown) => parseSpec(await text((o) => { o.qc.smallRoiPixels = v; }, c));
+    expect(await bad(0)).toMatchObject({ ok: false, error: "range" });
+    expect(await bad(1.5)).toMatchObject({ ok: false, error: "range" });
+    expect(await bad(2147483648)).toMatchObject({ ok: false, error: "range" });
+    expect(await bad("150")).toMatchObject({ ok: false, error: "type" });
   });
 });

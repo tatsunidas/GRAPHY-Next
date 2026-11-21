@@ -66,6 +66,13 @@ public class RadiomicsBatchService {
 
     /** 旗。{@code SMALL_ROI}＝強度マスクのボクセル数が基準値（要求の値、無ければ環境設定）より少ない。基準値が無ければ立たない。 */
     public static final String FLAG_SMALL_ROI = "SMALL_ROI";
+
+    /**
+     * 旗。{@code SMALL_ROI_2D}＝2D の最大断面、またはスライス別のどれかの強度マスクの画素数が、基準値（要求の値、無ければ
+     * 環境設定の 2D の値）より少ない（取得面と、再スライスした各断面のすべてを見る）。基準値が無ければ判定しない。
+     * 扱い（フラグ・止める・スキップ）は「小さい ROI」の選択が {@link #FLAG_SMALL_ROI} と同じに効く。
+     */
+    public static final String FLAG_SMALL_ROI_2D = "SMALL_ROI_2D";
     public static final String FLAG_LOSSY = "LOSSY_COMPRESSION";
     /** PET を、利用者の明示で SUV に校正せずに（Bq/mL のまま）計算した。 */
     public static final String FLAG_UNCALIBRATED_PT = "UNCALIBRATED_PT";
@@ -90,7 +97,19 @@ public class RadiomicsBatchService {
                                List<String> scaleLabels, String scaleConversion, Double scaleCoefficient,
                                int channel, int timePoint, boolean recompute, Qc qc, List<String> qcAcknowledged,
                                Integer smallRoiWarnVoxels, String kind, String calibration,
-                               ValueKind.Spec valueSpec, String planes) {
+                               ValueKind.Spec valueSpec, String planes, Integer smallRoiWarnPixels) {
+        /** 2D の基準値を指定しない（従来の要求。環境設定の値）。 */
+        public BatchRequest(List<BatchPair> pairs, Map<String, String> settings,
+                            Set<RoiFeatureRequest.RoiMode> roiModes, List<Double> scales, String scaleNotation,
+                            List<String> scaleLabels, String scaleConversion, Double scaleCoefficient,
+                            int channel, int timePoint, boolean recompute, Qc qc, List<String> qcAcknowledged,
+                            Integer smallRoiWarnVoxels, String kind, String calibration, ValueKind.Spec valueSpec,
+                            String planes) {
+            this(pairs, settings, roiModes, scales, scaleNotation, scaleLabels, scaleConversion, scaleCoefficient,
+                    channel, timePoint, recompute, qc, qcAcknowledged, smallRoiWarnVoxels, kind, calibration,
+                    valueSpec, planes, null);
+        }
+
         /** 断面を指定しない（従来の要求。2D の単位は取得面だけ）。 */
         public BatchRequest(List<BatchPair> pairs, Map<String, String> settings,
                             Set<RoiFeatureRequest.RoiMode> roiModes, List<Double> scales, String scaleNotation,
@@ -99,7 +118,7 @@ public class RadiomicsBatchService {
                             Integer smallRoiWarnVoxels, String kind, String calibration, ValueKind.Spec valueSpec) {
             this(pairs, settings, roiModes, scales, scaleNotation, scaleLabels, scaleConversion, scaleCoefficient,
                     channel, timePoint, recompute, qc, qcAcknowledged, smallRoiWarnVoxels, kind, calibration,
-                    valueSpec, null);
+                    valueSpec, null, null);
         }
 
         /** 値の種類を指定しない（従来の要求）。 */
@@ -346,7 +365,7 @@ public class RadiomicsBatchService {
         return new RoiFeatureRequest(p.studyUid(), p.sourceSeriesUid(), p.maskSeriesUid(), p.maskChannel(),
                 req.channel(), req.timePoint(), req.settings(), req.recompute(), req.roiModes(), req.scales(),
                 req.scaleNotation(), req.scaleLabels(), req.scaleConversion(), req.scaleCoefficient(),
-                req.smallRoiWarnVoxels(), req.calibration(), req.valueSpec(), req.planes());
+                req.smallRoiWarnVoxels(), req.calibration(), req.valueSpec(), req.planes(), req.smallRoiWarnPixels());
     }
 
     private void set(Job job, int i, PairState state, FailureKind kind, String error, boolean fromCache, long ms) {
@@ -365,6 +384,9 @@ public class RadiomicsBatchService {
         if (size != null && Boolean.TRUE.equals(size.smallRoi())) {
             flags.add(FLAG_SMALL_ROI);
         }
+        if (small2d(r)) {
+            flags.add(FLAG_SMALL_ROI_2D);
+        }
         if (r.lossyCompressed()) {
             flags.add(FLAG_LOSSY);
         }
@@ -377,12 +399,59 @@ public class RadiomicsBatchService {
         return flags;
     }
 
+    private static boolean sectionSmall(RoiFeatureResult.Section s) {
+        return s != null && s.roiSize() != null && Boolean.TRUE.equals(s.roiSize().smallRoi());
+    }
+
+    private static boolean slicesSmall(RoiFeatureResult.Slices s) {
+        return s != null && s.smallRoiPositionsMm() != null && !s.smallRoiPositionsMm().isEmpty();
+    }
+
+    /** 2D（取得面・再スライスした断面）のどれかが、基準値より小さいか。基準値が無ければ false。 */
+    static boolean small2d(RoiFeatureResult r) {
+        if (sectionSmall(r.section()) || slicesSmall(r.slices())) {
+            return true;
+        }
+        if (r.planeResults() != null) {
+            for (RoiFeatureResult.PlaneResult p : r.planeResults()) {
+                if (sectionSmall(p.section()) || slicesSmall(p.slices())) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /** 2D の小さい ROI の説明（スキップの理由に使う）。 */
+    static String small2dText(RoiFeatureResult r) {
+        List<String> parts = new ArrayList<>();
+        java.util.function.BiConsumer<String, RoiFeatureResult.Section> sec = (name, s) -> {
+            if (sectionSmall(s)) {
+                parts.add(name + " 最大断面 " + s.roiSize().intensityVoxels() + " 画素 ＜ 基準値 " + s.roiSize().smallRoiWarnVoxels());
+            }
+        };
+        java.util.function.BiConsumer<String, RoiFeatureResult.Slices> sl = (name, s) -> {
+            if (slicesSmall(s)) {
+                parts.add(name + " スライス " + s.smallRoiPositionsMm().size() + " 枚 ＜ 基準値 " + s.smallRoiWarnPixels() + " 画素");
+            }
+        };
+        sec.accept("取得面", r.section());
+        sl.accept("取得面", r.slices());
+        if (r.planeResults() != null) {
+            for (RoiFeatureResult.PlaneResult p : r.planeResults()) {
+                sec.accept(p.plane(), p.section());
+                sl.accept(p.plane(), p.slices());
+            }
+        }
+        return "小さい ROI（2D: " + String.join("、", parts) + "）";
+    }
+
     /** QC の「スキップ」に当たったか（止める指定が先に効くので、止めるに当たったときは呼ばない）。 */
     private static boolean skipsOn(Qc qc, List<String> flags) {
         if (qc == null) {
             return false;
         }
-        return (qc.smallRoi() == QcMode.SKIP && flags.contains(FLAG_SMALL_ROI))
+        return (qc.smallRoi() == QcMode.SKIP && (flags.contains(FLAG_SMALL_ROI) || flags.contains(FLAG_SMALL_ROI_2D)))
                 || (qc.lossy() == QcMode.SKIP && flags.contains(FLAG_LOSSY));
     }
 
@@ -394,6 +463,9 @@ public class RadiomicsBatchService {
             why.add("小さい ROI（" + (s == null || s.intensityVoxels() == null ? "?" : s.intensityVoxels())
                     + " ボクセル ＜ 基準値 " + (s == null || s.smallRoiWarnVoxels() == null ? "?" : s.smallRoiWarnVoxels()) + "）");
         }
+        if (qc.smallRoi() == QcMode.SKIP && flags.contains(FLAG_SMALL_ROI_2D)) {
+            why.add(small2dText(r));
+        }
         if (qc.lossy() == QcMode.SKIP && flags.contains(FLAG_LOSSY)) {
             why.add("非可逆圧縮の画像");
         }
@@ -404,7 +476,7 @@ public class RadiomicsBatchService {
         if (qc == null) {
             return false;
         }
-        return (qc.smallRoi() == QcMode.STOP && flags.contains(FLAG_SMALL_ROI))
+        return (qc.smallRoi() == QcMode.STOP && (flags.contains(FLAG_SMALL_ROI) || flags.contains(FLAG_SMALL_ROI_2D)))
                 || (qc.lossy() == QcMode.STOP && flags.contains(FLAG_LOSSY));
     }
 

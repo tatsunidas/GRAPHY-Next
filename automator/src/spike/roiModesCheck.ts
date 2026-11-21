@@ -342,6 +342,36 @@ async function main(): Promise<void> {
       check(sls.rows.length > 1 && sls.rows.every((r4) => r4[sls.header.indexOf("Plane")] === pl.toUpperCase()), `${pl}: スライス別の CSV に複数行`, sls.rows.length);
     }
     check(!/Morphology_|GLAM_/.test((byAll["modes-case-seg0_maxsection2d_axial.csv"] ?? "").split("\r\n")[0]), "断面の CSV にも Morphology・GLAM は無い");
+
+    // 再スライスした断面の画面表示: 断面ごとの折りたたみ（見出し・要約）と、2D の列に出す断面の選択
+    for (const pl of ["AXIAL", "SAGITTAL", "CORONAL"]) {
+      const lower = pl.toLowerCase();
+      const head = await page.getByTestId(`roifeat-plane-${pl}-head`).innerText();
+      const csvSec = parseCsv(byAll[`modes-case-seg0_maxsection2d_${lower}.csv`] ?? "");
+      const csvPixels = csvSec.rows[0]?.[csvSec.header.indexOf("Section_Pixels")];
+      check(new RegExp(pl.charAt(0) + lower.slice(1)).test(head) && /再スライス/.test(head) && head.includes(`${csvPixels} 画素`), `${lower}: 折りたたみの見出しに断面名・再スライス・最大断面の画素数（CSV と一致 ${csvPixels}）`, head);
+      await page.getByTestId(`roifeat-plane-${pl}`).locator("summary").first().click();
+      const sumTxt = await page.getByTestId(`roifeat-plane-${pl}-slices-summary`).innerText();
+      const csvSl = parseCsv(byAll[`modes-case-seg0_slices2d_${lower}.csv`] ?? "");
+      check(sumTxt.includes(`${csvSl.rows.length} 枚のうち ${csvSl.rows.length} 枚`) && sumTxt.includes("失敗 0 枚"), `${lower}: スライス別の要約の枚数が CSV の行数（${csvSl.rows.length}）と一致`, sumTxt);
+      await page.getByTestId(`roifeat-plane-${pl}-slices-details`).locator("summary").click();
+      check((await page.getByTestId(`roifeat-plane-${pl}-slices-table`).locator("tbody tr").count()) === csvSl.rows.length, `${lower}: スライス別の表の行数が CSV と一致`);
+    }
+    // 取得面の要約は、断面を足しても変わらない（既存の testid のまま、取得面の値）
+    check((await page.getByTestId("roifeat-section-summary").innerText()).includes("225 画素"), "取得面の最大断面の要約は変わらない（225 画素）");
+    const SHAPE = "Shape2D_PixelSurface";
+    const acqCell = (await cell(SHAPE, "section")).trim();
+    await page.getByTestId("roifeat-plane-select").selectOption("SAGITTAL");
+    await page.waitForTimeout(300);
+    const sagCell = (await cell(SHAPE, "section")).trim();
+    const sagCsv = parseCsv(byAll["modes-case-seg0_maxsection2d_sagittal.csv"] ?? "");
+    const wantSag = Number(sagCsv.rows[0][sagCsv.header.indexOf(SHAPE)]);
+    check(Math.abs(num(sagCell) - wantSag) / Math.max(1, Math.abs(wantSag)) < 1e-3, `断面の選択（Sagittal）で 2D の列が Sagittal の値（CSV ${wantSag}）に切り替わる`, [sagCell, wantSag]);
+    check(sagCell !== acqCell, "選択前（取得面）と値が違う（切り替わりが効いている条件）", [acqCell, sagCell]);
+    await page.screenshot({ path: path.join(OUT_DIR, "05-plane-view.png"), fullPage: false });
+    await page.getByTestId("roifeat-plane-select").selectOption("ACQUISITION");
+    await page.waitForTimeout(300);
+    check((await cell(SHAPE, "section")).trim() === acqCell, "取得面に戻すと元の値に戻る");
   } finally {
     await d.stop();
   }

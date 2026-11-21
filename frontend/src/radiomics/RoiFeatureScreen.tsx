@@ -825,12 +825,31 @@ export function RoiFeatureScreen() {
 
 /** 2D の単位の要約: 最大断面の位置・面積、スライス別の枚数・失敗・小さい ROI、スライス別の表（折りたたみ）。 */
 function Modes2dPanel({ result, t }: { result: RoiFeatureResult; t: TFn }) {
-  const sec = result.section;
-  const sl = result.slices;
   return (
     <div data-testid="roifeat-modes2d">
+      <UnitSummary sec={result.section} sl={result.slices} idp="roifeat" t={t} />
+      {(result.planeResults ?? []).map((p) => (
+        <details key={p.plane} style={{ marginTop: 8 }} data-testid={`roifeat-plane-${p.plane}`}>
+          <summary style={{ cursor: "pointer", color: "#0b5cad" }} data-testid={`roifeat-plane-${p.plane}-head`}>
+            {t(`roiFeat.plane.${p.plane}`)}（{t("roiFeat.plane.resliced", { spacing: p.spacingMm ?? "?" })}）
+            {p.error ? ` — ${t("roiFeat.plane.notComputed")}` : p.section ? ` — ${t("roiFeat.section.summary", {
+              pos: formatPositionMm(p.section.positionMm), area: formatAreaMm2(p.section.areaMm2), pixels: p.section.pixels })}` : ""}
+          </summary>
+          {p.error
+            ? <div style={warnBand} data-testid={`roifeat-plane-${p.plane}-error`}>⚠ {p.error}</div>
+            : <UnitSummary sec={p.section} sl={p.slices} idp={`roifeat-plane-${p.plane}`} t={t} />}
+        </details>
+      ))}
+    </div>
+  );
+}
+
+/** 1 つの面（取得面、または再スライスした断面）の 2D の要約。`idp` は data-testid の接頭辞。 */
+function UnitSummary({ sec, sl, idp, t }: { sec?: RoiFeatureResult["section"]; sl?: RoiFeatureResult["slices"]; idp: string; t: TFn }) {
+  return (
+    <div>
       {sec && (
-        <div style={note} data-testid="roifeat-section-summary">
+        <div style={note} data-testid={`${idp}-section-summary`}>
           {t("roiFeat.section.summary", {
             pos: formatPositionMm(sec.positionMm), area: formatAreaMm2(sec.areaMm2), pixels: sec.pixels,
           })}
@@ -838,11 +857,11 @@ function Modes2dPanel({ result, t }: { result: RoiFeatureResult; t: TFn }) {
       )}
       {sl && (
         <>
-          <div style={note} data-testid="roifeat-slices-summary">
+          <div style={note} data-testid={`${idp}-slices-summary`}>
             {t("roiFeat.slices.summary", { used: sl.rows.length, total: sl.foregroundSlices, failed: sl.failures.length })}
           </div>
           {sl.failures.length > 0 && (
-            <div style={warnBand} data-testid="roifeat-slices-failures">
+            <div style={warnBand} data-testid={`${idp}-slices-failures`}>
               ⚠ {t("roiFeat.slices.failures", {
                 n: sl.failures.length,
                 list: sl.failures.map((f) => `${formatPositionMm(f.positionMm)} mm`).join(", "),
@@ -851,7 +870,7 @@ function Modes2dPanel({ result, t }: { result: RoiFeatureResult; t: TFn }) {
             </div>
           )}
           {sl.smallRoiWarnPixels != null && sl.smallRoiPositionsMm.length > 0 && (
-            <div style={warnBand} data-testid="roifeat-slices-small">
+            <div style={warnBand} data-testid={`${idp}-slices-small`}>
               ⚠ {t("roiFeat.slices.small", {
                 n: sl.smallRoiPositionsMm.length,
                 threshold: sl.smallRoiWarnPixels,
@@ -859,9 +878,9 @@ function Modes2dPanel({ result, t }: { result: RoiFeatureResult; t: TFn }) {
               })}
             </div>
           )}
-          <details style={{ marginTop: 6 }} data-testid="roifeat-slices-details">
+          <details style={{ marginTop: 6 }} data-testid={`${idp}-slices-details`}>
             <summary style={{ cursor: "pointer", color: "#0b5cad" }}>{t("roiFeat.slices.open")}</summary>
-            <table style={table} data-testid="roifeat-slices-table">
+            <table style={table} data-testid={`${idp}-slices-table`}>
               <thead>
                 <tr>
                   <th style={th}>{t("roiFeat.slices.col.pos")}</th>
@@ -903,20 +922,39 @@ function CompareTable({ result, query, familyLabel, t }: {
   familyLabel: (family: string) => string;
   t: TFn;
 }) {
+  // 表示する断面: 取得面（既定）か、再スライスした断面。選んだ断面の最大断面・スライス別の列に入れ替える（計算は変えない）
+  const [planeSel, setPlaneSel] = useState("ACQUISITION");
+  const planes = (result.planeResults ?? []).filter((p) => !p.error && (p.section || p.slices));
+  const picked = planes.find((p) => p.plane === planeSel);
+  const view = useMemo<RoiFeatureResult>(
+    () => (picked ? { ...result, section: picked.section ?? null, slices: picked.slices ?? null } : result),
+    [result, picked],
+  );
   const rows = useMemo(() => {
     const q = query.trim().toLowerCase();
-    return compareRows(result).filter((r) => !q || r.column.toLowerCase().includes(q));
-  }, [result, query]);
+    return compareRows(view).filter((r) => !q || r.column.toLowerCase().includes(q));
+  }, [view, query]);
   const groups: { family: string; rows: CompareRow[] }[] = [];
   for (const r of rows) {
     const last = groups[groups.length - 1];
     if (last && last.family === r.family) last.rows.push(r);
     else groups.push({ family: r.family, rows: [r] });
   }
-  const showSection = !!result.section;
-  const showSlices = !!result.slices;
+  const showSection = !!view.section;
+  const showSlices = !!view.slices;
   const cols = 4 + (showSection ? 1 : 0) + (showSlices ? 2 : 0);
   return (
+    <>
+      {planes.length > 0 && (
+        <div style={{ ...note, display: "flex", gap: 8, alignItems: "center" }}>
+          <span title={t("roiFeat.tip.planeSelect")}>{t("roiFeat.plane.select")}</span>
+          <select value={picked ? picked.plane : "ACQUISITION"} style={{ ...input, width: "auto" }} data-testid="roifeat-plane-select"
+            onChange={(e) => setPlaneSel(e.target.value)}>
+            <option value="ACQUISITION">{t("roiFeat.plane.acquisition")}</option>
+            {planes.map((p) => <option key={p.plane} value={p.plane}>{t(`roiFeat.plane.${p.plane}`)}</option>)}
+          </select>
+        </div>
+      )}
     <table style={table} data-testid="roifeat-table">
       <thead>
         <tr>
@@ -950,6 +988,7 @@ function CompareTable({ result, query, familyLabel, t }: {
         ))}
       </tbody>
     </table>
+    </>
   );
 }
 

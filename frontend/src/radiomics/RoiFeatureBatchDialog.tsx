@@ -30,6 +30,7 @@ import {
   selectedPairs,
   setIncluded,
   setSource,
+  smallRoi2dThresholdUnset,
   smallRoiThresholdUnset,
   summarize,
   type PairRow,
@@ -105,7 +106,7 @@ export function RoiFeatureBatchDialog({
   const [trial, setTrial] = useState<BatchPairResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [written, setWritten] = useState<number | null>(null);
-  const [qc, setQc] = useState<SpecContent["qc"]>({ smallRoi: "FLAG", lossy: "FLAG", smallRoiVoxels: null });
+  const [qc, setQc] = useState<SpecContent["qc"]>({ smallRoi: "FLAG", lossy: "FLAG", smallRoiVoxels: null, smallRoiPixels: null });
   const [labelsText, setLabelsText] = useState("");
   /** 抽出の種類。`voiStats` は一次統計だけ（族・ビン・再標本化・範囲の欄は隠す）。 */
   const [kind, setKind] = useState<SpecKind>("radiomics");
@@ -252,7 +253,7 @@ export function RoiFeatureBatchDialog({
     try {
       const spec = await buildSpec(specContentFrom(form, qc, labels, kind), prefix);
       const st = await submitBatch(buildBatchRequest(chosen.map((c) => c.pair), form, {
-        qc: isTrial ? null : { smallRoi: qc.smallRoi, lossy: qc.lossy }, acknowledged: ack, smallRoiVoxels: qc.smallRoiVoxels, kind,
+        qc: isTrial ? null : { smallRoi: qc.smallRoi, lossy: qc.lossy }, acknowledged: ack, smallRoiVoxels: qc.smallRoiVoxels, smallRoiPixels: qc.smallRoiPixels, kind,
       }));
       runRef.current = {
         jobId: st.jobId, labels: chosen.map((c) => c.caseLabel), keys: chosen.map((c) => pairKey(c.pair)),
@@ -373,6 +374,7 @@ export function RoiFeatureBatchDialog({
   };
 
   const unsetThreshold = smallRoiThresholdUnset(trial ? [trial.result] : (results ?? []).map((r) => r.result));
+  const unsetThreshold2d = smallRoi2dThresholdUnset(trial ? [trial.result] : (results ?? []).map((r) => r.result));
 
   const close = () => {
     queueCancelRef.current = true;
@@ -555,6 +557,7 @@ export function RoiFeatureBatchDialog({
                 <div style={qcBox} data-testid="batch-qc-hold">
                   <div>
                     {t("roiFeat.batch.qc.held", { label: qcHold.label, flags: qcHold.flags.map((f) => t(`roiFeat.batch.qcflag.${f}`)).join("・") })}
+                    {qcHold.flags.includes("SMALL_ROI_2D") && ` ${t("roiFeat.batch.qc.held2d")}`}
                     {qcHold.flags.includes("SMALL_ROI") && qcHold.size?.intensityVoxels != null && qcHold.size.smallRoiWarnVoxels != null
                       && ` ${t("roiFeat.batch.qc.heldSize", { n: qcHold.size.intensityVoxels, threshold: qcHold.size.smallRoiWarnVoxels })}`}
                   </div>
@@ -578,6 +581,9 @@ export function RoiFeatureBatchDialog({
           )}
           {unsetThreshold && (qc.smallRoi !== "FLAG" || results || trial) && (
             <div style={{ ...note, color: "#7a4b00" }} data-testid="batch-unset-threshold">{t("roiFeat.batch.qc.unset")}</div>
+          )}
+          {unsetThreshold2d && (qc.smallRoi !== "FLAG" || results || trial) && (
+            <div style={{ ...note, color: "#7a4b00" }} data-testid="batch-unset-threshold-2d">{t("roiFeat.batch.qc.unset2d")}</div>
           )}
           {written != null && <div style={{ ...note, color: "#2f6b2f" }} data-testid="batch-written">{t("roiFeat.batch.written", { n: written })}</div>}
         </div>

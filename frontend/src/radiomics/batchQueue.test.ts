@@ -92,7 +92,7 @@ const ctx = (over: Partial<QueueContext> = {}): QueueContext => ({
 describe("runQueue", () => {
   it("1 つの定義の失敗で残りを止めず、定義ごとに表を書き出す", async () => {
     const a = await spec("a");
-    const b = await spec("b", { qc: { smallRoi: "STOP", lossy: "FLAG", smallRoiVoxels: 5 } });
+    const b = await spec("b", { qc: { smallRoi: "STOP", lossy: "FLAG", smallRoiVoxels: 5, smallRoiPixels: null } });
     const c = await spec("c");
     const { api, log } = fakeApi((i) => (i === 1 ? "throw" : "ok"));
     const updates: QueueEntry[][] = [];
@@ -107,7 +107,7 @@ describe("runQueue", () => {
 
   it("各定義の設定（QC・基準値・種類）を要求に載せる", async () => {
     const a = await spec("a", { kind: "voiStats" });
-    const b = await spec("b", { qc: { smallRoi: "STOP", lossy: "FLAG", smallRoiVoxels: 7 } });
+    const b = await spec("b", { qc: { smallRoi: "STOP", lossy: "FLAG", smallRoiVoxels: 7, smallRoiPixels: null } });
     const { api, log } = fakeApi(() => "ok");
     await runQueue([entry(1, a), entry(2, b)], ctx(), api, () => undefined);
     expect(log.submits[0].kind).toBe("voiStats");

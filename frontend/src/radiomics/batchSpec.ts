@@ -65,12 +65,14 @@ export type SpecForm = Pick<RoiFeatureForm, "fixedBinNumber" | "binCount" | "bin
 
 /**
  * QC の設定。`smallRoiVoxels` は小さい ROI の基準値（ボクセル数、1 以上の整数）。null は環境設定の値を使う。
+ * `smallRoiPixels` は 2D（最大断面・スライス別）の基準値（画素数、同じく 1 以上の整数。null は環境設定の 2D の値）。
  * null のときは正準 JSON にキーを出さない（基準値の無い従来の定義の SHA-256 を変えない）。
  */
 export interface SpecQc {
   smallRoi: SpecQcMode;
   lossy: SpecQcMode;
   smallRoiVoxels: number | null;
+  smallRoiPixels: number | null;
 }
 
 /** 基準値の上限（バックエンドの Integer と同じ）。 */
@@ -103,7 +105,7 @@ export function defaultSpecContent(): SpecContent {
   return {
     kind: "radiomics",
     form: { fixedBinNumber: f.fixedBinNumber, binCount: f.binCount, binWidth: f.binWidth, resampleMm: f.resampleMm, families: f.families, units2d: [], planesAll: false, rangeMin: null, rangeMax: null, calibration: f.calibration, valueKind: f.valueKind, ivhBinWidth: null, intensityRounding: false, settings: {} },
-    qc: { smallRoi: "FLAG", lossy: "FLAG", smallRoiVoxels: null },
+    qc: { smallRoi: "FLAG", lossy: "FLAG", smallRoiVoxels: null, smallRoiPixels: null },
     selection: { segmentLabels: [] },
   };
 }
@@ -123,8 +125,12 @@ export function parseLabelInput(text: string): string[] {
   return normalizeLabels(text.split(/[,、\n]/));
 }
 
-const qcJson = (q: SpecQc) =>
-  q.smallRoiVoxels == null ? { smallRoi: q.smallRoi, lossy: q.lossy } : { smallRoi: q.smallRoi, lossy: q.lossy, smallRoiVoxels: q.smallRoiVoxels };
+// 基準値は、指定したものだけキーを出す（無い従来の定義の SHA-256 を変えない）
+const qcJson = (q: SpecQc) => ({
+  smallRoi: q.smallRoi, lossy: q.lossy,
+  ...(q.smallRoiVoxels == null ? {} : { smallRoiVoxels: q.smallRoiVoxels }),
+  ...(q.smallRoiPixels == null ? {} : { smallRoiPixels: q.smallRoiPixels }),
+});
 
 const formJson = (f: SpecForm) => ({
   fixedBinNumber: f.fixedBinNumber,
@@ -315,6 +321,14 @@ export async function parseSpec(text: string): Promise<SpecParse> {
     smallRoiVoxels = voxelsRaw;
   }
 
+  const pixelsRaw = own(qc, "smallRoiPixels");
+  let smallRoiPixels: number | null = null;
+  if (pixelsRaw !== undefined && pixelsRaw !== null) {
+    if (typeof pixelsRaw !== "number") return fail("type", "qc.smallRoiPixels");
+    if (!Number.isInteger(pixelsRaw) || pixelsRaw < 1 || pixelsRaw > SMALL_ROI_VOXELS_MAX) return fail("range", "qc.smallRoiPixels");
+    smallRoiPixels = pixelsRaw;
+  }
+
   const labelsRaw = own(sel, "segmentLabels");
   if (!Array.isArray(labelsRaw)) return fail("type", "selection.segmentLabels");
   if (labelsRaw.length > SEGMENT_LABELS_MAX) return fail("range", "selection.segmentLabels");
@@ -335,7 +349,7 @@ export async function parseSpec(text: string): Promise<SpecParse> {
   const content: SpecContent = {
     kind,
     form: { fixedBinNumber, binCount, binWidth, resampleMm: resampleMm as number | null, families, units2d, planesAll, rangeMin, rangeMax, calibration, valueKind, ivhBinWidth, intensityRounding, settings },
-    qc: { smallRoi, lossy, smallRoiVoxels },
+    qc: { smallRoi, lossy, smallRoiVoxels, smallRoiPixels },
     selection: { segmentLabels: normalizeLabels(labels) },
   };
   const actual = await contentSha256(content);

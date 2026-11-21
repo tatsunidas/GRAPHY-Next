@@ -39,6 +39,8 @@ import java.util.Map;
  * @param planes        2D の単位で計算する断面。null・{@code ACQUISITION} は取得面（元のスライス。従来）だけ。
  *                      {@code ALL} は、取得面に加えて、患者の LPS 軸に揃えた 3 断面（Axial・Sagittal・Coronal）へ体積を
  *                      再スライスして計算する（2D の単位を選んでいないときは無視）
+ * @param smallRoiWarnPixels 小さい ROI の基準値（画素数、2D）。null は環境設定の値を使う（{@code smallRoiWarnVoxels} の 2D 版）。
+ *                      最大断面・スライス別（取得面と再スライスした断面）の判定に使う。計算結果のキャッシュには含めない
  */
 public record RoiFeatureRequest(
         String studyInstanceUid,
@@ -58,11 +60,24 @@ public record RoiFeatureRequest(
         Integer smallRoiWarnVoxels,
         String calibration,
         ValueKind.Spec valueSpec,
-        String planes) {
+        String planes,
+        Integer smallRoiWarnPixels) {
 
     public static final String PLANES_ACQUISITION = "ACQUISITION";
     public static final String PLANES_ALL = "ALL";
     public static final java.util.Set<String> PLANES = java.util.Set.of(PLANES_ACQUISITION, PLANES_ALL);
+
+    /** 2D の基準値の指定なし（従来の要求。環境設定の値）。 */
+    public RoiFeatureRequest(String studyInstanceUid, String sourceSeriesUid, String maskSeriesUid,
+                             int maskChannel, int channel, int timePoint, Map<String, String> settings,
+                             boolean recompute, java.util.Set<RoiMode> roiModes, java.util.List<Double> scales,
+                             String scaleNotation, java.util.List<String> scaleLabels, String scaleConversion,
+                             Double scaleCoefficient, Integer smallRoiWarnVoxels, String calibration,
+                             ValueKind.Spec valueSpec, String planes) {
+        this(studyInstanceUid, sourceSeriesUid, maskSeriesUid, maskChannel, channel, timePoint, settings,
+                recompute, roiModes, scales, scaleNotation, scaleLabels, scaleConversion, scaleCoefficient,
+                smallRoiWarnVoxels, calibration, valueSpec, planes, null);
+    }
 
     /** 断面の指定なし（従来の要求。取得面だけ）。 */
     public RoiFeatureRequest(String studyInstanceUid, String sourceSeriesUid, String maskSeriesUid,
@@ -73,7 +88,7 @@ public record RoiFeatureRequest(
                              ValueKind.Spec valueSpec) {
         this(studyInstanceUid, sourceSeriesUid, maskSeriesUid, maskChannel, channel, timePoint, settings,
                 recompute, roiModes, scales, scaleNotation, scaleLabels, scaleConversion, scaleCoefficient,
-                smallRoiWarnVoxels, calibration, valueSpec, null);
+                smallRoiWarnVoxels, calibration, valueSpec, null, null);
     }
 
     /** 全断面（取得面に加えて Axial・Sagittal・Coronal）を求めるか。 */
