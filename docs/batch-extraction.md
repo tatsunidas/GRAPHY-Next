@@ -29,13 +29,14 @@
 | Linux（deb） | `/opt/GRAPHY-Next/resources/cli/graphy-batch` |
 
 ```
-graphy-batch --album <アルバム名|ID> --spec a.json [--spec b.json …] --out <出力フォルダ> [--recompute] [--report <ファイル>]
+graphy-batch --album <アルバム名|ID> --spec a.json [--spec b.json …] --out <出力フォルダ> [--recompute] [--no-patient-id] [--report <ファイル>]
 ```
 
 - `--album`: アルバムの名前または ID。同じ名前が複数あるときは ID で指定します。
 - `--spec`: 保存した処理の定義。複数指定すると、指定した順に実行します。定義ごとに出力の接頭辞が違うことが必要です。
 - `--out`: 出力フォルダ。定義ごとのファイルと、結果の報告（`batch-cli-report.json`）が入ります。
 - `--recompute`: 計算済みの結果（キャッシュ）を使わず、計算し直します。
+- `--no-patient-id`: 結果の表に患者 ID の列を入れません。既定は、画面の書き出しと同じく入れます（同じ定義なら画面と同じ表になります）。表を共有・公開するときは、これで外してください。
 - `--data-dir`: データの置き場所（通常は指定しません。アプリと同じ場所を使います）。
 
 !!! warning "アプリを閉じて実行してください"

@@ -111,9 +111,9 @@ describe("runBatchCli", () => {
     expect(report.exitCode).toBe(0);
     expect(report.album).toEqual({ id: 7, name: "lung" });
     expect(report.specs.map((s) => [s.prefix, s.state, s.files.length, s.sha256])).toEqual([["ra", "done", 5, a.sha256], ["rb", "done", 5, b.sha256]]);
-    // 患者 ID は、被験者の対応表（_subjects_private.csv。画面の既定どおり別ファイル）にだけ入る。表・報告には入らない
+    // 患者 ID は、被験者の対応表（_subjects_private.csv）と、既定では結果の表（画面の書き出しの既定と同じ）に入る。報告・定義表・設定には入らない
     const withPid = [...log.files.entries()].filter(([, t]) => t.includes("P-1.2.1")).map(([k]) => k).sort();
-    expect(withPid).toEqual(["/out/ra_subjects_private.csv", "/out/rb_subjects_private.csv"]);
+    expect(withPid).toEqual(["/out/ra.csv", "/out/ra_subjects_private.csv", "/out/rb.csv", "/out/rb_subjects_private.csv"]);
   });
 
   it("失敗した定義があっても残りは続け、終了コードは 1", async () => {
@@ -198,6 +198,25 @@ describe("runBatchCli", () => {
     expect((await run("none")).code).toBe(EXIT_USAGE);
     expect((await run("dup")).code).toBe(EXIT_USAGE);
     expect(log.errors.join("\n")).toContain("8, 9");
+  });
+
+  it("患者 ID の列: 既定で含め（画面の書き出しと同じ）、includePatientId: false で列も値も無い。被験者の対応表は変わらない", async () => {
+    const header = (log: ReturnType<typeof fake>["log"]) => (log.files.get("/out/ra.csv") ?? "").split("\r\n")[0].split(",");
+    const withId = fake(pairs);
+    await putSpec(withId.log, "a.json", "ra");
+    await runBatchCli({ ...OPTS, specFiles: ["a.json"] }, withId.api, withId.io);
+    expect(header(withId.log)).toContain("PatientID");
+    expect(withId.log.lines.join("\n")).toContain("--no-patient-id");
+    const without = fake(pairs);
+    await putSpec(without.log, "a.json", "ra");
+    await runBatchCli({ ...OPTS, specFiles: ["a.json"], includePatientId: false }, without.api, without.io);
+    expect(header(without.log)).not.toContain("PatientID");
+    expect(without.log.lines.join("\n")).not.toContain("--no-patient-id");
+    // 列を除けば同じ表（PatientID の列以外は変わらない）
+    const cut = (csv: string, i: number) => csv.split("\r\n").map((l) => (l === "" ? l : l.split(",").filter((_, k) => k !== i).join(","))).join("\r\n");
+    const i = header(withId.log).indexOf("PatientID");
+    expect(cut(withId.log.files.get("/out/ra.csv")!.replace(/"/g, ""), i)).toBe(without.log.files.get("/out/ra.csv")!.replace(/"/g, ""));
+    expect(withId.log.files.get("/out/ra_subjects_private.csv")).toBe(without.log.files.get("/out/ra_subjects_private.csv"));
   });
 
   it("--recompute が要求に載る", async () => {
