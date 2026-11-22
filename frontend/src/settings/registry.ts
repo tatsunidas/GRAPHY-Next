@@ -182,6 +182,14 @@ const TEXTURE_CATEGORY: CategoryDef = {
   ],
 };
 
+// 中・右ボタンに割り当てられるツール（viewer/mouseBindings.ts）。
+const MOUSE_TOOL_OPTIONS: FieldOption[] = [
+  { value: "pan", labelKey: "settings.opt.mouse.pan" },
+  { value: "zoom", labelKey: "settings.opt.mouse.zoom" },
+  { value: "windowLevel", labelKey: "settings.opt.mouse.windowLevel" },
+  { value: "none", labelKey: "settings.opt.mouse.none" },
+];
+
 export const SETTINGS_REGISTRY: CategoryDef[] = [
   {
     id: "general",
@@ -361,6 +369,20 @@ export const SETTINGS_REGISTRY: CategoryDef[] = [
           },
           { key: "viewer.defaultZoom", labelKey: "settings.field.defaultZoom", type: "number", default: 100, min: 10, max: 800 },
           { key: "viewer.cineFps", labelKey: "settings.field.cineFps", type: "number", default: 10, min: 1, max: 60 },
+        ],
+      },
+      {
+        titleKey: "settings.sec.mouse",
+        fields: [
+          {
+            key: "mouse.middle",
+            labelKey: "settings.field.mouseMiddle",
+            type: "select",
+            default: "pan",
+            options: MOUSE_TOOL_OPTIONS,
+            helpKey: "settings.field.mouseButtons.help",
+          },
+          { key: "mouse.right", labelKey: "settings.field.mouseRight", type: "select", default: "zoom", options: MOUSE_TOOL_OPTIONS },
         ],
       },
       {
