@@ -17,7 +17,9 @@ import {
   setSource,
   smallRoi2dThresholdUnset,
   smallRoiThresholdUnset,
+  spacingMixText,
   summarize,
+  voxelSpacingMix,
 } from "./batchPairs";
 import { defaultRoiFeatureForm } from "./roiFeatureSettings";
 
@@ -293,5 +295,38 @@ describe("2D の小さい ROI の基準値", () => {
     expect(smallRoi2dThresholdUnset([res(null, 150)])).toBe(false);
     expect(smallRoi2dThresholdUnset([res(null, null, false)])).toBe(false);
     expect(smallRoi2dThresholdUnset([])).toBe(false);
+  });
+});
+
+describe("元画像の画素間隔がそろっているか（voxelSpacingMix）", () => {
+  const C = (a: "X" | "Y" | "Z") => `Diagnostics_DiagnosticsInitialImageVoxelDimension${a}`;
+  const r = (x: number | null, y: number | null, z: number | null) => ({
+    rows: [{ column: C("X"), value: x }, { column: C("Y"), value: y }, { column: C("Z"), value: z }],
+  }) as unknown as RoiFeatureResult;
+
+  it("そろっていれば mixed=false。z だけ違えば mixed=true で、軸ごとの範囲が出る", () => {
+    expect(voxelSpacingMix([r(0.7, 0.7, 2), r(0.7, 0.7, 2)]).mixed).toBe(false);
+    const m = voxelSpacingMix([r(0.7, 0.7, 1), r(0.7, 0.7, 3), r(0.7, 0.7, 3)]);
+    expect(m.mixed).toBe(true);
+    expect(m.perAxis).toEqual([{ min: 0.7, max: 0.7 }, { min: 0.7, max: 0.7 }, { min: 1, max: 3 }]);
+    expect(m.usable).toBe(3);
+    expect(spacingMixText(m)).toBe("x 0.7 mm、y 0.7 mm、z 1〜3 mm");
+  });
+  it("x・y だけ違うときも検出する。1 % 未満（丸め）は差にしない。1 % を超えれば差", () => {
+    expect(voxelSpacingMix([r(0.7, 0.7, 2), r(0.9, 0.7, 2)]).mixed).toBe(true);
+    expect(voxelSpacingMix([r(0.977, 0.977, 2), r(0.9766, 0.9766, 2)]).mixed).toBe(false);
+    expect(voxelSpacingMix([r(1, 1, 2), r(1.005, 1, 2)]).mixed).toBe(false);
+    expect(voxelSpacingMix([r(1, 1, 2), r(1.02, 1, 2)]).mixed).toBe(true);
+  });
+  it("取れない組（無い・0・NaN）は判定から外して未取得に数える。使える結果が 2 未満なら判定しない", () => {
+    const m = voxelSpacingMix([r(0.7, 0.7, 1), r(0.7, 0.7, 3), r(null, 0.7, 3), r(0.7, 0.7, 0), { rows: [] } as unknown as RoiFeatureResult]);
+    expect(m.usable).toBe(2);
+    expect(m.unknown).toBe(3);
+    expect(m.mixed).toBe(true);
+    expect(voxelSpacingMix([r(0.7, 0.7, 1)]).mixed).toBe(false);
+    expect(voxelSpacingMix([r(0.7, 0.7, 1), r(null, null, null)]).mixed).toBe(false);
+    const none = voxelSpacingMix([]);
+    expect(none).toEqual({ mixed: false, perAxis: [null, null, null], usable: 0, unknown: 0 });
+    expect(spacingMixText(none)).toBe("x —、y —、z —");
   });
 });

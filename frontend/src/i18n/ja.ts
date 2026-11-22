@@ -4325,6 +4325,8 @@ export const ja: Record<string, string> = {
   "roiFeat.plane.select": "2D の列に表示する断面",
   "roiFeat.plane.acquisition": "取得面",
   "roiFeat.tip.planeSelect": "表の「最大断面」「スライス平均」「画素数重み付き」の列に出す断面です。計算は変わらず、表示を切り替えます。3D の列はそのままです。",
+  "roiFeat.batch.spacing.warn": "元画像の画素間隔が組の間でそろっていません（{{text}}。{{n}} 組）。リサンプリングなしでは、間隔（スライス厚）の違いが形態・テクスチャの値に影響します。等方リサンプリングを使うか、間隔ごとに分けて解析してください。",
+  "roiFeat.batch.spacing.info": "元画像の画素間隔は組の間でそろっていませんが、{{r}} mm 等方に取り直して計算しています（{{text}}）。",
   "roiFeat.mode.note2d": "2D では形態（Morphology）と GLAM は計算せず、代わりに Shape2D を出します。2D のリサンプリングは面内だけ（z の値は使いません）。固定ビン数の離散化はスライスごとに決まるため、3D と同じビン数でも離散化の意味が違います。",
   "roiFeat.sliceProgress": "スライス {{done}} / {{total}}",
   "roiFeat.cancelNote2d": "スライス別の計算は、1 枚の切れ目で止まります。",

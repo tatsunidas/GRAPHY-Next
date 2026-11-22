@@ -4334,6 +4334,8 @@ export const en: Record<string, string> = {
   "roiFeat.plane.select": "Plane shown in the 2D columns",
   "roiFeat.plane.acquisition": "Acquisition plane",
   "roiFeat.tip.planeSelect": "The plane shown in the max-section, slice-mean and pixel-weighted columns. The computation is unchanged; only the display switches. The 3D column stays as is.",
+  "roiFeat.batch.spacing.warn": "The source images do not share the same voxel spacing across pairs ({{text}}; {{n}} pairs). Without resampling, spacing (slice thickness) differences affect shape and texture values. Use isotropic resampling, or analyse each spacing separately.",
+  "roiFeat.batch.spacing.info": "The source images do not share the same voxel spacing across pairs, but they were resampled to {{r}} mm isotropic for the computation ({{text}}).",
   "roiFeat.mode.note2d": "2D does not compute Morphology or GLAM; Shape2D is given instead. 2D resampling is in-plane only (z is not used). Fixed-bin-number discretisation is decided per slice, so the same bin count does not mean the same discretisation as in 3D.",
   "roiFeat.sliceProgress": "Slice {{done}} / {{total}}",
   "roiFeat.cancelNote2d": "The per-slice computation stops at a slice boundary.",
