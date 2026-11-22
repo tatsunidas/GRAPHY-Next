@@ -35,6 +35,8 @@ export interface CliOptions {
   specFiles: string[];
   outDir: string;
   recompute: boolean;
+  /** 結果の表に患者 ID の列を含める。省略は含める（画面の書き出しの既定と同じ。同じ定義なら画面と同じ表になる）。 */
+  includePatientId?: boolean;
   /** 報告 JSON の場所。省略は `<outDir>/batch-cli-report.json`。 */
   reportFile?: string;
   pollMs?: number;
@@ -191,12 +193,14 @@ export async function runBatchCli(opts: CliOptions, api: CliApi, io: CliIo): Pro
   const patientOf = new Map(studies.map((s) => [s.studyInstanceUid, s.patientId]));
   const subjects = assignSubjectCodes(uids, (u) => patientOf.get(u), studyUids);
 
+  const includePatientId = opts.includePatientId ?? true;
+  if (includePatientId) io.log("結果の表に患者 ID の列を含めます。表を共有・公開する前に、--no-patient-id で外すか、列を除いてください。");
   io.mkdirp(opts.outDir);
   const written = new Map<number, string[]>();
   const entries: QueueEntry[] = loaded.map((l, i) => ({ id: i + 1, spec: l.spec, enabled: true, state: "pending", message: null, files: 0 }));
   const final = await runQueue(entries, {
     baseRows: rows, baseForm: defaultRoiFeatureForm(),
-    output: { albumName: album.name, subjects, includePatientId: false, subjectsFile: true, bom: false },
+    output: { albumName: album.name, subjects, includePatientId, subjectsFile: true, bom: false },
     pollMs: opts.pollMs ?? 1000, isCancelled: () => false, recompute: opts.recompute,
   }, {
     submit: api.submit, get: api.get, results: api.results, cancel: api.cancel,

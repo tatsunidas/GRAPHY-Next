@@ -9,7 +9,17 @@ const cli = require("./batchCli");
 test("parseArgs: 必須の引数と複数の --spec", () => {
   const r = cli.parseArgs(["--album", "lung", "--spec", "a.json", "--spec", "b.json", "--out", "o", "--recompute", "--data-dir", "d", "--report", "r.json"]);
   assert.equal(r.ok, true);
-  assert.deepEqual(r.opts, { album: "lung", specs: ["a.json", "b.json"], out: "o", dataDir: "d", recompute: true, report: "r.json" });
+  assert.deepEqual(r.opts, { album: "lung", specs: ["a.json", "b.json"], out: "o", dataDir: "d", recompute: true, patientId: true, report: "r.json" });
+});
+
+test("parseArgs: 患者 ID の列は既定で含め、--no-patient-id で外す（他の引数と併用できる）", () => {
+  const base = ["--album", "lung", "--spec", "a.json", "--out", "o"];
+  assert.equal(cli.parseArgs(base).opts.patientId, true);
+  const r = cli.parseArgs([...base, "--no-patient-id", "--recompute"]);
+  assert.equal(r.ok, true);
+  assert.equal(r.opts.patientId, false);
+  assert.equal(r.opts.recompute, true);
+  assert.equal(cli.parseArgs(["--no-patient-id", ...base]).opts.patientId, false);
 });
 
 test("parseArgs: 足りない・不正な引数は断る", () => {
