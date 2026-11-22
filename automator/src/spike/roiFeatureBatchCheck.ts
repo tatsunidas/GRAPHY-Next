@@ -299,6 +299,8 @@ async function main(): Promise<void> {
     await page.screenshot({ path: path.join(OUT_DIR, "02-progress.png"), fullPage: true });
     const prog = await waitText(page, "batch-progress", /完了 — 6\/6 完了/, 600_000);
     console.log(`  progress: ${prog.replace(/\n/g, " ")}`);
+    // この合成データは全検査が同じ間隔（0.7×0.7×2 mm）なので、間隔の注意は出ない（負例。出る側は mixedSpacingCheck）
+    check((await page.getByTestId("batch-spacing-warn").count()) === 0 && (await page.getByTestId("batch-spacing-info").count()) === 0, "間隔がそろっているので、間隔の注意は出ない");
     await page.screenshot({ path: path.join(OUT_DIR, "03-done.png"), fullPage: true });
     const req = posted[posted.length - 1];
     check((req.pairs as unknown[]).length === 6 && (req.roiModes as string[]).join() === "WHOLE_3D", "全件実行は 6 組・3D だけ", req.roiModes);

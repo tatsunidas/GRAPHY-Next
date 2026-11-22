@@ -356,6 +356,7 @@ async function main(): Promise<void> {
 
   // 既定は、画面の書き出しと同じく患者 ID の列を含める（上の一致の検査が通っている）。注意の 1 行が出る
   check(A.stdout.includes("--no-patient-id"), "既定の実行は、患者 ID の列を含める旨の注意を出す");
+  check(!A.stdout.includes("画素間隔"), "間隔がそろった合成データでは、間隔の注意をログに出さない（出る側は frontend の単体）");
   // --no-patient-id: 表の PatientID 列と、定義表の PatientID の行が無く、そのほかは既定の出力から PatientID 列を除いたものと一致
   const outD = path.join(OUT_DIR, "cli-node-nopid");
   fs.rmSync(outD, { recursive: true, force: true });

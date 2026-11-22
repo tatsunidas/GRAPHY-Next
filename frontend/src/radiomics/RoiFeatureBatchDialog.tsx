@@ -32,6 +32,8 @@ import {
   setSource,
   smallRoi2dThresholdUnset,
   smallRoiThresholdUnset,
+  spacingMixText,
+  voxelSpacingMix,
   summarize,
   type PairRow,
 } from "./batchPairs";
@@ -374,6 +376,8 @@ export function RoiFeatureBatchDialog({
   };
 
   const unsetThreshold = smallRoiThresholdUnset(trial ? [trial.result] : (results ?? []).map((r) => r.result));
+  // 元画像の画素間隔が組の間でそろっているか（計算できた組の診断情報から）。VOI 統計は対象外
+  const spacingMix = kind === "voiStats" ? null : voxelSpacingMix(trial ? [trial.result] : (results ?? []).map((r) => r.result));
   const unsetThreshold2d = smallRoi2dThresholdUnset(trial ? [trial.result] : (results ?? []).map((r) => r.result));
 
   const close = () => {
@@ -582,6 +586,17 @@ export function RoiFeatureBatchDialog({
           {unsetThreshold && (qc.smallRoi !== "FLAG" || results || trial) && (
             <div style={{ ...note, color: "#7a4b00" }} data-testid="batch-unset-threshold">{t("roiFeat.batch.qc.unset")}</div>
           )}
+          {spacingMix?.mixed && (
+            form.resampleMm == null ? (
+              <div style={warnNote} data-testid="batch-spacing-warn">
+                ⚠ {t("roiFeat.batch.spacing.warn", { text: spacingMixText(spacingMix), n: spacingMix.usable })}
+              </div>
+            ) : (
+              <div style={note} data-testid="batch-spacing-info">
+                {t("roiFeat.batch.spacing.info", { r: form.resampleMm, text: spacingMixText(spacingMix) })}
+              </div>
+            )
+          )}
           {unsetThreshold2d && (qc.smallRoi !== "FLAG" || results || trial) && (
             <div style={{ ...note, color: "#7a4b00" }} data-testid="batch-unset-threshold-2d">{t("roiFeat.batch.qc.unset2d")}</div>
           )}
@@ -609,6 +624,7 @@ const footer: React.CSSProperties = { display: "flex", gap: 8, justifyContent: "
 const closeBtn: React.CSSProperties = { border: "none", background: "transparent", fontSize: 16, cursor: "pointer", color: "#666" };
 const section: React.CSSProperties = { fontWeight: 600, color: "#0b5cad", marginTop: 12, marginBottom: 4 };
 const note: React.CSSProperties = { color: "#6b7785", fontSize: 11, marginTop: 4, lineHeight: 1.5 };
+const warnNote: React.CSSProperties = { ...note, color: "#7a4b00" };
 const errStyle: React.CSSProperties = { color: "#b00020", marginTop: 8, whiteSpace: "pre-wrap" };
 const table: React.CSSProperties = { width: "100%", borderCollapse: "collapse", fontSize: 12 };
 const th: React.CSSProperties = { textAlign: "left", padding: "4px 6px", borderBottom: "1px solid #cdd5de", color: "#5a6672", fontWeight: 600 };

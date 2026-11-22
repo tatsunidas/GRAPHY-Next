@@ -191,6 +191,53 @@ export function smallRoi2dThresholdUnset(results: readonly RoiFeatureResult[]): 
   return with2d.length > 0 && with2d.every((r) => r.section?.roiSize?.smallRoiWarnVoxels == null && r.slices?.smallRoiWarnPixels == null);
 }
 
+/** 元画像の画素間隔（mm、リサンプリング前）の診断情報の列。 */
+const SPACING_COLUMNS = [
+  "Diagnostics_DiagnosticsInitialImageVoxelDimensionX",
+  "Diagnostics_DiagnosticsInitialImageVoxelDimensionY",
+  "Diagnostics_DiagnosticsInitialImageVoxelDimensionZ",
+] as const;
+
+/** 間隔の差とみなす相対差。DICOM の間隔は有限桁で書かれるため、1 % 未満（例 0.977 と 0.9766）は丸めとして差にしない。 */
+export const SPACING_MIX_TOLERANCE = 0.01;
+
+export interface VoxelSpacingMix {
+  /** いずれかの軸で、最大/最小 − 1 が許容を超える。使える結果が 2 未満なら false（比べる相手が無い）。 */
+  mixed: boolean;
+  /** 軸（x・y・z）ごとの最小・最大（mm）。使える結果が無ければ null。 */
+  perAxis: ({ min: number; max: number } | null)[];
+  /** 3 軸とも取れた結果の数。 */
+  usable: number;
+  /** 間隔が取れなかった（診断情報に無い・数でない・0 以下）結果の数。判定からは外す。 */
+  unknown: number;
+}
+
+/**
+ * 計算できた組の、元画像の画素間隔（診断情報）が組の間でそろっているか。形態・テクスチャの値は、リサンプリングしないと
+ * 間隔（スライス厚）の違いが乗るので、そろっていないことを画面・CLI で知らせるために使う。
+ */
+export function voxelSpacingMix(results: readonly RoiFeatureResult[]): VoxelSpacingMix {
+  const vals: number[][] = [];
+  let unknown = 0;
+  for (const r of results) {
+    const v = SPACING_COLUMNS.map((c) => r.rows.find((x) => x.column === c)?.value);
+    if (v.every((x): x is number => typeof x === "number" && Number.isFinite(x) && x > 0)) vals.push(v as number[]);
+    else unknown++;
+  }
+  const perAxis = [0, 1, 2].map((a) => (vals.length === 0 ? null : { min: Math.min(...vals.map((v) => v[a])), max: Math.max(...vals.map((v) => v[a])) }));
+  const mixed = vals.length >= 2 && perAxis.some((p) => p != null && p.max / p.min - 1 > SPACING_MIX_TOLERANCE);
+  return { mixed, perAxis, usable: vals.length, unknown };
+}
+
+/** 表示用の文字列（`x 0.7〜0.9 mm、y …、z 1〜3 mm`）。 */
+export function spacingMixText(m: VoxelSpacingMix): string {
+  const f = (n: number) => String(Number(n.toPrecision(4)));
+  return ["x", "y", "z"].map((a, i) => {
+    const p = m.perAxis[i];
+    return p == null ? `${a} —` : p.min === p.max ? `${a} ${f(p.min)} mm` : `${a} ${f(p.min)}〜${f(p.max)} mm`;
+  }).join("、");
+}
+
 /** ファイル名の接頭辞に使えない文字を `_` にする。空なら `roi-features-batch`。 */
 export function batchFileBase(prefix: string): string {
   const p = prefix.trim().replace(/[\\/:*?"<>|\s]/g, "_");
