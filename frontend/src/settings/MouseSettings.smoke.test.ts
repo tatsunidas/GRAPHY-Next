@@ -53,6 +53,8 @@ describe("設定 > マウスボタン", () => {
     await flush();
     expect(q("settings-field-mouse.middle")!.value).toBe("pan");
     expect(q("settings-field-mouse.right")!.value).toBe("zoom");
+    expect(q("settings-field-mouse.back")!.value).toBe("none");
+    expect(q("settings-field-mouse.forward")!.value).toBe("none");
     expect(saved).toHaveLength(0); // 開いただけでは何も保存しない
 
     const sel = q("settings-field-mouse.right")!;
@@ -61,8 +63,19 @@ describe("設定 > マウスボタン", () => {
       sel.dispatchEvent(new Event("change", { bubbles: true }));
     });
     await flush();
-    expect(saved).toEqual([{ "mouse.middle": "pan", "mouse.right": "windowLevel" }]);
-    expect(getMouseBindings()).toEqual({ middle: "pan", right: "windowLevel" });
+    expect(saved).toEqual([{ "mouse.middle": "pan", "mouse.right": "windowLevel", "mouse.back": "none", "mouse.forward": "none" }]);
+    expect(getMouseBindings()).toEqual({ middle: "pan", right: "windowLevel", back: "none", forward: "none" });
     expect(q("settings-field-mouse.right")!.value).toBe("windowLevel");
+
+    // 戻るボタンを割り当てる
+    const back = q("settings-field-mouse.back")!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")!.set!.call(back, "pan");
+      back.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await flush();
+    expect(getMouseBindings().back).toBe("pan");
+    expect(saved[saved.length - 1]["mouse.back"]).toBe("pan");
+    expect(q("settings-field-mouse.back")!.value).toBe("pan");
   });
 });

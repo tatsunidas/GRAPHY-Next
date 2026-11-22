@@ -383,6 +383,15 @@ export const SETTINGS_REGISTRY: CategoryDef[] = [
             helpKey: "settings.field.mouseButtons.help",
           },
           { key: "mouse.right", labelKey: "settings.field.mouseRight", type: "select", default: "zoom", options: MOUSE_TOOL_OPTIONS },
+          {
+            key: "mouse.back",
+            labelKey: "settings.field.mouseBack",
+            type: "select",
+            default: "none",
+            options: MOUSE_TOOL_OPTIONS,
+            helpKey: "settings.field.mouseSide.help",
+          },
+          { key: "mouse.forward", labelKey: "settings.field.mouseForward", type: "select", default: "none", options: MOUSE_TOOL_OPTIONS },
         ],
       },
       {
