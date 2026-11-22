@@ -102,6 +102,13 @@ public class RadiomicsMapEngine {
      * のもの。リサンプリングが有効なら元シリーズの格子とは異なり、そのときだけ
      * {@code resampling} に元の格子と逆変換が入る（{@link TextureResampling}）。
      * 一方 {@code ippByZ}/{@code sopPerZ} は<b>常に元シリーズの z</b> で並ぶ。
+     *
+     * <p>{@code normalPositionsMm} は、**計算に使う格子の各スライス**の、法線方向の位置（{@code IPP·法線}、mm、
+     * 向きは IOP の法線のまま）。取り直し（{@code rectified}）のときは取り直した格子の位置（元の IPP は使えない）、
+     * そうでなければ元のスライスの位置。Next のリサンプリングで格子が変わったとき、読み込みが失敗したときは null。
+     *
+     * <p>{@code originLps} は、計算に使う格子の (0,0,0) の画素中心の患者座標（LPS、mm）。取り直したときは取り直した格子の原点、
+     * そうでなければ先頭スライスの IPP。別の断面への再スライス（{@link LpsResampler}）に使う。分からないときは null。
      */
     public record LoadedVolume(
             ImagePlus image,
@@ -116,8 +123,55 @@ public class RadiomicsMapEngine {
             String[] sopPerZ,
             String frameOfReferenceUid,
             TextureResampling.Grid resampling,
-            boolean lossyCompressed) {
+            boolean lossyCompressed,
+            ValueCalibration valueCalibration,
+            double[] normalPositionsMm,
+            boolean rectified,
+            double[] originLps) {
+
+        /** 格子の原点の記録なし（従来の呼び出し元・試験用）。再スライスはできない。 */
+        public LoadedVolume(ImagePlus image, ImagePlus mask, int width, int height, int slices, int label,
+                            boolean hasMask, Calibration calibration, double[] imageOrientationPatient,
+                            double pixelSpacingRow, double pixelSpacingCol, Map<Integer, double[]> ippByZ,
+                            String[] sopPerZ, String frameOfReferenceUid, TextureResampling.Grid resampling,
+                            boolean lossyCompressed, ValueCalibration valueCalibration, double[] normalPositionsMm,
+                            boolean rectified) {
+            this(image, mask, width, height, slices, label, hasMask, calibration, imageOrientationPatient,
+                    pixelSpacingRow, pixelSpacingCol, ippByZ, sopPerZ, frameOfReferenceUid, resampling,
+                    lossyCompressed, valueCalibration, normalPositionsMm, rectified, null);
+        }
+
+        /**
+         * 値の種類・位置の記録なし（従来の呼び出し元・試験用）。{@code normalPositionsMm} は null（位置は IPP から求める）、
+         * 取り直しなし。
+         */
+        public LoadedVolume(ImagePlus image, ImagePlus mask, int width, int height, int slices, int label,
+                            boolean hasMask, Calibration calibration, double[] imageOrientationPatient,
+                            double pixelSpacingRow, double pixelSpacingCol, Map<Integer, double[]> ippByZ,
+                            String[] sopPerZ, String frameOfReferenceUid, TextureResampling.Grid resampling,
+                            boolean lossyCompressed, ValueCalibration valueCalibration) {
+            this(image, mask, width, height, slices, label, hasMask, calibration, imageOrientationPatient,
+                    pixelSpacingRow, pixelSpacingCol, ippByZ, sopPerZ, frameOfReferenceUid, resampling,
+                    lossyCompressed, valueCalibration, null, false, null);
+        }
+
+        /** 校正の記録なし（従来の呼び出し元・試験用）。 */
+        public LoadedVolume(ImagePlus image, ImagePlus mask, int width, int height, int slices, int label,
+                            boolean hasMask, Calibration calibration, double[] imageOrientationPatient,
+                            double pixelSpacingRow, double pixelSpacingCol, Map<Integer, double[]> ippByZ,
+                            String[] sopPerZ, String frameOfReferenceUid, TextureResampling.Grid resampling,
+                            boolean lossyCompressed) {
+            this(image, mask, width, height, slices, label, hasMask, calibration, imageOrientationPatient,
+                    pixelSpacingRow, pixelSpacingCol, ippByZ, sopPerZ, frameOfReferenceUid, resampling,
+                    lossyCompressed, ValueCalibration.UNSET, null, false, null);
+        }
     }
+
+    /**
+     * {@link #load} の {@code settings} に入れる、PET の校正の指定のキー（{@link RoiFeatureRequest#calibration}）。
+     * 無いときは校正を扱わない（従来の経路。テクスチャのマップなどは今も Bq/mL のまま）。
+     */
+    public static final String CALIBRATION_SETTING = "graphy.calibration";
 
     /** ターゲット（＋任意マスク）から 1 特徴のマップを計算する。 */
     public MapResult compute(TextureSeriesRequest req, TextureProgress progress) throws IOException {
@@ -181,6 +235,7 @@ public class RadiomicsMapEngine {
                     + ", nC=" + layout.nC() + ", nT=" + layout.nT() + ")");
         }
         int nZ = sel.size();
+        final int srcNZ = nZ; // 元のスライス数（取り直しやリサンプリングで nZ が変わる前）
         String[] sopPerZ = new String[nZ];
         int[] framePerZ = new int[nZ];
         Map<Integer, double[]> ippByZ = new HashMap<>(); // k(連続) → IPP
@@ -191,6 +246,8 @@ public class RadiomicsMapEngine {
             double[] ipp = ippByZGlobal.get(c.z());
             if (ipp != null) ippByZ.put(k, ipp);
         }
+
+        ValueCalibration valueCal = resolveCalibration(settings, sopPerZ);
 
         // ターゲットボリュームを積む（dcm4che で画素をデコード。圧縮なら PixelCodec で伸長）。
         int w = 0, h = 0;
@@ -210,7 +267,7 @@ public class RadiomicsMapEngine {
                 throw new IllegalArgumentException("値の無い画素（NaN）を含むシリーズはテクスチャを計算できません"
                         + "（z=" + z + " に " + nan + " 画素）。Parametric Map の NaN は背景などの「値なし」です。");
             }
-            procs.add(loaded.ip());
+            procs.add(valueCal.scales() ? scaled(loaded.ip(), valueCal.scale()) : loaded.ip());
             if (cal == null && loaded.cal() != null && loaded.cal().calibrated()) cal = loaded.cal();
             w = loaded.ip().getWidth();
             h = loaded.ip().getHeight();
@@ -248,6 +305,7 @@ public class RadiomicsMapEngine {
         ImagePlus mask = buildMask(studyInstanceUid, maskSeriesUid, maskChannel, w, h, nZ, label,
                 layout.imageOrientationPatient(), ippByZ, targetLayout);
 
+        double[] rectifiedOrigin = null;
         if (rectify) {
             // 不等間隔・欠損・チルト: 直交・等間隔の格子へ取り直す（画像は線形補間、マスクは最近傍）。
             // 取り直したボリュームは元のスライスと対応しない（ippByZ / sopPerZ は元のまま）。
@@ -267,6 +325,7 @@ public class RadiomicsMapEngine {
                 is2.addSlice(new ij.process.FloatProcessor(rr.width(), rr.height(), rr.slices()[z]));
                 ms2.addSlice(new ByteProcessor(rr.width(), rr.height(), rr.mask()[z], null));
             }
+            rectifiedOrigin = rr.origin();
             ImagePlus newMask = new ImagePlus("texture-mask", ms2);
             newMask.setProp(PROP_GEOMETRY_ALIGNED, mask.getProp(PROP_GEOMETRY_ALIGNED));
             mask = newMask;
@@ -322,9 +381,74 @@ public class RadiomicsMapEngine {
                     source[0], source[1], source[2]);
         }
 
+        // 計算格子の各スライスの法線方向の位置。取り直したときは、取り直した格子の位置（先頭は最小位置、dz 刻み）。
+        double[] nrmForPos = normalOf(layout.imageOrientationPatient());
+        double[] normalPositions = null;
+        double[] originLps = null;
+        if (nrmForPos != null && grid == null && ippByZ != null) {
+            if (rectify) {
+                originLps = rectifiedOrigin;
+                double tMin = Double.POSITIVE_INFINITY;
+                for (double[] ipp : ippList(ippByZ, srcNZ)) {
+                    tMin = Math.min(tMin, dot(ipp, nrmForPos));
+                }
+                normalPositions = new double[nZ];
+                for (int m = 0; m < nZ; m++) {
+                    normalPositions[m] = tMin + m * finalCal.pixelDepth;
+                }
+            } else if (ippByZ.size() == nZ) {
+                originLps = ippByZ.get(0) == null ? null : ippByZ.get(0).clone();
+                normalPositions = new double[nZ];
+                for (int z = 0; z < nZ; z++) {
+                    double[] ipp = ippByZ.get(z);
+                    normalPositions[z] = ipp == null ? Double.NaN : dot(ipp, nrmForPos);
+                }
+            }
+        }
         return new LoadedVolume(img, mask, w, h, nZ, label, hasMask, finalCal,
                 layout.imageOrientationPatient(), layout.pixelSpacingRow(), layout.pixelSpacingCol(),
-                ippByZ, sopPerZ, layout.frameOfReferenceUID(), grid, lossy);
+                ippByZ, sopPerZ, layout.frameOfReferenceUID(), grid, lossy, valueCal, normalPositions, rectify, originLps);
+    }
+
+    /** 画素値に係数を掛ける（float のまま。NaN は NaN のまま）。PET の SUV 校正だけが使う。 */
+    private static ImageProcessor scaled(ImageProcessor ip, double scale) {
+        FloatProcessor fp = ip instanceof FloatProcessor f ? f : ip.convertToFloatProcessor();
+        float[] px = (float[]) fp.getPixels();
+        for (int i = 0; i < px.length; i++) {
+            px[i] = (float) (px[i] * scale);
+        }
+        return fp;
+    }
+
+    /** 1 インスタンスの DICOM ヘッダ（画素の前まで）。読めなければ null。 */
+    private Attributes headerOf(String sop) throws IOException {
+        Path path = storage.resolveInstanceFile(sop);
+        if (path == null) {
+            return null;
+        }
+        try (DicomInputStream in = new DicomInputStream(path.toFile())) {
+            return in.readDatasetUntilPixelData();
+        }
+    }
+
+    /**
+     * 読み込みで画素値に掛ける校正を決める。{@code settings} に {@link #CALIBRATION_SETTING} が無ければ何もしない（従来）。
+     * 決め方は {@link ValueCalibration#resolve}（ヘッダだけから決める純粋な関数）。
+     */
+    private ValueCalibration resolveCalibration(Map<String, String> settings, String[] sopPerZ) throws IOException {
+        String req = settings == null ? null : settings.get(CALIBRATION_SETTING);
+        if (req == null) {
+            return ValueCalibration.UNSET;
+        }
+        Attributes first = headerOf(sopPerZ[0]);
+        if (first == null) {
+            throw new IllegalArgumentException("校正に必要な DICOM ヘッダを読めません（sop=" + sopPerZ[0] + "）");
+        }
+        Attributes last = null;
+        if (sopPerZ.length > 1 && !sopPerZ[0].equals(sopPerZ[sopPerZ.length - 1])) {
+            last = headerOf(sopPerZ[sopPerZ.length - 1]);
+        }
+        return ValueCalibration.resolve(req, first, last);
     }
 
     /** {@link #load} で揃えた材料からマップを計算する（compute の後半）。 */

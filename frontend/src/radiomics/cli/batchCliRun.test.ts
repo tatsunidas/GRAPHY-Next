@@ -2,7 +2,7 @@
  * Copyright (c) Visionary Imaging Services, Inc. All rights reserved.
  * Author: Tatsuaki Kobayashi
  */
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import type { RoiFeatureResult, RoiFeatureRow } from "../../api";
 import type { BatchJobState, BatchPair, BatchPairResult, BatchPairStatusRow, BatchRequest, BatchStatus } from "../batchApi";
 import { buildSpec, defaultSpecContent, specText, type SpecContent } from "../batchSpec";
@@ -22,9 +22,16 @@ const row = (column: string, value: number): RoiFeatureRow => {
   const us = column.indexOf("_");
   return { column, family: column.slice(0, us), feature: column.slice(us + 1), ibsi: "X", value, notes: [] };
 };
+
+/** 試験ごとに、結果 i の元画像の画素間隔（x, y, z）を差し込む。null なら診断情報の列を付けない（従来の結果と同じ）。 */
+let spacingOf: (i: number) => [number, number, number] | null = () => null;
+const spacingRows = (i: number): RoiFeatureRow[] => {
+  const s = spacingOf(i);
+  return s ? (["X", "Y", "Z"] as const).map((a, k) => row(`Diagnostics_DiagnosticsInitialImageVoxelDimension${a}`, s[k])) : [];
+};
 const result = (v: number, voi = false): RoiFeatureResult => ({
   radiomicsjVersion: "2.7.0", computedAt: "2026-11-02T00:00:00Z", fromCache: false, label: 1,
-  rows: voi ? VOI_STATS_COLUMNS.map((c, i) => row(c, v + i)) : [row("Stat_mean", v), row("Stat_max", v + 1)],
+  rows: voi ? VOI_STATS_COLUMNS.map((c, i) => row(c, v + i)) : [row("Stat_mean", v), row("Stat_max", v + 1), ...spacingRows(v - 10)],
   discretisation: { fixedBinNumber: true, nBins: 32, binWidth: 25, ivhMode: 0, ivhBinCount: 1000, ivhBinWidth: 2.5 },
   provenance: { graphyNextVersion: "0.5.1", radiomicsjVersion: "2.7.0", extractedAt: "2026-11-02T00:00:00.1Z", settingsSha256: "ab".repeat(32) },
   settingsProperties: "INT_binCount=32\n",
@@ -44,7 +51,7 @@ function fake(pairs: BatchPair[], mode: (i: number) => Mode = () => "ok", albums
       index, pair: p, state: "DONE", failureKind: null, error: null, fromCache: false, elapsedMs: 1, qcFlags: [],
     }));
     return {
-      jobId: id, state, elapsedMs: 1, total: prs.length, done: prs.length, failed: 0, skipped: 0, notRun: 0, cancelled: 0,
+      jobId: id, state, elapsedMs: 1, total: prs.length, done: prs.length, failed: 0, skipped: 0, notRun: 0, cancelled: 0, qcSkipped: 0,
       stopReason: j.mode === "qc" ? "SMALL_ROI" : null, stopKind: j.mode === "qc" ? "QC" : null, stopIndex: null, pairs: prs,
     };
   };
@@ -111,9 +118,9 @@ describe("runBatchCli", () => {
     expect(report.exitCode).toBe(0);
     expect(report.album).toEqual({ id: 7, name: "lung" });
     expect(report.specs.map((s) => [s.prefix, s.state, s.files.length, s.sha256])).toEqual([["ra", "done", 5, a.sha256], ["rb", "done", 5, b.sha256]]);
-    // 患者 ID は、被験者の対応表（_subjects_private.csv。画面の既定どおり別ファイル）にだけ入る。表・報告には入らない
+    // 患者 ID は、被験者の対応表（_subjects_private.csv）と、既定では結果の表（画面の書き出しの既定と同じ）に入る。報告・定義表・設定には入らない
     const withPid = [...log.files.entries()].filter(([, t]) => t.includes("P-1.2.1")).map(([k]) => k).sort();
-    expect(withPid).toEqual(["/out/ra_subjects_private.csv", "/out/rb_subjects_private.csv"]);
+    expect(withPid).toEqual(["/out/ra.csv", "/out/ra_subjects_private.csv", "/out/rb.csv", "/out/rb_subjects_private.csv"]);
   });
 
   it("失敗した定義があっても残りは続け、終了コードは 1", async () => {
@@ -131,7 +138,7 @@ describe("runBatchCli", () => {
 
   it("QC で止まった定義だけがあれば終了コード 2（表は書かない）", async () => {
     const { api, io, log } = fake(pairs, () => "qc");
-    await putSpec(log, "a.json", "ra", { qc: { smallRoi: "STOP", lossy: "FLAG", smallRoiVoxels: 5 } });
+    await putSpec(log, "a.json", "ra", { qc: { smallRoi: "STOP", lossy: "FLAG", smallRoiVoxels: 5, smallRoiPixels: null } });
     const r = await runBatchCli({ ...OPTS, specFiles: ["a.json"] }, api, io);
     expect(r.code).toBe(EXIT_ATTENTION);
     expect(r.report.specs[0].state).toBe("qcStopped");
@@ -179,7 +186,7 @@ describe("runBatchCli", () => {
   it("読めない定義・同じ接頭辞の定義・定義なしは終了コード 3", async () => {
     const { api, io, log } = fake(pairs);
     await putSpec(log, "a.json", "same");
-    await putSpec(log, "b.json", "same", { qc: { smallRoi: "STOP", lossy: "FLAG", smallRoiVoxels: 3 } });
+    await putSpec(log, "b.json", "same", { qc: { smallRoi: "STOP", lossy: "FLAG", smallRoiVoxels: 3, smallRoiPixels: null } });
     expect((await runBatchCli({ ...OPTS, specFiles: ["a.json", "missing.json"] }, api, io)).code).toBe(EXIT_USAGE);
     const dup = await runBatchCli({ ...OPTS, specFiles: ["a.json", "b.json"] }, api, io);
     expect(dup.code).toBe(EXIT_USAGE);
@@ -200,6 +207,25 @@ describe("runBatchCli", () => {
     expect(log.errors.join("\n")).toContain("8, 9");
   });
 
+  it("患者 ID の列: 既定で含め（画面の書き出しと同じ）、includePatientId: false で列も値も無い。被験者の対応表は変わらない", async () => {
+    const header = (log: ReturnType<typeof fake>["log"]) => (log.files.get("/out/ra.csv") ?? "").split("\r\n")[0].split(",");
+    const withId = fake(pairs);
+    await putSpec(withId.log, "a.json", "ra");
+    await runBatchCli({ ...OPTS, specFiles: ["a.json"] }, withId.api, withId.io);
+    expect(header(withId.log)).toContain("PatientID");
+    expect(withId.log.lines.join("\n")).toContain("--no-patient-id");
+    const without = fake(pairs);
+    await putSpec(without.log, "a.json", "ra");
+    await runBatchCli({ ...OPTS, specFiles: ["a.json"], includePatientId: false }, without.api, without.io);
+    expect(header(without.log)).not.toContain("PatientID");
+    expect(without.log.lines.join("\n")).not.toContain("--no-patient-id");
+    // 列を除けば同じ表（PatientID の列以外は変わらない）
+    const cut = (csv: string, i: number) => csv.split("\r\n").map((l) => (l === "" ? l : l.split(",").filter((_, k) => k !== i).join(","))).join("\r\n");
+    const i = header(withId.log).indexOf("PatientID");
+    expect(cut(withId.log.files.get("/out/ra.csv")!.replace(/"/g, ""), i)).toBe(without.log.files.get("/out/ra.csv")!.replace(/"/g, ""));
+    expect(withId.log.files.get("/out/ra_subjects_private.csv")).toBe(without.log.files.get("/out/ra_subjects_private.csv"));
+  });
+
   it("--recompute が要求に載る", async () => {
     const { api, io, log } = fake(pairs);
     await putSpec(log, "a.json", "ra");
@@ -218,5 +244,28 @@ describe("exitCodeOf", () => {
     expect(exitCodeOf(["attention", "done"])).toBe(2);
     expect(exitCodeOf(["failed", "done"])).toBe(1);
     expect(exitCodeOf(["qcStopped", "failed", "attention"])).toBe(1);
+  });
+});
+
+describe("元画像の画素間隔のそろい（ログ）", () => {
+  afterEach(() => { spacingOf = () => null; });
+  it("そろっていなければ、リサンプリングなしの定義は警告、ありの定義は情報を 1 行ログに出す。そろっていれば出さない", async () => {
+    spacingOf = (i) => [0.7, 0.7, i === 0 ? 1 : 3];
+    const { api, io, log } = fake(pairs);
+    await putSpec(log, "none.json", "rn", { form: { ...defaultSpecContent().form, resampleMm: null } });
+    await putSpec(log, "iso.json", "ri");
+    await runBatchCli({ ...OPTS, specFiles: ["none.json", "iso.json"] }, api, io);
+    const spacing = log.lines.filter((l) => l.includes("画素間隔"));
+    expect(spacing.length).toBe(2);
+    expect(spacing[0]).toContain("⚠ rn");
+    expect(spacing[0]).toContain("z 1〜3 mm");
+    expect(spacing[1]).toContain("ri");
+    expect(spacing[1]).not.toContain("⚠");
+    expect(spacing[1]).toContain("1 mm 等方");
+    spacingOf = () => [0.7, 0.7, 3];
+    const same = fake(pairs);
+    await putSpec(same.log, "none.json", "rn", { form: { ...defaultSpecContent().form, resampleMm: null } });
+    await runBatchCli({ ...OPTS, specFiles: ["none.json"] }, same.api, same.io);
+    expect(same.log.lines.some((l) => l.includes("画素間隔"))).toBe(false);
   });
 });

@@ -5,6 +5,7 @@
 import { describe, expect, it } from "vitest";
 import {
   anyFamilyOn, applyScale36, isScale36, isSixStatistics, defaultRoiFeatureForm, parseSigmaList, roiFeatureScaleRequest, roiFeatureSettings, ROI_FEATURE_FAMILIES, splitFilteredFamily,
+  applyAllFamilies, applyTexture, isAllFamilies, isTexture,
 } from "./roiFeatureSettings";
 import { discretisationOf } from "./roiFeatureCsv";
 
@@ -29,12 +30,12 @@ const SETTING_PARAMS = new Set([
 ]);
 
 describe("roiFeatureSettings", () => {
-  it("既定は RadiomicsJ の既定（ビン数 32、GLAM・Shape2D はオフ、リサンプリングなし）", () => {
+  it("既定: ビン数 32、GLAM・Shape2D はオフ、リサンプリングは等方 1 mm", () => {
     const s = roiFeatureSettings(defaultRoiFeatureForm());
     expect(s.BOOL_USE_FixedBinNumber).toBe("1");
     expect(s.INT_binCount).toBe("32");
     expect(s.DOUBLE_binWidth).toBeUndefined();
-    expect(s.DOUBLEARRAY_resamplingFactorXYZ).toBeUndefined();
+    expect(s.DOUBLEARRAY_resamplingFactorXYZ).toBe("1,1,1");
     expect(s.BOOL_enableGLAM).toBe("0");
     expect(s.BOOL_enableShape2D).toBe("0");
     for (const k of ["Morphological", "GLCM", "GLRLM", "GLSZM", "GLDZM", "NGTDM", "NGLDM", "Fractal",
@@ -110,5 +111,23 @@ describe("LoG フィルタ", () => {
     expect(isScale36({ ...p, scalesText: "0, 2" })).toBe(false);
     expect(isScale36({ ...p, families: { ...p.families, GLCM: true } })).toBe(false);
     expect(isScale36({ ...p, logByRadius: false })).toBe(false);
+  });
+});
+
+describe("プリセット: テクスチャ・すべて", () => {
+  it("テクスチャは IBSI の 6 族だけ（Fractal・強度ヒストグラム・IVH を含めない）", () => {
+    const f = applyTexture(defaultRoiFeatureForm());
+    expect(Object.entries(f.families).filter(([, on]) => on).map(([k]) => k).sort()).toEqual(["GLCM", "GLDZM", "GLRLM", "GLSZM", "NGLDM", "NGTDM"]);
+    expect(isTexture(f)).toBe(true);
+    expect(isAllFamilies(f)).toBe(false);
+  });
+  it("すべては、2D 形状だけ 2D の単位があるときに有効", () => {
+    const f3 = applyAllFamilies(defaultRoiFeatureForm());
+    expect(f3.families.Shape2D).toBe(false);
+    expect(Object.entries(f3.families).filter(([, on]) => !on)).toEqual([["Shape2D", false]]);
+    const f2 = applyAllFamilies({ ...defaultRoiFeatureForm(), units2d: ["MAX_SECTION_2D"] });
+    expect(Object.values(f2.families).every(Boolean)).toBe(true);
+    expect(isAllFamilies(f2)).toBe(true);
+    expect(isAllFamilies(f3)).toBe(true);
   });
 });

@@ -3,9 +3,15 @@
  *
  * 実行:  cd automator && GRAPHY_DENTAL_PYBIN=<ultralytics・torch・jupyter_server・ipykernel の入った venv の bin> \
  *          GRAPHY_DENTAL_DCM=<Modality PX の DICOM 1 枚> \
+ *          GRAPHY_DENTAL_WEIGHTS_DIR=<teeth-seg.pt（と dx-det.pt）を置いたフォルダ> GRAPHY_DENTAL_REF=<ref.json> GRAPHY_DENTAL_BAD_TEETH=<固定と違う歯の重み> \
  *          GRAPHY_AUTOMATOR_HTTP_PORT=28710 GRAPHY_AUTOMATOR_SCP_PORT=28711 GRAPHY_AUTOMATOR_VITE_PORT=28713 \
- *          npx tsx src/spike/dentalPanoPluginCheck.ts [ok|no-spacing|missing-deps|missing-weights]
- *   ok              : 既定のまま（選択欄・チェックは触らない）事前チェック → 本処理 → 結果。本体の ROI が実際に置かれる
+ *          npx tsx src/spike/dentalPanoPluginCheck.ts [ok|ok-dx|bad-weights|no-spacing|missing-deps|missing-weights]
+ *   重みは WEIGHTS_DIR から一時の HOME（~/.graphy-next/models/vis-dental-pano/）へ symlink する（本物の HOME の重みに依存しない）。
+ *   REF: 同じ重み・同じ画素を、本体を通さず ultralytics で直接動かした結果 {teeth:[{fdi,conf,bbox}], dx:[{cls,conf,bbox}]}（真値の代わり）。
+ *   ok              : 診断の重み無し（dx-det.pt を置かない）。既定のまま（選択欄・チェックは触らない）事前チェック → 本処理 → 結果。本体の ROI が実際に置かれる
+ *   ok-dx           : 診断の重みあり。結果が REF と一致（本数・番号・クラス・枠）、チャートの印・表・レポート・SR の所見数・ROI の数が結果と一致
+ *   bad-weights     : 歯の重みが固定した sha256 と違う（GRAPHY_DENTAL_BAD_TEETH）。事前チェックが止まり、本処理は出ない（負例）。理由文は画面の言語（日本語か英語）だけ
+ *   ok / ok-dx      : 各操作部品・見出し・診断の行・チャートの 32 マス・印・凡例に tooltip（title）があり、言語が画面とそろう。ホバーの撮影は best effort（標準の tooltip は OS が描く）
  *   no-spacing      : 画素間隔の無い DICOM（GRAPHY_DENTAL_DCM に指定）で、本体が ROI を置けない（no-geometry）とき、理由が画面に出て、チャートとレポートは使える（負例）
  *   missing-deps    : ultralytics・torch などが何も入っていない環境（GRAPHY_DENTAL_BAREBIN: jupyter_server と ipykernel だけの venv の bin）で、
  *                     事前チェックが不足と導入コマンドを出して止まる → 入れた（.pth で GRAPHY_DENTAL_PYBIN の site-packages を見せる）あと、
@@ -27,6 +33,10 @@ import { AUTOMATOR_ROOT } from "../fixtures/manifest.js";
 import { consentWindow, createChecker, openAnalysisPlugin } from "./computeSpikeShared.js";
 
 const MODE = process.argv[2] ?? "ok";
+const JA = /[\u3040-\u30ff\u4e00-\u9fff]/;
+// 結果の画面で title（tooltip）を持つべき部品（ui.test.mjs の TIP_IDS と同じ）
+const TIP_IDS = ["dp-run", "dp-chart-title", "dp-overlays-title", "dp-show-teeth", "dp-show-dx", "dp-clear", "dp-dx-title", "dp-dx-row",
+  "dp-report-title", "dp-report", "dp-copy", "dp-save-sr", "dp-save-csv", "dp-publish", "dp-meta"];
 const PLUGIN_ID = "vis-dental-pano";
 const OUT_DIR = path.join(AUTOMATOR_ROOT, ".results", `dental-pano-check-${MODE}`);
 const AUDIT = path.join(DESKTOP_RUN_DATA_DIR, "compute-audit.jsonl");
@@ -68,6 +78,18 @@ async function main(): Promise<void> {
   process.env.PATH = `${MODE === "missing-deps" ? (bare as string) : bin}${path.delimiter}${process.env.PATH}`;
   const emptyHome = fs.mkdtempSync(path.join(os.tmpdir(), "dental-home-"));
   if (MODE === "missing-weights") process.env.HOME = emptyHome; // 重みの置き場 ~/.graphy-next/models/... を空にする
+  else {
+    const wdir = process.env.GRAPHY_DENTAL_WEIGHTS_DIR;
+    if (!wdir || !fs.existsSync(path.join(wdir, "teeth-seg.pt"))) throw new Error("GRAPHY_DENTAL_WEIGHTS_DIR に teeth-seg.pt を置いたフォルダを指定してください");
+    const bad = process.env.GRAPHY_DENTAL_BAD_TEETH;
+    if (MODE === "bad-weights" && (!bad || !fs.existsSync(bad))) throw new Error("bad-weights には GRAPHY_DENTAL_BAD_TEETH（固定と違う歯の重み）が要る");
+    if (MODE === "ok-dx" && !fs.existsSync(path.join(wdir, "dx-det.pt"))) throw new Error("ok-dx には WEIGHTS_DIR に dx-det.pt が要る");
+    const md = path.join(emptyHome, ".graphy-next", "models", PLUGIN_ID);
+    fs.mkdirSync(md, { recursive: true });
+    fs.symlinkSync(MODE === "bad-weights" ? (bad as string) : path.join(wdir, "teeth-seg.pt"), path.join(md, "teeth-seg.pt"));
+    if (MODE === "ok-dx") fs.symlinkSync(path.join(wdir, "dx-det.pt"), path.join(md, "dx-det.pt"));
+    process.env.HOME = emptyHome;
+  }
   fs.mkdirSync(OUT_DIR, { recursive: true });
   installPlugin();
   fs.rmSync(AUDIT, { force: true });
@@ -162,6 +184,20 @@ async function main(): Promise<void> {
       await viewer.screenshot({ path: path.join(OUT_DIR, "viewer-env-fixed.png") });
       await viewer.getByTestId("dp-run").click();
     }
+    if (MODE === "bad-weights") {
+      await viewer.getByTestId("dp-env").waitFor({ state: "visible", timeout: 120_000 });
+      const prob = (await viewer.getByTestId("dp-env-problem").textContent()) ?? "";
+      await viewer.screenshot({ path: path.join(OUT_DIR, "viewer-bad-weights.png") });
+      const st0 = await state(viewer);
+      check(/teeth-seg\.pt/.test(prob) && /(sha256|固定した版|pinned|differs)/i.test(prob), "固定した版と違う歯の重みが理由つきで止まる", prob.slice(0, 200));
+      const uiJa = JA.test((await viewer.getByTestId("dp-run").textContent()) ?? "");
+      check(uiJa ? JA.test(prob) && !/does not match/.test(prob) : /does not match the pinned version/.test(prob) && !JA.test(prob), `理由文が画面の言語（${uiJa ? "日本語" : "英語"}）だけで出る（もう一方の言語が混ざらない）`, prob.slice(0, 200));
+      check(st0.phase === "idle" && !(await viewer.getByTestId("dp-result").isVisible()), "止まったとき本処理は出ない（結果の欄も出ない）", st0.phase);
+      const events0 = fs.readFileSync(AUDIT, "utf8").trim().split("\n").map((l) => JSON.parse(l));
+      check(events0.filter((e: { event: string }) => e.event === "egress-requested").length === 1, "監査: 送信の要求は事前チェックの 1 件だけ（画像は出ていない）");
+      if (summary() > 0) process.exitCode = 1;
+      return;
+    }
     if (MODE === "missing-weights") {
       await viewer.getByTestId("dp-env").waitFor({ state: "visible", timeout: 120_000 });
       const box = (await viewer.getByTestId("dp-env").textContent()) ?? "";
@@ -202,13 +238,73 @@ async function main(): Promise<void> {
     const nTeeth: number = res.teeth?.length ?? 0;
     check(nTeeth >= 20 && nTeeth <= 32, "歯が 20〜32 本検出される（この画像は 26 本前後）", nTeeth);
     check(res.teeth?.every((t: { fdi: number }) => t.fdi >= 11 && t.fdi <= 48 && t.fdi % 10 >= 1 && t.fdi % 10 <= 8), "番号はすべて永久歯の FDI");
-    check(res.dx === null, "診断モデルが無いので dx は null（空配列ではない）", res.dx);
+    const wantDx = MODE === "ok-dx";
+    check(wantDx ? Array.isArray(res.dx) : res.dx === null, wantDx ? "診断モデルがあるので dx は配列" : "診断モデルが無いので dx は null（空配列ではない）", res.dx);
+    check(String(res.model).includes("teeth=teeth-seg.pt@75dd697a") && String(res.model).includes(wantDx ? "dx=dx-det.pt@62a498a7" : "dx=none"), "使った重みの版（sha256 の先頭）が結果に残る", res.model);
+    const nDx: number = res.dx?.length ?? 0;
+    if (wantDx) {
+      const refPath = process.env.GRAPHY_DENTAL_REF;
+      if (!refPath || !fs.existsSync(refPath)) throw new Error("ok-dx には GRAPHY_DENTAL_REF が要る");
+      const ref = JSON.parse(fs.readFileSync(refPath, "utf8")) as { teeth: { fdi: number; bbox: number[] }[]; dx: { cls: string; bbox: number[] }[] };
+      const near = (a: number[], b: number[]) => a.every((v, i) => Math.abs(v - b[i]) <= 3);
+      check(res.teeth.length === ref.teeth.length && ref.teeth.every((r) => res.teeth.some((t: { fdi: number; bbox: number[] }) => t.fdi === r.fdi && near(t.bbox, r.bbox))), "歯: 本数・番号・枠が、直接動かした結果（参照）と一致（枠の差 3 px 以内）", { app: res.teeth.length, ref: ref.teeth.length });
+      check(nDx === ref.dx.length && ref.dx.every((r) => res.dx.some((d: { cls: string; bbox: number[] }) => d.cls === r.cls && near(d.bbox, r.bbox))), "診断: 件数・クラス・枠が、直接動かした結果（参照）と一致（枠の差 3 px 以内）", { app: res.dx?.map((d: { cls: string }) => d.cls), ref: ref.dx.map((d) => d.cls) });
+      check(res.dx.every((d: { fdi: number | null; overlap: number }) => d.fdi !== null && d.overlap > 0.5), "どの診断も、重なりの大きい歯に割り当てられている（歯を特定できずが 0 件）", res.dx.map((d: { fdi: number | null; overlap: number }) => `${d.fdi}:${d.overlap.toFixed(2)}`));
+    }
     const detected = await viewer.locator('[data-testid^="fdi-"][data-state="detected"]').count();
     const missing = await viewer.locator('[data-testid^="fdi-"][data-state="missing"]').count();
     check(detected === nTeeth && detected + missing === 32, "チャート: 検出の数が結果と一致し、合計 32 マス", { detected, missing, nTeeth });
     const report = await viewer.getByTestId("dp-report").inputValue();
-    check(new RegExp(`(検出した歯: ${nTeeth} 本|Detected teeth: ${nTeeth} )`).test(report) && /(診断モデルは使っていません|No diagnosis model was used)/.test(report), "レポートの本数と『診断モデル無し』が結果と一致（本体のロケールの言語で）", report.slice(0, 120));
+    const noModelText = /(診断モデルは使っていません|No diagnosis model was used)/.test(report);
+    check(new RegExp(`(検出した歯: ${nTeeth} 本|Detected teeth: ${nTeeth} )`).test(report) && noModelText === !wantDx, wantDx ? "レポートの本数が結果と一致し、『診断モデル無し』が出ていない" : "レポートの本数と『診断モデル無し』が結果と一致（本体のロケールの言語で）", report.slice(0, 200));
+    if (wantDx) {
+      const pairs = new Set<string>(res.dx.map((d: { fdi: number; cls: string }) => `${d.fdi}:${d.cls}`));
+      check((await viewer.locator("[data-dx-key]").count()) === pairs.size, "チャート: 診断の印の数が、（歯, クラス）の組の数と一致", { marks: await viewer.locator("[data-dx-key]").count(), pairs: pairs.size });
+      check((await viewer.getByTestId("dp-dx-row").count()) === nDx, "診断の表の行数が結果の件数と一致", await viewer.getByTestId("dp-dx-row").count());
+      for (const g of new Set<string>(res.dx.map((d: { cls: string }) => d.cls))) {
+        const teeth = [...new Set<number>(res.dx.filter((d: { cls: string }) => d.cls === g).map((d: { fdi: number }) => d.fdi))].sort((a, b) => a - b);
+        check(teeth.every((f) => report.includes(String(f))), `レポートに ${g} の歯の番号が全部載る`, { g, teeth });
+      }
+    }
     check(((await viewer.getByTestId("dp-disclaimer").textContent()) ?? "").length > 20, "結果が出た後も免責が残る");
+
+    console.log("\n[4b] tooltip（各機能の補足）");
+    const ids = wantDx ? TIP_IDS : TIP_IDS.filter((i) => i !== "dp-dx-row");
+    const noTitle: string[] = await viewer.evaluate((list: string[]) => list.filter((id) => {
+      const els = Array.from(document.querySelectorAll(`[data-testid="${id}"]`));
+      return !els.length || els.some((e) => !(e.getAttribute("title") ?? "").trim());
+    }), ids);
+    check(noTitle.length === 0, "操作部品・見出し・診断の行に title（tooltip）がある", noTitle);
+    const cells: { id: string; t: string }[] = await viewer.evaluate(() => Array.from(document.querySelectorAll('[data-testid^="fdi-"]')).map((g) => ({ id: g.getAttribute("data-testid") ?? "", t: g.querySelector(":scope > title")?.textContent ?? "" })));
+    check(cells.length === 32 && cells.every((c) => c.t.trim()), "チャートの 32 マスすべてに <title>", cells.filter((c) => !c.t.trim()).map((c) => c.id));
+    const detectedCells = cells.filter((c) => res.teeth.some((t: { fdi: number }) => `fdi-${t.fdi}` === c.id));
+    check(detectedCells.length === nTeeth && detectedCells.every((c) => c.t.includes(`FDI ${c.id.slice(4)}`) && /(confidence|信頼度)/.test(c.t)), "検出したマスの tooltip に FDI と信頼度が入る", detectedCells.slice(0, 1));
+    const legend: string[] = await viewer.evaluate(() => Array.from(document.querySelectorAll('[data-testid^="legend-"]')).map((g) => g.querySelector("title")?.textContent ?? ""));
+    check(legend.length === 4 && legend.every((t) => t.trim().length > 10), "凡例の 4 項目に tooltip", legend.length);
+    if (wantDx) {
+      const marks: string[] = await viewer.evaluate(() => Array.from(document.querySelectorAll("[data-dx-key]")).map((r) => r.querySelector("title")?.textContent ?? ""));
+      check(marks.length > 0 && marks.every((t) => /(歯単位|tooth, not the exact lesion)/.test(t)), "診断の印の tooltip に『枠は歯単位で病変の位置ではない』が入る", marks.length);
+    }
+    // 本体の画面の部品（ツールバーなど）の title を混ぜない: プラグインの窓の中（実行ボタンを含む親）だけを数える
+    const titles: string[] = await viewer.evaluate(() => {
+      const root = document.querySelector('[data-testid="dp-run"]')?.parentElement ?? document.createElement("div");
+      return Array.from(root.querySelectorAll("[title]")).map((e) => e.getAttribute("title") ?? "").concat(Array.from(root.querySelectorAll("svg title")).map((e) => e.textContent ?? ""));
+    });
+    const jaCount = titles.filter((t) => JA.test(t)).length;
+    check(titles.length >= 40 && (jaCount === 0 || jaCount === titles.length), "tooltip の言語が画面とそろい、日本語と英語が混ざらない", { total: titles.length, ja: jaCount });
+    // ホバー（best effort）: 標準の tooltip は OS が描くので撮れないことがある。撮れたら見る。撮れなくても失敗にはしない
+    try {
+      const box = await viewer.getByTestId(wantDx ? "fdi-16" : "dp-run").boundingBox();
+      if (box) {
+        await viewer.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+        await viewer.waitForTimeout(2_500);
+        const { execFileSync } = await import("node:child_process");
+        execFileSync("xwd", ["-root", "-display", process.env.DISPLAY ?? ":0", "-out", path.join(OUT_DIR, "tooltip-hover.xwd")], { timeout: 20_000 });
+        console.log("  （ホバーの X 画面を tooltip-hover.xwd に保存。PNG に直して、tooltip が写っているかを目で見る）");
+      }
+    } catch {
+      console.log("  （ホバーの X 画面の撮影はできなかった。tooltip の見た目は未確認）");
+    }
 
     if (MODE === "no-spacing") {
       console.log("\n[5] 本体が ROI を置けない画像（画素間隔なし）");
@@ -223,20 +319,30 @@ async function main(): Promise<void> {
 
     console.log("\n[5] 画像への重ね表示（既定のまま）");
     const after = await annotationCount(viewer);
-    check(st.overlay?.placed === nTeeth && st.overlay?.failed === 0, "歯の輪郭がすべて置かれた（失敗 0）", st.overlay);
-    check(after - before === nTeeth, "本体の注釈が歯の数だけ増えた（実際に置かれている）", { before, after, nTeeth });
+    check(st.overlay?.placed === nTeeth + nDx && st.overlay?.failed === 0, "歯の輪郭と診断の枠がすべて置かれた（失敗 0）", st.overlay);
+    check(after - before === nTeeth + nDx, "本体の注釈が歯と診断の数だけ増えた（実際に置かれている）", { before, after, nTeeth, nDx });
+    if (wantDx) {
+      await viewer.getByTestId("dp-show-dx").uncheck();
+      await viewer.waitForTimeout(800);
+      check((await annotationCount(viewer)) - before === nTeeth, "診断の枠のチェックだけを外すと、歯の輪郭だけが残る", (await annotationCount(viewer)) - before);
+      await viewer.getByTestId("dp-show-dx").check();
+      await viewer.waitForTimeout(800);
+      check((await annotationCount(viewer)) - before === nTeeth + nDx, "チェックを戻すと診断の枠が再び置かれる");
+    }
     const firstFdi: number = res.teeth[0].fdi;
     await viewer.getByTestId(`fdi-${firstFdi}`).click();
     await viewer.waitForTimeout(500);
     check((await state(viewer)).selectedFdi === firstFdi, "チャートの歯を押すと、その歯が選ばれる", (await state(viewer)).selectedFdi);
     await viewer.screenshot({ path: path.join(OUT_DIR, "viewer-selected.png") });
     await viewer.getByTestId("dp-show-teeth").uncheck();
+    if (wantDx) await viewer.getByTestId("dp-show-dx").uncheck();
     await viewer.waitForTimeout(800);
     const off = await annotationCount(viewer);
-    check(off === before, "輪郭のチェックを外すと注釈が元の数に戻る", { before, off });
+    check(off === before, "チェックを全部外すと注釈が元の数に戻る", { before, off });
     await viewer.getByTestId("dp-show-teeth").check();
+    if (wantDx) await viewer.getByTestId("dp-show-dx").check();
     await viewer.waitForTimeout(800);
-    check((await annotationCount(viewer)) - before === nTeeth, "チェックを戻すと再び置かれる");
+    check((await annotationCount(viewer)) - before === nTeeth + nDx, "チェックを戻すと再び置かれる");
     await viewer.screenshot({ path: path.join(OUT_DIR, "viewer-result-final.png") });
 
     console.log("\n[6] 保存");
@@ -244,7 +350,10 @@ async function main(): Promise<void> {
     const dlg = viewer.getByRole("button", { name: "Save", exact: true });
     await dlg.waitFor({ state: "visible", timeout: 15_000 });
     const dlgText = (await viewer.locator("body").innerText()).replace(/\s+/g, " ");
-    check(/Measurement groups \(lesions\) 0/.test(dlgText) && /Finding texts 4/.test(dlgText), "SR の確認ダイアログ: 計測グループ 0・所見 4（偽の計測を入れていない）");
+    const classes = new Set<string>((res.dx ?? []).map((d: { cls: string }) => d.cls)).size;
+    const wantFindings = 3 + classes; // 検出した歯・検出されなかった歯・注意 + （dx なし: 診断の候補の注記 1 件 / dx あり: 見つかったクラスごとに 1 件）
+    const findingsExpected = wantDx ? wantFindings : 4;
+    check(/Measurement groups \(lesions\) 0/.test(dlgText) && new RegExp(`Finding texts ${findingsExpected}\\b`).test(dlgText), `SR の確認ダイアログ: 計測グループ 0・所見 ${findingsExpected}（偽の計測を入れていない）`, dlgText.match(/Finding texts \d+/)?.[0]);
     await dlg.click();
     await viewer.waitForFunction(() => (window as unknown as { __dentalPanoState?: { sr?: unknown } }).__dentalPanoState?.sr !== undefined, null, { timeout: 30_000 });
     const sr = (await state(viewer)).sr;
@@ -264,7 +373,7 @@ async function main(): Promise<void> {
     throw e;
   } finally {
     await driver.stop();
-    fs.rmSync(emptyHome, { recursive: true, force: true });
+    fs.rmSync(emptyHome, { recursive: true, force: true }); // 一時の HOME（重みは symlink なので実体は消えない）
   }
   if (summary() > 0) process.exitCode = 1;
 }

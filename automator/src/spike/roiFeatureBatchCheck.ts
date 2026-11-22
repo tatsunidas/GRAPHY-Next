@@ -31,6 +31,7 @@ import { DesktopDriver } from "../driver/desktopDriver.js";
 import { resetDb } from "../backend/dbReset.js";
 import { importPaths } from "../fixtures/importFixtures.js";
 import { AUTOMATOR_ROOT } from "../fixtures/manifest.js";
+import { openAllGroups } from "./openGroups.js";
 import { dismissUpdateDialog } from "./dismissUpdateDialog.js";
 import { PY, PY_FLAGS } from "./pythonCmd.js";
 
@@ -158,6 +159,11 @@ async function waitText(page: Page, testId: string, re: RegExp, timeoutMs: numbe
   throw new Error(`「${re}」にならない: ${last} / 進み: ${prog}`);
 }
 
+async function caseLabelInputsOf(page: Page): Promise<{ value: string; placeholder: string }[]> {
+  return page.locator('[data-testid^="batch-caselabel-"]').evaluateAll((els) =>
+    els.map((e) => ({ value: (e as HTMLInputElement).value, placeholder: (e as HTMLInputElement).placeholder })));
+}
+
 async function main(): Promise<void> {
   fs.mkdirSync(OUT_DIR, { recursive: true });
   const synths = [0, 1, 2, 3].map((i) => makeSynth(i, PATIENT_IDS[i]));
@@ -263,7 +269,14 @@ async function main(): Promise<void> {
     check(!(await page.getByTestId(`batch-include-${swapped}`).isChecked()), "要確認の組は選ぶまで対象に入らない");
     check(await page.getByTestId(`batch-source-${swapped}`).isVisible(), "要確認の組に元画像の選択が出る");
     await page.screenshot({ path: path.join(OUT_DIR, "01-review.png"), fullPage: true });
+    // 表を開いた直後（どの行も未入力）: 欄は空のまま、行ごとに違う「予定のラベル」を placeholder に出す（全行が C001 に見えない）
+    const firstInputs = await caseLabelInputsOf(page);
+    check(firstInputs.length === 5 && firstInputs.every((x) => x.value === ""), "症例ラベルの欄は、開いた直後は 5 行とも空", firstInputs);
+    check(new Set(firstInputs.map((x) => x.placeholder)).size === 5
+      && firstInputs.map((x) => x.placeholder).join(",") === "C001,C002,C003,C004,C005", "予定のラベル（placeholder）は行ごとに違い、C001 から並ぶ", firstInputs.map((x) => x.placeholder));
+    await page.screenshot({ path: path.join(OUT_DIR, "01b-planned-labels.png"), fullPage: true });
 
+    let plannedLabels: string[] = [];
     console.log("\n[3b] 1 組だけ試す（ファイルは書かない）");
     await page.getByTestId("batch-trial").click();
     const trialText = await waitText(page, "batch-trial-result", /特徴量を計算しました/, 180_000);
@@ -271,6 +284,7 @@ async function main(): Promise<void> {
     check(nCols >= 150, "試行で 150 列以上の特徴量を計算", trialText);
     check(((await page.evaluate("window.__roiDownloads.length")) as number) === 0, "試行ではファイルを書かない");
     check(posted.length === 1 && (posted[0].pairs as unknown[]).length === 1, "試行は 1 組だけ送る", posted[0]?.pairs);
+    check((posted[0].settings as Record<string, string>).DOUBLEARRAY_resamplingFactorXYZ === "1,1,1", "既定のまま送った設定は、等方 1 mm のリサンプリング", posted[0]?.settings);
 
     console.log("\n[4] 要確認の組を選んで一括実行 → 書き出し");
     await page.getByTestId(`batch-source-${swapped}`).selectOption(trueSource);
@@ -278,11 +292,15 @@ async function main(): Promise<void> {
     check(await page.getByTestId(`batch-include-${swapped}`).isChecked(), "元画像を選ぶと対象に入る");
     const sum1 = await page.getByTestId("batch-summary").innerText();
     check(/対象 6/.test(sum1), "対象 6", sum1);
+    // 実行前の症例ラベル（入力済み・振り済みの値があればそれ、空なら予定のラベル＝placeholder）。書き出しの CaseLabel と比べる
+    plannedLabels = (await caseLabelInputsOf(page)).map((x) => x.value || x.placeholder);
     await page.getByTestId("batch-run").click();
     await page.waitForTimeout(600);
     await page.screenshot({ path: path.join(OUT_DIR, "02-progress.png"), fullPage: true });
     const prog = await waitText(page, "batch-progress", /完了 — 6\/6 完了/, 600_000);
     console.log(`  progress: ${prog.replace(/\n/g, " ")}`);
+    // この合成データは全検査が同じ間隔（0.7×0.7×2 mm）なので、間隔の注意は出ない（負例。出る側は mixedSpacingCheck）
+    check((await page.getByTestId("batch-spacing-warn").count()) === 0 && (await page.getByTestId("batch-spacing-info").count()) === 0, "間隔がそろっているので、間隔の注意は出ない");
     await page.screenshot({ path: path.join(OUT_DIR, "03-done.png"), fullPage: true });
     const req = posted[posted.length - 1];
     check((req.pairs as unknown[]).length === 6 && (req.roiModes as string[]).join() === "WHOLE_3D", "全件実行は 6 組・3D だけ", req.roiModes);
@@ -299,13 +317,15 @@ async function main(): Promise<void> {
       "5 ファイルの名前（表・定義表・設定・定義・被験者の対応表）", dl.map((f) => f.name));
     check(!!features && !!subjectsPrivate, "表と被験者の対応表がある");
     check(!dl.some((f) => f.text.includes(PATIENT_NAME)), "どのファイルにも患者名が無い");
-    check(!dl.filter((f) => f !== subjectsPrivate).some((f) => f.text.includes("SYNTHBATCH")), "患者 ID は被験者の対応表以外のファイルに入らない");
+    // 患者 ID は既定で表にも入る（利用者の要望。画面に警告を常に出す）。定義表・設定・定義には入らない
+    check(!dl.filter((f) => f !== subjectsPrivate && f !== features).some((f) => f.text.includes("SYNTHBATCH")), "患者 ID は、被験者の対応表と結果の表だけに入る（定義表・設定・定義には入らない）");
+    check(!!features && features.text.includes("SYNTHBATCH"), "既定では、結果の表にも患者 ID が入る");
     if (features && subjectsPrivate) {
       const feat = parseFeatures(features.text);
       const col = (n: string) => feat.header.indexOf(n);
       check(feat.rows.length === 6, "表は 6 行（送った組の数）", feat.rows.length);
       check(features.head.join() !== "239,187,191", "BOM なし");
-      check(!feat.header.includes("PatientID"), "既定では PatientID の列が無い");
+      check(feat.header[1] === "PatientID" && feat.rows.every((r) => r[1].startsWith("SYNTHBATCH")), "既定では PatientID の列が表の 2 列目にある", feat.header.slice(0, 3));
       check(feat.rows.every((r) => r[col("RowStatus")] === "DONE"), "状態はすべて DONE");
       check(feat.rows.map((r) => r[col("SubjectCode")]).join() === "S001,S001,S001,S001,S002,S002",
         "SubjectCode: 患者 A の 4 組が S001、患者 B の 2 組が S002", feat.rows.map((r) => r[col("SubjectCode")]));
@@ -322,7 +342,7 @@ async function main(): Promise<void> {
       for (const r of feat.rows) {
         const direct = await apiFeatures(base, {
           studyInstanceUid: r[col("StudyInstanceUID")], sourceSeriesUid: r[col("SourceSeriesUID")], maskSeriesUid: r[col("MaskSeriesUID")],
-          maskChannel: Number(r[col("Roi_MaskChannel")]), channel: 0, timePoint: 0, settings: req.settings, recompute: true,
+          maskChannel: Number(r[col("Roi_MaskChannel")]), channel: 0, timePoint: 0, settings: req.settings, valueSpec: req.valueSpec, recompute: true,
         });
         const names = feat.header.slice(start);
         const values = r.slice(start).map(Number);
@@ -334,6 +354,7 @@ async function main(): Promise<void> {
       check(compared === 6 && mismatched === 0, "6 行すべてで、同じ組の API 直呼び（キャッシュなし）と全列の差 0", { compared, mismatched });
       const labels = feat.rows.map((r) => r[0]);
       check(new Set(labels).size === 6 && labels[0] === "C001", "症例ラベルが C001… と重複なしで振られる", labels);
+      check(JSON.stringify([...plannedLabels].sort()) === JSON.stringify([...labels].sort()), "実行前に表示した予定のラベルと、書き出した CSV の症例ラベルが同じ集合", { plannedLabels, labels });
     }
 
     console.log("\n[5] 取り消しと続きからの再実行（重い設定）");
@@ -382,12 +403,19 @@ async function main(): Promise<void> {
     const put = (v: string) => api(base, "/api/settings", {
       method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ "texture.SmallRoiWarnVoxels": v }),
     });
-    const reopen = async () => {
+    // 既定は等方 1 mm のリサンプリング。この検査の QC の予測値（ROI のボクセル数）は元の格子のものなので、開き直したら「なし」にする
+    // （既定のままの経路は、最初の実行と、既定の定義の SHA-256 の確認で通す）
+    const reopen = async (keepDefaults = false) => {
       await page.getByTestId("batch-close").click();
       await page.waitForTimeout(500);
       await btn.click();
       await page.getByTestId("batch-row-5").waitFor({ state: "visible", timeout: 30_000 });
       await page.waitForTimeout(1500);
+      await openAllGroups(page); // ③ 値の扱い・④ QC は既定で閉じている。中の入力を触るので開く
+      if (!keepDefaults) {
+        await page.getByTestId("batch-resampling").selectOption("none");
+        await page.waitForTimeout(300);
+      }
     };
     const bincount = page.getByTestId("batch-bincount").locator("input");
     const radio = (id: string, n: number) => page.getByTestId(id).locator('input[type="radio"]').nth(n);
@@ -460,7 +488,7 @@ async function main(): Promise<void> {
         const fc = (n: string) => feat.rows[i][feat.header.indexOf(n)];
         const direct = await apiFeatures(base, {
           studyInstanceUid: fc("StudyInstanceUID"), sourceSeriesUid: fc("SourceSeriesUID"), maskSeriesUid: fc("MaskSeriesUID"),
-          maskChannel: Number(fc("Roi_MaskChannel")), channel: 0, timePoint: 0, settings: reqNow.settings, recompute: true,
+          maskChannel: Number(fc("Roi_MaskChannel")), channel: 0, timePoint: 0, settings: reqNow.settings, valueSpec: reqNow.valueSpec, recompute: true,
         });
         const names = feat.header.slice(featureStart(feat.header));
         const values = feat.rows[i].slice(featureStart(feat.header)).map(Number);
@@ -595,11 +623,19 @@ async function main(): Promise<void> {
     check(featA.rows.length === 2 && /^[0-9a-f]{64}$/.test(provA), "手で設定して実行: 2 行・設定の SHA-256 が出る", provA);
 
     // 開き直す → 既定に戻る → 定義を読み込む
-    await reopen();
+    await reopen(true);
     check(await bincount.inputValue() === "32" && (await page.getByTestId("batch-labels").inputValue()) === "", "開き直すと欄は既定");
+    check(await page.getByTestId("batch-resampling").inputValue() === "iso" && await page.getByTestId("batch-resample-mm").locator("input").inputValue() === "1",
+      "既定のリサンプリングは等方 1 mm");
+    check(await page.getByTestId("batch-out-patientid").isChecked() && await page.getByTestId("batch-out-patientid-warn").isVisible(),
+      "既定では「患者 ID を表に含める」がオンで、警告が見える");
+    await page.screenshot({ path: path.join(OUT_DIR, "10-defaults.png"), fullPage: true });
     const shaDefault = await page.getByTestId("batch-spec-sha").getAttribute("title");
     check(shaDefault !== shownA, "既定の定義の SHA-256 は保存した定義と違う");
-    check(shaDefault === "9e08bec6fc61105a4113e5ea626ac8640c405c1b7ec31343b0b928419e43dced", "基準値の無い既定の定義の SHA-256 は、基準値の項目を足す前の値と同じ（実アプリ）", shaDefault);
+    // 校正（PET）と値の種類の項目が増えたので、新しい既定の定義は calibration=auto と valueKind=auto を含む。
+    // 正準 JSON のキーを足し引きして別（Python の hashlib）で求めた SHA-256 と同じ。校正も値の種類も無い従来の定義の値 9e08bec6…、
+    // 校正だけがある定義の値 f54302dd… は、batchSpec.test.ts が固定値で守る（読み込んでも変わらない）。
+    check(shaDefault === "f0f8273683f4304a247ca1ccad7d54687be5fa5ab313c4ce2613feb1776de81c", "既定の定義の SHA-256 は、校正（auto）・値の種類（auto）・リサンプリング 1 mm を含む正準 JSON を独立に求めた値と同じ（実アプリ）", shaDefault);
     await page.getByTestId("batch-spec-file").setInputFiles(path.join(OUT_DIR, savedSpec.name));
     await waitText(page, "batch-info", /読み込みました/, 20_000);
     await page.waitForTimeout(400);
@@ -688,12 +724,13 @@ async function main(): Promise<void> {
     };
     const rangeMin = page.getByTestId("batch-range-min");
     const rangeMax = page.getByTestId("batch-range-max");
-    const familyBoxes = page.getByTestId("batch-settings").locator('input[type="checkbox"]');
+    // 族のチェックボックスだけ（計算の単位の欄の「全腫瘍（3D）」などは含めない）
+    const familyBoxes = page.getByTestId("batch-settings").locator('input[type="checkbox"][data-testid^="batch-family-"]');
     await reopen();
     await page.getByTestId("batch-prefix").fill("rangecheck");
     check((await page.getByTestId("batch-preset").inputValue()) === "custom", "プリセットは既定で「自分で選ぶ」");
     const presetValues = await page.getByTestId("batch-preset").locator("option").evaluateAll((os) => os.map((o) => (o as HTMLOptionElement).value));
-    check(presetValues.join() === "custom,six", "一括抽出のプリセットに「36 特徴」は出ない（LoG が前提のため）", presetValues);
+    check(presetValues.join() === "custom,six,texture,all", "一括抽出のプリセットは 6 統計・テクスチャ・すべての族で、「36 特徴」は出ない（LoG が前提のため）", presetValues);
     check((await rangeMin.inputValue()) === "" && (await rangeMax.inputValue()) === "", "範囲の欄は既定で空");
 
     console.log("  -- 9a. プリセット「6 統計」");
@@ -765,7 +802,7 @@ async function main(): Promise<void> {
     for (const r of featR.rows) {
       const direct = await apiFeatures(base, {
         studyInstanceUid: r[cR("StudyInstanceUID")], sourceSeriesUid: r[cR("SourceSeriesUID")], maskSeriesUid: r[cR("MaskSeriesUID")],
-        maskChannel: Number(r[cR("Roi_MaskChannel")]), channel: 0, timePoint: 0, settings: reqR.settings, recompute: true,
+        maskChannel: Number(r[cR("Roi_MaskChannel")]), channel: 0, timePoint: 0, settings: reqR.settings, valueSpec: reqR.valueSpec, recompute: true,
       });
       const names = featR.header.slice(startR);
       const values = r.slice(startR).map(Number);
@@ -805,6 +842,139 @@ async function main(): Promise<void> {
     await page.getByTestId("batch-spec-file").setInputFiles(path.join(OUT_DIR, "range_reversed.json"));
     await waitText(page, "batch-error", /範囲外.*form\.range/, 20_000);
     check((await rangeMin.inputValue()) === "-850.5" && (await rangeMax.inputValue()) === "", "下限が上限より大きい定義は範囲外として断られ、欄は変わらない（負例）");
+
+    console.log("  -- 10. 2D の単位・全断面（一括抽出の縦長の 1 表）");
+    await reopen();
+    await page.getByTestId("batch-preset").selectOption("six");
+    await page.waitForTimeout(300);
+    check(await page.getByTestId("batch-family-Shape2D").isDisabled() && !(await page.getByTestId("batch-family-Shape2D").isChecked()), "2D の単位が無いと Shape2D は選べない");
+    check((await page.getByTestId("batch-planes").count()) === 0, "2D の単位が無いと断面の選択は出ない");
+    await page.getByTestId("batch-unit-MAX_SECTION_2D").check();
+    await page.getByTestId("batch-unit-SLICES_2D").check();
+    await page.getByTestId("batch-planes-all").check();
+    check(!(await page.getByTestId("batch-family-Shape2D").isDisabled()), "2D の単位を選ぶと Shape2D が選べる");
+    await page.getByTestId("batch-family-Shape2D").check();
+    check(/RowKey/.test(await page.getByTestId("batch-units-help").innerText()), "RowKey の使い方の説明が出る");
+    const opts10 = await page.getByTestId("batch-preset").locator("option").allInnerTexts();
+    check(opts10.some((t) => /^テクスチャ/.test(t)) && opts10.some((t) => /^すべての族/.test(t)), "プリセットにテクスチャとすべての族がある", opts10);
+    const sha10 = await shaOf();
+    await page.screenshot({ path: path.join(OUT_DIR, "16-units-form.png"), fullPage: true });
+    await page.getByTestId("batch-run").click();
+    await waitText(page, "batch-progress", /完了 — 5\/5 完了/, 900_000);
+    const req10 = posted[posted.length - 1];
+    check((req10.roiModes as string[]).join() === "WHOLE_3D,MAX_SECTION_2D,SLICES_2D" && req10.planes === "ALL", "送った要求: 3 単位・断面 ALL", [req10.roiModes, req10.planes]);
+    await page.getByTestId("batch-prefix").fill("units2d");
+    await page.getByTestId("batch-write").click();
+    const dl10 = await takeDownloads(page, 6);
+    for (const f of dl10) fs.writeFileSync(path.join(OUT_DIR, f.name), f.text);
+    check(dl10.map((f) => f.name).sort().join() === ["units2d.csv", "units2d_definitions.csv", "units2d_radiomicsj.properties", "units2d_radiomicsj_2d.properties", "units2d_spec.json", "units2d_subjects_private.csv"].sort().join(), "6 ファイル（2D の設定ファイルが増える）", dl10.map((f) => f.name));
+    const t10 = parseFeatures(dl10.find((f) => f.name === "units2d.csv")!.text);
+    const c10 = (n: string) => t10.header.indexOf(n);
+    check(["Unit", "PlaneSource", "Plane", "RowKey", "Roi_PlaneTiltDeg", "Roi_PositionMm", "Roi_AreaMm2", "Roi_Pixels"].every((n) => c10(n) > 0), "単位の列がある");
+    const keys10 = t10.rows.map((r) => r[c10("RowKey")]);
+    check(new Set(keys10).size === keys10.length, "RowKey は全行で一意", keys10.length);
+    const spec10 = JSON.parse(dl10.find((f) => f.name === "units2d_spec.json")!.text) as { sha256: string; form: { units: string[]; planes: string } };
+    check(spec10.sha256 === sha10 && spec10.form.units.join() === "MAX_SECTION_2D,SLICES_2D" && spec10.form.planes === "ALL" && t10.rows.every((r) => r[c10("Provenance_SpecSha256")] === sha10), "定義の units・planes・SHA-256 が画面・全行と一致");
+    // 基準: 同じ組を API 直呼び（同じ設定・3 単位・全断面）で計算し、期待する行（単位・断面・位置・画素数・平均）を作る
+    const MEAN10 = "IntensityBasedStatistical_Mean";
+    interface Sec10 { positionMm: number; pixels: number; rows: Row[]; record: { plane?: string } }
+    interface Sl10 { rows: { positionMm: number; pixels: number; rows: Row[] }[]; record: { plane?: string } }
+    interface Res10 { rows: Row[]; section?: Sec10; slices?: Sl10; planeResults?: { plane: string; section?: Sec10 | null; slices?: Sl10 | null; error?: string | null }[] }
+    const pairsDone = [...new Set(t10.rows.map((r) => `${r[c10("StudyInstanceUID")]}|${r[c10("MaskSeriesUID")]}|${r[c10("Roi_MaskChannel")]}`))];
+    check(pairsDone.length === 5, "5 組", pairsDone.length);
+    let rowsWant = 0;
+    let rowsOk = 0;
+    let meanDiff = 0;
+    const planesCovered = new Set<string>();
+    for (const key of pairsDone) {
+      const [study, mask, ch] = key.split("|");
+      const mine = t10.rows.filter((r) => r[c10("StudyInstanceUID")] === study && r[c10("MaskSeriesUID")] === mask && r[c10("Roi_MaskChannel")] === ch);
+      const src = mine[0][c10("SourceSeriesUID")];
+      const direct = (await apiFeatures(base, { studyInstanceUid: study, sourceSeriesUid: src, maskSeriesUid: mask, maskChannel: Number(ch), channel: 0, timePoint: 0,
+        settings: req10.settings, valueSpec: req10.valueSpec, calibration: req10.calibration, recompute: true, roiModes: ["WHOLE_3D", "MAX_SECTION_2D", "SLICES_2D"], planes: "ALL" })) as unknown as Res10;
+      const want: { unit: string; src: string; plane: string; pos: number; pixels: number; mean: number | null }[] = [
+        { unit: "WHOLE_3D", src: "", plane: "", pos: NaN, pixels: NaN, mean: direct.rows.find((x) => x.column === MEAN10)?.value ?? null }];
+      const addU = (source: string, sec?: Sec10 | null, sl?: Sl10 | null) => {
+        if (sec) want.push({ unit: "MAX_SECTION_2D", src: source, plane: sec.record.plane ?? "", pos: sec.positionMm, pixels: sec.pixels, mean: sec.rows.find((x) => x.column === MEAN10)?.value ?? null });
+        for (const r of sl?.rows ?? []) want.push({ unit: "SLICE_2D", src: source, plane: sl!.record.plane ?? "", pos: r.positionMm, pixels: r.pixels, mean: r.rows.find((x) => x.column === MEAN10)?.value ?? null });
+      };
+      addU("ACQUISITION", direct.section, direct.slices);
+      for (const p of direct.planeResults ?? []) { addU("RESLICED", p.section, p.slices); if (p.section) planesCovered.add(p.plane); }
+      rowsWant += want.length;
+      const fmt = (u: string, s: string, pl: string, pos: number, px: number) => `${u}|${s}|${pl}|${Number.isNaN(pos) ? "" : pos.toFixed(4)}|${Number.isNaN(px) ? "" : px}`;
+      const gotKeys = new Map(mine.map((r) => [fmt(r[c10("Unit")], r[c10("PlaneSource")], r[c10("Plane")], r[c10("Roi_PositionMm")] === "" ? NaN : Number(r[c10("Roi_PositionMm")]), r[c10("Roi_Pixels")] === "" ? NaN : Number(r[c10("Roi_Pixels")])), r]));
+      for (const w of want) {
+        const g = gotKeys.get(fmt(w.unit, w.src, w.plane, w.pos, w.pixels));
+        if (g) {
+          rowsOk++;
+          const gv = g[c10(MEAN10)] === "" ? null : Number(g[c10(MEAN10)]);
+          if (w.mean == null ? gv != null : gv == null || Math.abs(gv - w.mean) > 1e-9) meanDiff++;
+        }
+      }
+      if (mine.length !== want.length) console.log(`  [info] ${key}: 行数 表 ${mine.length} / 基準 ${want.length}`);
+    }
+    check(rowsWant > 40 && rowsOk === rowsWant, "全 5 組の全行（単位・取得面/再スライス・断面・位置・画素数）が、API 直呼びの結果と一致", { rowsWant, rowsOk });
+    check(meanDiff === 0, "全行の平均強度が API 直呼びと一致（2D の行は 2D の値、3D の行は 3D の値）", { meanDiff });
+    check(t10.rows.length === rowsWant, "表の行数 = 基準の行数（余計な行・欠けた行が無い）", [t10.rows.length, rowsWant]);
+    check(["AXIAL", "SAGITTAL", "CORONAL"].every((p) => planesCovered.has(p)), "再スライスした 3 断面が計算されている", [...planesCovered]);
+    const sh2d = t10.rows.filter((r) => r[c10("Unit")] !== "WHOLE_3D" && c10("Shape2D_PixelSurface") > 0 && r[c10("Shape2D_PixelSurface")] !== "");
+    check(c10("Shape2D_PixelSurface") > 0 && sh2d.length > 0 && t10.rows.filter((r) => r[c10("Unit")] === "WHOLE_3D").every((r) => r[c10("Shape2D_PixelSurface")] === ""), "Shape2D は 2D の行だけに値があり、3D の行は空欄");
+    const defs10 = dl10.find((f) => f.name === "units2d_definitions.csv")!.text;
+    check(/Shape2D_PixelSurface[^\n]*MAX_SECTION_2D;SLICE_2D/.test(defs10) && /IntensityBasedStatistical_Mean[^\n]*WHOLE_3D;MAX_SECTION_2D;SLICE_2D/.test(defs10), "定義表に、列ごとの計算した単位が付く");
+    check(!dl10.some((f) => f.text.includes(PATIENT_NAME)), "どのファイルにも患者名が無い");
+
+    console.log("  -- 11. 2D の小さい ROI の QC（基準値を定義に入れる）");
+    // 合成 CT の箱（独立の予測値）: BigBox は各スライス 24×24=576 画素、SmallBox は 10×10=100 画素。基準値 150 画素なら SmallBox だけが小さい
+    await reopen();
+    await page.getByTestId("batch-preset").selectOption("six");
+    await page.getByTestId("batch-unit-MAX_SECTION_2D").check();
+    await page.getByTestId("batch-unit-SLICES_2D").check();
+    // 3D の基準値は、前の節で環境設定に入れた 1000 ボクセルが残っていて 3D の旗が立つ。この節は 2D だけを見るので、画面の値で 1 ボクセルにして 3D を外す
+    await page.getByTestId("batch-qc-voxels").fill("1");
+    // 負例: 2D の基準値が未設定（画面の値も環境設定も無い）なら、止める指定でも止まらず、「判定していない」の注記が出る
+    await radio("batch-qc-small", 1).check();
+    await page.getByTestId("batch-run").click();
+    await waitText(page, "batch-progress", /完了 — 5\/5 完了/, 900_000);
+    check(!(await page.getByTestId("batch-qc-hold").isVisible().catch(() => false)), "2D の基準値が未設定なら、止める指定でも止まらない");
+    check(await page.getByTestId("batch-unset-threshold-2d").isVisible().catch(() => false), "未設定のときは「2D の小さい ROI は判定していません」の注記が出る");
+    // 基準値 150 画素を入れて「止める」
+    await page.getByTestId("batch-qc-pixels").fill("150");
+    await page.waitForTimeout(300);
+    const sha11 = await shaOf();
+    await page.getByTestId("batch-run").click();
+    await page.getByTestId("batch-qc-hold").waitFor({ state: "visible", timeout: 600_000 });
+    const holdA = await page.getByTestId("batch-qc-hold").innerText();
+    check(/C002/.test(holdA) && /小さい ROI（2D）/.test(holdA) && /2D/.test(holdA), "最初の小さい組（C002）で、2D の旗で止まる", holdA);
+    const progA = await page.getByTestId("batch-progress").innerText();
+    check(/停止 — 2\/5 完了/.test(progA), "C001（BigBox）は通って、C002 で止まる（大きい 2D は旗なし）", progA);
+    check(/小さい ROI（2D）/.test(await page.getByTestId("batch-flags-1").innerText()), "止めた組に 2D の旗が付く");
+    await page.screenshot({ path: path.join(OUT_DIR, "17-qc-2d-hold.png"), fullPage: true });
+    await page.getByTestId("batch-qc-continue").click();
+    await waitText(page, "batch-progress", /停止 — 5\/5 完了/, 600_000);
+    await page.getByTestId("batch-qc-continue").click();
+    await waitText(page, "batch-progress", /完了 — 5\/5 完了/, 600_000);
+    await page.getByTestId("batch-prefix").fill("qc2d");
+    await page.getByTestId("batch-write").click();
+    const dl11 = await takeDownloads(page, 6);
+    const t11 = parseFeatures(dl11.find((f) => f.name === "qc2d.csv")!.text);
+    const c11 = (n: string) => t11.header.indexOf(n);
+    const flagsOf = (label: string) => t11.rows.filter((r) => r[c11("CaseLabel")] === label).map((r) => r[c11("Provenance_QcFlags")]);
+    const bigLabels = ["C001", "C003", "C004"];
+    check(flagsOf("C002").length > 1 && flagsOf("C002").every((f) => f.includes("SMALL_ROI_2D")) && flagsOf("C005").every((f) => f.includes("SMALL_ROI_2D")),
+      "SmallBox の組（C002・C005）の全行に SMALL_ROI_2D が記録される（正例）", [flagsOf("C002")[0], flagsOf("C005")[0]]);
+    check(bigLabels.every((l) => flagsOf(l).length > 1 && flagsOf(l).every((f) => !f.includes("SMALL_ROI_2D"))), "BigBox の組には SMALL_ROI_2D が付かない（負例）", bigLabels.map((l) => flagsOf(l)[0]));
+    const spec11 = JSON.parse(dl11.find((f) => f.name === "qc2d_spec.json")!.text) as { sha256: string; qc: Record<string, unknown> };
+    check(spec11.qc.smallRoiPixels === 150 && spec11.qc.smallRoiVoxels === 1 && spec11.sha256 === sha11, "定義に smallRoiPixels=150（と、3D を外すための smallRoiVoxels=1）が入り、SHA-256 が画面と一致", spec11.qc);
+    // 定義の保存 → 開き直し → 読み込みで、基準値が復元される
+    await page.getByTestId("batch-spec-save").click();
+    const [saved11] = await takeDownloads(page, 1);
+    fs.writeFileSync(path.join(OUT_DIR, "qc2d_spec.json"), saved11.text);
+    await reopen();
+    check((await page.getByTestId("batch-qc-pixels").inputValue()) === "" && (await page.getByTestId("batch-qc-voxels").inputValue()) === "", "開き直すと基準値は空に戻る");
+    await page.getByTestId("batch-spec-file").setInputFiles(path.join(OUT_DIR, "qc2d_spec.json"));
+    await waitText(page, "batch-info", /読み込みました/, 20_000);
+    await page.waitForTimeout(400);
+    check((await page.getByTestId("batch-qc-pixels").inputValue()) === "150" && (await shaOf()) === sha11, "定義を読み込むと 2D の基準値が復元され、SHA-256 が保存時と同じ");
   } finally {
     // resetDb はアルバムを消さないので、自分で作ったものは自分で消す
     if (albumId) await fetch(`${base}/api/albums/${albumId}`, { method: "DELETE" }).catch(() => {});

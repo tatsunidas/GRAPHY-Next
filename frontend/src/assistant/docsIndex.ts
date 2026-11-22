@@ -23,6 +23,18 @@ export const DOCS_MAX_CHARS = 1500;
 export const DOCS_MIN_SCORE = 2;
 
 /**
+ * アシスタントの資料（docs/*.md）に入れないページ。mcp.md は、外部 AI クライアント（Claude Desktop など）を設定する人向けで、
+ * アシスタントが答える対象ではない。長く、「AI に話しかけて…教えて」のような語を多く含むので、入れると「プラグインの作り方」の 1 位が
+ * plugins.md でなく mcp.md になり、無関係な問いにも添付される（assistantDocs.test.ts が検出）。MCP の設定のしかたは settings.md の節で答えられる。
+ */
+export const ASSISTANT_DOCS_EXCLUDE = ["mcp.md"];
+
+/** ファイル名（パスの末尾）が除外のものを外す。 */
+export function assistantDocFiles(files: Record<string, string>): Record<string, string> {
+  return Object.fromEntries(Object.entries(files).filter(([p]) => !ASSISTANT_DOCS_EXCLUDE.includes(p.split("/").pop() ?? p)));
+}
+
+/**
  * `##` までの見出しで割る。それより深い見出しは本文に残す（細かく割ると文脈が痩せるため）。
  * ただし 1 つの `##` 節が `longSection` 文字を超えるときは `###` でも割る。断片は `maxChars` で切って渡すので、
  * それを超える節を 1 つにしておくと、切れた先が届かず、巨大な 1 断片が検索の枠を奪うだけになる。

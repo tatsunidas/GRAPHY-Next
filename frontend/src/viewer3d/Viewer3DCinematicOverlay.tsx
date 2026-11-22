@@ -22,9 +22,11 @@ import {
   defaultPathTraceParams,
   type CinematicEngine,
 } from "../viewer/cinematicPathTracer";
+import { desktop } from "../desktopBridge";
 import {
   gpuBudget,
   isSharedMemoryGpu,
+  matchNvidiaFree,
   parseGpuRecords,
   planCinematicGrid,
   TEXEL_BYTES,
@@ -154,12 +156,39 @@ export function Viewer3DCinematicOverlay({
   onCancelRef.current = onCancel;
   const decisionRef = useRef<"start" | "cancel" | null>(null);
 
+  /** 開始の直前に取った、描画に使っている NVIDIA の空き（バイト。無ければ null）。attempt ごとに取り直す。 */
+  const [nvFree, setNvFree] = useState<{ attempt: number; bytes: number | null } | null>(null);
+
   useEffect(() => {
-    if (!active) retryBytesRef.current = null;
+    if (!active) {
+      retryBytesRef.current = null;
+      setNvFree(null);
+    }
   }, [active]);
+
+  // 空きメモリは「今」の値が要る（他のアプリが使っていれば減る）ので、開始・再開のたびに聞く。取れない・内蔵 GPU で描いているときは null。
+  useEffect(() => {
+    if (!active || renderKind === null) return;
+    let cancelled = false;
+    void (async () => {
+      let bytes: number | null = null;
+      try {
+        const d = desktop();
+        const free = d?.getGpuMemoryFree ? await d.getGpuMemoryFree() : null;
+        bytes = matchNvidiaFree(probeRenderEnv().defaultCtx?.renderer, free)?.freeBytes ?? null;
+      } catch {
+        bytes = null;
+      }
+      if (!cancelled) setNvFree({ attempt, bytes });
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [active, renderKind, attempt]);
 
   useEffect(() => {
     if (!active || renderKind === null) return;
+    if (nvFree === null || nvFree.attempt !== attempt) return; // 空きメモリの問い合わせ待ち
     const canvas = canvasRef.current;
     if (!canvas) return;
     decisionRef.current = null;
@@ -188,6 +217,7 @@ export function Viewer3DCinematicOverlay({
     const override = getCinematicBudgetOverride();
     const b = gpuBudget({
       userMb: gpuMemoryMbRef.current,
+      nvidiaFreeBytes: nvFree.bytes,
       shared: isSharedMemoryGpu(rendererName),
       appliedVolumeMaxBytes: volumeMaxBytes(getAppliedVolumeMaxMb()),
       srcBytes,
@@ -525,7 +555,7 @@ export function Viewer3DCinematicOverlay({
       publishCinematicForce(null);
       engine.dispose();
     };
-  }, [active, view, renderKind, t, attempt]);
+  }, [active, view, renderKind, t, attempt, nvFree]);
 
   if (!active) return null;
 
@@ -588,6 +618,7 @@ export function Viewer3DCinematicOverlay({
           data-spacing-mm={texView.spacingMm.map((x) => x.toFixed(4)).join(",")}
           data-gpu-bytes={String(texView.gpuBytes)}
           data-budget-source={texView.source}
+          data-budget-bytes={texView.budgetBytes === null ? "" : String(texView.budgetBytes)}
           data-reason={texView.reason}
         >
           {texView.reason === "full"

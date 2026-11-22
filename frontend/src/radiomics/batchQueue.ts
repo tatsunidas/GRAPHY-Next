@@ -21,7 +21,9 @@ import {
   buildBatchRequest,
   duplicateLabels,
   selectedPairs,
+  voxelSpacingMix,
   type PairRow,
+  type VoxelSpacingMix,
 } from "./batchPairs";
 import { applySpecToForm, specText, type BatchSpec } from "./batchSpec";
 import { datasetFiles, type DatasetRow, type OutputFile, type SubjectInfo } from "./datasetCsv";
@@ -65,6 +67,7 @@ export function buildDatasetOutput(
   return datasetFiles(rows, out.subjects, {
     albumName: out.albumName, specSha256: spec.sha256, includePatientId: out.includePatientId, base: batchFileBase(prefix),
     specText: specText({ ...spec, output: { prefix } }), subjectsFile: out.subjectsFile, bom: out.bom, kind: spec.kind,
+    twoD: spec.kind !== "voiStats" && spec.form.units2d.length > 0,
   });
 }
 
@@ -85,6 +88,8 @@ export interface QueueContext {
   pollMs: number;
   /** キャッシュを使わず計算し直す（無人実行の `--recompute`）。省略は使う。 */
   recompute?: boolean;
+  /** 計算できた組の元画像の画素間隔がそろっていないとき、定義ごとに 1 回呼ぶ（`resampleMm` は null ならリサンプリングなし）。 */
+  onSpacingMix?(prefix: string, mix: VoxelSpacingMix, resampleMm: number | null): void;
   /** 利用者が中止を押したか。実行中のジョブには `cancel` を送り、残りの定義は始めない。 */
   isCancelled(): boolean;
 }
@@ -107,7 +112,7 @@ async function runOne(
   if (chosen.length === 0) return { state: "failed", message: ERR_NO_PAIRS, files: 0 };
   const form = applySpecToForm(ctx.baseForm, spec);
   const req = buildBatchRequest(chosen.map((c) => c.pair), form, {
-    qc: { smallRoi: spec.qc.smallRoi, lossy: spec.qc.lossy }, acknowledged: [], smallRoiVoxels: spec.qc.smallRoiVoxels, kind: spec.kind,
+    qc: { smallRoi: spec.qc.smallRoi, lossy: spec.qc.lossy }, acknowledged: [], smallRoiVoxels: spec.qc.smallRoiVoxels, smallRoiPixels: spec.qc.smallRoiPixels, kind: spec.kind,
     recompute: ctx.recompute ?? false,
   });
   let job = await api.submit(req);
@@ -128,6 +133,10 @@ async function runOne(
       : { state: "failed", message: job.stopReason ?? "stopped", files: 0 };
   }
   const results = await api.results(job.jobId);
+  if (spec.kind !== "voiStats" && ctx.onSpacingMix) {
+    const mix = voxelSpacingMix(results.map((r) => r.result));
+    if (mix.mixed) ctx.onSpacingMix(spec.output.prefix, mix, form.resampleMm);
+  }
   const out = buildDatasetOutput(job, results, chosen.map((c) => c.caseLabel), spec, spec.output.prefix, ctx.output);
   if (!out.ok) return { state: "failed", message: out.reason + (out.caseLabel ? `: ${out.caseLabel}` : ""), files: 0 };
   api.save(out.files);

@@ -85,6 +85,8 @@ import { convertMeasureToRoi } from "./measureToRoi";
 import { installInteriorGrab, installSelectionGestures } from "./roiInteriorGrab";
 import { measureToolConfig } from "./roiStatsTextBox";
 import { useRoiStatsDisplay } from "./roiStatsDisplay";
+import { ensureMouseBindingsLoaded, getMouseBindings, subscribeMouseBindings } from "./mouseBindings";
+import { applyMouseBindings } from "./mouseBindingsApply";
 import { computeRoiStatsNow, getRoiStats, subscribeRoiStats } from "./roiStatsStore";
 import { buildRoiStatsCornerRows, sameCornerRows, type RoiStatsCornerRow } from "./roiStatsCorner";
 import { subscribeSuvStore, suvForImageId, seriesUidOf } from "./suvStore";
@@ -132,20 +134,6 @@ import { useDateFormat } from "../i18n/dateFormat";
 
 type ViewSnapshot = { transform: ViewTransform; voi: { lower: number; upper: number } | null };
 
-const { MouseBindings } = csToolsEnums;
-
-/**
- * 2 本指タッチのバインド（`fw/mobile-ui-design.md` §3.3）。
- *
- * <p>**ZoomTool に割り当てる**のがポイント。ZoomTool は既定で `pinchToZoom: true` かつ `pan: true`
- * なので、2 本指で**ピンチ拡大縮小と平行移動を同時に**扱う（`ZoomTool._pinchCallback`）。
- * PanTool を割り当てると平行移動しかできない。
- *
- * <p>1 本指は Cornerstone が「Primary にバインドされたアクティブツール」へ暗黙フォールバックする
- * （`getActiveToolForTouchEvent`）ので、明示的なバインドは要らない。
- */
-const TOUCH_ZOOM_BINDING = { numTouchPoints: 2 } as const;
-
 /** カラー（RGB/YBR/PALETTE）画像か。MONOCHROME 以外を色付きとみなす。LUT/Invert の可否判定に使う。 */
 function isColorImage(inf: ImageInfo | null): boolean {
   const p = inf?.photometricInterpretation;
@@ -178,6 +166,14 @@ const MEASURE_TOOLS = [
 ];
 // 左ドラッグに割り当て可能なツール一覧（操作＋計測＋ブラシ＋3D Wand＋Level Sets）。
 const PRIMARY_TOOLS = [WindowLevelTool.toolName, PanTool.toolName, ZoomTool.toolName, MagnifyTool.toolName, ...MEASURE_TOOLS, BrushTool.toolName, WandTool.toolName, LevelSetTool.toolName, ...SCISSORS_TOOL_NAMES];
+/** 論理ツール ID（Eraser・Wand 2D/3D・Level Sets・Scissors を含む）→ 左ドラッグに付ける Cornerstone のツール名。 */
+function physicalPrimaryTool(toolName: string): string {
+  if (toolName === ERASER_TOOL_ID) return BrushTool.toolName;
+  if (toolName === WAND2D_TOOL_ID || toolName === WAND3D_TOOL_ID) return WandTool.toolName;
+  if (toolName === LEVELSET2D_TOOL_ID) return LevelSetTool.toolName;
+  if (toolName === SCISSORS_TOOL_ID) return scissorsToolName(getScissors().shape);
+  return toolName;
+}
 // 描画/計測/セグメンテーション系ツール（左ドラッグ占有）。これらが有効な間は per-tile の Pan↔W/L 切替を抑止し、
 // 先にツールバーで解除するよう促す（グローバルツールが優先＝ナビ切替が黙って効かないのを避ける）。
 const BLOCKING_TOOLS = new Set<string>([...MEASURE_TOOLS, BrushTool.toolName, ERASER_TOOL_ID, WAND2D_TOOL_ID, WAND3D_TOOL_ID, LEVELSET2D_TOOL_ID, SCISSORS_TOOL_ID]);
@@ -672,7 +668,7 @@ export function Viewer2D({
     /** DICOM 既定ウィンドウ（＝画素の値空間の指紋）。VOI を引き継いでよいかの判定に使う。 */
     defaultWindow?: { center?: number; width?: number };
   } | null>(null);
-  // Pan モード: ON で左ドラッグ=パン、OFF で左ドラッグ=W/L。中ドラッグは常にパン、右はズーム。
+  // Pan モード: ON で左ドラッグ=パン、OFF で左ドラッグ=W/L。中・右ボタンのツールは設定（mouseBindings.ts。既定は中=パン・右=ズーム）。
   const [panMode, setPanMode] = useState(false);
   // 現在このタイルの左ドラッグに割り当てられている論理ツール（グローバルツールバー or per-tile 切替で更新）。
   const activeToolRef = useRef<string>(WindowLevelTool.toolName);
@@ -793,17 +789,8 @@ export function Viewer2D({
     const next = !panMode;
     if (tg) {
       try {
-        if (next) {
-          // 左＋中ドラッグ=Pan、W/L は無効化。
-          tg.setToolActive(PanTool.toolName, {
-            bindings: [{ mouseButton: MouseBindings.Primary }, { mouseButton: MouseBindings.Auxiliary }],
-          });
-          tg.setToolPassive(WindowLevelTool.toolName);
-        } else {
-          // 左=W/L、中=Pan に戻す。2 本指タッチの Zoom バインドは別ツールなので触らない。
-          tg.setToolActive(WindowLevelTool.toolName, { bindings: [{ mouseButton: MouseBindings.Primary }] });
-          tg.setToolActive(PanTool.toolName, { bindings: [{ mouseButton: MouseBindings.Auxiliary }] });
-        }
+        // 左=Pan（ON）／W/L（OFF）。中・右は設定のツール。2 本指タッチの Zoom は常に残る。
+        applyMouseBindings(tg, PRIMARY_TOOLS, next ? PanTool.toolName : WindowLevelTool.toolName, getMouseBindings(), { touchZoom: true });
       } catch {
         /* ツールグループ未準備時は無視 */
       }
@@ -1255,7 +1242,7 @@ export function Viewer2D({
 
         const wireTools = (tg: ReturnType<typeof ToolGroupManager.createToolGroup>) => {
           if (!tg) return;
-          // 左ドラッグ=WW/WL、中ドラッグ=Pan、右ドラッグ=Zoom（ホイールはスライス送り）。
+          // 左ドラッグ=WW/WL、中・右ドラッグ=設定のツール（既定は Pan・Zoom）。ホイールはスライス送り。
           if (!tg.hasTool(WindowLevelTool.toolName)) {
             tg.addTool(WindowLevelTool.toolName);
             tg.addTool(PanTool.toolName);
@@ -1299,12 +1286,8 @@ export function Viewer2D({
               tg.addTool(tn);
               tg.setToolPassive(tn);
             }
-            tg.setToolActive(WindowLevelTool.toolName, { bindings: [{ mouseButton: MouseBindings.Primary }] });
-            tg.setToolActive(PanTool.toolName, { bindings: [{ mouseButton: MouseBindings.Auxiliary }] });
-            // 右クリック=Zoom に加えて、2 本指タッチでピンチ Zoom ＋ Pan（§3.3）。
-            tg.setToolActive(ZoomTool.toolName, {
-              bindings: [{ mouseButton: MouseBindings.Secondary }, TOUCH_ZOOM_BINDING],
-            });
+            // 左=W/L、中・右は設定のツール（既定は中=Pan・右=Zoom）。2 本指タッチでピンチ Zoom ＋ Pan（§3.3）。
+            applyMouseBindings(tg, PRIMARY_TOOLS, WindowLevelTool.toolName, getMouseBindings(), { touchZoom: true });
           }
           tg.addViewport(viewportId, ENGINE_ID);
         };
@@ -2390,7 +2373,7 @@ export function Viewer2D({
     }
   };
 
-  // 操作/計測/ブラシツールの切替（左ドラッグ割当）。中=Pan・右=Zoom はナビ用に常時維持。
+  // 操作/計測/ブラシツールの切替（左ドラッグ割当）。中・右ボタンは設定のツール（既定は Pan・Zoom）をナビ用に常時維持。
   // ブラシ/消しゴムは BrushTool に集約（消しゴム=ERASE ストラテジ）。選択時に labelmap を保証。
   const setActiveTool = (toolName: string) => {
     const tg = ToolGroupManager.getToolGroup(`${viewportIdRef.current}-tg`);
@@ -2410,28 +2393,12 @@ export function Viewer2D({
       emitToast(t("series.thickSlab.roiBlocked"));
       return;
     }
-    const primary = isEraser ? BrushTool.toolName : isWand ? WandTool.toolName : isLevelSet ? LevelSetTool.toolName : isScissors ? scissorsToolName(scissors.shape) : toolName;
+    const primary = physicalPrimaryTool(toolName);
     const applyBindings = () => {
       try {
-        for (const tn of PRIMARY_TOOLS) {
-          if (tn !== primary) tg.setToolPassive(tn);
-        }
         const isPan = primary === PanTool.toolName;
-        const isZoom = primary === ZoomTool.toolName;
-        tg.setToolActive(primary, {
-          bindings: [
-            { mouseButton: MouseBindings.Primary },
-            ...(isPan ? [{ mouseButton: MouseBindings.Auxiliary }] : []),
-            // Zoom を選んでいるときも 2 本指はここ（＝Zoom）に来るので二重登録しない。
-            ...(isZoom ? [{ mouseButton: MouseBindings.Secondary }, TOUCH_ZOOM_BINDING] : []),
-          ],
-        });
-        if (!isPan) tg.setToolActive(PanTool.toolName, { bindings: [{ mouseButton: MouseBindings.Auxiliary }] });
-        if (!isZoom) {
-          tg.setToolActive(ZoomTool.toolName, {
-            bindings: [{ mouseButton: MouseBindings.Secondary }, TOUCH_ZOOM_BINDING],
-          });
-        }
+        // 左=primary、中・右は設定のツール。Pan・Zoom を左に選んだときは、その左割り当てに中・右が足される。
+        applyMouseBindings(tg, PRIMARY_TOOLS, primary, getMouseBindings(), { touchZoom: true });
         if (isBrush || isEraser) {
           tg.setToolConfiguration(BrushTool.toolName, {
             activeStrategy: isEraser ? "ERASE_INSIDE_CIRCLE" : "FILL_INSIDE_CIRCLE",
@@ -2488,6 +2455,20 @@ export function Viewer2D({
       const changed = cur.shape !== prev.shape || cur.op !== prev.op;
       prev = cur;
       if (changed && activeToolRef.current === SCISSORS_TOOL_ID) setActiveToolRef.current?.(SCISSORS_TOOL_ID);
+    });
+  }, []);
+
+  // 中・右ボタンの割り当てが設定で変わったら（読み込み完了・設定画面・他ウィンドウ）、いまの左ツールのまま張り直す。
+  useEffect(() => {
+    void ensureMouseBindingsLoaded();
+    return subscribeMouseBindings(() => {
+      const tg = ToolGroupManager.getToolGroup(`${viewportIdRef.current}-tg`);
+      if (!tg) return;
+      try {
+        applyMouseBindings(tg, PRIMARY_TOOLS, physicalPrimaryTool(activeToolRef.current), getMouseBindings(), { touchZoom: true });
+      } catch {
+        /* ツールグループ未準備時は無視 */
+      }
     });
   }, []);
 
@@ -3040,7 +3021,7 @@ export function Viewer2D({
 
   const imagePanel = (
     // data-graphy-image-panel: 画像キャンバス領域の目印。タイル枠の右クリックメニューは
-    // この内側では開かず、cornerstone の右ドラッグ Zoom を優先させる（Viewer2DScreen 参照）。
+    // この内側では開かず、右ドラッグ（設定のツール。既定は Zoom）を優先させる（Viewer2DScreen 参照）。
     <div data-graphy-image-panel style={fill ? { ...wrap, flex: 1, height: "auto" } : { ...wrap, height: height ?? 512 }}>
       {/* 画像・オーバーレイ一式を入れる枠。スケールバー ON のときは右に固定幅の列を空け、OFF なら従来どおり全面。
           オーバーレイの座標はこの枠が基準になるので、列の分だけ縮んでも位置がずれない。 */}

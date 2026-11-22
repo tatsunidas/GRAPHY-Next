@@ -1,6 +1,6 @@
 #!/bin/sh
 # GRAPHY-Next の MCP 中継 graphy-mcp（インストール版の macOS・Linux deb。外部 AI クライアントが起動する）。resources/cli/ から実行ファイルと app.asar を探し、
-# ELECTRON_RUN_AS_NODE=1 で mcpCli.js を動かす。使い方は docs/mcp.md（段 5 で作成）。
+# ELECTRON_RUN_AS_NODE=1 で mcpCli.js を動かす。使い方は docs/mcp.md。
 src="$0"
 while [ -L "$src" ]; do
   link=$(readlink "$src")

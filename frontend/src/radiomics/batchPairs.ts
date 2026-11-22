@@ -10,7 +10,7 @@
 import type { RoiFeatureResult } from "../api";
 import type { BatchPair, BatchQc, BatchRequest } from "./batchApi";
 import { normalizeLabels, type SpecKind } from "./batchSpec";
-import { ROI_FEATURE_FAMILIES, roiFeatureSettings, type RoiFeatureForm } from "./roiFeatureSettings";
+import { ROI_FEATURE_FAMILIES, roiFeatureSettings, valueSpecOf, type RoiFeatureForm } from "./roiFeatureSettings";
 
 export interface PairRow {
   pair: BatchPair;
@@ -138,6 +138,8 @@ export interface BatchRunOptions {
   acknowledged?: readonly string[];
   /** 小さい ROI の基準値（ボクセル数）。null か無しは環境設定の値。 */
   smallRoiVoxels?: number | null;
+  /** 2D の小さい ROI の基準値（画素数）。null か無しは環境設定の 2D の値。 */
+  smallRoiPixels?: number | null;
   /** 抽出の種類。`voiStats` は族を一次統計だけ・元の格子・範囲なしにして送る。 */
   kind?: SpecKind;
 }
@@ -145,14 +147,16 @@ export interface BatchRunOptions {
 /** VOI 統計の設定: 一次統計の族だけを有効にし、再標本化・範囲は使わない（値が元の格子の値になるように）。 */
 export function voiStatsForm(base: RoiFeatureForm): RoiFeatureForm {
   const families = Object.fromEntries(ROI_FEATURE_FAMILIES.map((f) => [f.key, f.key === "IntensityBasedStatistical"]));
-  return { ...base, families, resampleMm: null, rangeMinText: "", rangeMaxText: "", logOn: false };
+  return { ...base, families, resampleMm: null, rangeMinText: "", rangeMaxText: "", logOn: false, advancedText: "" };
 }
 
 export function buildBatchRequest(pairs: readonly BatchPair[], form: RoiFeatureForm, opts: BatchRunOptions = {}): BatchRequest {
   return {
     pairs: [...pairs],
     settings: roiFeatureSettings(opts.kind === "voiStats" ? voiStatsForm(form) : { ...form, logOn: false }),
-    roiModes: ["WHOLE_3D"],
+    // VOI 統計は 3D の一次統計だけ。2D の単位は特徴量の抽出のときだけ
+    roiModes: opts.kind === "voiStats" ? ["WHOLE_3D"] : ["WHOLE_3D", ...form.units2d],
+    planes: opts.kind !== "voiStats" && form.units2d.length > 0 && form.planesAll ? "ALL" : null,
     scales: null,
     scaleNotation: null,
     scaleLabels: null,
@@ -164,7 +168,10 @@ export function buildBatchRequest(pairs: readonly BatchPair[], form: RoiFeatureF
     qc: opts.qc ?? null,
     qcAcknowledged: opts.acknowledged ? [...opts.acknowledged] : null,
     smallRoiWarnVoxels: opts.smallRoiVoxels ?? null,
+    smallRoiWarnPixels: opts.kind !== "voiStats" && form.units2d.length > 0 ? opts.smallRoiPixels ?? null : null,
     kind: opts.kind === "voiStats" ? "voiStats" : null,
+    calibration: form.calibration,
+    valueSpec: opts.kind === "voiStats" ? null : valueSpecOf(form),
   };
 }
 
@@ -174,6 +181,61 @@ export function buildBatchRequest(pairs: readonly BatchPair[], form: RoiFeatureF
  */
 export function smallRoiThresholdUnset(results: readonly RoiFeatureResult[]): boolean {
   return results.length > 0 && results.every((r) => r.roiSize?.smallRoiWarnVoxels == null);
+}
+
+/**
+ * 2D の小さい ROI の基準値（画面の値も環境設定の 2D の値も）が未設定で、2D のどの結果でも判定していないか。2D の結果が 1 つも無いときは false。
+ */
+export function smallRoi2dThresholdUnset(results: readonly RoiFeatureResult[]): boolean {
+  const with2d = results.filter((r) => r.section || r.slices);
+  return with2d.length > 0 && with2d.every((r) => r.section?.roiSize?.smallRoiWarnVoxels == null && r.slices?.smallRoiWarnPixels == null);
+}
+
+/** 元画像の画素間隔（mm、リサンプリング前）の診断情報の列。 */
+const SPACING_COLUMNS = [
+  "Diagnostics_DiagnosticsInitialImageVoxelDimensionX",
+  "Diagnostics_DiagnosticsInitialImageVoxelDimensionY",
+  "Diagnostics_DiagnosticsInitialImageVoxelDimensionZ",
+] as const;
+
+/** 間隔の差とみなす相対差。DICOM の間隔は有限桁で書かれるため、1 % 未満（例 0.977 と 0.9766）は丸めとして差にしない。 */
+export const SPACING_MIX_TOLERANCE = 0.01;
+
+export interface VoxelSpacingMix {
+  /** いずれかの軸で、最大/最小 − 1 が許容を超える。使える結果が 2 未満なら false（比べる相手が無い）。 */
+  mixed: boolean;
+  /** 軸（x・y・z）ごとの最小・最大（mm）。使える結果が無ければ null。 */
+  perAxis: ({ min: number; max: number } | null)[];
+  /** 3 軸とも取れた結果の数。 */
+  usable: number;
+  /** 間隔が取れなかった（診断情報に無い・数でない・0 以下）結果の数。判定からは外す。 */
+  unknown: number;
+}
+
+/**
+ * 計算できた組の、元画像の画素間隔（診断情報）が組の間でそろっているか。形態・テクスチャの値は、リサンプリングしないと
+ * 間隔（スライス厚）の違いが乗るので、そろっていないことを画面・CLI で知らせるために使う。
+ */
+export function voxelSpacingMix(results: readonly RoiFeatureResult[]): VoxelSpacingMix {
+  const vals: number[][] = [];
+  let unknown = 0;
+  for (const r of results) {
+    const v = SPACING_COLUMNS.map((c) => r.rows.find((x) => x.column === c)?.value);
+    if (v.every((x): x is number => typeof x === "number" && Number.isFinite(x) && x > 0)) vals.push(v as number[]);
+    else unknown++;
+  }
+  const perAxis = [0, 1, 2].map((a) => (vals.length === 0 ? null : { min: Math.min(...vals.map((v) => v[a])), max: Math.max(...vals.map((v) => v[a])) }));
+  const mixed = vals.length >= 2 && perAxis.some((p) => p != null && p.max / p.min - 1 > SPACING_MIX_TOLERANCE);
+  return { mixed, perAxis, usable: vals.length, unknown };
+}
+
+/** 表示用の文字列（`x 0.7〜0.9 mm、y …、z 1〜3 mm`）。 */
+export function spacingMixText(m: VoxelSpacingMix): string {
+  const f = (n: number) => String(Number(n.toPrecision(4)));
+  return ["x", "y", "z"].map((a, i) => {
+    const p = m.perAxis[i];
+    return p == null ? `${a} —` : p.min === p.max ? `${a} ${f(p.min)} mm` : `${a} ${f(p.min)}〜${f(p.max)} mm`;
+  }).join("、");
 }
 
 /** ファイル名の接頭辞に使えない文字を `_` にする。空なら `roi-features-batch`。 */

@@ -2232,6 +2232,11 @@ export interface RoiFeatureRequest {
   /** 計算の単位。省略は 3D だけ（3D は常に計算する）。 */
   roiModes?: RoiMode[];
   /**
+   * 2D の単位を計算する断面。省略・ACQUISITION は取得面（元のスライス）だけ。ALL は取得面に加えて、患者の LPS 軸に揃えた
+   * Axial・Sagittal・Coronal へ体積を再スライスして計算する（2D の単位を選んでいないときは無視）。
+   */
+  planes?: RoiPlanes;
+  /**
    * LoG のスケールの値の並び（単位は scaleNotation）。0 はフィルタなし。省略は従来（スケールなし）。
    * 設定の DOUBLEARRAY_logSigmaMm とは併用できない。
    */
@@ -2244,9 +2249,27 @@ export interface RoiFeatureRequest {
   scaleConversion?: "SQRT_D" | "IDENTITY" | "COEFFICIENT";
   /** COEFFICIENT の k（σ = k·r）。 */
   scaleCoefficient?: number;
+  /**
+   * PET の校正（auto・none・bw・sul-james・sul-janma・bsa）。省略は auto（PET を SUVbw に校正し、CT・MR は何もしない）。
+   * none は Bq/mL のまま（結果に旗 UNCALIBRATED_PT が付く）。
+   */
+  calibration?: string;
+  /** 値の種類（IVH のモードと補間後の丸め）。省略・null は従来（分類しない）。 */
+  valueSpec?: { valueKind: string; ivhBinWidth: number | null; intensityRounding: boolean } | null;
 }
 
 export type RoiMode = "WHOLE_3D" | "MAX_SECTION_2D" | "SLICES_2D";
+export type RoiPlanes = "ACQUISITION" | "ALL";
+
+/** 患者の軸に揃えた 1 つの断面の 2D の結果（backend: RoiFeatureResult.PlaneResult）。作れなかった断面は error に理由。 */
+export interface RoiFeaturePlaneResult {
+  plane: "AXIAL" | "SAGITTAL" | "CORONAL";
+  /** 再スライスした間隔（面内・法線方向とも、mm）。 */
+  spacingMm: number | null;
+  section?: RoiFeatureSection | null;
+  slices?: RoiFeatureSlices | null;
+  error?: string | null;
+}
 
 /** 表の 1 行（backend: RoiFeatureResult.Row）。 */
 export interface RoiFeatureRow {
@@ -2291,6 +2314,8 @@ export interface RoiFeatureResult {
   section?: RoiFeatureSection | null;
   /** スライス別 2D。単位に SLICES_2D を選んだときだけ。 */
   slices?: RoiFeatureSlices | null;
+  /** 全断面（planes=ALL）のとき、取得面に加えた Axial・Sagittal・Coronal の 2D の結果。 */
+  planeResults?: RoiFeaturePlaneResult[] | null;
   /** 空間スケールごとの結果（scalesMm を指定したときだけ）。この結果自体は先頭のスケールのもの。 */
   scales?: RoiFeatureScaleEntry[] | null;
 }
@@ -2319,6 +2344,10 @@ export interface RoiFeatureRecord2d {
   discretisation: RoiFeatureDiscretisation;
   provenance: RoiFeatureProvenance;
   settingsProperties: string;
+  /** 断面の名前（AXIAL・SAGITTAL・CORONAL。IOP の法線に最も近い患者軸）。古い記録は無い。 */
+  plane?: string | null;
+  /** 法線がその患者軸からなす角（度）。0 なら軸に揃っている。古い記録は無い。 */
+  tiltDeg?: number | null;
 }
 
 export interface RoiFeatureSection {
@@ -2384,6 +2413,18 @@ export interface RoiFeatureProvenance {
   extractedAt: string;
   /** settingsProperties の UTF-8 の SHA-256（16 進）。 */
   settingsSha256: string;
+  /** 計算に使った値の単位（HU・SUVbw・SUVlbm・SUVbsa・BQML（未校正）・SUV（元の値））。単位が分からないときは空。古い記録は無い。 */
+  valueUnit?: string | null;
+  /** 校正の記録（種類;scale=係数;警告）。校正しなかったときは空。古い記録は無い。 */
+  calibration?: string | null;
+  /** PET を、明示して校正せずに（Bq/mL のまま）計算した。 */
+  uncalibratedPet?: boolean;
+  /** 値の種類（discrete・continuous・arbitrary）。分類しなかった（従来）ときは無い。 */
+  valueKind?: string | null;
+  /** 値の種類の判定の根拠（例 `RescaleType=HU;ImageType=ORIGINAL;rescale=integer`）。 */
+  valueKindBasis?: string | null;
+  /** 値の種類・画素間隔の記録の旗（VALUEKIND_OVERRIDDEN・IVH_BINWIDTH_UNSET・ROUNDING_IGNORED・IVH_SETTING_EXPLICIT・UNCALIBRATED_SPACING）。 */
+  recordFlags?: string[];
 }
 
 export type RoiFeatureJobState = "QUEUED" | "LOADING" | "EXTRACTING" | "DONE" | "FAILED" | "CANCELLED";
@@ -2406,6 +2447,11 @@ export interface RoiFeatureJobStatus {
 
 export const submitRoiFeatureJob = (req: RoiFeatureRequest) =>
   httpSend<RoiFeatureJobStatus>("/api/radiomics/features/jobs", "POST", req);
+
+/** RadiomicsJ の設定キーの一覧と既定値（一括抽出・ROI 特徴量の「詳細設定」の入力検査用）。 */
+export const getRoiFeatureSettingsSchema = () =>
+  httpGet<{ key: string; type: "boolean" | "int" | "long" | "double" | "array" | "string"; defaultValue: string | null }[]>(
+    "/api/radiomics/features/settings-schema");
 
 export const getRoiFeatureJob = (jobId: string) =>
   httpGet<RoiFeatureJobStatus>(`/api/radiomics/features/jobs/${encodeURIComponent(jobId)}`);
@@ -2475,4 +2521,62 @@ export async function exportSeriesNifti(studyUid: string, seriesUid: string): Pr
   if (!res.ok) throw new NiftiExportRefused(await extractErrorMessage(res), res.status);
   const n = Number(res.headers.get("X-Graphy-Slices"));
   return { blob: await res.blob(), slices: Number.isFinite(n) && n > 0 ? n : null };
+}
+
+/** web ジョブの状態を見に行く間隔（ms）。 */
+const NIFTI_JOB_POLL_MS = 1000;
+
+/**
+ * web: 1 シリーズの NIfTI をジョブで書き出す（PM-IO-901 段 2b）。PACS から 1 枚ずつ取るので時間がかかり、
+ * 途中の失敗で半端なファイルを渡さないため、投入 → 状態の確認 → 受け取りの 3 段にする。
+ *
+ * <p>断られたら（投入の 4xx・501、ジョブの FAILED）{@link NiftiExportRefused}（理由コードは standalone と同じ）。
+ * {@code signal} が中止されたらジョブを DELETE して AbortError を投げる。受け取れるのは 1 回だけ。
+ * 書き込み系は web では {@code X-Graphy-Request} を要求する（`WebWriteGuardFilter`）。
+ */
+export async function exportSeriesNiftiWeb(
+  studyUid: string,
+  seriesUid: string,
+  onProgress?: (done: number, total: number) => void,
+  signal?: AbortSignal,
+): Promise<{ blob: Blob; slices: number | null }> {
+  const base = `${apiBase()}/api/nifti`;
+  const post = await fetch(`${base}/export-job`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Graphy-Request": "1" },
+    body: JSON.stringify({ studyUid, seriesUid }),
+    signal,
+  });
+  if (!post.ok) throw new NiftiExportRefused(await extractErrorMessage(post), post.status);
+  const { jobId } = (await post.json()) as { jobId: string };
+  const jobUrl = `${apiBase()}/api/anonymizer/jobs/${encodeURIComponent(jobId)}`;
+  const cancel = async () => {
+    try {
+      await fetch(jobUrl, { method: "DELETE", headers: { "X-Graphy-Request": "1" } });
+    } catch {
+      // 中止の通知が届かなくても、ジョブは期限（ttl）で消える
+    }
+  };
+  for (;;) {
+    if (signal?.aborted) {
+      await cancel();
+      throw new DOMException("aborted", "AbortError");
+    }
+    const res = await fetch(jobUrl, { method: "GET", signal });
+    if (!res.ok) throw new NiftiExportRefused(await extractErrorMessage(res), res.status);
+    const st = (await res.json()) as AnonJobStatus & { reason?: string | null; slices?: number };
+    if (st.state === "DONE") {
+      const file = await fetch(`${base}/export-job/${encodeURIComponent(jobId)}/file`, { method: "GET", signal });
+      if (!file.ok) throw new NiftiExportRefused(await extractErrorMessage(file), file.status);
+      const n = Number(file.headers.get("X-Graphy-Slices"));
+      return { blob: await file.blob(), slices: Number.isFinite(n) && n > 0 ? n : null };
+    }
+    if (st.state === "FAILED") throw new NiftiExportRefused(st.reason ?? "web-job-failed", 422);
+    if (st.state === "CANCELLED") throw new DOMException("cancelled", "AbortError");
+    if (st.total > 0) onProgress?.(st.processed, st.total);
+    await new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, NIFTI_JOB_POLL_MS);
+      signal?.addEventListener("abort", () => { clearTimeout(timer); resolve(); }, { once: true }); // 次の周回で中止を処理する
+    });
+  }
 }

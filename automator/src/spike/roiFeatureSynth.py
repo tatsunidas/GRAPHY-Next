@@ -15,7 +15,8 @@ out = sys.argv[1]
 W = H = 48
 D = 16
 SPACING = [0.7, 0.7]
-THICK = 2.0
+# 第 5 引数: スライス厚・スライス間隔（mm、既定 2.0）。間隔の混在を検査するときに変える
+THICK = float(sys.argv[5]) if len(sys.argv) > 5 else 2.0
 study, series, forr = (generate_uid() for _ in range(3))
 # 実行ごとに画素を変える（同じ画素だと前回の実行のキャッシュが当たり、「新しく計算した」検査にならない）。
 rng = np.random.default_rng(int(sys.argv[2]) if len(sys.argv) > 2 else None)

@@ -22,10 +22,8 @@ export type NiftiExportAvailability = { enabled: true } | { enabled: false; reas
 /** メニュー項目を押せるか。押せない理由は画面に出す（項目の title）。公開デモは項目自体を出さない（呼び出し側）。 */
 export function niftiExportAvailability(o: {
   series: Series | null;
-  isStandalone: boolean;
   busy?: boolean;
 }): NiftiExportAvailability {
-  if (!o.isStandalone) return { enabled: false, reasonKey: "niftiExport.disabled.web" };
   if (!o.series) return { enabled: false, reasonKey: "niftiExport.disabled.noSeries" };
   if (o.busy) return { enabled: false, reasonKey: "niftiExport.disabled.busy" };
   return { enabled: true };
@@ -37,6 +35,13 @@ const REFUSAL_REASONS = new Set([
   "series-not-found",
   "anonymize-failed",
   "burnin-incomplete",
+  "burnin-declared",
+  "burnin-risky-modality",
+  "burnin-risky-sop-class",
+  "burnin-unknown-modality",
+  "burnin-mask-blocked",
+  "burnin-mask-partial",
+  "web-job-failed",
   "bad-request",
   "nifti-no-geometry",
   "volume-sheared",
@@ -74,7 +79,16 @@ export function downloadBlob(blob: Blob, filename: string): void {
 }
 
 export interface NiftiExportDeps {
-  exportSeries: (studyUid: string, seriesUid: string) => Promise<{ blob: Blob; slices: number | null }>;
+  exportSeries: (
+    studyUid: string,
+    seriesUid: string,
+    onProgress?: (done: number, total: number) => void,
+    signal?: AbortSignal,
+  ) => Promise<{ blob: Blob; slices: number | null }>;
+  /** web のジョブの進行（取得・匿名化が済んだ枚数／全枚数）。 */
+  onProgress?: (done: number, total: number) => void;
+  /** 中止（web のジョブのみ。standalone の同期の書き出しは止められない）。 */
+  signal?: AbortSignal;
   save: (blob: Blob, filename: string) => void;
   t: (key: string, params?: Record<string, string | number>) => string;
 }
@@ -96,10 +110,11 @@ export async function runNiftiExport(
   const { t } = deps;
   const name = niftiFileName(series);
   try {
-    const r = await deps.exportSeries(study.studyInstanceUid, series.seriesInstanceUid);
+    const r = await deps.exportSeries(study.studyInstanceUid, series.seriesInstanceUid, deps.onProgress, deps.signal);
     deps.save(r.blob, name);
     return { error: false, text: r.slices === null ? t("niftiExport.doneNoCount", { name }) : t("niftiExport.done", { name, n: r.slices }) };
   } catch (e) {
+    if (e instanceof DOMException && e.name === "AbortError") return { error: false, text: t("niftiExport.cancelled") };
     if (e instanceof NiftiExportRefused) {
       const key = niftiRefusalKey(e.reason);
       return { error: true, text: key ? t("niftiExport.failed", { reason: t(key) }) : t("niftiExport.failedUnknown", { code: e.reason }) };

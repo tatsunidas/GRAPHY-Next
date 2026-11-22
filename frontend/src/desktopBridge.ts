@@ -58,6 +58,13 @@ export interface GpuMemoryEntry {
   totalBytes: number;
 }
 
+/** `nvidia-smi` の GPU ごとの今の空きメモリ（シネマティックの予算用）。name は描画の GPU 名（WebGL の renderer）と突き合わせる。 */
+export interface GpuMemoryFreeEntry {
+  name: string;
+  freeBytes: number;
+  totalBytes: number;
+}
+
 export type RenderGpuFallback = "missing" | "unconfirmed" | "failed";
 
 export interface RenderPrefsState {
@@ -457,6 +464,8 @@ export interface GraphyDesktop {
   getGpuStatus?: () => Promise<GpuStatus>;
   /** GPU の搭載メモリ（設定＞描画環境、デスクトップのみ）。取れなければ null（Linux の NVIDIA 以外は未対応）。 */
   getGpuMemory?: () => Promise<GpuMemoryEntry[] | null>;
+  /** GPU ごとの今の空きメモリ（シネマティックの開始のたびに聞く。デスクトップの Linux・NVIDIA のみ。取れなければ null）。 */
+  getGpuMemoryFree?: () => Promise<GpuMemoryFreeEntry[] | null>;
   /** 描画に使う GPU の選択（設定＞描画環境。ハイブリッド GPU の機械だけ。反映は再起動）。デスクトップのみ。 */
   getRenderPrefs?: () => Promise<RenderPrefsState>;
   setRenderPrefs?: (prefs: { gpu: RenderGpuChoice }) => Promise<{ ok: boolean; reason?: string }>;
@@ -888,6 +897,11 @@ export interface McpPrefs {
   enabled: boolean;
   includePhi: boolean;
   allowAnalysis: boolean;
+  allowViewerControl: boolean;
+  allowViewerEdit: boolean;
+  allowViewerCapture: boolean;
+  /** 外部 AI クライアントへツールを公開するプラグインの ID（アシスタントの toggle store とは別の一覧）。 */
+  pluginTools: string[];
 }
 
 /** `graphy:mcp-get` の結果。readError は設定ファイルが読めなかった理由（すべてオフに戻してある）、relayCommand はパッケージ版だけ。 */

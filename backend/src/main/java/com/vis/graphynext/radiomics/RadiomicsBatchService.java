@@ -44,21 +44,38 @@ public class RadiomicsBatchService {
 
     public enum JobState { QUEUED, RUNNING, DONE, STOPPED, CANCELLED }
 
-    public enum PairState { PENDING, RUNNING, DONE, FAILED, SKIPPED, NOT_RUN, CANCELLED }
+    /**
+     * {@code SKIPPED} は計画で除外された組（計算しない）。{@code QC_SKIPPED} は計算したが、QC の「スキップ」に当たって
+     * 値を表に入れなかった組（理由は {@code error}、旗は {@code qcFlags}）。
+     */
+    public enum PairState { PENDING, RUNNING, DONE, FAILED, SKIPPED, QC_SKIPPED, NOT_RUN, CANCELLED }
 
     /** INPUT＝入力固有（IllegalArgumentException）、ENGINE＝入力かエンジンか区別できない（IllegalStateException など）、
      *  ENVIRONMENT＝IO・メモリ。 */
     public enum FailureKind { INPUT, ENGINE, ENVIRONMENT }
 
     /** QC に当たった組をどうするか。{@code FLAG}＝記録して続ける、{@code STOP}＝その組の結果を残してジョブを止める。 */
-    public enum QcMode { FLAG, STOP }
+    /**
+     * FLAG＝旗を付けて続ける、STOP＝当たった組の結果を残して止める（人が 1 件ずつ判断する）、
+     * SKIP＝止めずに続け、当たった組の値は表に入れずに「スキップ・理由」の行として残す。
+     */
+    public enum QcMode { FLAG, STOP, SKIP }
 
     /** QC の条件ごとの扱い。null は {@code FLAG}。 */
     public record Qc(QcMode smallRoi, QcMode lossy) {}
 
     /** 旗。{@code SMALL_ROI}＝強度マスクのボクセル数が基準値（要求の値、無ければ環境設定）より少ない。基準値が無ければ立たない。 */
     public static final String FLAG_SMALL_ROI = "SMALL_ROI";
+
+    /**
+     * 旗。{@code SMALL_ROI_2D}＝2D の最大断面、またはスライス別のどれかの強度マスクの画素数が、基準値（要求の値、無ければ
+     * 環境設定の 2D の値）より少ない（取得面と、再スライスした各断面のすべてを見る）。基準値が無ければ判定しない。
+     * 扱い（フラグ・止める・スキップ）は「小さい ROI」の選択が {@link #FLAG_SMALL_ROI} と同じに効く。
+     */
+    public static final String FLAG_SMALL_ROI_2D = "SMALL_ROI_2D";
     public static final String FLAG_LOSSY = "LOSSY_COMPRESSION";
+    /** PET を、利用者の明示で SUV に校正せずに（Bq/mL のまま）計算した。 */
+    public static final String FLAG_UNCALIBRATED_PT = "UNCALIBRATED_PT";
 
     /** 停止の種類。QC＝利用者の確認待ち、ENVIRONMENT＝IO・メモリの障害。 */
     public enum StopKind { QC, ENVIRONMENT }
@@ -70,13 +87,61 @@ public class RadiomicsBatchService {
      * @param smallRoiWarnVoxels 小さい ROI の基準値（ボクセル数）。null は環境設定の値。{@code qc} とは別の項目
      *                       （試行は {@code qc} を送らないが、基準値は効かせる）
      * @param kind           抽出の種類。null・{@code radiomics}＝従来の特徴量抽出、{@code voiStats}＝一次統計だけ
-     *                       （設定はフロントが一次統計の族だけを有効にして送る。PET は SUV を扱えないので組ごとに断る）
+     *                       （設定はフロントが一次統計の族だけを有効にして送る）
+     * @param calibration    PET の校正（{@link RoiFeatureRequest#calibration}）。null は {@code auto}（PET を SUVbw に校正）。
+     *                       VOI 統計は、{@code none}（Bq/mL のまま）の PET だけを断る
+     * @param valueSpec      値の種類（{@link RoiFeatureRequest#valueSpec}）。null は従来（分類しない）。VOI 統計では使わない
      */
     public record BatchRequest(List<BatchPair> pairs, Map<String, String> settings,
                                Set<RoiFeatureRequest.RoiMode> roiModes, List<Double> scales, String scaleNotation,
                                List<String> scaleLabels, String scaleConversion, Double scaleCoefficient,
                                int channel, int timePoint, boolean recompute, Qc qc, List<String> qcAcknowledged,
-                               Integer smallRoiWarnVoxels, String kind) {
+                               Integer smallRoiWarnVoxels, String kind, String calibration,
+                               ValueKind.Spec valueSpec, String planes, Integer smallRoiWarnPixels) {
+        /** 2D の基準値を指定しない（従来の要求。環境設定の値）。 */
+        public BatchRequest(List<BatchPair> pairs, Map<String, String> settings,
+                            Set<RoiFeatureRequest.RoiMode> roiModes, List<Double> scales, String scaleNotation,
+                            List<String> scaleLabels, String scaleConversion, Double scaleCoefficient,
+                            int channel, int timePoint, boolean recompute, Qc qc, List<String> qcAcknowledged,
+                            Integer smallRoiWarnVoxels, String kind, String calibration, ValueKind.Spec valueSpec,
+                            String planes) {
+            this(pairs, settings, roiModes, scales, scaleNotation, scaleLabels, scaleConversion, scaleCoefficient,
+                    channel, timePoint, recompute, qc, qcAcknowledged, smallRoiWarnVoxels, kind, calibration,
+                    valueSpec, planes, null);
+        }
+
+        /** 断面を指定しない（従来の要求。2D の単位は取得面だけ）。 */
+        public BatchRequest(List<BatchPair> pairs, Map<String, String> settings,
+                            Set<RoiFeatureRequest.RoiMode> roiModes, List<Double> scales, String scaleNotation,
+                            List<String> scaleLabels, String scaleConversion, Double scaleCoefficient,
+                            int channel, int timePoint, boolean recompute, Qc qc, List<String> qcAcknowledged,
+                            Integer smallRoiWarnVoxels, String kind, String calibration, ValueKind.Spec valueSpec) {
+            this(pairs, settings, roiModes, scales, scaleNotation, scaleLabels, scaleConversion, scaleCoefficient,
+                    channel, timePoint, recompute, qc, qcAcknowledged, smallRoiWarnVoxels, kind, calibration,
+                    valueSpec, null, null);
+        }
+
+        /** 値の種類を指定しない（従来の要求）。 */
+        public BatchRequest(List<BatchPair> pairs, Map<String, String> settings,
+                            Set<RoiFeatureRequest.RoiMode> roiModes, List<Double> scales, String scaleNotation,
+                            List<String> scaleLabels, String scaleConversion, Double scaleCoefficient,
+                            int channel, int timePoint, boolean recompute, Qc qc, List<String> qcAcknowledged,
+                            Integer smallRoiWarnVoxels, String kind, String calibration) {
+            this(pairs, settings, roiModes, scales, scaleNotation, scaleLabels, scaleConversion, scaleCoefficient,
+                    channel, timePoint, recompute, qc, qcAcknowledged, smallRoiWarnVoxels, kind, calibration, null,
+                    null);
+        }
+
+        /** PET の校正を指定しない（従来の要求。{@code auto}）。 */
+        public BatchRequest(List<BatchPair> pairs, Map<String, String> settings,
+                            Set<RoiFeatureRequest.RoiMode> roiModes, List<Double> scales, String scaleNotation,
+                            List<String> scaleLabels, String scaleConversion, Double scaleCoefficient,
+                            int channel, int timePoint, boolean recompute, Qc qc, List<String> qcAcknowledged,
+                            Integer smallRoiWarnVoxels, String kind) {
+            this(pairs, settings, roiModes, scales, scaleNotation, scaleLabels, scaleConversion, scaleCoefficient,
+                    channel, timePoint, recompute, qc, qcAcknowledged, smallRoiWarnVoxels, kind, null);
+        }
+
         /** 種類を指定しない（従来の要求）。 */
         public BatchRequest(List<BatchPair> pairs, Map<String, String> settings,
                             Set<RoiFeatureRequest.RoiMode> roiModes, List<Double> scales, String scaleNotation,
@@ -109,7 +174,7 @@ public class RadiomicsBatchService {
      * @param stopIndex  止めた組の添字（{@code pairs} の中）。止まっていなければ null
      */
     public record Status(String jobId, JobState state, long elapsedMs, int total, int done, int failed, int skipped,
-                         int notRun, int cancelled, String stopReason, StopKind stopKind, Integer stopIndex,
+                         int notRun, int cancelled, int qcSkipped, String stopReason, StopKind stopKind, Integer stopIndex,
                          List<PairStatus> pairs) {}
 
     public record PairResult(int index, BatchPair pair, RoiFeatureResult result) {}
@@ -158,7 +223,7 @@ public class RadiomicsBatchService {
             // 組の更新がすべて見える（組を先に走査して、あとから状態を読むと、完了なのに最後の組が「実行中」のままの
             // 食い違った状態が返りうる）。
             JobState stateNow = state;
-            int done = 0, failed = 0, skipped = 0, notRun = 0, cancelled = 0;
+            int done = 0, failed = 0, skipped = 0, notRun = 0, cancelled = 0, qcSkipped = 0;
             List<PairStatus> list = new ArrayList<>(status.length);
             for (PairStatus p : status) {
                 list.add(p);
@@ -168,11 +233,12 @@ public class RadiomicsBatchService {
                     case SKIPPED -> skipped++;
                     case NOT_RUN -> notRun++;
                     case CANCELLED -> cancelled++;
+                    case QC_SKIPPED -> qcSkipped++;
                     default -> { }
                 }
             }
             return new Status(id, stateNow, elapsedMs(), status.length, done, failed, skipped, notRun, cancelled,
-                    stopReason, stopKind, stopIndex, list);
+                    qcSkipped, stopReason, stopKind, stopIndex, list);
         }
     }
 
@@ -274,7 +340,7 @@ public class RadiomicsBatchService {
         List<PairResult> out = new ArrayList<>();
         for (int i = 0; i < job.results.length; i++) {
             RoiFeatureResult r = job.results[i];
-            if (r != null && job.status[i].state() == PairState.DONE) {
+            if (r != null && job.status[i].state() == PairState.DONE) { // QC_SKIPPED の値は返さない
                 out.add(new PairResult(i, job.pairs.get(i), r));
             }
         }
@@ -299,7 +365,7 @@ public class RadiomicsBatchService {
         return new RoiFeatureRequest(p.studyUid(), p.sourceSeriesUid(), p.maskSeriesUid(), p.maskChannel(),
                 req.channel(), req.timePoint(), req.settings(), req.recompute(), req.roiModes(), req.scales(),
                 req.scaleNotation(), req.scaleLabels(), req.scaleConversion(), req.scaleCoefficient(),
-                req.smallRoiWarnVoxels());
+                req.smallRoiWarnVoxels(), req.calibration(), req.valueSpec(), req.planes(), req.smallRoiWarnPixels());
     }
 
     private void set(Job job, int i, PairState state, FailureKind kind, String error, boolean fromCache, long ms) {
@@ -318,17 +384,99 @@ public class RadiomicsBatchService {
         if (size != null && Boolean.TRUE.equals(size.smallRoi())) {
             flags.add(FLAG_SMALL_ROI);
         }
+        if (small2d(r)) {
+            flags.add(FLAG_SMALL_ROI_2D);
+        }
         if (r.lossyCompressed()) {
             flags.add(FLAG_LOSSY);
         }
+        if (r.provenance() != null && r.provenance().uncalibratedPet()) {
+            flags.add(FLAG_UNCALIBRATED_PT);
+        }
+        if (r.provenance() != null && r.provenance().recordFlags() != null) {
+            flags.addAll(r.provenance().recordFlags());
+        }
         return flags;
+    }
+
+    private static boolean sectionSmall(RoiFeatureResult.Section s) {
+        return s != null && s.roiSize() != null && Boolean.TRUE.equals(s.roiSize().smallRoi());
+    }
+
+    private static boolean slicesSmall(RoiFeatureResult.Slices s) {
+        return s != null && s.smallRoiPositionsMm() != null && !s.smallRoiPositionsMm().isEmpty();
+    }
+
+    /** 2D（取得面・再スライスした断面）のどれかが、基準値より小さいか。基準値が無ければ false。 */
+    static boolean small2d(RoiFeatureResult r) {
+        if (sectionSmall(r.section()) || slicesSmall(r.slices())) {
+            return true;
+        }
+        if (r.planeResults() != null) {
+            for (RoiFeatureResult.PlaneResult p : r.planeResults()) {
+                if (sectionSmall(p.section()) || slicesSmall(p.slices())) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /** 2D の小さい ROI の説明（スキップの理由に使う）。 */
+    static String small2dText(RoiFeatureResult r) {
+        List<String> parts = new ArrayList<>();
+        java.util.function.BiConsumer<String, RoiFeatureResult.Section> sec = (name, s) -> {
+            if (sectionSmall(s)) {
+                parts.add(name + " 最大断面 " + s.roiSize().intensityVoxels() + " 画素 ＜ 基準値 " + s.roiSize().smallRoiWarnVoxels());
+            }
+        };
+        java.util.function.BiConsumer<String, RoiFeatureResult.Slices> sl = (name, s) -> {
+            if (slicesSmall(s)) {
+                parts.add(name + " スライス " + s.smallRoiPositionsMm().size() + " 枚 ＜ 基準値 " + s.smallRoiWarnPixels() + " 画素");
+            }
+        };
+        sec.accept("取得面", r.section());
+        sl.accept("取得面", r.slices());
+        if (r.planeResults() != null) {
+            for (RoiFeatureResult.PlaneResult p : r.planeResults()) {
+                sec.accept(p.plane(), p.section());
+                sl.accept(p.plane(), p.slices());
+            }
+        }
+        return "小さい ROI（2D: " + String.join("、", parts) + "）";
+    }
+
+    /** QC の「スキップ」に当たったか（止める指定が先に効くので、止めるに当たったときは呼ばない）。 */
+    private static boolean skipsOn(Qc qc, List<String> flags) {
+        if (qc == null) {
+            return false;
+        }
+        return (qc.smallRoi() == QcMode.SKIP && (flags.contains(FLAG_SMALL_ROI) || flags.contains(FLAG_SMALL_ROI_2D)))
+                || (qc.lossy() == QcMode.SKIP && flags.contains(FLAG_LOSSY));
+    }
+
+    /** スキップの理由（結果の表の RowError に入る）。スキップの指定に当たった旗だけを書く。 */
+    static String skipReason(Qc qc, RoiFeatureResult r, List<String> flags) {
+        List<String> why = new ArrayList<>();
+        if (qc.smallRoi() == QcMode.SKIP && flags.contains(FLAG_SMALL_ROI)) {
+            RoiFeatureResult.RoiSize s = r.roiSize();
+            why.add("小さい ROI（" + (s == null || s.intensityVoxels() == null ? "?" : s.intensityVoxels())
+                    + " ボクセル ＜ 基準値 " + (s == null || s.smallRoiWarnVoxels() == null ? "?" : s.smallRoiWarnVoxels()) + "）");
+        }
+        if (qc.smallRoi() == QcMode.SKIP && flags.contains(FLAG_SMALL_ROI_2D)) {
+            why.add(small2dText(r));
+        }
+        if (qc.lossy() == QcMode.SKIP && flags.contains(FLAG_LOSSY)) {
+            why.add("非可逆圧縮の画像");
+        }
+        return "QC でスキップ: " + String.join("、", why);
     }
 
     private static boolean stopsOn(Qc qc, List<String> flags) {
         if (qc == null) {
             return false;
         }
-        return (qc.smallRoi() == QcMode.STOP && flags.contains(FLAG_SMALL_ROI))
+        return (qc.smallRoi() == QcMode.STOP && (flags.contains(FLAG_SMALL_ROI) || flags.contains(FLAG_SMALL_ROI_2D)))
                 || (qc.lossy() == QcMode.STOP && flags.contains(FLAG_LOSSY));
     }
 
@@ -365,6 +513,12 @@ public class RadiomicsBatchService {
                         log.info("[roi-batch] job {} stopped by QC at pair {}: {}", job.id, i, flags);
                         return;
                     }
+                    if (!flags.isEmpty() && skipsOn(req.qc(), flags) && !acknowledged(req).contains(p.pairKey())) {
+                        // 止めずに続ける。値は表に入れず、状態と理由を残す（黙って捨てない）。許容した組は飛ばさない
+                        set(job, i, PairState.QC_SKIPPED, null, skipReason(req.qc(), r, flags), r.fromCache(),
+                                System.currentTimeMillis() - t0, flags);
+                        log.info("[roi-batch] job {} pair {} skipped by QC: {}", job.id, i, flags);
+                    }
                 } catch (CancellationException e) {
                     set(job, i, PairState.CANCELLED, null, null, false, System.currentTimeMillis() - t0);
                 } catch (IllegalArgumentException e) {
@@ -390,13 +544,18 @@ public class RadiomicsBatchService {
         }
     }
 
-    /** VOI 統計は PET の SUV を扱えない（保存値のまま Bq/mL を SUV と取り違えないよう、その組は断る）。 */
+    /**
+     * VOI 統計は、PET を校正せずに（Bq/mL のまま、{@code calibration=none}）出す組を断る（保存値の単位を SUV と
+     * 取り違えないため）。校正する（既定の {@code auto} を含む）なら、PET も出せる。
+     */
     private void rejectUnsupportedModality(BatchRequest req, BatchPair p) {
         if (!KIND_VOI_STATS.equals(req.kind()) || modalityOf == null) {
             return;
         }
-        if ("PT".equals(modalityOf.apply(p.studyUid(), p.sourceSeriesUid()))) {
-            throw new IllegalArgumentException("PET は SUV に未対応のため、VOI 統計を出しません（保存値の単位のままになるため）");
+        if (RoiFeatureRequest.CALIBRATION_NONE.equalsIgnoreCase(req.calibration())
+                && "PT".equals(modalityOf.apply(p.studyUid(), p.sourceSeriesUid()))) {
+            throw new IllegalArgumentException(
+                    "PET を校正せずに（Bq/mL のまま）VOI 統計は出しません。SUV に校正してください");
         }
     }
 

@@ -19,7 +19,7 @@ import { ERR_NO_PAIRS, runQueue, type QueueEntry, type QueueState } from "../bat
 import { parseSpec, type BatchSpec } from "../batchSpec";
 import { assignSubjectCodes, type OutputFile } from "../datasetCsv";
 import { defaultRoiFeatureForm } from "../roiFeatureSettings";
-import { batchFileBase } from "../batchPairs";
+import { batchFileBase, spacingMixText } from "../batchPairs";
 
 export const EXIT_OK = 0;
 export const EXIT_FAILED = 1;
@@ -35,6 +35,8 @@ export interface CliOptions {
   specFiles: string[];
   outDir: string;
   recompute: boolean;
+  /** 結果の表に患者 ID の列を含める。省略は含める（画面の書き出しの既定と同じ。同じ定義なら画面と同じ表になる）。 */
+  includePatientId?: boolean;
   /** 報告 JSON の場所。省略は `<outDir>/batch-cli-report.json`。 */
   reportFile?: string;
   pollMs?: number;
@@ -191,13 +193,18 @@ export async function runBatchCli(opts: CliOptions, api: CliApi, io: CliIo): Pro
   const patientOf = new Map(studies.map((s) => [s.studyInstanceUid, s.patientId]));
   const subjects = assignSubjectCodes(uids, (u) => patientOf.get(u), studyUids);
 
+  const includePatientId = opts.includePatientId ?? true;
+  if (includePatientId) io.log("結果の表に患者 ID の列を含めます。表を共有・公開する前に、--no-patient-id で外すか、列を除いてください。");
   io.mkdirp(opts.outDir);
   const written = new Map<number, string[]>();
   const entries: QueueEntry[] = loaded.map((l, i) => ({ id: i + 1, spec: l.spec, enabled: true, state: "pending", message: null, files: 0 }));
   const final = await runQueue(entries, {
     baseRows: rows, baseForm: defaultRoiFeatureForm(),
-    output: { albumName: album.name, subjects, includePatientId: false, subjectsFile: true, bom: false },
+    output: { albumName: album.name, subjects, includePatientId, subjectsFile: true, bom: false },
     pollMs: opts.pollMs ?? 1000, isCancelled: () => false, recompute: opts.recompute,
+    onSpacingMix: (prefix, mix, resampleMm) => io.log(resampleMm == null
+      ? `⚠ ${prefix}: 元画像の画素間隔が組の間でそろっていません（${spacingMixText(mix)}。${mix.usable} 組）。リサンプリングなしでは、間隔の違いが形態・テクスチャの値に影響します。等方リサンプリングを使うか、間隔ごとに分けて解析してください。`
+      : `${prefix}: 元画像の画素間隔は組の間でそろっていませんが、${resampleMm} mm 等方に取り直して計算しています（${spacingMixText(mix)}）。`),
   }, {
     submit: api.submit, get: api.get, results: api.results, cancel: api.cancel,
     save: (files: readonly OutputFile[]) => {

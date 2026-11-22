@@ -62,10 +62,13 @@ import {
   defaultRoiFeatureForm,
   parseSigmaList,
   roiFeatureSettings,
+  valueSpecOf,
   splitFilteredFamily,
   type LogPadding,
   type RoiFeatureForm,
 } from "./roiFeatureSettings";
+import { parseAdvanced } from "./advancedSettings";
+import { useSettingsSchema } from "./useSettingsSchema";
 
 interface RoiFeatureContext {
   studyInstanceUid: string;
@@ -120,6 +123,7 @@ export function RoiFeatureScreen() {
   /** 計算の単位（3D は常に計算する）。既定は 3D だけ＝従来と同じ。 */
   const [sectionOn, setSectionOn] = useState(false);
   const [slicesOn, setSlicesOn] = useState(false);
+  const [allPlanes, setAllPlanes] = useState(false);
   /** 症例を突き合わせるための任意の文字列（CSV の CaseLabel 列とファイル名）。患者情報は入れない。 */
   const [caseLabel, setCaseLabel] = useState("");
 
@@ -308,7 +312,11 @@ export function RoiFeatureScreen() {
         maskChannel,
         channel,
         timePoint,
-        settings: roiFeatureSettings(form),
+        // 2D の単位を選んでいないときは、Shape2D（1 枚の画像の特徴量）を送らない（3D では計算されないため）
+        settings: { ...roiFeatureSettings(form), ...(sectionOn || slicesOn ? {} : { BOOL_enableShape2D: "0" }) },
+        planes: (sectionOn || slicesOn) && allPlanes ? "ALL" : "ACQUISITION",
+        calibration: form.calibration,
+        valueSpec: valueSpecOf(form),
         recompute,
         ...roiFeatureScaleRequest(form),
         roiModes: [
@@ -389,7 +397,9 @@ export function RoiFeatureScreen() {
     return t("roiFeat.summary.settings", { disc, resampling: rs, filter, on, total: ROI_FEATURE_FAMILIES.length });
   }, [result, t]);
 
-  const rangeProblem = rangeBounds(form).problem;
+  const settingsSchema = useSettingsSchema();
+  // 範囲の入力か、詳細設定にエラーがある間は計算しない（エラーの行を黙って捨てた設定で計算しない）
+  const rangeProblem = rangeBounds(form).problem ?? (parseAdvanced(form.advancedText, settingsSchema).errors.length > 0 ? "ADVANCED" : null);
 
   const seriesLabel = (s: Series) =>
     `#${s.seriesNumber ?? "?"} ${s.modality ?? ""} ${s.seriesDescription ?? ""}`.trim();
@@ -434,7 +444,7 @@ export function RoiFeatureScreen() {
       {!studyUid && <div style={errText}>{t("roiFeat.err.noContext")}</div>}
 
       <div style={panel}>
-        <Field label={t("roiFeat.field.target")}>
+        <Field label={t("roiFeat.field.target")} tip={t("roiFeat.tip.target")}>
           <select value={sourceSeriesUid} onChange={(e) => setSourceSeriesUid(e.target.value)}
             disabled={busy} style={input} data-testid="roifeat-target">
             {allSeries.map((s) => (
@@ -456,7 +466,7 @@ export function RoiFeatureScreen() {
             </select>
           </Field>
         )}
-        <Field label={t("roiFeat.field.mask")}>
+        <Field label={t("roiFeat.field.mask")} tip={t("roiFeat.tip.mask")}>
           <select value={maskSeriesUid} onChange={(e) => setMaskSeriesUid(e.target.value)}
             disabled={busy} style={input} data-testid="roifeat-mask">
             <option value="">{t("roiFeat.mask.none")}</option>
@@ -502,13 +512,20 @@ export function RoiFeatureScreen() {
             ) : maxSection.error}
           </div>
         )}
-        <Field label={t("roiFeat.field.caseLabel")}>
+        <Field label={t("roiFeat.field.caseLabel")} tip={t("roiFeat.tip.caseLabel")}>
           <input value={caseLabel} onChange={(e) => setCaseLabel(e.target.value)} placeholder="case-012"
             style={input} data-testid="roifeat-caselabel" />
         </Field>
         <div style={note}>{t("roiFeat.caseLabel.help")}</div>
 
-        <Field label={t("roiFeat.field.modes")}>
+        <RoiFeatureSettingsFields form={form} setForm={setForm} disabled={busy} testIdPrefix="roifeat"
+          layout={{ labelMinWidth: 150, align: "right" }} showRange showPreset twoDSelected={sectionOn || slicesOn}
+          contentSummary={[t("roiFeat.mode.whole"), ...(sectionOn ? [t("roiFeat.mode.section")] : []), ...(slicesOn ? [t("roiFeat.mode.slices")] : []),
+            ...((sectionOn || slicesOn) && allPlanes ? [t("roiFeat.planes.all")] : [])].join(" + ")}
+          preprocessSummary={`${t("roiFeat.field.filter")} ${form.logOn ? (form.logByRadius ? t("roiFeat.filter.logRadius") : t("roiFeat.filter.log")) : t("roiFeat.filter.none")}`}
+          contentSlot={(
+            <>
+        <Field label={t("roiFeat.field.modes")} tip={t("roiFeat.tip.modes")}>
           <span style={{ display: "inline-flex", gap: 10, alignItems: "center", justifyContent: "flex-end", flexWrap: "wrap" }}>
             <label title={t("roiFeat.mode.alwaysOn")}>
               <input type="checkbox" checked disabled data-testid="roifeat-mode-whole" /> {t("roiFeat.mode.whole")}
@@ -524,12 +541,26 @@ export function RoiFeatureScreen() {
           </span>
         </Field>
         {(sectionOn || slicesOn) && <div style={note}>{t("roiFeat.mode.note2d")}</div>}
+        <Field label={t("roiFeat.field.planes")} tip={t("roiFeat.tip.planes")}>
+          <span style={{ display: "inline-flex", gap: 10, alignItems: "center", justifyContent: "flex-end", flexWrap: "wrap" }}
+            title={sectionOn || slicesOn ? undefined : t("roiFeat.planes.needs2d")}>
+            <label>
+              <input type="radio" name="roifeat-planes" checked={!allPlanes} disabled={busy || !(sectionOn || slicesOn)}
+                data-testid="roifeat-planes-acquisition" onChange={() => setAllPlanes(false)} /> {t("roiFeat.planes.acquisition")}
+            </label>
+            <label>
+              <input type="radio" name="roifeat-planes" checked={allPlanes && (sectionOn || slicesOn)} disabled={busy || !(sectionOn || slicesOn)}
+                data-testid="roifeat-planes-all" onChange={() => setAllPlanes(true)} /> {t("roiFeat.planes.all")}
+            </label>
+          </span>
+        </Field>
+        {(sectionOn || slicesOn) && allPlanes && <div style={note}>{t("roiFeat.planes.noteAll")}</div>}
 
-        <RoiFeatureSettingsFields form={form} setForm={setForm} disabled={busy} testIdPrefix="roifeat"
-          layout={{ labelMinWidth: 150, align: "right" }} showRange showPreset
-          middleSlot={(
+            </>
+          )}
+          preprocessSlot={(
             <>
-        <Field label={t("roiFeat.field.filter")}>
+        <Field label={t("roiFeat.field.filter")} tip={t("roiFeat.tip.filter")}>
           <span style={{ display: "inline-flex", gap: 8, alignItems: "center", justifyContent: "flex-end", flexWrap: "wrap" }}>
             <label>
               <input type="radio" checked={!form.logOn} disabled={busy} data-testid="roifeat-filter-none"
@@ -549,19 +580,19 @@ export function RoiFeatureScreen() {
           <>
             {form.logByRadius ? (
               <>
-                <Field label={t("roiFeat.scale.notation")}>
+                <Field label={t("roiFeat.scale.notation")} tip={t("roiFeat.tip.scaleNotation")}>
                   <select value={form.scaleNotation} disabled={busy} style={{ ...input, width: 160 }}
                     data-testid="roifeat-scale-notation"
                     onChange={(e) => setForm((f) => ({ ...f, scaleNotation: e.target.value as ScaleNotation }))}>
                     {SCALE_NOTATIONS.map((n) => <option key={n} value={n}>{t(`roiFeat.scale.notation.${n}`)}</option>)}
                   </select>
                 </Field>
-                <Field label={t("roiFeat.scale.values")}>
+                <Field label={t("roiFeat.scale.values")} tip={t("roiFeat.tip.scaleValues")}>
                   <input value={form.scalesText} disabled={busy} style={{ ...input, width: 220 }} data-testid="roifeat-scales"
                     onChange={(e) => setForm((f) => ({ ...f, scalesText: e.target.value }))} />
                 </Field>
                 <div style={note}>{t("roiFeat.scale.valuesHint")}</div>
-                <Field label={t("roiFeat.scale.labels")}>
+                <Field label={t("roiFeat.scale.labels")} tip={t("roiFeat.tip.scaleLabels")}>
                   <input value={form.scaleLabelsText} disabled={busy} style={{ ...input, width: 220 }} data-testid="roifeat-scale-labels"
                     onChange={(e) => setForm((f) => ({ ...f, scaleLabelsText: e.target.value }))} />
                 </Field>
@@ -584,7 +615,7 @@ export function RoiFeatureScreen() {
                   )}
                 </div>
                 {form.scaleNotation === "WIDTH_PX" && <div style={note} data-testid="roifeat-scale-width-note">{t("roiFeat.scale.noteWidth")}</div>}
-                <Field label={t("roiFeat.scale.conversion")}>
+                <Field label={t("roiFeat.scale.conversion")} tip={t("roiFeat.tip.scaleConversion")}>
                   <select value={form.scaleConversion} disabled={busy} style={{ ...input, width: 260 }}
                     data-testid="roifeat-scale-conversion"
                     onChange={(e) => setForm((f) => ({ ...f, scaleConversion: e.target.value as ScaleConversion }))}>
@@ -592,7 +623,7 @@ export function RoiFeatureScreen() {
                   </select>
                 </Field>
                 {form.scaleConversion === "COEFFICIENT" && (
-                  <Field label={t("roiFeat.scale.k")}>
+                  <Field label={t("roiFeat.scale.k")} tip={t("roiFeat.tip.scaleK")}>
                     <NumberField value={form.scaleK} onChange={(v) => setForm((f) => ({ ...f, scaleK: v }))}
                       min={0.1} max={10} step={0.1} disabled={busy} style={{ ...input, width: 64 }} />
                   </Field>
@@ -600,16 +631,16 @@ export function RoiFeatureScreen() {
                 <div style={note} data-testid="roifeat-scale-note">{t("roiFeat.scale.note")}</div>
               </>
             ) : (
-              <Field label={t("roiFeat.filter.sigma")}>
+              <Field label={t("roiFeat.filter.sigma")} tip={t("roiFeat.tip.sigma")}>
                 <input value={form.logSigmaMm} disabled={busy} style={{ ...input, width: 120 }} data-testid="roifeat-log-sigma"
                   onChange={(e) => setForm((f) => ({ ...f, logSigmaMm: e.target.value }))} />
               </Field>
             )}
-            <Field label={t("roiFeat.filter.truncate")}>
+            <Field label={t("roiFeat.filter.truncate")} tip={t("roiFeat.tip.truncate")}>
               <NumberField value={form.logTruncate} onChange={(v) => setForm((f) => ({ ...f, logTruncate: v }))}
                 min={1} max={10} step={0.5} disabled={busy} style={{ ...input, width: 64 }} />
             </Field>
-            <Field label={t("roiFeat.filter.padding")}>
+            <Field label={t("roiFeat.filter.padding")} tip={t("roiFeat.tip.padding")}>
               <select value={form.logPadding} disabled={busy} style={{ ...input, width: 120 }} data-testid="roifeat-log-padding"
                 onChange={(e) => setForm((f) => ({ ...f, logPadding: e.target.value as LogPadding }))}>
                 {LOG_PADDINGS.map((pd) => <option key={pd} value={pd}>{pd}</option>)}
@@ -622,7 +653,7 @@ export function RoiFeatureScreen() {
           )} />
         {form.families.GLAM && <div style={note}>{t("roiFeat.glamNote")}</div>}
 
-        <div style={{ display: "flex", gap: 6, marginTop: 10, justifyContent: "flex-end" }}>
+        <div style={{ display: "flex", gap: 6, marginTop: 10, justifyContent: "flex-end", position: "sticky", bottom: 0, background: "#fff", padding: "8px 0", borderTop: "1px solid #dfe5ec" }}>
           <button onClick={() => void run(false)} disabled={busy || !studyUid || rangeProblem !== null}
             style={{ ...btnPrimary, opacity: busy ? 0.6 : 1 }} data-testid="roifeat-run">
             {t("roiFeat.run")}
@@ -794,12 +825,31 @@ export function RoiFeatureScreen() {
 
 /** 2D の単位の要約: 最大断面の位置・面積、スライス別の枚数・失敗・小さい ROI、スライス別の表（折りたたみ）。 */
 function Modes2dPanel({ result, t }: { result: RoiFeatureResult; t: TFn }) {
-  const sec = result.section;
-  const sl = result.slices;
   return (
     <div data-testid="roifeat-modes2d">
+      <UnitSummary sec={result.section} sl={result.slices} idp="roifeat" t={t} />
+      {(result.planeResults ?? []).map((p) => (
+        <details key={p.plane} style={{ marginTop: 8 }} data-testid={`roifeat-plane-${p.plane}`}>
+          <summary style={{ cursor: "pointer", color: "#0b5cad" }} data-testid={`roifeat-plane-${p.plane}-head`}>
+            {t(`roiFeat.plane.${p.plane}`)}（{t("roiFeat.plane.resliced", { spacing: p.spacingMm ?? "?" })}）
+            {p.error ? ` — ${t("roiFeat.plane.notComputed")}` : p.section ? ` — ${t("roiFeat.section.summary", {
+              pos: formatPositionMm(p.section.positionMm), area: formatAreaMm2(p.section.areaMm2), pixels: p.section.pixels })}` : ""}
+          </summary>
+          {p.error
+            ? <div style={warnBand} data-testid={`roifeat-plane-${p.plane}-error`}>⚠ {p.error}</div>
+            : <UnitSummary sec={p.section} sl={p.slices} idp={`roifeat-plane-${p.plane}`} t={t} />}
+        </details>
+      ))}
+    </div>
+  );
+}
+
+/** 1 つの面（取得面、または再スライスした断面）の 2D の要約。`idp` は data-testid の接頭辞。 */
+function UnitSummary({ sec, sl, idp, t }: { sec?: RoiFeatureResult["section"]; sl?: RoiFeatureResult["slices"]; idp: string; t: TFn }) {
+  return (
+    <div>
       {sec && (
-        <div style={note} data-testid="roifeat-section-summary">
+        <div style={note} data-testid={`${idp}-section-summary`}>
           {t("roiFeat.section.summary", {
             pos: formatPositionMm(sec.positionMm), area: formatAreaMm2(sec.areaMm2), pixels: sec.pixels,
           })}
@@ -807,11 +857,11 @@ function Modes2dPanel({ result, t }: { result: RoiFeatureResult; t: TFn }) {
       )}
       {sl && (
         <>
-          <div style={note} data-testid="roifeat-slices-summary">
+          <div style={note} data-testid={`${idp}-slices-summary`}>
             {t("roiFeat.slices.summary", { used: sl.rows.length, total: sl.foregroundSlices, failed: sl.failures.length })}
           </div>
           {sl.failures.length > 0 && (
-            <div style={warnBand} data-testid="roifeat-slices-failures">
+            <div style={warnBand} data-testid={`${idp}-slices-failures`}>
               ⚠ {t("roiFeat.slices.failures", {
                 n: sl.failures.length,
                 list: sl.failures.map((f) => `${formatPositionMm(f.positionMm)} mm`).join(", "),
@@ -820,7 +870,7 @@ function Modes2dPanel({ result, t }: { result: RoiFeatureResult; t: TFn }) {
             </div>
           )}
           {sl.smallRoiWarnPixels != null && sl.smallRoiPositionsMm.length > 0 && (
-            <div style={warnBand} data-testid="roifeat-slices-small">
+            <div style={warnBand} data-testid={`${idp}-slices-small`}>
               ⚠ {t("roiFeat.slices.small", {
                 n: sl.smallRoiPositionsMm.length,
                 threshold: sl.smallRoiWarnPixels,
@@ -828,9 +878,9 @@ function Modes2dPanel({ result, t }: { result: RoiFeatureResult; t: TFn }) {
               })}
             </div>
           )}
-          <details style={{ marginTop: 6 }} data-testid="roifeat-slices-details">
+          <details style={{ marginTop: 6 }} data-testid={`${idp}-slices-details`}>
             <summary style={{ cursor: "pointer", color: "#0b5cad" }}>{t("roiFeat.slices.open")}</summary>
-            <table style={table} data-testid="roifeat-slices-table">
+            <table style={table} data-testid={`${idp}-slices-table`}>
               <thead>
                 <tr>
                   <th style={th}>{t("roiFeat.slices.col.pos")}</th>
@@ -872,20 +922,39 @@ function CompareTable({ result, query, familyLabel, t }: {
   familyLabel: (family: string) => string;
   t: TFn;
 }) {
+  // 表示する断面: 取得面（既定）か、再スライスした断面。選んだ断面の最大断面・スライス別の列に入れ替える（計算は変えない）
+  const [planeSel, setPlaneSel] = useState("ACQUISITION");
+  const planes = (result.planeResults ?? []).filter((p) => !p.error && (p.section || p.slices));
+  const picked = planes.find((p) => p.plane === planeSel);
+  const view = useMemo<RoiFeatureResult>(
+    () => (picked ? { ...result, section: picked.section ?? null, slices: picked.slices ?? null } : result),
+    [result, picked],
+  );
   const rows = useMemo(() => {
     const q = query.trim().toLowerCase();
-    return compareRows(result).filter((r) => !q || r.column.toLowerCase().includes(q));
-  }, [result, query]);
+    return compareRows(view).filter((r) => !q || r.column.toLowerCase().includes(q));
+  }, [view, query]);
   const groups: { family: string; rows: CompareRow[] }[] = [];
   for (const r of rows) {
     const last = groups[groups.length - 1];
     if (last && last.family === r.family) last.rows.push(r);
     else groups.push({ family: r.family, rows: [r] });
   }
-  const showSection = !!result.section;
-  const showSlices = !!result.slices;
+  const showSection = !!view.section;
+  const showSlices = !!view.slices;
   const cols = 4 + (showSection ? 1 : 0) + (showSlices ? 2 : 0);
   return (
+    <>
+      {planes.length > 0 && (
+        <div style={{ ...note, display: "flex", gap: 8, alignItems: "center" }}>
+          <span title={t("roiFeat.tip.planeSelect")}>{t("roiFeat.plane.select")}</span>
+          <select value={picked ? picked.plane : "ACQUISITION"} style={{ ...input, width: "auto" }} data-testid="roifeat-plane-select"
+            onChange={(e) => setPlaneSel(e.target.value)}>
+            <option value="ACQUISITION">{t("roiFeat.plane.acquisition")}</option>
+            {planes.map((p) => <option key={p.plane} value={p.plane}>{t(`roiFeat.plane.${p.plane}`)}</option>)}
+          </select>
+        </div>
+      )}
     <table style={table} data-testid="roifeat-table">
       <thead>
         <tr>
@@ -919,6 +988,7 @@ function CompareTable({ result, query, familyLabel, t }: {
         ))}
       </tbody>
     </table>
+    </>
   );
 }
 
@@ -960,10 +1030,10 @@ function FamilyRows({ label, raw, discretisation, rows, t }: {
   );
 }
 
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
+function Field({ label, children, tip }: { label: string; children: React.ReactNode; tip?: string }) {
   return (
     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, padding: "3px 0" }}>
-      <span style={{ ...fieldLabel, flex: "none", minWidth: 150 }}>{label}</span>
+      <span style={{ ...fieldLabel, flex: "none", minWidth: 150 }} title={tip}>{label}</span>
       <span style={{ flex: 1, textAlign: "right" }}>{children}</span>
     </div>
   );

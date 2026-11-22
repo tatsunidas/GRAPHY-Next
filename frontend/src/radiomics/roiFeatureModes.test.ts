@@ -22,7 +22,7 @@ const prov = {
   graphyNextVersion: "1.0", radiomicsjVersion: "2.4.1", extractedAt: "2026-10-22T00:00:00Z", settingsSha256: "ab".repeat(32),
 };
 const disc = { fixedBinNumber: true, nBins: 32, binWidth: 25, ivhMode: 0, ivhBinCount: 1000, ivhBinWidth: 2.5 };
-const rec = { computedAt: "2026-10-22T00:00:00Z", discretisation: disc, provenance: prov, settingsProperties: "BOOL_force2D=1\n" };
+const rec = { computedAt: "2026-10-22T00:00:00Z", discretisation: disc, provenance: prov, settingsProperties: "BOOL_force2D=1\n", plane: "SAGITTAL", tiltDeg: 12.5 };
 
 const MEAN = "IntensityBasedStatistical_Mean";
 const full = (): RoiFeatureResult => ({
@@ -89,32 +89,44 @@ describe("2D の CSV", () => {
     expect(roiFeatureDataCsv(a, "c1")).toBe(roiFeatureDataCsv(b, "c1"));
   });
 
-  it("最大断面の CSV: 記録 5 列・大きさ 6 列・最大断面 3 列・特徴。Morphology の列は無い", () => {
+  it("最大断面の CSV: 記録 9 列（校正の単位・記録と値の種類を含む）・大きさ 6 列・最大断面 3 列・特徴。Morphology の列は無い", () => {
     const [h, v] = roiFeatureSectionCsv(full().section!, "c1").trimEnd().split("\r\n");
     const cols = h.split(",");
-    expect(cols.slice(0, 5)).toEqual([
+    expect(cols.slice(0, 9)).toEqual([
       "CaseLabel", "Provenance_GraphyNextVersion", "Provenance_RadiomicsJVersion", "Provenance_ExtractedAt",
-      "Provenance_SettingsSha256",
+      "Provenance_SettingsSha256", "Provenance_ValueUnit", "Provenance_Calibration",
+      "Provenance_ValueKind", "Provenance_ValueKindBasis",
     ]);
-    expect(cols.slice(11, 14)).toEqual(["Section_PositionMm", "Section_AreaMm2", "Section_Pixels"]);
-    expect(cols.slice(14)).toEqual(["Shape2D_PixelSurface", MEAN]);
+    expect(cols.slice(15, 18)).toEqual(["Section_PositionMm", "Section_AreaMm2", "Section_Pixels"]);
+    expect(cols.slice(18, 20)).toEqual(["Plane", "Plane_TiltDeg"]);
+    expect(cols.slice(20)).toEqual(["Shape2D_PixelSurface", MEAN]);
     const vals = v.split(",");
     expect(vals.length).toBe(cols.length);
     expect(vals[0]).toBe("c1");
-    expect(Number(vals[12])).toBe(147);
+    expect(Number(vals[16])).toBe(147);
     expect(Number(vals[vals.length - 1])).toBe(200);
+    expect(vals.slice(18, 20)).toEqual(["SAGITTAL", "12.5"]); // 断面の名前と傾き角
     // 形態の体積は 2D では無いので大きさの列は NaN、しきい値は 150
-    expect(vals[7]).toBe("NaN");
-    expect(vals[9]).toBe("150");
+    expect(vals[11]).toBe("NaN");
+    expect(vals[13]).toBe("150");
   });
 
   it("スライス別の CSV: 前景のあるスライスごとに 1 行（失敗は行にならない）", () => {
     const lines = roiFeatureSlicesCsv(full().slices!, "c1").trimEnd().split("\r\n");
     expect(lines.length).toBe(1 + 2);
     const h = lines[0].split(",");
-    expect(h.slice(5, 8)).toEqual(["Slice_PositionMm", "Slice_AreaMm2", "Slice_Pixels"]);
-    expect(lines.slice(1).map((l) => Number(l.split(",")[5]))).toEqual([0, 2]);
+    expect(h.slice(9, 14)).toEqual(["Slice_PositionMm", "Slice_AreaMm2", "Slice_Pixels", "Plane", "Plane_TiltDeg"]);
+    expect(lines[1].split(",").slice(12, 14)).toEqual(["SAGITTAL", "12.5"]);
+    expect(lines.slice(1).map((l) => Number(l.split(",")[9]))).toEqual([0, 2]);
     expect(lines.slice(1).map((l) => Number(l.split(",")[h.indexOf(MEAN)]))).toEqual([100, 200]);
+  });
+
+  it("断面の列: 古い記録（断面の無いもの）は空で、列は同じ並びで出る", () => {
+    const old = full();
+    old.section = { ...old.section!, record: { ...old.section!.record, plane: undefined, tiltDeg: undefined } };
+    const [h, v] = roiFeatureSectionCsv(old.section, "c1").trimEnd().split("\r\n");
+    expect(h.split(",").slice(18, 20)).toEqual(["Plane", "Plane_TiltDeg"]);
+    expect(v.split(",").slice(18, 20)).toEqual(["", ""]);
   });
 
   it("集約の CSV: mean・pixelWeightedMean・slicesUsed と、前景数・失敗数", () => {
@@ -143,6 +155,23 @@ describe("2D の CSV", () => {
     expect(roiFeature2dFiles(r, "").map((f) => f.suffix).every((s) => s.startsWith("_slices2d"))).toBe(true);
     r.slices = null;
     expect(roiFeature2dFiles(r, "")).toEqual([]);
+  });
+
+  it("全断面: 断面ごとのファイルが、取得面と同じ並びで追加される（作れなかった断面は書かない）", () => {
+    const r = full();
+    r.planeResults = [
+      { plane: "AXIAL", spacingMm: 0.7, section: r.section, slices: r.slices },
+      { plane: "SAGITTAL", spacingMm: 0.7, section: null, slices: null, error: "スライスが 1 枚だけのため、別の断面を作れません。" },
+      { plane: "CORONAL", spacingMm: 0.7, section: r.section, slices: null },
+    ];
+    const files = roiFeature2dFiles(r, "c1");
+    expect(files.map((f) => f.suffix).slice(7)).toEqual([
+      "_maxsection2d_axial.csv", "_slices2d_axial.csv", "_slices2d_axial_aggregate.csv", "_maxsection2d_coronal.csv",
+    ]);
+    // 取得面のファイルと同じ内容（同じ列・同じ値）
+    const byName = Object.fromEntries(files.map((f) => [f.suffix, f.text]));
+    expect(byName["_maxsection2d_axial.csv"]).toBe(byName["_maxsection2d.csv"]);
+    expect(byName["_slices2d_axial.csv"]).toBe(byName["_slices2d.csv"]);
   });
 
   it("定義表の離散化に per-slice が付く（IVH は付かない）", () => {

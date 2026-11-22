@@ -1,7 +1,7 @@
 // 一括抽出の無人実行（コマンドライン）。画面を出さずに backend を自前で起動し、保存した処理の定義（複数）を順に実行して
 // 表を書き、終了コードで成否を返す。実行の本体は frontend の `npm run build:batch-cli` が作る `batch-cli/run.cjs`。
 //
-//   node desktop/batchCli.js --album <名前|ID> --spec a.json [--spec b.json …] --out <フォルダ> [--data-dir <フォルダ>] [--recompute] [--report <ファイル>]
+//   node desktop/batchCli.js --album <名前|ID> --spec a.json [--spec b.json …] --out <フォルダ> [--data-dir <フォルダ>] [--recompute] [--no-patient-id] [--report <ファイル>]
 //   ELECTRON_RUN_AS_NODE=1 <electron> desktop/batchCli.js …        （同梱の Node で動かすとき）
 //
 // 終了コード: 0＝全定義が完了／1＝失敗した定義がある／2＝失敗は無いが QC 停止・確認待ちの組などがあった／
@@ -42,12 +42,13 @@ const JVM_ARGS = [
 
 const USAGE = [
   "使い方: graphy-batch --album <名前|ID> --spec <定義.json> [--spec …] --out <フォルダ>（開発ツリーでは node desktop/batchCli.js）",
-  "         [--data-dir <フォルダ>] [--recompute] [--report <ファイル>]",
+  "         [--data-dir <フォルダ>] [--recompute] [--no-patient-id] [--report <ファイル>]",
+  "         （既定では結果の表に患者 ID の列を含めます。--no-patient-id で外します）",
 ].join("\n");
 
 /** @returns {{ok: true, opts: object} | {ok: false, error: string, help?: boolean}} */
 function parseArgs(argv) {
-  const opts = { album: null, specs: [], out: null, dataDir: null, recompute: false, report: null };
+  const opts = { album: null, specs: [], out: null, dataDir: null, recompute: false, patientId: true, report: null };
   const need = (i, name) => {
     const v = argv[i + 1];
     if (v === undefined || v.startsWith("--")) throw new Error(`${name} に値がありません`);
@@ -63,6 +64,7 @@ function parseArgs(argv) {
       else if (a === "--data-dir") opts.dataDir = need(i++, a);
       else if (a === "--report") opts.report = need(i++, a);
       else if (a === "--recompute") opts.recompute = true;
+      else if (a === "--no-patient-id") opts.patientId = false;
       else throw new Error(`知らない引数です: ${a}`);
     }
   } catch (e) {
@@ -264,7 +266,7 @@ async function main(argv) {
     await waitHealthy(port, child, () => spawnError !== null || child.exitCode !== null);
     return await runCli({
       server: `http://127.0.0.1:${port}`, album: opts.album, specFiles,
-      outDir: path.resolve(opts.out), recompute: opts.recompute,
+      outDir: path.resolve(opts.out), recompute: opts.recompute, includePatientId: opts.patientId,
       reportFile: opts.report ? path.resolve(opts.report) : undefined,
     });
   } catch (e) {

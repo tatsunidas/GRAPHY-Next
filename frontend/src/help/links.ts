@@ -19,8 +19,14 @@ export const HELP_LINKS = {
   sponsors: "https://github.com/sponsors/accounts",
 } as const;
 
-/** 外部 URL / mailto を OS 既定アプリで開く（デスクトップ）／新規タブ（web）。 */
+/** 外部で開いてよい URL は https・http・mailto だけ（`javascript:`・`file:`・`data:`・相対パスは開かない）。 */
+export function isSafeExternalUrl(url: string): boolean {
+  return /^(https?:|mailto:)/i.test(url);
+}
+
+/** 外部 URL / mailto を OS 既定アプリで開く（デスクトップ）／新規タブ（web）。許可するスキームだけ（デスクトップの main と同じ規則）。 */
 export function openExternal(url: string): void {
+  if (!isSafeExternalUrl(url)) return;
   const d = desktop();
   if (d?.openExternal) {
     d.openExternal(url);

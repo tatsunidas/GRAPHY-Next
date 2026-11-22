@@ -42,15 +42,42 @@ function checkBackendCall(method, pathname) {
 const obj = (properties, required = []) => ({ type: "object", properties, required, additionalProperties: false });
 const str = (description, max = 128) => ({ type: "string", description, maxLength: max });
 const int = (description, min = 0, max = 1_000_000_000) => ({ type: "integer", description, minimum: min, maximum: max });
+const num = (description, min, max) => ({ type: "number", description, minimum: min, maximum: max });
+const oneOf = (description, values) => ({ type: "string", description, enum: values, maxLength: 32 });
 const HANDLE = "（list/search の結果に出た値をそのまま渡す）";
+const CONTROL_NOTE = "操作の対象は、利用者が今 2D ビューアで選んでいるタイル。元に戻せる（undo_viewer_action）。2D ビューアが開いていなければ no-viewer。";
+const EDIT_NOTE = "対象は、利用者が今 2D ビューアで選んでいるタイル。実行のたびに、アプリが利用者に確認する（拒否されると declined）。2D ビューアが開いていなければ no-viewer。";
 
 /**
  * 2D ビューア窓（renderer）へ main が中継して読む種類（固定リスト）。`via: "viewer"` のツールはここにある kind しか作れない。
- * 🔴 画素を返す `captureView` と、窓を操作する `action`・`pluginTool` はここに入れない（段 4c 以降）。
+ * `captureView` は表示中のタイルの画像（画素。`allowViewerCapture` のときだけ。焼き込みの患者情報があり得るので、実行のたびに main が画像を見せて利用者に確認する）。
+ * `pluginTool` はプラグインの AI ツール（名前は main の一覧で引き直す。`pluginTools` で公開したプラグインだけ）。
+ *    `action` は下の `VIEWER_ACTIONS`（表示操作）と `VIEWER_WRITE_ACTIONS`（allowViewerEdit のときだけ。実行のたびに確認）だけ、
+ *    `undo` は main が持つ履歴を戻す操作（窓への kind ではない）。
  */
-const VIEWER_KINDS = ["getState", "getMeasurements"];
+const VIEWER_KINDS = ["getState", "getMeasurements", "action", "undo", "pluginTool", "captureView"];
 
-/** effect: read | analysis。`phiOnly` の引数は includePhi=false では受けない。`via: "viewer"` は backend でなく 2D ビューア窓から読む。 */
+/**
+ * 外部 AI クライアントが行える 2D ビューアの表示操作（固定リスト）。**すべて元に戻せる display の操作**（allowViewerControl）。
+ * 🔴 データを変える write は入れない（下の VIEWER_WRITE_ACTIONS）。アシスタント専用の removeAssistantRoi は UNDO_ONLY_ACTIONS。
+ *    frontend/src/assistant/actions/registry.ts の display の action（removeAssistantRoi を除く）と一致することを mcp.test.js が検査する。
+ */
+const VIEWER_ACTIONS = ["setWindowLevel", "resetWindow", "applyWlPreset", "rotate90", "flipH", "flipV", "invert", "goToSlice", "setLayout", "setTool"];
+/**
+ * データを変える操作（allowViewerEdit のときだけ。2D 窓の dryRun で検査してから、main が利用者に**毎回**確認する）。
+ * registry.ts の `effect: "write"` と一致することを mcp.test.js が検査する。clearMeasurements は元に戻せない。
+ */
+const VIEWER_WRITE_ACTIONS = ["createRoi", "createContourRoi", "clearMeasurements"];
+/** 逆操作（undo）でだけ main が再実行する。ツールとしては出さない（ROI は createRoi で作った出自のものだけ消せる）。 */
+const UNDO_ONLY_ACTIONS = ["removeAssistantRoi"];
+/** setTool に渡せるツール（registry.ts の DISPLAY_TOOLS と一致させる）。 */
+const DISPLAY_TOOLS = ["windowLevel", "pan", "zoom", "magnify", "length", "angle"];
+
+/**
+ * effect: read | analysis | control | edit | capture。`phiOnly` の引数は includePhi=false では受けない。`via: "viewer"` は backend でなく 2D ビューア窓から読む／操作する。
+ * `control` は allowViewerControl がオンのときだけ（利用者の画面が動く）。`edit` は allowViewerEdit がオンのときだけ（データを変える）。
+ * `capture` は allowViewerCapture がオンのときだけ（画像を返す。実行のたびに利用者が確認する）。
+ */
 const TOOLS = [
   { name: "get_status", effect: "read", description: "GRAPHY-Next の稼働状況（版・モード）。", inputSchema: obj({}) },
   { name: "list_albums", effect: "read", description: "アルバムの一覧（id と件数。名前は患者情報の設定がオンのときだけ）。", inputSchema: obj({}) },
@@ -84,6 +111,118 @@ const TOOLS = [
     inputSchema: obj({}),
   },
   {
+    name: "set_window_level",
+    effect: "control",
+    via: "viewer",
+    viewerKind: "action",
+    viewerAction: "setWindowLevel",
+    description: `2D ビューアの窓位（center）と窓幅（width）を設定する（モダリティの単位。CT は HU）。${CONTROL_NOTE}`,
+    inputSchema: obj({ center: num("窓位", -100000, 100000), width: num("窓幅（1 以上）", 1, 200000) }, ["center", "width"]),
+  },
+  { name: "reset_window", effect: "control", via: "viewer", viewerKind: "action", viewerAction: "resetWindow", description: `窓位・窓幅を DICOM の既定に戻す。${CONTROL_NOTE}`, inputSchema: obj({}) },
+  {
+    name: "apply_window_preset",
+    effect: "control",
+    via: "viewer",
+    viewerKind: "action",
+    viewerAction: "applyWlPreset",
+    description: `名前つきの窓条件を適用する（brain=脳・soft=軟部・lung=肺・bone=骨・abdomen=腹部・liver=肝、または利用者のプリセット名）。${CONTROL_NOTE}`,
+    inputSchema: obj({ name: str("プリセットの名前", 60) }, ["name"]),
+  },
+  {
+    name: "rotate_view",
+    effect: "control",
+    via: "viewer",
+    viewerKind: "action",
+    viewerAction: "rotate90",
+    description: `画像を時計回りに 90 度ずつ回す（times 回。既定 1）。${CONTROL_NOTE}`,
+    inputSchema: obj({ times: int("90 度の回数", 1, 3) }),
+  },
+  { name: "flip_horizontal", effect: "control", via: "viewer", viewerKind: "action", viewerAction: "flipH", description: `左右反転（もう一度呼ぶと戻る）。${CONTROL_NOTE}`, inputSchema: obj({}) },
+  { name: "flip_vertical", effect: "control", via: "viewer", viewerKind: "action", viewerAction: "flipV", description: `上下反転（もう一度呼ぶと戻る）。${CONTROL_NOTE}`, inputSchema: obj({}) },
+  { name: "invert_colors", effect: "control", via: "viewer", viewerKind: "action", viewerAction: "invert", description: `白黒反転（ネガポジ。もう一度呼ぶと戻る）。${CONTROL_NOTE}`, inputSchema: obj({}) },
+  {
+    name: "go_to_slice",
+    effect: "control",
+    via: "viewer",
+    viewerKind: "action",
+    viewerAction: "goToSlice",
+    description: `指定のスライスへ移動する。index は 0 始まり（N 枚目は N-1、最初は 0、最後は sliceCount-1。sliceCount は get_viewer_state）。範囲外は端に寄せる。${CONTROL_NOTE}`,
+    inputSchema: obj({ index: int("0 始まりのスライス番号", 0, 1_000_000) }, ["index"]),
+  },
+  {
+    name: "set_layout",
+    effect: "control",
+    via: "viewer",
+    viewerKind: "action",
+    viewerAction: "setLayout",
+    description: `ビューアの列数（画像を横に並べる数）を設定する。表示するスライスは変わらない。${CONTROL_NOTE}`,
+    inputSchema: obj({ cols: int("列数", 1, 8) }, ["cols"]),
+  },
+  {
+    name: "set_tool",
+    effect: "control",
+    via: "viewer",
+    viewerKind: "action",
+    viewerAction: "setTool",
+    description: `左ボタンのツールを選ぶ（表示・計測表示用のツールだけ）。${CONTROL_NOTE}`,
+    inputSchema: obj({ tool: oneOf("ツール名", DISPLAY_TOOLS) }, ["tool"]),
+  },
+  {
+    name: "undo_viewer_action",
+    effect: "control",
+    undo: true, // allowViewerEdit だけでも出す（ROI の作成を戻すため）
+    via: "viewer",
+    viewerKind: "undo",
+    description: "この接続が行った表示操作・ROI の作成のうち、直近の 1 つを元に戻す（履歴は最大 20 件。アプリ側が持つ）。ROI は、この接続が作ったものだけ消える。計測の全削除は戻せない。履歴が無ければ nothing-to-undo。",
+    inputSchema: obj({}),
+  },
+  {
+    name: "create_roi",
+    effect: "edit",
+    via: "viewer",
+    viewerKind: "action",
+    viewerAction: "createRoi",
+    description: `表示中のスライスに ROI（楕円または矩形）を 1 つ追加する。位置は見えている画像の領域に対する割合（u=0 左…1 右、v=0 上…1 下。画面に見えるとおり）、大きさは画面の横・縦方向の半径（mm）。この ROI は undo_viewer_action で消せる。${EDIT_NOTE}`,
+    inputSchema: obj(
+      { shape: oneOf("形", ["ellipse", "rectangle"]), u: num("中心の横位置（0〜1）", 0, 1), v: num("中心の縦位置（0〜1）", 0, 1), radiusXmm: num("横方向の半径（mm）", 0.1, 500), radiusYmm: num("縦方向の半径（mm）", 0.1, 500) },
+      ["shape", "u", "v", "radiusXmm", "radiusYmm"],
+    ),
+  },
+  {
+    name: "create_contour_roi",
+    effect: "edit",
+    via: "viewer",
+    viewerKind: "action",
+    viewerAction: "createContourRoi",
+    description: `表示中のスライスに、頂点で囲んだ閉じた ROI を 1 つ追加する。各頂点は [u, v]（見えている画像の領域に対する割合。u=0 左…1 右、v=0 上…1 下）で、輪郭に沿った順に並べる（最初の点を繰り返さない）。polygon は直線で結び、freehand は自由曲線（頂点を多く）。3〜64 個。輪郭が自分自身と交差してはならない。この ROI は undo_viewer_action で消せる。${EDIT_NOTE}`,
+    inputSchema: obj(
+      {
+        shape: oneOf("形", ["polygon", "freehand"]),
+        points: { type: "array", description: "頂点 [u, v] の並び", minItems: 3, maxItems: 64, items: { type: "array", minItems: 2, maxItems: 2, items: { type: "number", minimum: 0, maximum: 1 } } },
+      },
+      ["shape", "points"],
+    ),
+  },
+  {
+    name: "clear_measurements",
+    effect: "edit",
+    via: "viewer",
+    viewerKind: "action",
+    viewerAction: "clearMeasurements",
+    description: `2D ビューアの計測（長さ・角度など）をすべて消す。**元に戻せない**（undo_viewer_action でも戻らない）。ロックされた計測は残る。利用者が明示的に頼んだときだけ使う。${EDIT_NOTE}`,
+    inputSchema: obj({}),
+  },
+  {
+    name: "capture_viewer_image",
+    effect: "capture",
+    via: "viewer",
+    viewerKind: "captureView",
+    description:
+      "2D ビューアの、利用者が今選んでいるタイルの表示中の画像を取る（読み取りだけ。表示・ファイルは変えない）。**画像に患者の氏名・ID などの文字が焼き込まれている場合がある。** 実行のたびに、アプリが画像を利用者に見せて確認し、拒否されると declined（答えがなければ 2 分で取り消し）。withRoi=true で ROI などの注釈を重ねる。crop=true で選択中の ROI の外接矩形で切り出す（選択が無ければ no-selected-roi、画面に出ていなければ roi-not-visible）。2D ビューアが開いていなければ no-viewer。",
+    inputSchema: obj({ withRoi: { type: "boolean", description: "ROI などの注釈を重ねる（既定 false）" }, crop: { type: "boolean", description: "選択中の ROI の外接矩形で切り出す（既定 false）" } }),
+  },
+  {
     name: "radiomics_submit",
     effect: "analysis",
     description: `Radiomics の特徴量の計算を投入する（元データは変えない。結果はキャッシュ）。${HANDLE}`,
@@ -97,49 +236,81 @@ const TOOLS = [
 
 const BY_NAME = new Map(TOOLS.map((t) => [t.name, t]));
 
-/** この設定で見せるツール（解析がオフなら analysis は出さない）。 */
-function listTools({ allowAnalysis, includePhi }) {
-  return TOOLS.filter((t) => allowAnalysis || t.effect !== "analysis").map((t) => {
+/** この設定でツールを使えるか（解析・表示操作・データを変える操作は、それぞれ別の許可）。 */
+function allowedBy(t, p) {
+  switch (t.effect) {
+    case "analysis":
+      return p.allowAnalysis === true;
+    case "control":
+      return p.allowViewerControl === true || (t.undo === true && p.allowViewerEdit === true);
+    case "edit":
+      return p.allowViewerEdit === true;
+    case "capture":
+      return p.allowViewerCapture === true;
+    default:
+      return true;
+  }
+}
+const DISABLED = { analysis: "analysis-disabled", control: "control-disabled", edit: "edit-disabled", capture: "capture-disabled" };
+
+/** この設定で見せるツール（解析・表示操作・データを変える操作は、それぞれの許可がオンのときだけ）。 */
+function listTools(prefs) {
+  const { includePhi } = prefs;
+  return TOOLS.filter((t) => allowedBy(t, prefs)).map((t) => {
     const props = { ...t.inputSchema.properties };
     for (const k of includePhi ? [] : t.phiOnly ?? []) delete props[k];
     return { name: t.name, description: t.description, inputSchema: { ...t.inputSchema, properties: props } };
   });
 }
 
-/** 最小の JSON Schema 検査（型・必須・長さ・範囲・未知のキー）。通ったら null、落ちたら理由。 */
+/** 値が JSON Schema（型・長さ・範囲・要素数・enum）に合うか。array は要素を再帰的に検査する（registry.ts の points と同じ形）。 */
+function valueOk(p, v) {
+  if (p.type === "string") {
+    if (typeof v !== "string" || v.length > (p.maxLength ?? 256) || /[\u0000-\u001f\u007f]/.test(v)) return false;
+  } else if (p.type === "integer") {
+    if (!Number.isInteger(v) || v < (p.minimum ?? -Infinity) || v > (p.maximum ?? Infinity)) return false;
+  } else if (p.type === "number") {
+    if (typeof v !== "number" || !Number.isFinite(v) || v < (p.minimum ?? -Infinity) || v > (p.maximum ?? Infinity)) return false;
+  } else if (p.type === "boolean") {
+    if (typeof v !== "boolean") return false;
+  } else if (p.type === "array") {
+    if (!Array.isArray(v) || v.length < (p.minItems ?? 0) || v.length > (p.maxItems ?? 1000)) return false;
+    if (p.items && !v.every((x) => valueOk(p.items, x))) return false;
+  }
+  if (p.enum && !p.enum.includes(v)) return false;
+  return true;
+}
+
+/** 最小の JSON Schema 検査（型・必須・長さ・範囲・要素数・未知のキー）。通ったら null、落ちたら理由。 */
 function validateArgs(schema, args) {
   if (args === undefined || args === null) args = {};
   if (typeof args !== "object" || Array.isArray(args)) return "args-not-object";
   for (const k of Object.keys(args)) if (!(k in schema.properties)) return `unknown-arg:${k}`;
   for (const k of schema.required ?? []) if (args[k] === undefined) return `missing-arg:${k}`;
-  for (const [k, v] of Object.entries(args)) {
-    const p = schema.properties[k];
-    if (p.type === "string") {
-      if (typeof v !== "string" || v.length > (p.maxLength ?? 256)) return `bad-arg:${k}`;
-      if (/[\u0000-\u001f\u007f]/.test(v)) return `bad-arg:${k}`;
-    } else if (p.type === "integer") {
-      if (!Number.isInteger(v) || v < (p.minimum ?? -Infinity) || v > (p.maximum ?? Infinity)) return `bad-arg:${k}`;
-    } else if (p.type === "boolean") {
-      if (typeof v !== "boolean") return `bad-arg:${k}`;
-    }
-  }
+  for (const [k, v] of Object.entries(args)) if (!valueOk(schema.properties[k], v)) return `bad-arg:${k}`;
   return null;
 }
 
 /**
  * ツール呼び出し → backend への要求。落とすときは { error } を返す（要求を作らない）。
- * @returns {{ error: string } | { viewer: { kind: string } } | { method: string, path: string, query?: object, limit?: number, body?: object }}
+ * @returns {{ error: string } | { viewer: { kind: string, id?: string, params?: object } } | { method: string, path: string, query?: object, limit?: number, body?: object }}
  */
 function buildRequest(name, args, { projector, prefs }) {
   const tool = BY_NAME.get(name);
   if (!tool) return { error: "unknown-tool" };
-  if (tool.effect === "analysis" && !prefs.allowAnalysis) return { error: "analysis-disabled" };
+  if (!allowedBy(tool, prefs)) return { error: DISABLED[tool.effect] };
   const bad = validateArgs(tool.inputSchema, args);
   if (bad) return { error: bad };
   const a = args ?? {};
   for (const k of prefs.includePhi ? [] : tool.phiOnly ?? []) if (a[k] !== undefined) return { error: `phi-disabled:${k}` };
   if (tool.via === "viewer") {
     if (!VIEWER_KINDS.includes(tool.viewerKind)) return { error: "unknown-tool" };
+    if (tool.viewerKind === "action") {
+      // 引数は検査済み（validateArgs）。id は固定リストにあるものだけ（write・アシスタント専用の操作は作れない）
+      if (!VIEWER_ACTIONS.includes(tool.viewerAction) && !VIEWER_WRITE_ACTIONS.includes(tool.viewerAction)) return { error: "unknown-tool" };
+      return { viewer: { kind: "action", id: tool.viewerAction, params: { ...a } } };
+    }
+    if (tool.viewerKind === "captureView") return { viewer: { kind: "captureView", withRoi: a.withRoi === true, crop: a.crop === true } };
     return { viewer: { kind: tool.viewerKind } };
   }
   const uid = (kind, v) => projector.resolve(kind, v);
@@ -238,4 +409,4 @@ function projectResult(name, data, projector) {
   return P.guard(out);
 }
 
-module.exports = { TOOLS, VIEWER_KINDS, listTools, validateArgs, buildRequest, projectResult, checkBackendCall, ALLOWED, DENIED, UID_RE };
+module.exports = { TOOLS, VIEWER_KINDS, VIEWER_ACTIONS, VIEWER_WRITE_ACTIONS, UNDO_ONLY_ACTIONS, DISPLAY_TOOLS, listTools, validateArgs, buildRequest, projectResult, checkBackendCall, ALLOWED, DENIED, UID_RE };

@@ -14,11 +14,25 @@ const EXIT_ERROR = 4;
 const ENDPOINT_FILE = "mcp-endpoint.json";
 
 /**
- * 発見用ファイル。既定はインストール版の userData（appData/GRAPHY-Next）。開発起動の userData は `graphy-next-desktop`（electron の app 名）なので、
- * 開発では `GRAPHY_MCP_ENDPOINT`（パス）で指す（検査用にも使う）。
+ * Electron の userData のフォルダ名（アプリ内の package.json の productName、無ければ name。electron の app.getName() と同じ規則）。
+ * 🔴 パッケージ版の userData は `appData/graphy-next-desktop` で、データ（DB・設定）の `appData/GRAPHY-Next`（batchCli の appDataDir）とは別。
+ *    main は mcp.json・mcp-endpoint.json・mcp-audit.jsonl を userData に置く。`GRAPHY-Next` を見ると、インストール版では見つけられない
+ *    （2026-11-17 配布物の予行演習で判明。実機の v0.6.3 の deb で、userData が graphy-next-desktop、データが GRAPHY-Next に分かれることを確認）。
  */
-function endpointFile({ env = process.env, appData = appDataDir() } = {}) {
-  return env.GRAPHY_MCP_ENDPOINT ? path.resolve(env.GRAPHY_MCP_ENDPOINT) : path.join(appData, ENDPOINT_FILE);
+function userDataName(dir = __dirname) {
+  try {
+    const pkg = JSON.parse(fs.readFileSync(path.join(dir, "package.json"), "utf8"));
+    if (typeof pkg.productName === "string" && pkg.productName) return pkg.productName;
+    if (typeof pkg.name === "string" && pkg.name) return pkg.name;
+  } catch {
+    /* 読めなければ既定 */
+  }
+  return "graphy-next-desktop";
+}
+
+/** 発見用ファイル。既定はアプリの userData（上記）。開発起動では `GRAPHY_MCP_ENDPOINT`（パス）で指してもよい（検査用にも使う）。 */
+function endpointFile({ env = process.env, appDataBase = path.dirname(appDataDir()), name = userDataName() } = {}) {
+  return env.GRAPHY_MCP_ENDPOINT ? path.resolve(env.GRAPHY_MCP_ENDPOINT) : path.join(appDataBase, name, ENDPOINT_FILE);
 }
 
 async function main() {
@@ -31,7 +45,7 @@ async function main() {
   return runMcp(endpointFile());
 }
 
-module.exports = { endpointFile, ENDPOINT_FILE, main };
+module.exports = { endpointFile, userDataName, ENDPOINT_FILE, main };
 
 if (require.main === module) {
   main().then((code) => process.exit(code), () => {

@@ -50,6 +50,18 @@ export const ID_COLUMNS = [
 /** 既存の記録の列のうち、`CaseLabel` を除いたもの（版・抽出日時・設定の SHA-256）。 */
 const PROVENANCE_COLUMNS = ROI_FEATURE_RECORD_COLUMNS.slice(1);
 
+/**
+ * 2D の単位を含む表の追加の列（`DatasetOptions.twoD`）。ID 列の後ろに足す。数の列は `Roi_` で始め（研究統計プラグインの
+ * 既定の特徴量の列に混ざらない）、そのほかは文字列。
+ *
+ * - `Unit`: WHOLE_3D・MAX_SECTION_2D・SLICE_2D。 `PlaneSource`: ACQUISITION（元のスライス）・RESLICED（患者の軸へ再スライス）。
+ * - `Plane`: AXIAL・SAGITTAL・CORONAL。 `RowKey`: 行の一意キー（`CaseLabel|Unit|PlaneSource|Plane|位置`）。
+ *   `CaseLabel` は症例・病変の識別で、2D の行では重複する。研究統計プラグインでは特徴量の ID に `RowKey` を選ぶ。
+ */
+export const UNIT_TEXT_COLUMNS = ["Unit", "PlaneSource", "Plane", "RowKey"] as const;
+export const UNIT_NUMBER_COLUMNS = ["Roi_PlaneTiltDeg", "Roi_PositionMm", "Roi_AreaMm2", "Roi_Pixels"] as const;
+const UNIT_COLUMNS = [...UNIT_TEXT_COLUMNS, ...UNIT_NUMBER_COLUMNS] as const;
+
 export interface SubjectInfo {
   code: string;
   /** 元の患者 ID。空なら不明（その検査だけの別の被験者として扱う）。 */
@@ -103,6 +115,11 @@ export interface DatasetOptions {
   includePatientId: boolean;
   /** 抽出の種類。`voiStats` は一次統計の 5 列と体積（mL）だけの表にする（既定は特徴量の全列）。 */
   kind?: SpecKind;
+  /**
+   * 定義に 2D の単位がある。表に単位の列（`UNIT_COLUMNS`）を足し、組ごとに 3D の 1 行と 2D の各行を縦に並べる。
+   * 偽（既定）なら、従来の表と同じ（列・行・値が変わらない）。
+   */
+  twoD?: boolean;
 }
 
 export type DatasetFailure = { ok: false; reason: "no results" | "header mismatch" | "missing result"; caseLabel: string };
@@ -110,9 +127,9 @@ export type DatasetFailure = { ok: false; reason: "no results" | "header mismatc
 const blanks = (n: number): string[] => Array(n).fill("");
 
 /** 見出し（`CaseLabel`、任意で `PatientID`、識別、記録、大きさ、特徴量）。 */
-function headerOf(featureColumns: readonly string[], includePatientId: boolean, voi: boolean): string[] {
+function headerOf(featureColumns: readonly string[], includePatientId: boolean, voi: boolean, twoD = false): string[] {
   return [
-    "CaseLabel", ...(includePatientId ? ["PatientID"] : []), ...ID_COLUMNS, ...PROVENANCE_COLUMNS,
+    "CaseLabel", ...(includePatientId ? ["PatientID"] : []), ...ID_COLUMNS, ...(twoD ? UNIT_COLUMNS : []), ...PROVENANCE_COLUMNS,
     ...ROI_FEATURE_SIZE_COLUMNS, ...(voi ? [VOLUME_ML_COLUMN] : []), ...featureColumns,
   ];
 }
@@ -135,6 +152,8 @@ export interface DatasetTable {
   header: string[];
   /** 見出しの列に対応する、特徴量の列の名前。 */
   featureColumns: string[];
+  /** 2D の単位を含む表のとき、特徴量の列ごとの、計算した単位（`WHOLE_3D;MAX_SECTION_2D;SLICE_2D` のうち）。 */
+  unitsByColumn?: Map<string, string>;
   /** 計算できた最初の結果（定義表・設定ファイルの元）。 */
   first: RoiFeatureResult;
 }
@@ -150,6 +169,7 @@ export function datasetTable(
   const done = rows.filter((r) => r.result != null);
   if (done.length === 0) return { ok: false, reason: "no results", caseLabel: "" };
   const voi = opts.kind === "voiStats";
+  if (opts.twoD && !voi) return datasetTable2d(rows, done, subjects, opts);
   const featureColumns = voi ? [...VOI_STATS_COLUMNS] : done[0].result!.rows.map((r) => r.column);
   const sig = featureColumns.join("\u0000");
   for (const r of done) {
@@ -187,7 +207,127 @@ export function datasetTable(
   return { ok: true, csv: `${lines.join("\r\n")}\r\n`, header, featureColumns, first: done[0].result! };
 }
 
+/** 2D の単位を含む表の 1 行ぶんの中身（特徴量は列名 → 値）。 */
+interface UnitLine {
+  unit: "WHOLE_3D" | "MAX_SECTION_2D" | "SLICE_2D";
+  source: "" | "ACQUISITION" | "RESLICED";
+  plane: string;
+  tilt: number | null | undefined;
+  position: number | null;
+  area: number | null;
+  pixels: number | null;
+  rec: string[];
+  size: string[];
+  rows: { column: string; value: number | null }[];
+}
+
+const keyOf = (caseLabel: string, l: UnitLine): string =>
+  [caseLabel, l.unit, l.source, l.plane, l.position == null ? "" : String(l.position)].join("|");
+
+/** 結果から、3D の行と、取得面・再スライスした断面の 2D の行を並べる。 */
+function unitLines(r: DatasetRow): UnitLine[] {
+  const res = r.result!;
+  const lines: UnitLine[] = [{
+    unit: "WHOLE_3D", source: "", plane: "", tilt: null, position: null, area: null, pixels: null,
+    rec: recordValuesOf(res.provenance, r.caseLabel), size: sizeValuesOf(res.roiSize), rows: res.rows,
+  }];
+  const blanksSize = blanks(ROI_FEATURE_SIZE_COLUMNS.length);
+  const add = (source: "ACQUISITION" | "RESLICED", sec: RoiFeatureResult["section"], sl: RoiFeatureResult["slices"]) => {
+    if (sec) {
+      lines.push({
+        unit: "MAX_SECTION_2D", source, plane: sec.record.plane ?? "", tilt: sec.record.tiltDeg, position: sec.positionMm,
+        area: sec.areaMm2, pixels: sec.pixels, rec: recordValuesOf(sec.record.provenance, r.caseLabel), size: blanksSize, rows: sec.rows,
+      });
+    }
+    if (sl) {
+      for (const s of sl.rows) {
+        lines.push({
+          unit: "SLICE_2D", source, plane: sl.record.plane ?? "", tilt: sl.record.tiltDeg, position: s.positionMm,
+          area: s.areaMm2, pixels: s.pixels, rec: recordValuesOf(sl.record.provenance, r.caseLabel), size: blanksSize, rows: s.rows,
+        });
+      }
+    }
+  };
+  add("ACQUISITION", res.section, res.slices);
+  for (const p of res.planeResults ?? []) add("RESLICED", p.section, p.slices);
+  return lines;
+}
+
+/**
+ * 2D の単位を含む表: 組ごとに 3D の 1 行と 2D の各行（最大断面・スライス別、取得面と再スライスした断面）を縦に並べる。
+ * 特徴量の列は単位をまたいだ和集合（3D の列を先頭、2D にだけある列を後ろ）。その単位で計算しない列は空欄（欠損。0 や NaN は書かない）。
+ * 3D の行の見出しが組の間で違えば止める（従来と同じ）。
+ */
+function datasetTable2d(
+  rows: readonly DatasetRow[],
+  done: readonly DatasetRow[],
+  subjects: ReadonlyMap<string, SubjectInfo>,
+  opts: DatasetOptions,
+): DatasetTable | DatasetFailure {
+  const sig3d = done[0].result!.rows.map((r) => r.column).join("\u0000");
+  for (const r of done) {
+    if (r.result!.rows.map((x) => x.column).join("\u0000") !== sig3d) return { ok: false, reason: "header mismatch", caseLabel: r.caseLabel };
+  }
+  for (const r of rows) {
+    if (r.status.state === "DONE" && r.result == null) return { ok: false, reason: "missing result", caseLabel: r.caseLabel };
+  }
+  const featureColumns: string[] = [];
+  const seen = new Set<string>();
+  const unitsOf = new Map<string, Set<string>>();
+  const perRow = rows.map((r) => (r.result ? unitLines(r) : null));
+  for (const lines of perRow) {
+    for (const l of lines ?? []) {
+      for (const f of l.rows) {
+        if (!seen.has(f.column)) {
+          seen.add(f.column);
+          featureColumns.push(f.column);
+        }
+        const set = unitsOf.get(f.column) ?? new Set<string>();
+        set.add(l.unit);
+        unitsOf.set(f.column, set);
+      }
+    }
+  }
+  const ORDER = ["WHOLE_3D", "MAX_SECTION_2D", "SLICE_2D"];
+  const unitsByColumn = new Map(featureColumns.map((c) => [c, ORDER.filter((u) => unitsOf.get(c)?.has(u)).join(";")]));
+  const header = headerOf(featureColumns, opts.includePatientId, false, true);
+  const out = [header.map(cell).join(",")];
+  rows.forEach((r, i) => {
+    const subject = subjects.get(r.status.pair.studyUid);
+    const pid = opts.includePatientId ? [cell(subject?.patientId ?? "")] : [];
+    const ids = idCells(r, subject, opts);
+    const lines = perRow[i];
+    if (!lines) {
+      // 結果が無い組（失敗・未実行・取り消し・QC のスキップ）は 1 行。単位は空（何も計算していない）、RowKey は CaseLabel
+      out.push([
+        cell(r.caseLabel), ...pid, ...ids, cell(""), cell(""), cell(""), cell(r.caseLabel), ...blanks(UNIT_NUMBER_COLUMNS.length),
+        ...blanks(PROVENANCE_COLUMNS.length), ...blanks(ROI_FEATURE_SIZE_COLUMNS.length), ...blanks(featureColumns.length),
+      ].join(","));
+      return;
+    }
+    for (const l of lines) {
+      const byCol = new Map(l.rows.map((x) => [x.column, x.value]));
+      out.push([
+        l.rec[0], ...pid, ...ids,
+        cell(l.unit), cell(l.source), cell(l.plane), cell(keyOf(r.caseLabel, l)),
+        value(l.tilt ?? null), value(l.position), value(l.area), value(l.pixels),
+        ...l.rec.slice(1), ...l.size,
+        ...featureColumns.map((c) => (byCol.has(c) ? value(byCol.get(c)!) : "")),
+      ].join(","));
+    }
+  });
+  return { ok: true, csv: `${out.join("\r\n")}\r\n`, header, featureColumns, unitsByColumn, first: done[0].result! };
+}
+
 const ID_NOTES: Record<string, [family: string, feature: string, note: string]> = {
+  Unit: ["Unit", "Unit", "WHOLE_3D|MAX_SECTION_2D|SLICE_2D"],
+  PlaneSource: ["Unit", "PlaneSource", "ACQUISITION|RESLICED"],
+  Plane: ["Unit", "Plane", "AXIAL|SAGITTAL|CORONAL"],
+  RowKey: ["Unit", "RowKey", "unique-row-key;use-as-feature-id-in-stats-plugin"],
+  Roi_PlaneTiltDeg: ["Roi", "PlaneTiltDeg", "angle-between-plane-normal-and-patient-axis"],
+  Roi_PositionMm: ["Roi", "PositionMm", "along-patient-axis"],
+  Roi_AreaMm2: ["Roi", "AreaMm2", "2d-rows-only"],
+  Roi_Pixels: ["Roi", "Pixels", "2d-rows-only"],
   PatientID: ["Id", "PatientID", "optional;sensitive"],
   SubjectCode: ["Id", "SubjectCode", "subject-sequence-in-album"],
   Album: ["Id", "Album", ""],
@@ -197,7 +337,7 @@ const ID_NOTES: Record<string, [family: string, feature: string, note: string]> 
   Roi_SegmentNumber: ["Roi", "SegmentNumber", ""],
   Roi_SegmentLabel: ["Roi", "SegmentLabel", ""],
   Roi_MaskChannel: ["Roi", "MaskChannel", "rank-of-segment-with-foreground"],
-  RowStatus: ["Row", "Status", "DONE|FAILED|NOT_RUN|CANCELLED"],
+  RowStatus: ["Row", "Status", "DONE|FAILED|QC_SKIPPED|NOT_RUN|CANCELLED"],
   RowFailureKind: ["Row", "FailureKind", "INPUT|ENGINE|ENVIRONMENT"],
   RowError: ["Row", "Error", ""],
   Provenance_QcFlags: ["Provenance", "QcFlags", "SMALL_ROI;LOSSY_COMPRESSION"],
@@ -208,17 +348,20 @@ const ID_NOTES: Record<string, [family: string, feature: string, note: string]> 
 /** 定義表。表の列の並びと 1 対 1（識別・状態の列の行を足す）。 */
 export function datasetDefinitionsCsv(table: DatasetTable): string {
   const base = roiFeatureDefinitionsCsv(table.first).split("\r\n").filter(Boolean);
-  const head = base[0];
+  const twoD = table.unitsByColumn != null;
+  const head = twoD ? `${base[0]},units` : base[0];
   const byColumn = new Map(base.slice(1).map((l) => [l.slice(0, l.indexOf(",")), l]));
   const lines = [head];
   for (const c of table.header) {
     const existing = byColumn.get(c) ?? byColumn.get(cell(c));
+    // 2D の単位を含む表では、特徴量の列に、計算した単位を書く（識別の列は空）
+    const units = twoD ? `,${cell(table.unitsByColumn!.get(c) ?? "")}` : "";
     if (existing) {
-      lines.push(existing);
+      lines.push(existing + units);
       continue;
     }
     const n = ID_NOTES[c];
-    lines.push(n ? [cell(c), cell(n[0]), cell(n[1]), "", cell(n[2]), ""].join(",") : [cell(c), "", "", "", "", ""].join(","));
+    lines.push((n ? [cell(c), cell(n[0]), cell(n[1]), "", cell(n[2]), ""].join(",") : [cell(c), "", "", "", "", ""].join(",")) + units);
   }
   return `${lines.join("\r\n")}\r\n`;
 }
@@ -276,6 +419,9 @@ export function datasetFiles(
     { name: `${opts.base}_radiomicsj.properties`, text: table.first.settingsProperties, mime: "text/plain;charset=utf-8" },
     { name: `${opts.base}_spec.json`, text: opts.specText, mime: "application/json;charset=utf-8" },
   ];
+  // 2D の単位の設定（BOOL_force2D=1 など。3D の設定と違う）。取得面の最初の結果のものを書く
+  const sec2d = opts.twoD ? table.first.section ?? table.first.slices : null;
+  if (sec2d) files.push({ name: `${opts.base}_radiomicsj_2d.properties`, text: sec2d.record.settingsProperties, mime: "text/plain;charset=utf-8" });
   if (opts.subjectsFile) {
     const inTable = new Set(rows.map((r) => r.status.pair.studyUid));
     files.push({ name: `${opts.base}_subjects_private.csv`, text: csvText(subjectsCsv(subjects, inTable)), mime: csv });

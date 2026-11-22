@@ -137,3 +137,8 @@ test("スキル: 1 プラグイン 4 件まで、形の不正は捨てる", () =
   assert.equal(buildSkills([planet([sk({ steps: [] }), sk({ id: "Bad Id" }), null, "x"])]).length, 0);
   assert.deepEqual(buildSkills(null), []);
 });
+
+test("buildEntries: エントリにプラグインの permissions が入る（MCP の確認の文面が remote-compute を見分ける）", () => {
+  const e = buildEntries([plugin("p", [tool("t")], { permissions: ["ai-tools", "remote-compute", 5] })]);
+  assert.deepStrictEqual(e[0].permissions, ["ai-tools", "remote-compute"]); // 文字列だけ
+});

@@ -30,7 +30,10 @@ import {
   selectedPairs,
   setIncluded,
   setSource,
+  smallRoi2dThresholdUnset,
   smallRoiThresholdUnset,
+  spacingMixText,
+  voxelSpacingMix,
   summarize,
   type PairRow,
 } from "./batchPairs";
@@ -53,7 +56,9 @@ import { BatchQueuePanel } from "./BatchQueuePanel";
 import { buildDatasetOutput, runQueue, type QueueEntry } from "./batchQueue";
 import { assignSubjectCodes } from "./datasetCsv";
 import { downloadText } from "./downloadText";
+import { parseAdvanced } from "./advancedSettings";
 import { defaultRoiFeatureForm, rangeBounds, type RoiFeatureForm } from "./roiFeatureSettings";
+import { useSettingsSchema } from "./useSettingsSchema";
 
 const POLL_INTERVAL_MS = 1000;
 const SERIES_CONCURRENCY = 4;
@@ -103,7 +108,7 @@ export function RoiFeatureBatchDialog({
   const [trial, setTrial] = useState<BatchPairResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [written, setWritten] = useState<number | null>(null);
-  const [qc, setQc] = useState<SpecContent["qc"]>({ smallRoi: "FLAG", lossy: "FLAG", smallRoiVoxels: null });
+  const [qc, setQc] = useState<SpecContent["qc"]>({ smallRoi: "FLAG", lossy: "FLAG", smallRoiVoxels: null, smallRoiPixels: null });
   const [labelsText, setLabelsText] = useState("");
   /** 抽出の種類。`voiStats` は一次統計だけ（族・ビン・再標本化・範囲の欄は隠す）。 */
   const [kind, setKind] = useState<SpecKind>("radiomics");
@@ -113,7 +118,8 @@ export function RoiFeatureBatchDialog({
   const [info, setInfo] = useState<string | null>(null);
   /** 出力の選択。被験者の対応表は既定で書く（別ファイル）。患者 ID を表に含めるのは選んだときだけ。BOM は既定で付けない。 */
   const [subjectsFile, setSubjectsFile] = useState(true);
-  const [includePatientId, setIncludePatientId] = useState(false);
+  // 既定でオン（利用者の要望）。表に患者 ID が入るので、共有・公開する表では外す。警告は常に見える位置に出す。
+  const [includePatientId, setIncludePatientId] = useState(true);
   const [bom, setBom] = useState(false);
   /** 送信中（押してから応答が来るまで）。この間に押し直すと同じ組が二重に投入される。 */
   const [starting, setStarting] = useState(false);
@@ -213,8 +219,14 @@ export function RoiFeatureBatchDialog({
   /** 単独実行中、または一覧の実行中。設定・組・出力の欄を触らせない。 */
   const locked = running || queueRunning;
   /** 範囲の欄が数でない・下限が上限より大きい間は、実行も定義の保存もしない（範囲なしの定義が黙って作られるのを防ぐ）。 */
-  const rangeProblem = kind === "voiStats" ? null : rangeBounds(form).problem;
-  const dup = rows ? duplicateLabels(assignCaseLabels(rows)) : [];
+  const settingsSchema = useSettingsSchema();
+  // 詳細設定にエラー（形・重複・他の欄のキー・知らないキー・値の型）がある間は、実行も定義の保存もしない
+  // （エラーの行を黙って捨てた設定で計算しない）
+  const advancedProblem = kind === "voiStats" ? false : parseAdvanced(form.advancedText, settingsSchema).errors.length > 0;
+  const inputProblem = kind === "voiStats" ? (advancedProblem ? "ADVANCED" : null) : (rangeBounds(form).problem ?? (advancedProblem ? "ADVANCED" : null));
+  // 実行時に振られる症例ラベル。空欄の行の placeholder に出す（振り方は assignCaseLabels の 1 つだけ。表示と実行で食い違わない）
+  const planned = rows ? assignCaseLabels(rows) : [];
+  const dup = rows ? duplicateLabels(planned) : [];
 
   const start = async (isTrial: boolean, ack: readonly string[] = acknowledged, from?: readonly PairRow[]) => {
     const base = from ?? rows;
@@ -243,7 +255,7 @@ export function RoiFeatureBatchDialog({
     try {
       const spec = await buildSpec(specContentFrom(form, qc, labels, kind), prefix);
       const st = await submitBatch(buildBatchRequest(chosen.map((c) => c.pair), form, {
-        qc: isTrial ? null : { smallRoi: qc.smallRoi, lossy: qc.lossy }, acknowledged: ack, smallRoiVoxels: qc.smallRoiVoxels, kind,
+        qc: isTrial ? null : { smallRoi: qc.smallRoi, lossy: qc.lossy }, acknowledged: ack, smallRoiVoxels: qc.smallRoiVoxels, smallRoiPixels: qc.smallRoiPixels, kind,
       }));
       runRef.current = {
         jobId: st.jobId, labels: chosen.map((c) => c.caseLabel), keys: chosen.map((c) => pairKey(c.pair)),
@@ -335,7 +347,9 @@ export function RoiFeatureBatchDialog({
     setLabelsText(r.spec.selection.segmentLabels.join(", "));
     setPrefix(r.spec.output.prefix);
     setInfo(t("roiFeat.batch.spec.loaded", { sha: r.spec.sha256.slice(0, 8) })
-      + (r.ignoredFamilies > 0 ? ` ${t("roiFeat.batch.spec.ignored", { n: r.ignoredFamilies })}` : ""));
+      + (r.ignoredFamilies > 0 ? ` ${t("roiFeat.batch.spec.ignored", { n: r.ignoredFamilies })}` : "")
+      // 校正の項目が無い従来の定義は、PET を校正しない（従来の結果の再現）。黙って SUV にしないことを知らせる
+      + (r.spec.form.calibration == null ? ` ${t("roiFeat.batch.spec.legacyCalibration")}` : ""));
   };
 
   /** QC で止まった組（全件実行のとき）。 */
@@ -362,6 +376,9 @@ export function RoiFeatureBatchDialog({
   };
 
   const unsetThreshold = smallRoiThresholdUnset(trial ? [trial.result] : (results ?? []).map((r) => r.result));
+  // 元画像の画素間隔が組の間でそろっているか（計算できた組の診断情報から）。VOI 統計は対象外
+  const spacingMix = kind === "voiStats" ? null : voxelSpacingMix(trial ? [trial.result] : (results ?? []).map((r) => r.result));
+  const unsetThreshold2d = smallRoi2dThresholdUnset(trial ? [trial.result] : (results ?? []).map((r) => r.result));
 
   const close = () => {
     queueCancelRef.current = true;
@@ -404,10 +421,10 @@ export function RoiFeatureBatchDialog({
           <div style={note}>{t("roiFeat.researchOnly")}</div>
           <div style={note}>{t("roiFeat.batch.privacy")}</div>
           <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 8 }}>
-            <button type="button" style={btn} data-testid="batch-spec-save" disabled={locked || rangeProblem !== null} onClick={() => void saveSpec()}>
+            <button type="button" style={btn} data-testid="batch-spec-save" title={t("roiFeat.tip.bSpecSave")} disabled={locked || inputProblem !== null} onClick={() => void saveSpec()}>
               {t("roiFeat.batch.spec.save")}
             </button>
-            <button type="button" style={btn} data-testid="batch-spec-load" disabled={locked} onClick={() => fileRef.current?.click()}>
+            <button type="button" style={btn} data-testid="batch-spec-load" title={t("roiFeat.tip.bSpecLoad")} disabled={locked} onClick={() => fileRef.current?.click()}>
               {t("roiFeat.batch.spec.load")}
             </button>
             <input ref={fileRef} data-testid="batch-spec-file" type="file" accept=".json,application/json" style={{ display: "none" }}
@@ -431,11 +448,11 @@ export function RoiFeatureBatchDialog({
                   <thead>
                     <tr>
                       <th style={th} />
-                      <th style={th}>{t("roiFeat.batch.col.study")}</th>
-                      <th style={th}>{t("roiFeat.batch.col.source")}</th>
-                      <th style={th}>{t("roiFeat.batch.col.mask")}</th>
-                      <th style={th}>{t("roiFeat.batch.col.state")}</th>
-                      <th style={th}>{t("roiFeat.batch.col.label")}</th>
+                      <th style={th} title={t("roiFeat.tip.bColStudy")}>{t("roiFeat.batch.col.study")}</th>
+                      <th style={th} title={t("roiFeat.tip.bColSource")}>{t("roiFeat.batch.col.source")}</th>
+                      <th style={th} title={t("roiFeat.tip.bColMask")}>{t("roiFeat.batch.col.mask")}</th>
+                      <th style={th} title={t("roiFeat.tip.bColState")}>{t("roiFeat.batch.col.state")}</th>
+                      <th style={th} title={t("roiFeat.tip.bColLabel")}>{t("roiFeat.batch.col.label")}</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -476,7 +493,8 @@ export function RoiFeatureBatchDialog({
                           </td>
                           <td style={td}>
                             {r.included && runnable(r) && (
-                              <input value={r.caseLabel} placeholder="C001" disabled={locked} style={{ ...input, width: 80 }}
+                              <input value={r.caseLabel} placeholder={planned[i]?.caseLabel ?? ""} disabled={locked}
+                                data-testid={`batch-caselabel-${i}`} style={{ ...input, width: 80 }}
                                 onChange={(e) => setRows(rows.map((x, j) => (j === i ? { ...x, caseLabel: cleanLabel(e.target.value) } : x)))} />
                             )}
                           </td>
@@ -499,30 +517,30 @@ export function RoiFeatureBatchDialog({
               <div style={note}>{t("roiFeat.batch.scope")}</div>
 
               <div style={section}>{t("roiFeat.batch.step3")}</div>
-              <label>
+              <label title={t("roiFeat.tip.bPrefix")}>
                 {t("roiFeat.batch.prefix")}{" "}
                 <input data-testid="batch-prefix" value={prefix} placeholder="roi-features-batch" disabled={locked}
                   style={{ ...input, width: 220 }} onChange={(e) => setPrefix(e.target.value)} />
               </label>
               <div style={{ marginTop: 6, display: "flex", flexDirection: "column", gap: 3 }} data-testid="batch-output-options">
-                <label>
+                <label title={t("roiFeat.tip.bSubjects")}>
                   <input type="checkbox" data-testid="batch-out-subjects" checked={subjectsFile} disabled={locked}
                     onChange={(e) => setSubjectsFile(e.target.checked)} /> {t("roiFeat.batch.out.subjects")}
                 </label>
                 <div style={note}>{t("roiFeat.batch.out.subjectsHelp")}</div>
-                <label>
+                <label title={t("roiFeat.tip.bPatientId")}>
                   <input type="checkbox" data-testid="batch-out-patientid" checked={includePatientId} disabled={locked}
                     onChange={(e) => setIncludePatientId(e.target.checked)} /> {t("roiFeat.batch.out.patientId")}
                 </label>
                 {includePatientId && <div style={{ ...note, color: "#b00020" }} data-testid="batch-out-patientid-warn">{t("roiFeat.batch.out.patientIdWarn")}</div>}
-                <label>
+                <label title={t("roiFeat.tip.bBom")}>
                   <input type="checkbox" data-testid="batch-out-bom" checked={bom} disabled={locked}
                     onChange={(e) => setBom(e.target.checked)} /> {t("roiFeat.batch.out.bom")}
                 </label>
               </div>
               {dup.length > 0 && <div style={errStyle}>{t("roiFeat.batch.err.duplicate", { labels: dup.join(", ") })}</div>}
               <BatchQueuePanel entries={queue} onChange={setQueue} running={queueRunning} busy={running || starting}
-                canAddCurrent={rangeProblem === null} onAddFiles={(fs) => void addSpecs(fs)} onAddCurrent={() => void addCurrentSpec()}
+                canAddCurrent={inputProblem === null} onAddFiles={(fs) => void addSpecs(fs)} onAddCurrent={() => void addCurrentSpec()}
                 onRun={() => void runList()} onCancel={() => { queueCancelRef.current = true; }} />
             </>
           )}
@@ -532,9 +550,10 @@ export function RoiFeatureBatchDialog({
               <div>
                 {t(`roiFeat.batch.jobState.${job.state}`)} — {t("roiFeat.batch.progress", {
                   done: job.done, total: job.total, failed: job.failed, skipped: job.skipped, notRun: job.notRun,
+                  qcSkipped: job.qcSkipped ?? 0,
                 })}
               </div>
-              <div style={track}><div style={{ ...bar, width: `${job.total ? Math.round(((job.done + job.failed + job.skipped) / job.total) * 100) : 0}%` }} /></div>
+              <div style={track}><div style={{ ...bar, width: `${job.total ? Math.round(((job.done + job.failed + job.skipped + (job.qcSkipped ?? 0)) / job.total) * 100) : 0}%` }} /></div>
               {job.state === "STOPPED" && job.stopKind !== "QC" && (
                 <div style={errStyle}>{t("roiFeat.batch.stopped", { reason: job.stopReason ?? "" })}</div>
               )}
@@ -542,6 +561,7 @@ export function RoiFeatureBatchDialog({
                 <div style={qcBox} data-testid="batch-qc-hold">
                   <div>
                     {t("roiFeat.batch.qc.held", { label: qcHold.label, flags: qcHold.flags.map((f) => t(`roiFeat.batch.qcflag.${f}`)).join("・") })}
+                    {qcHold.flags.includes("SMALL_ROI_2D") && ` ${t("roiFeat.batch.qc.held2d")}`}
                     {qcHold.flags.includes("SMALL_ROI") && qcHold.size?.intensityVoxels != null && qcHold.size.smallRoiWarnVoxels != null
                       && ` ${t("roiFeat.batch.qc.heldSize", { n: qcHold.size.intensityVoxels, threshold: qcHold.size.smallRoiWarnVoxels })}`}
                   </div>
@@ -563,18 +583,32 @@ export function RoiFeatureBatchDialog({
               {t("roiFeat.batch.trialResult", { n: trial.result.rows.length, ms: job?.pairs[0]?.elapsedMs ?? 0 })}
             </div>
           )}
-          {unsetThreshold && (qc.smallRoi === "STOP" || results || trial) && (
+          {unsetThreshold && (qc.smallRoi !== "FLAG" || results || trial) && (
             <div style={{ ...note, color: "#7a4b00" }} data-testid="batch-unset-threshold">{t("roiFeat.batch.qc.unset")}</div>
+          )}
+          {spacingMix?.mixed && (
+            form.resampleMm == null ? (
+              <div style={warnNote} data-testid="batch-spacing-warn">
+                ⚠ {t("roiFeat.batch.spacing.warn", { text: spacingMixText(spacingMix), n: spacingMix.usable })}
+              </div>
+            ) : (
+              <div style={note} data-testid="batch-spacing-info">
+                {t("roiFeat.batch.spacing.info", { r: form.resampleMm, text: spacingMixText(spacingMix) })}
+              </div>
+            )
+          )}
+          {unsetThreshold2d && (qc.smallRoi !== "FLAG" || results || trial) && (
+            <div style={{ ...note, color: "#7a4b00" }} data-testid="batch-unset-threshold-2d">{t("roiFeat.batch.qc.unset2d")}</div>
           )}
           {written != null && <div style={{ ...note, color: "#2f6b2f" }} data-testid="batch-written">{t("roiFeat.batch.written", { n: written })}</div>}
         </div>
         <div style={footer}>
-          <button type="button" style={btn} data-testid="batch-trial" disabled={rangeProblem !== null || locked || starting || !summary || summary.selected === 0}
+          <button type="button" style={btn} data-testid="batch-trial" title={t("roiFeat.tip.bTrial")} disabled={inputProblem !== null || locked || starting || !summary || summary.selected === 0}
             onClick={() => void start(true)}>{t("roiFeat.batch.trial")}</button>
-          <button type="button" style={btnPrimary} data-testid="batch-run" disabled={rangeProblem !== null || locked || starting || !summary || summary.selected === 0}
+          <button type="button" style={btnPrimary} data-testid="batch-run" title={t("roiFeat.tip.bRun")} disabled={inputProblem !== null || locked || starting || !summary || summary.selected === 0}
             onClick={() => void start(false)}>{t("roiFeat.batch.run")}</button>
           {running && <button type="button" style={btn} data-testid="batch-cancel" onClick={cancel}>{t("roiFeat.batch.cancel")}</button>}
-          <button type="button" style={btn} data-testid="batch-write"
+          <button type="button" style={btn} data-testid="batch-write" title={t("roiFeat.tip.bWrite")}
             disabled={locked || !results || results.length === 0} onClick={write}>{t("roiFeat.batch.write")}</button>
         </div>
       </div>
@@ -590,6 +624,7 @@ const footer: React.CSSProperties = { display: "flex", gap: 8, justifyContent: "
 const closeBtn: React.CSSProperties = { border: "none", background: "transparent", fontSize: 16, cursor: "pointer", color: "#666" };
 const section: React.CSSProperties = { fontWeight: 600, color: "#0b5cad", marginTop: 12, marginBottom: 4 };
 const note: React.CSSProperties = { color: "#6b7785", fontSize: 11, marginTop: 4, lineHeight: 1.5 };
+const warnNote: React.CSSProperties = { ...note, color: "#7a4b00" };
 const errStyle: React.CSSProperties = { color: "#b00020", marginTop: 8, whiteSpace: "pre-wrap" };
 const table: React.CSSProperties = { width: "100%", borderCollapse: "collapse", fontSize: 12 };
 const th: React.CSSProperties = { textAlign: "left", padding: "4px 6px", borderBottom: "1px solid #cdd5de", color: "#5a6672", fontWeight: 600 };

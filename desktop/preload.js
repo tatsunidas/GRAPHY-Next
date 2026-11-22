@@ -54,6 +54,7 @@ contextBridge.exposeInMainWorld("graphyDesktop", {
   getGpuStatus: () => ipcRenderer.invoke("graphy:gpu-status"),
   // GPU の搭載メモリ（設定＞描画環境）。取れなければ null。
   getGpuMemory: () => ipcRenderer.invoke("graphy:gpu-memory"),
+  getGpuMemoryFree: () => ipcRenderer.invoke("graphy:gpu-memory-free"),
   // 描画に使う GPU の選択（設定＞描画環境。反映は再起動）。
   getRenderPrefs: () => ipcRenderer.invoke("graphy:render-prefs-get"),
   setRenderPrefs: (prefs) => ipcRenderer.invoke("graphy:render-prefs-set", prefs),

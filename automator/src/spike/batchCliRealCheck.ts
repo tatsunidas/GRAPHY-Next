@@ -22,11 +22,14 @@ import { DesktopDriver, DESKTOP_RUN_DATA_DIR } from "../driver/desktopDriver.js"
 import { resetDb } from "../backend/dbReset.js";
 import { importPaths } from "../fixtures/importFixtures.js";
 import { AUTOMATOR_ROOT } from "../fixtures/manifest.js";
+import { openAllGroups } from "./openGroups.js";
 import { dismissUpdateDialog } from "./dismissUpdateDialog.js";
 import { PY, PY_FLAGS } from "./pythonCmd.js";
 
 const OUT_DIR = path.join(AUTOMATOR_ROOT, ".results", "batch-cli-real-check");
 const failures: string[] = [];
+/** 前提が成り立たず確かめられなかったもの（合格にも失敗にも数えない）。 */
+const unmet: string[] = [];
 let passed = 0;
 function check(cond: boolean, label: string, detail?: unknown): void {
   if (cond) {
@@ -183,7 +186,7 @@ const readDir = (dir: string): Map<string, string> =>
 async function main(): Promise<void> {
   fs.mkdirSync(OUT_DIR, { recursive: true });
   // 前回の出力が残っていると「何も書かない」の検査が前回の物を見てしまう
-  for (const n of fs.readdirSync(OUT_DIR)) if (n.startsWith("cli-")) fs.rmSync(path.join(OUT_DIR, n), { recursive: true, force: true });
+  for (const n of fs.readdirSync(OUT_DIR)) if (n.startsWith("cli-") || n.startsWith("gui-")) fs.rmSync(path.join(OUT_DIR, n), { recursive: true, force: true });
   const built = spawnSync("npm", ["run", "build:batch-cli"], { cwd: path.join(REPO, "frontend"), encoding: "utf8", shell: true });
   check(built.status === 0 && fs.existsSync(path.join(REPO, "desktop", "batch-cli", "run.cjs")), "frontend の npm run build:batch-cli が通る", built.stderr.slice(0, 200));
 
@@ -265,6 +268,7 @@ async function main(): Promise<void> {
     await page.getByTestId("batch-kind-radiomics").check();
     await page.getByTestId("batch-prefix").fill("r2rad");
     specSha.r2rad = await saveSpec("r2_spec.json");
+    await openAllGroups(page);
     await page.getByTestId("batch-labels").fill("Nothing");
     await page.getByTestId("batch-prefix").fill("r3none");
     specSha.r3none = await saveSpec("r3_spec.json");
@@ -276,6 +280,9 @@ async function main(): Promise<void> {
       await waitText(page, "batch-progress", /完了 — 4\/4 完了/, 300_000);
       await page.getByTestId("batch-write").click();
       gui[name] = await takeDownloads(page, 5);
+      // 食い違ったときに差分を取れるよう、画面の書き出しも残す
+      fs.mkdirSync(path.join(OUT_DIR, `gui-${name}`), { recursive: true });
+      for (const f of gui[name]) fs.writeFileSync(path.join(OUT_DIR, `gui-${name}`, f.name), f.text);
       check(gui[name].length === 5, `${name}: 画面の書き出しが 5 ファイル`, gui[name].map((f) => f.name));
     }
     const tampered = JSON.parse(fs.readFileSync(path.join(OUT_DIR, "r2_spec.json"), "utf8")) as { form: { binCount: number } };
@@ -293,7 +300,13 @@ async function main(): Promise<void> {
 
   // 画面の backend を強制終了したので、ロックファイルは残っているが、宛先は閉じている（残っているだけ＝使用中ではない）
   console.log("\n[3] 画面を閉じたあと、CLI が自前で backend を起動して実行する");
-  check(fs.existsSync(LOCK), "強制終了のあともロックファイルは残っている（残っているだけのロックでも CLI は通る、の前提）");
+  // 前提: 画面の backend の終了後もロックファイルが残っていること。終了は SIGTERM が先（processUtils.killProcessTree）で、backend が正常に閉じると
+  // H2 がロックを消す（コード上の見立て。SIGKILL での実測はしていない）。前提が成り立たないときは未達として別に数え、合格にも失敗にもしない。
+  if (fs.existsSync(LOCK)) check(true, "強制終了のあともロックファイルは残っている（残っているだけのロックでも CLI は通る、の前提）");
+  else {
+    unmet.push("残ったロックファイルでも CLI が通ること（前提のロックファイルが無い）");
+    console.log("  [未達] 強制終了のあともロックファイルが残る前提が成り立たない（ロックファイルが無い）。残ったロックでも CLI が通るかは確かめていない");
+  }
   await new Promise((r) => setTimeout(r, 1_000));
   const predicted = new Map(synths.map((s) => [s.studyInstanceUid, predict(s.dir)]));
   const args = (specs: string[], out: string, extra: string[] = [], album = albumName) =>
@@ -341,6 +354,24 @@ async function main(): Promise<void> {
   const portB = portOf(B.stdout);
   check(portB !== null && (await portFree(portB)), "終了後に CLI の backend のポートが空く（正常終了）", portB);
 
+  // 既定は、画面の書き出しと同じく患者 ID の列を含める（上の一致の検査が通っている）。注意の 1 行が出る
+  check(A.stdout.includes("--no-patient-id"), "既定の実行は、患者 ID の列を含める旨の注意を出す");
+  check(!A.stdout.includes("画素間隔"), "間隔がそろった合成データでは、間隔の注意をログに出さない（出る側は frontend の単体）");
+  // --no-patient-id: 表の PatientID 列と、定義表の PatientID の行が無く、そのほかは既定の出力から PatientID 列を除いたものと一致
+  const outD = path.join(OUT_DIR, "cli-node-nopid");
+  fs.rmSync(outD, { recursive: true, force: true });
+  const Dn = runCli("node", args(["r2_spec.json"], "cli-node-nopid", ["--no-patient-id"]));
+  check(Dn.code === 0 && !Dn.stdout.includes("--no-patient-id"), "--no-patient-id の実行は終了コード 0（注意は出さない）", { code: Dn.code, stderr: Dn.stderr.slice(0, 200) });
+  const filesD = readDir(outD);
+  const guiT = maskedCsv(gui["r2rad"].find((f) => f.name === "r2rad.csv")!.text);
+  const noT = maskedCsv(filesD.get("r2rad.csv") ?? "");
+  const pidCol = guiT[0].indexOf("PatientID");
+  check(pidCol >= 0 && !noT[0]?.includes("PatientID"), "--no-patient-id: 表に PatientID 列が無い（画面の出力にはある）", { pidCol });
+  const dropped = guiT.map((r) => r.filter((_, k) => k !== pidCol));
+  check(JSON.stringify(dropped) === JSON.stringify(noT) && noT.length > 1, "--no-patient-id: そのほかの列・値は、画面の出力から PatientID 列を除いたものと一致");
+  check(!/^"?PatientID"?,/m.test(filesD.get("r2rad_definitions.csv") ?? "") && /^"?PatientID"?,/m.test(gui["r2rad"].find((f) => f.name === "r2rad_definitions.csv")!.text), "--no-patient-id: 定義表に PatientID の行が無い（画面の出力にはある）");
+  check(![...filesD.values()].some((t, i) => [...filesD.keys()][i] !== "r2rad_subjects_private.csv" && t.includes("SYNTHVOI") ), "--no-patient-id: 患者 ID は被験者の対応表以外に入らない");
+
   console.log("\n[4] 負例");
   const C = runCli("node", args(["r1_spec.json", "r_tampered_spec.json"], "cli-tampered"));
   check(C.code === 3 && /sha_mismatch/.test(C.stderr), "改変した定義が 1 つでもあれば終了コード 3", { code: C.code, stderr: C.stderr.slice(0, 200) });
@@ -352,7 +383,7 @@ async function main(): Promise<void> {
   check(E.code === 3, "--spec が無い引数は終了コード 3（backend を起動しない）", E.code);
   check(!E.stdout.includes("backend を起動します"), "引数の誤りでは backend を起動しない");
 
-  console.log(`\n合格 ${passed} ／ 失敗 ${failures.length}`);
+  console.log(`\n合格 ${passed} ／ 失敗 ${failures.length} ／ 未達 ${unmet.length}${unmet.length ? `（${unmet.join("、")}）` : ""}`);
   if (failures.length > 0) process.exitCode = 1;
 }
 

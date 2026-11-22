@@ -59,14 +59,14 @@ import {
 } from "./videoTransform";
 import { registerViewerDisplayCommands } from "./viewerCommands";
 import { TOOL_IDS } from "./toolIds";
+import { ensureMouseBindingsLoaded, getMouseBindings, subscribeMouseBindings, useMouseBindings } from "./mouseBindings";
+import { applyMouseBindings } from "./mouseBindingsApply";
 import { ToolIcon } from "../icons/ToolIcon";
 import { UI_ICON_FILES, ACTIVE_ICON_STYLE } from "../icons/toolIcons";
 
-const { MouseBindings } = csToolsEnums;
-
 /**
  * 左ドラッグ（Primary）に割り当て可能な動画ツール。WW/WL と計測/ROI を切り替える
- * （Pan=中ドラッグ・Zoom=右ドラッグは固定）。P3c で ROI 解析（時系列）を載せる土台。
+ * （中・右ドラッグは設定のツール。既定は Pan・Zoom）。P3c で ROI 解析（時系列）を載せる土台。
  */
 /**
  * 🔧 ツールの列（W/L・計測・ROI・グローバル ROI 解析・フレーム統計）・ROI の帰属・ROI 一覧・解析パネルを**画面に出すか**。
@@ -206,6 +206,7 @@ export function VideoViewer({
   const engineRef = useRef<RenderingEngine | null>(null);
   const vpRef = useRef<VideoVP | null>(null);
   const toolGroupIdRef = useRef<string | null>(null);
+  const mouse = useMouseBindings(); // 操作の案内（video.mouseHint）に使う
 
   const [phase, setPhase] = useState<Phase>("loading");
   const [meta, setMeta] = useState<VideoMetadata | null>(null);
@@ -411,7 +412,7 @@ export function VideoViewer({
       }
 
       // ツール（Pan/Zoom/WW-WL ＋ 計測/ROI）を video viewport に紐付ける（best-effort。失敗しても再生は継続）。
-      // グローバルツール登録は ensureCornerstoneInitialized 済み。Pan=中ドラッグ・Zoom=右ドラッグ固定、Primary 切替式。
+      // グローバルツール登録は ensureCornerstoneInitialized 済み。中・右は設定のツール（既定は Pan・Zoom）、Primary 切替式。
       try {
         const toolGroupId = `${viewportId}-tg`;
         const tg = ToolGroupManager.getToolGroup(toolGroupId) ?? ToolGroupManager.createToolGroup(toolGroupId);
@@ -422,9 +423,8 @@ export function VideoViewer({
             tg.addTool(name);
             tg.setToolPassive(name);
           }
-          tg.setToolActive(PanTool.toolName, { bindings: [{ mouseButton: MouseBindings.Auxiliary }] });
-          tg.setToolActive(ZoomTool.toolName, { bindings: [{ mouseButton: MouseBindings.Secondary }] });
-          tg.setToolActive(WindowLevelTool.toolName, { bindings: [{ mouseButton: MouseBindings.Primary }] });
+          // 左=W/L、中・右は設定のツール（既定は Pan・Zoom）。動画に 2 本指の割り当ては無い。
+          applyMouseBindings(tg, VIDEO_TOOLBAR_TOOLS, WindowLevelTool.toolName, getMouseBindings(), { touchZoom: false });
           tg.addViewport(viewportId, engineId);
           toolGroupIdRef.current = toolGroupId;
         }
@@ -445,6 +445,23 @@ export function VideoViewer({
     // loop はマウント後に viewport へ反映（別 effect）。ここでの初期値のみ使用。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sopInstanceUid]);
+
+  // 中・右ボタンの割り当てが設定で変わったら、いまの左ツールのまま張り直す。
+  const activeToolNowRef = useRef(activeTool);
+  activeToolNowRef.current = activeTool;
+  useEffect(() => {
+    void ensureMouseBindingsLoaded();
+    return subscribeMouseBindings(() => {
+      const tgId = toolGroupIdRef.current;
+      const tg = tgId ? ToolGroupManager.getToolGroup(tgId) : undefined;
+      if (!tg) return;
+      try {
+        applyMouseBindings(tg, VIDEO_TOOLBAR_TOOLS, activeToolNowRef.current, getMouseBindings(), { touchZoom: false });
+      } catch {
+        /* ツールグループ未準備時は無視 */
+      }
+    });
+  }, []);
 
   // アンマウント時に走行中の解析を中断。
   useEffect(() => () => analysisAbortRef.current?.abort(), []);
@@ -545,7 +562,7 @@ export function VideoViewer({
     }
   };
 
-  // Primary（左ドラッグ）ツールを切り替える。Pan/Zoom（中/右）は据え置き。
+  // Primary（左ドラッグ）ツールを切り替える。中・右は設定のツール（mouseBindings.ts）。
   const selectPrimaryTool = (toolName: string) => {
     const tgId = toolGroupIdRef.current;
     if (!tgId) {
@@ -555,17 +572,8 @@ export function VideoViewer({
     if (!tg) {
       return;
     }
-    for (const name of VIDEO_TOOLBAR_TOOLS) {
-      if (name !== toolName) {
-        try {
-          tg.setToolPassive(name);
-        } catch {
-          /* 無視 */
-        }
-      }
-    }
     try {
-      tg.setToolActive(toolName, { bindings: [{ mouseButton: MouseBindings.Primary }] });
+      applyMouseBindings(tg, VIDEO_TOOLBAR_TOOLS, toolName, getMouseBindings(), { touchZoom: false });
       setActiveTool(toolName);
     } catch {
       /* 無視 */
@@ -1138,7 +1146,10 @@ export function VideoViewer({
             </button>
             {!SHOW_VIDEO_TOOLS && (
               <span style={{ color: "#889", fontSize: 11, marginLeft: 8 }} data-testid="video-mouse-hint">
-                {t("video.mouseHint")}
+                {t("video.mouseHint", { middle: t(`settings.opt.mouse.${mouse.middle}`), right: t(`settings.opt.mouse.${mouse.right}`) }) +
+                  (mouse.back !== "none" || mouse.forward !== "none"
+                    ? t("video.mouseHint.side", { back: t(`settings.opt.mouse.${mouse.back}`), forward: t(`settings.opt.mouse.${mouse.forward}`) })
+                    : "")}
               </span>
             )}
           </div>
@@ -1146,7 +1157,7 @@ export function VideoViewer({
           {/* ツールの列・ROI の帰属・ROI 一覧は SHOW_VIDEO_TOOLS のときだけ（2026-09-30 画面から外した）。 */}
           {SHOW_VIDEO_TOOLS && (
           <>
-          {/* ツールバー（左ドラッグ=WW/WL・計測/ROI 切替。中=Pan・右=Zoom は固定）。 */}
+          {/* ツールバー（左ドラッグ=WW/WL・計測/ROI 切替。中・右は設定のツール）。 */}
           <div style={{ ...controlRowStyle, gap: 6 }}>
             {VIDEO_PRIMARY_TOOLS.map(({ name, key }) => (
               <button

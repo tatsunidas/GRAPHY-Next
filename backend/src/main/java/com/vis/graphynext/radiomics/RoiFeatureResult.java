@@ -35,7 +35,17 @@ public record RoiFeatureResult(
         boolean lossyCompressed,
         Section section,
         Slices slices,
-        List<ScaleEntry> scales) {
+        List<ScaleEntry> scales,
+        List<PlaneResult> planeResults) {
+
+    /** 断面の結果なし（従来の呼び出し元・キャッシュに残っている古い結果）。 */
+    public RoiFeatureResult(String radiomicsjVersion, Instant computedAt, boolean fromCache, int label,
+                            List<Row> rows, Discretisation discretisation, Provenance provenance,
+                            String settingsProperties, RoiSize roiSize, boolean lossyCompressed,
+                            Section section, Slices slices, List<ScaleEntry> scales) {
+        this(radiomicsjVersion, computedAt, fromCache, label, rows, discretisation, provenance,
+                settingsProperties, roiSize, lossyCompressed, section, slices, scales, null);
+    }
 
     /** 3D と 2D の単位まで（スケールなし）。 */
     public RoiFeatureResult(String radiomicsjVersion, Instant computedAt, boolean fromCache, int label,
@@ -84,7 +94,41 @@ public record RoiFeatureResult(
      * @param settingsSha256    {@code settingsProperties} の SHA-256（16 進小文字）
      */
     public record Provenance(String graphyNextVersion, String radiomicsjVersion, Instant extractedAt,
-                             String settingsSha256) {}
+                             String settingsSha256, String valueUnit, String calibration, boolean uncalibratedPet,
+                             String valueKind, String valueKindBasis, List<String> recordFlags) {
+
+        /** 校正の記録なし（従来の記録。キャッシュに残っている古い結果もこの形で読める）。 */
+        public Provenance(String graphyNextVersion, String radiomicsjVersion, Instant extractedAt,
+                          String settingsSha256) {
+            this(graphyNextVersion, radiomicsjVersion, extractedAt, settingsSha256, null, null, false,
+                    null, null, List.of());
+        }
+
+        /** 値の種類の記録なし。 */
+        public Provenance(String graphyNextVersion, String radiomicsjVersion, Instant extractedAt,
+                          String settingsSha256, String valueUnit, String calibration, boolean uncalibratedPet) {
+            this(graphyNextVersion, radiomicsjVersion, extractedAt, settingsSha256, valueUnit, calibration,
+                    uncalibratedPet, null, null, List.of());
+        }
+
+        /**
+         * 返すたびに付け直す記録。同じ画素値でも、要求の校正・値の種類の指定で単位や種類の表示が変わりうる。
+         * 値の種類を分類しなかった（従来）ときは、種類の欄は空。
+         */
+        Provenance withCalibration(ValueCalibration vc, ValueKind kind) {
+            return withCalibration(vc, kind, List.of());
+        }
+
+        /** {@code extraFlags}: 値の種類とは別の、この読み込みの旗（例: 画素間隔なし）。 */
+        Provenance withCalibration(ValueCalibration vc, ValueKind kind, List<String> extraFlags) {
+            boolean classified = kind != null && !ValueKind.LEGACY.equals(kind.kind());
+            List<String> flags = new java.util.ArrayList<>(classified ? kind.flags() : List.of());
+            flags.addAll(extraFlags);
+            return new Provenance(graphyNextVersion, radiomicsjVersion, extractedAt, settingsSha256,
+                    vc.valueUnit(), vc.text(), vc.uncalibratedPet(),
+                    classified ? kind.kind() : null, classified ? kind.basis() : null, List.copyOf(flags));
+        }
+    }
 
     /**
      * ボクセル数は RadiomicsJ の Diagnostics の値。
@@ -97,13 +141,35 @@ public record RoiFeatureResult(
      * @param smallRoi           {@code intensityVoxels < smallRoiWarnVoxels}。基準値が未設定なら null
      */
     public record RoiSize(Long initialVoxels, Long intensityVoxels, Long morphVoxels, Double volumeMm3,
-                          Integer smallRoiWarnVoxels, Boolean smallRoi) {}
+                          Integer smallRoiWarnVoxels, Boolean smallRoi) {
+        /** 画素間隔が無い画像では、体積を mm³ として出さない（単位の取り違えを避ける）。 */
+        RoiSize withoutVolume() {
+            return new RoiSize(initialVoxels, intensityVoxels, morphVoxels, null, smallRoiWarnVoxels, smallRoi);
+        }
+    }
 
     /**
      * 2D の計算の記録（実際に使った設定 {@code BOOL_force2D=1} を含む）。3D と設定が違うのでハッシュも別。
      */
     public record Record2d(Instant computedAt, Discretisation discretisation, Provenance provenance,
-                           String settingsProperties) {}
+                           String settingsProperties, String plane, Double tiltDeg) {
+        /** 断面の記録なし（従来の記録。キャッシュに残っている古い結果もこの形で読める）。 */
+        public Record2d(Instant computedAt, Discretisation discretisation, Provenance provenance,
+                        String settingsProperties) {
+            this(computedAt, discretisation, provenance, settingsProperties, null, null);
+        }
+
+        Record2d withCalibration(ValueCalibration vc, ValueKind kind, List<String> extraFlags) {
+            return new Record2d(computedAt, discretisation,
+                    provenance == null ? null : provenance.withCalibration(vc, kind, extraFlags), settingsProperties,
+                    plane, tiltDeg);
+        }
+
+        /** 断面の名前（AXIAL・SAGITTAL・CORONAL）と、法線がその患者軸からなす角（度）を付ける。 */
+        Record2d withPlane(String planeName, Double tilt) {
+            return new Record2d(computedAt, discretisation, provenance, settingsProperties, planeName, tilt);
+        }
+    }
 
     /**
      * 最大断面 2D（{@link MaxSectionService} が選んだ 1 枚）。
@@ -111,7 +177,11 @@ public record RoiFeatureResult(
      * @param positionMm 患者座標の法線方向の位置（mm）。スライス番号は持たない
      */
     public record Section(boolean fromCache, double positionMm, double areaMm2, long pixels, List<Row> rows,
-                          Record2d record, RoiSize roiSize) {}
+                          Record2d record, RoiSize roiSize) {
+        Section withRecord(Record2d r) {
+            return new Section(fromCache, positionMm, areaMm2, pixels, rows, r, roiSize);
+        }
+    }
 
     /** スライス 1 枚ぶんの行（前景のあるスライスだけ）。 */
     public record SliceRow(double positionMm, long pixels, double areaMm2, List<Row> rows) {}
@@ -132,26 +202,54 @@ public record RoiFeatureResult(
     public record Slices(boolean fromCache, List<SliceRow> rows, List<SliceFailure> failures, List<Row> mean,
                          List<Row> pixelWeightedMean, java.util.Map<String, Integer> slicesUsed,
                          int foregroundSlices, Record2d record, Integer smallRoiWarnPixels,
-                         List<Double> smallRoiPositionsMm) {}
+                         List<Double> smallRoiPositionsMm) {
+        Slices withRecord(Record2d r) {
+            return new Slices(fromCache, rows, failures, mean, pixelWeightedMean, slicesUsed, foregroundSlices, r,
+                    smallRoiWarnPixels, smallRoiPositionsMm);
+        }
+    }
+
+    /**
+     * 患者の軸に揃えた 1 つの断面（体積を LPS 座標で再スライスしたもの）の 2D の結果。{@code section}・{@code slices} は
+     * 取得面の 2D と同じ形で、記録（{@code record}）に断面の名前と傾き角（0）が入る。作れなかった断面は {@code error} に理由を
+     * 入れ、ほかの断面と 3D の結果は残す。
+     *
+     * @param spacingMm 再スライスした間隔（面内・法線方向とも、mm）
+     */
+    public record PlaneResult(String plane, Double spacingMm, Section section, Slices slices, String error) {}
 
     RoiFeatureResult asCached() {
         return new RoiFeatureResult(radiomicsjVersion, computedAt, true, label, rows, discretisation,
-                provenance, settingsProperties, roiSize, lossyCompressed, section, slices, scales);
+                provenance, settingsProperties, roiSize, lossyCompressed, section, slices, scales, planeResults);
     }
 
     RoiFeatureResult withScales(List<ScaleEntry> list) {
         return new RoiFeatureResult(radiomicsjVersion, computedAt, fromCache, label, rows, discretisation,
-                provenance, settingsProperties, roiSize, lossyCompressed, section, slices, list);
+                provenance, settingsProperties, roiSize, lossyCompressed, section, slices, list, planeResults);
     }
 
     RoiFeatureResult withModes(Section sec, Slices sl) {
         return new RoiFeatureResult(radiomicsjVersion, computedAt, fromCache, label, rows, discretisation,
-                provenance, settingsProperties, roiSize, lossyCompressed, sec, sl, scales);
+                provenance, settingsProperties, roiSize, lossyCompressed, sec, sl, scales, planeResults);
     }
 
     /** 返すたびに付け直す欄（キャッシュに無い・古いかもしれない値）。 */
     RoiFeatureResult withPerRequest(RoiSize size, boolean lossy) {
         return new RoiFeatureResult(radiomicsjVersion, computedAt, fromCache, label, rows, discretisation,
-                provenance, settingsProperties, size, lossy, section, slices, scales);
+                provenance, settingsProperties, size, lossy, section, slices, scales, planeResults);
+    }
+
+    /** {@link #withPerRequest(RoiSize, boolean)} に、読み込みで掛けた校正と、値の種類・画素間隔の記録を付ける。 */
+    RoiFeatureResult withPerRequest(RoiSize size, boolean lossy, ValueCalibration vc, ValueKind kind,
+                                    List<String> extraFlags) {
+        return new RoiFeatureResult(radiomicsjVersion, computedAt, fromCache, label, rows, discretisation,
+                provenance == null ? null : provenance.withCalibration(vc, kind, extraFlags), settingsProperties,
+                size, lossy, section, slices, scales, planeResults);
+    }
+
+    /** 患者の軸に揃えた断面（Axial・Sagittal・Coronal）の 2D の結果を付ける。 */
+    RoiFeatureResult withPlanes(List<PlaneResult> list) {
+        return new RoiFeatureResult(radiomicsjVersion, computedAt, fromCache, label, rows, discretisation,
+                provenance, settingsProperties, roiSize, lossyCompressed, section, slices, scales, list);
     }
 }

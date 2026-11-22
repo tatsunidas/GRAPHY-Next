@@ -10,6 +10,7 @@
  * マップ用で、ここでは読まない。
  */
 
+import { parseAdvanced } from "./advancedSettings";
 import { DEFAULT_SCALES, parseScaleLabels, parseScaleSpec, type ScaleNotation } from "./scaleSpec";
 
 export const SCALE_CONVERSIONS = ["SQRT_D", "IDENTITY", "COEFFICIENT"] as const;
@@ -71,6 +72,29 @@ export const isScale36 = (form: RoiFeatureForm): boolean =>
   isSixStatistics(form) && form.logOn && form.logByRadius && form.scaleNotation === "RADIUS_MM"
   && form.scalesText === DEFAULT_SCALES;
 
+/** プリセット「テクスチャ」: IBSI のテクスチャ 6 族（Fractal・強度ヒストグラム・IVH などは含めない）。 */
+export const TEXTURE_FAMILIES: ReadonlySet<string> = new Set(["GLCM", "GLRLM", "GLSZM", "GLDZM", "NGTDM", "NGLDM"]);
+
+export const applyTexture = (form: RoiFeatureForm): RoiFeatureForm => ({
+  ...form,
+  families: Object.fromEntries(ROI_FEATURE_FAMILIES.map((f) => [f.key, TEXTURE_FAMILIES.has(f.key)])),
+});
+
+/**
+ * プリセット「すべて」: すべての族。ただし 2D 形状（Shape2D）は 2D の単位を選んだときだけ（3D では計算されない）。
+ * 補助統計（IBSI 外）も含める。
+ */
+export const applyAllFamilies = (form: RoiFeatureForm): RoiFeatureForm => ({
+  ...form,
+  families: Object.fromEntries(ROI_FEATURE_FAMILIES.map((f) => [f.key, f.key !== "Shape2D" || form.units2d.length > 0])),
+});
+
+export const isTexture = (form: RoiFeatureForm): boolean =>
+  ROI_FEATURE_FAMILIES.every((f) => !!form.families[f.key] === TEXTURE_FAMILIES.has(f.key));
+
+export const isAllFamilies = (form: RoiFeatureForm): boolean =>
+  ROI_FEATURE_FAMILIES.every((f) => !!form.families[f.key] === (f.key !== "Shape2D" || form.units2d.length > 0));
+
 /** 「6 統計」のプリセットがいま当たっているか。 */
 export const isSixStatistics = (form: RoiFeatureForm): boolean =>
   ROI_FEATURE_FAMILIES.every((f) => !!form.families[f.key] === SIX_STATISTICS_FAMILIES.has(f.key));
@@ -84,7 +108,40 @@ export const DISCRETISED_FAMILIES: ReadonlySet<string> = new Set([
 ]);
 export const IVH_FAMILY = "IntensityVolumeHistogram";
 
+/**
+ * PET の校正（backend `RoiFeatureRequest.calibration`）。`auto` は PET を SUVbw に校正し、CT・MR などは何もしない。
+ * `none` は PET を Bq/mL のまま計算する（明示したときだけ。結果の行に旗が付く）。
+ */
+export const CALIBRATION_CHOICES = ["auto", "bw", "sul-james", "sul-janma", "bsa", "none"] as const;
+export type CalibrationChoice = (typeof CALIBRATION_CHOICES)[number];
+
+/**
+ * 値の種類（backend `ValueKind`）。DICOM のメタデータから、離散の校正値（CT の HU。IVH は mode 0、補間後の丸めを選べる）・
+ * 連続の校正値（単位が明示。IVH は mode 1 でビン幅が要る）・任意単位（MR など。IVH は mode 2）を判定する。
+ * `auto` は判定に任せる。`legacy` は分類しない（従来。IVH は RadiomicsJ の既定のまま。項目の無い従来の定義はこれ）。
+ */
+export const VALUE_KIND_CHOICES = ["auto", "discrete", "continuous", "arbitrary", "legacy"] as const;
+export type ValueKindChoice = (typeof VALUE_KIND_CHOICES)[number];
+
+/** 3D のほかに計算する 2D の単位（一括抽出）。画面（ROI 特徴量）は別の状態で持つ。 */
+export const UNITS_2D = ["MAX_SECTION_2D", "SLICES_2D"] as const;
+export type Unit2d = (typeof UNITS_2D)[number];
+
 export interface RoiFeatureForm {
+  /** 3D のほかに計算する 2D の単位（一括抽出）。空は 3D だけ。並びは UNITS_2D の順。 */
+  units2d: Unit2d[];
+  /** 2D の単位を、取得面に加えて Axial・Sagittal・Coronal（患者の LPS 軸）でも計算する。units2d が空なら無効。 */
+  planesAll: boolean;
+  /** PET の校正。範囲・離散化・特徴量は、校正後の値に対して働く。 */
+  calibration: CalibrationChoice;
+  /** 詳細設定（上級者向け）。RadiomicsJ の設定キーを `KEY=値` で 1 行 1 項目。他の欄が決めるキーは書けない（advancedSettings.ts）。 */
+  advancedText: string;
+  /** 値の種類。IVH のモードと補間後の丸めを決める。 */
+  valueKind: ValueKindChoice;
+  /** 連続の校正値の IVH のビン幅（強度の単位）。空欄は既定（PET の SUV は 0.10。他の単位は未設定）。 */
+  ivhBinWidthText: string;
+  /** 離散の校正値（CT の HU）で、補間後の強度を整数へ丸める（IBSI 68QD）。既定 off。 */
+  intensityRounding: boolean;
   fixedBinNumber: boolean;
   binCount: number;
   binWidth: number;
@@ -135,10 +192,19 @@ export function splitFilteredFamily(family: string): { sigma: string; base: stri
 /** RadiomicsJ の既定（ビン数 32・ビン幅 25・リサンプリングなし・GLAM と Shape2D はオフ）。 */
 export function defaultRoiFeatureForm(): RoiFeatureForm {
   return {
+    units2d: [],
+    planesAll: false,
+    calibration: "auto",
+    advancedText: "",
+    valueKind: "auto",
+    ivhBinWidthText: "",
+    intensityRounding: false,
     fixedBinNumber: true,
     binCount: 32,
     binWidth: 25,
-    resampleMm: null,
+    // 等方 1 mm（スライス厚が混在するアルバムで、スライス厚の違いがテクスチャに乗るのを避ける。手入力・「なし」も選べる）。
+    // 項目の無い従来の定義・VOI 統計の定義は、従来どおりリサンプリングなしで読む（batchSpec.ts）。
+    resampleMm: 1,
     rangeMinText: "",
     rangeMaxText: "",
     logOn: false,
@@ -192,6 +258,22 @@ export function rangeBounds(form: RoiFeatureForm):
   return { min, max, problem: null };
 }
 
+export type IvhBinWidthProblem = "INVALID";
+
+/** IVH のビン幅の入力。空欄は未指定（null）。正の有限数でなければ問題あり。 */
+export function ivhBinWidthOf(form: RoiFeatureForm): { value: number | null; problem: IvhBinWidthProblem | null } {
+  const t = form.ivhBinWidthText.trim();
+  if (t === "") return { value: null, problem: null };
+  const v = Number(t);
+  return Number.isFinite(v) && v > 0 ? { value: v, problem: null } : { value: null, problem: "INVALID" };
+}
+
+/** backend の `valueSpec`。`legacy`（分類しない）は null（従来の要求と同じ）。 */
+export function valueSpecOf(form: RoiFeatureForm): { valueKind: string; ivhBinWidth: number | null; intensityRounding: boolean } | null {
+  if (form.valueKind === "legacy") return null;
+  return { valueKind: form.valueKind, ivhBinWidth: ivhBinWidthOf(form).value, intensityRounding: form.intensityRounding };
+}
+
 export const anyFamilyOn = (form: RoiFeatureForm) => ROI_FEATURE_FAMILIES.some((f) => form.families[f.key]);
 
 /**
@@ -199,7 +281,9 @@ export const anyFamilyOn = (form: RoiFeatureForm) => ROI_FEATURE_FAMILIES.some((
  * マスクの値 `INT_label` は backend が必ず上書きするので送らない。
  */
 export function roiFeatureSettings(form: RoiFeatureForm): Record<string, string> {
+  // 詳細設定（検査を通った項目だけ。他の欄のキーはここに来ない）を先に置き、他の欄の設定で上書きする（画面の欄が優先）
   const s: Record<string, string> = {
+    ...parseAdvanced(form.advancedText).entries,
     BOOL_USE_FixedBinNumber: form.fixedBinNumber ? "1" : "0",
   };
   if (form.fixedBinNumber) s.INT_binCount = String(form.binCount);

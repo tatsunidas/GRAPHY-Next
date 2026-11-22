@@ -2,7 +2,7 @@
  * Copyright (c) Visionary Imaging Services, Inc. All rights reserved.
  * Author: Tatsuaki Kobayashi
  */
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import type { RoiFeatureResult, RoiFeatureRow } from "../api";
 import type { BatchJobState, BatchPair, BatchPairResult, BatchPairStatusRow, BatchRequest, BatchStatus } from "./batchApi";
 import { initialRows, selectedPairs, assignCaseLabels } from "./batchPairs";
@@ -21,9 +21,16 @@ const row = (column: string, value: number): RoiFeatureRow => {
   const us = column.indexOf("_");
   return { column, family: column.slice(0, us), feature: column.slice(us + 1), ibsi: "X", value, notes: [] };
 };
+
+/** 試験ごとに、結果 i の元画像の画素間隔（x, y, z）を差し込む。null なら診断情報の列を付けない（従来の結果と同じ）。 */
+let spacingOf: (i: number) => [number, number, number] | null = () => null;
+const spacingRows = (i: number): RoiFeatureRow[] => {
+  const s = spacingOf(i);
+  return s ? (["X", "Y", "Z"] as const).map((a, k) => row(`Diagnostics_DiagnosticsInitialImageVoxelDimension${a}`, s[k])) : [];
+};
 const result = (v: number): RoiFeatureResult => ({
   radiomicsjVersion: "2.7.0", computedAt: "2026-11-02T00:00:00Z", fromCache: false, label: 1,
-  rows: [row("Stat_mean", v), row("Stat_max", v + 1)],
+  rows: [row("Stat_mean", v), row("Stat_max", v + 1), ...spacingRows(v - 10)],
   discretisation: { fixedBinNumber: true, nBins: 32, binWidth: 25, ivhMode: 0, ivhBinCount: 1000, ivhBinWidth: 2.5 },
   provenance: { graphyNextVersion: "0.5.1", radiomicsjVersion: "2.7.0", extractedAt: "2026-11-02T00:00:00.1Z", settingsSha256: "ab".repeat(32) },
   settingsProperties: "INT_binCount=32\n",
@@ -60,7 +67,7 @@ function fakeApi(behaviour: (submitIndex: number, req: BatchRequest) => "ok" | "
       index, pair: p, state: "DONE", failureKind: null, error: null, fromCache: false, elapsedMs: 1, qcFlags: [],
     }));
     return {
-      jobId: id, state, elapsedMs: 1, total: prs.length, done: prs.length, failed: 0, skipped: 0, notRun: 0, cancelled: 0,
+      jobId: id, state, elapsedMs: 1, total: prs.length, done: prs.length, failed: 0, skipped: 0, notRun: 0, cancelled: 0, qcSkipped: 0,
       stopReason, stopKind, stopIndex: null, pairs: prs,
     };
   };
@@ -92,7 +99,7 @@ const ctx = (over: Partial<QueueContext> = {}): QueueContext => ({
 describe("runQueue", () => {
   it("1 つの定義の失敗で残りを止めず、定義ごとに表を書き出す", async () => {
     const a = await spec("a");
-    const b = await spec("b", { qc: { smallRoi: "STOP", lossy: "FLAG", smallRoiVoxels: 5 } });
+    const b = await spec("b", { qc: { smallRoi: "STOP", lossy: "FLAG", smallRoiVoxels: 5, smallRoiPixels: null } });
     const c = await spec("c");
     const { api, log } = fakeApi((i) => (i === 1 ? "throw" : "ok"));
     const updates: QueueEntry[][] = [];
@@ -107,7 +114,7 @@ describe("runQueue", () => {
 
   it("各定義の設定（QC・基準値・種類）を要求に載せる", async () => {
     const a = await spec("a", { kind: "voiStats" });
-    const b = await spec("b", { qc: { smallRoi: "STOP", lossy: "FLAG", smallRoiVoxels: 7 } });
+    const b = await spec("b", { qc: { smallRoi: "STOP", lossy: "FLAG", smallRoiVoxels: 7, smallRoiPixels: null } });
     const { api, log } = fakeApi(() => "ok");
     await runQueue([entry(1, a), entry(2, b)], ctx(), api, () => undefined);
     expect(log.submits[0].kind).toBe("voiStats");
@@ -174,5 +181,28 @@ describe("runQueue", () => {
     expect(saved.map((f) => f.name)).toEqual(direct.files.map((f) => f.name));
     expect(saved.map((f) => f.text)).toEqual(direct.files.map((f) => f.text));
     expect(saved[0].text).toContain(a.sha256);
+  });
+});
+
+describe("元画像の画素間隔のそろい（onSpacingMix）", () => {
+  afterEach(() => { spacingOf = () => null; });
+  const run = async (resample: number | null) => {
+    const calls: [string, number, number | null][] = [];
+    const base = defaultRoiFeatureForm();
+    const sp = await spec("sp", { form: { ...defaultSpecContent().form, resampleMm: resample } });
+    const api = fakeApi(() => "ok");
+    await runQueue([entry(1, sp)], ctx({ baseForm: { ...base, resampleMm: resample }, onSpacingMix: (prefix, mix, r) => calls.push([prefix, mix.usable, r]) }), api.api, () => undefined);
+    return calls;
+  };
+  it("そろっていなければ、定義ごとに 1 回、使えた組の数とリサンプリングの値つきで呼ぶ", async () => {
+    spacingOf = (i) => [0.7, 0.7, i === 0 ? 1 : 3];
+    expect(await run(null)).toEqual([["sp", 3, null]]);
+    expect(await run(1)).toEqual([["sp", 3, 1]]);
+  });
+  it("負例: そろっていれば呼ばない。診断情報が無い従来の結果でも呼ばない", async () => {
+    spacingOf = () => [0.7, 0.7, 3];
+    expect(await run(null)).toEqual([]);
+    spacingOf = () => null;
+    expect(await run(null)).toEqual([]);
   });
 });

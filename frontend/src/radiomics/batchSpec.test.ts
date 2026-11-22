@@ -18,9 +18,15 @@ import {
   specText,
   type SpecContent,
 } from "./batchSpec";
-import { ROI_FEATURE_FAMILIES, defaultRoiFeatureForm } from "./roiFeatureSettings";
+import { ROI_FEATURE_FAMILIES, defaultRoiFeatureForm, type Unit2d } from "./roiFeatureSettings";
 
 const content = (over: Partial<SpecContent> = {}): SpecContent => ({ ...defaultSpecContent(), ...over });
+
+/**
+ * 校正と値の種類の項目が無い従来の定義の内容（`calibration: null`・`valueKind: "legacy"`・リサンプリングなし。正準 JSON にキーを出さず、
+ * SHA-256 は項目が増える前のまま）。新しい既定はリサンプリング 1 mm なので、従来の定義の再現には `resampleMm: null` が要る。
+ */
+const legacy = (c: SpecContent = defaultSpecContent()): SpecContent => ({ ...c, form: { ...c.form, calibration: null, valueKind: "legacy", resampleMm: null } });
 
 /** 検証を通る定義のテキストを作り、1 か所だけ書き換えたものを返す（SHA-256 は書き換え前のまま）。 */
 async function text(mutate: (o: Record<string, any>) => void = () => undefined, c: SpecContent = content()): Promise<string> {
@@ -39,11 +45,11 @@ describe("small-ROI threshold in the definition", () => {
   // 基準値を足す前に取った値（コミット前のコードで計算して固定）。基準値の無い従来の定義の SHA-256 は変わらない
   const BASE_DEFAULT = "9e08bec6fc61105a4113e5ea626ac8640c405c1b7ec31343b0b928419e43dced";
   const BASE_STOP_LABELS = "673da998ba6bff623ef058121cffeb17a9175bb45d7b01efa4309e9246ac636f";
-  const withVoxels = (n: number | null): SpecContent => content({ qc: { smallRoi: "STOP", lossy: "FLAG", smallRoiVoxels: n } });
+  const withVoxels = (n: number | null): SpecContent => content({ qc: { smallRoi: "STOP", lossy: "FLAG", smallRoiVoxels: n, smallRoiPixels: null } });
 
   it("a definition without a threshold keeps the SHA-256 it had before the field existed", async () => {
-    expect(await contentSha256(defaultSpecContent())).toBe(BASE_DEFAULT);
-    expect(await contentSha256(content({ qc: { smallRoi: "STOP", lossy: "FLAG", smallRoiVoxels: null }, selection: { segmentLabels: ["GTV", "tumor"] } }))).toBe(BASE_STOP_LABELS);
+    expect(await contentSha256(legacy())).toBe(BASE_DEFAULT);
+    expect(await contentSha256(legacy(content({ qc: { smallRoi: "STOP", lossy: "FLAG", smallRoiVoxels: null, smallRoiPixels: null }, selection: { segmentLabels: ["GTV", "tumor"] } })))).toBe(BASE_STOP_LABELS);
   });
   it("null leaves the key out of the canonical JSON and the saved file; a value writes it", async () => {
     expect(canonicalContentJson(withVoxels(null))).not.toContain("smallRoiVoxels");
@@ -160,7 +166,7 @@ describe("round trip", () => {
   it("save then load gives the same content and the same SHA-256", async () => {
     const c = content({
       form: { ...defaultSpecContent().form, fixedBinNumber: false, binWidth: 12.5, resampleMm: 1.5, families: { ...defaultSpecContent().form.families, GLAM: true } },
-      qc: { smallRoi: "STOP", lossy: "STOP", smallRoiVoxels: null },
+      qc: { smallRoi: "STOP", lossy: "STOP", smallRoiVoxels: null, smallRoiPixels: null },
       selection: { segmentLabels: ["GTV", "tumor"] },
     });
     const spec = await buildSpec(c, "lung-ct");
@@ -169,7 +175,7 @@ describe("round trip", () => {
     if (!back.ok) return;
     expect(back.spec.sha256).toBe(spec.sha256);
     expect(back.spec.form).toEqual(spec.form);
-    expect(back.spec.qc).toEqual({ smallRoi: "STOP", lossy: "STOP", smallRoiVoxels: null });
+    expect(back.spec.qc).toEqual({ smallRoi: "STOP", lossy: "STOP", smallRoiVoxels: null, smallRoiPixels: null });
     expect(back.spec.selection.segmentLabels).toEqual(["GTV", "tumor"]);
     expect(back.spec.output.prefix).toBe("lung-ct");
     expect(back.ignoredFamilies).toBe(0);
@@ -186,7 +192,7 @@ describe("round trip", () => {
     const form = defaultSpecContent().form;
     expect(await contentSha256(content({ form: { ...form, binCount: 33 } }))).not.toBe(base);
     expect(await contentSha256(content({ form: { ...form, families: { ...form.families, GLCM: !form.families.GLCM } } }))).not.toBe(base);
-    expect(await contentSha256(content({ qc: { smallRoi: "STOP", lossy: "FLAG", smallRoiVoxels: null } }))).not.toBe(base);
+    expect(await contentSha256(content({ qc: { smallRoi: "STOP", lossy: "FLAG", smallRoiVoxels: null, smallRoiPixels: null } }))).not.toBe(base);
     expect(await contentSha256(content({ selection: { segmentLabels: ["GTV"] } }))).not.toBe(base);
   });
 
@@ -200,7 +206,7 @@ describe("round trip", () => {
 
   it("the form round-trips through the input fields", () => {
     const base = defaultRoiFeatureForm();
-    const c = specContentFrom({ ...base, binCount: 16, resampleMm: 2 }, { smallRoi: "FLAG", lossy: "STOP", smallRoiVoxels: null }, ["a", " a ", ""]);
+    const c = specContentFrom({ ...base, binCount: 16, resampleMm: 2 }, { smallRoi: "FLAG", lossy: "STOP", smallRoiVoxels: null, smallRoiPixels: null }, ["a", " a ", ""]);
     expect(c.selection.segmentLabels).toEqual(["a"]);
     const next = applySpecToForm({ ...base, logOn: true }, c);
     expect(next.binCount).toBe(16);
@@ -308,9 +314,9 @@ describe("kind in the definition", () => {
 
   it("a definition without a kind keeps the SHA-256 it had before the field existed", async () => {
     // 種類を足す前に取った固定値（上の「基準値」の節と同じ値）。radiomics のときはキーを出さない
-    expect(await contentSha256(defaultSpecContent())).toBe("9e08bec6fc61105a4113e5ea626ac8640c405c1b7ec31343b0b928419e43dced");
-    expect(canonicalContentJson(defaultSpecContent())).not.toContain("kind");
-    expect(specText(await buildSpec(defaultSpecContent(), "p"))).not.toContain("kind");
+    expect(await contentSha256(legacy())).toBe("9e08bec6fc61105a4113e5ea626ac8640c405c1b7ec31343b0b928419e43dced");
+    expect(canonicalContentJson(legacy())).not.toContain("kind");
+    expect(specText(await buildSpec(legacy(), "p"))).not.toContain("kind");
   });
 
   it("the kind changes the SHA-256, and is written to the file only when it is voiStats", async () => {
@@ -331,10 +337,10 @@ describe("kind in the definition", () => {
   });
 
   it("round-trips through save and load", async () => {
-    const r = await parseSpec(specText(await buildSpec(voi({ qc: { smallRoi: "STOP", lossy: "FLAG", smallRoiVoxels: 50 } }), "x")));
+    const r = await parseSpec(specText(await buildSpec(voi({ qc: { smallRoi: "STOP", lossy: "FLAG", smallRoiVoxels: 50, smallRoiPixels: null } }), "x")));
     expect(r.ok && r.spec.kind).toBe("voiStats");
     expect(r.ok && r.spec.qc.smallRoiVoxels).toBe(50);
-    expect(r.ok && r.spec.sha256).toBe(await contentSha256(voi({ qc: { smallRoi: "STOP", lossy: "FLAG", smallRoiVoxels: 50 } })));
+    expect(r.ok && r.spec.sha256).toBe(await contentSha256(voi({ qc: { smallRoi: "STOP", lossy: "FLAG", smallRoiVoxels: 50, smallRoiPixels: null } })));
   });
 
   it("accepts an explicit radiomics or null kind (same SHA-256), rejects anything else", async () => {
@@ -360,3 +366,314 @@ describe("kind in the definition", () => {
   });
 });
 
+
+describe("value kind (IVH mode and rounding) in the definition", () => {
+  // 正準 JSON のキーを足し引きして、別（Python の hashlib）で求めた値
+  const LEGACY_SHA = "9e08bec6fc61105a4113e5ea626ac8640c405c1b7ec31343b0b928419e43dced"; // 校正も値の種類も無い
+  const CAL_ONLY_SHA = "f54302dd56d8504990b9668e2ce2a2724c71476b4e7ebbf31e76eb1b5f1af659"; // 校正（auto）だけ
+  const PRB_DEFAULT_SHA = "78f5a3d4001797d079252e55cd8ff3cbcce5f2707273eade0ac5d82076994ac2"; // 校正（auto）＋値の種類（auto）、リサンプリングなし
+  const NEW_DEFAULT_SHA = "f0f8273683f4304a247ca1ccad7d54687be5fa5ab313c4ce2613feb1776de81c"; // 同＋リサンプリング等方 1 mm（新しい既定）
+
+  it("the new default definition has the SHA-256 computed independently", async () => {
+    expect(await contentSha256(defaultSpecContent())).toBe(NEW_DEFAULT_SHA);
+    expect(canonicalContentJson(defaultSpecContent())).toContain('"resampleMm":1,');
+    expect(canonicalContentJson(defaultSpecContent())).toContain('"calibration":"auto","valueKind":"auto"}');
+  });
+
+  it("the same definition with no resampling keeps the SHA-256 it had before the default became 1 mm", async () => {
+    const c = defaultSpecContent();
+    expect(await contentSha256({ ...c, form: { ...c.form, resampleMm: null } })).toBe(PRB_DEFAULT_SHA);
+  });
+
+  it("a definition with the calibration but no value kind keeps its SHA-256 and means 'legacy'", async () => {
+    const c = defaultSpecContent();
+    const calOnly: SpecContent = { ...c, form: { ...c.form, valueKind: "legacy", resampleMm: null } };
+    expect(await contentSha256(calOnly)).toBe(CAL_ONLY_SHA);
+    const r = await parseSpec(specText(await buildSpec(calOnly, "p")));
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.spec.sha256).toBe(CAL_ONLY_SHA);
+    expect(r.spec.form.valueKind).toBe("legacy");
+    expect(applySpecToForm(defaultRoiFeatureForm(), r.spec).valueKind).toBe("legacy");
+  });
+
+  it("a legacy definition (no calibration, no value kind) keeps its SHA-256", async () => {
+    expect(await contentSha256(legacy())).toBe(LEGACY_SHA);
+  });
+
+  it("every choice, the bin width and the rounding change the hash and survive save and load", async () => {
+    const base = defaultSpecContent().form;
+    const variants = [
+      { ...base, valueKind: "discrete" as const },
+      { ...base, valueKind: "continuous" as const, ivhBinWidth: 0.1 },
+      { ...base, valueKind: "continuous" as const, ivhBinWidth: 0.2 },
+      { ...base, valueKind: "arbitrary" as const },
+      { ...base, valueKind: "discrete" as const, intensityRounding: true },
+      { ...base, valueKind: "legacy" as const },
+    ];
+    const seen = new Set<string>([NEW_DEFAULT_SHA]);
+    for (const form of variants) {
+      const c = content({ form });
+      const sha = await contentSha256(c);
+      expect(seen.has(sha)).toBe(false);
+      seen.add(sha);
+      const r = await parseSpec(specText(await buildSpec(c, "p")));
+      expect(r.ok).toBe(true);
+      if (r.ok) {
+        expect(r.spec.form.valueKind).toBe(form.valueKind);
+        expect(r.spec.form.ivhBinWidth).toBe(form.ivhBinWidth);
+        expect(r.spec.form.intensityRounding).toBe(form.intensityRounding);
+      }
+    }
+  });
+
+  it("a VOI statistics definition keeps its SHA-256 (computed independently) although the default resampling became 1 mm", async () => {
+    // 正準 JSON は、校正だけがあった頃の既定（リサンプリングなし）に "kind":"voiStats" を足したもの。別（Python の hashlib）で求めた値
+    const VOI_DEFAULT_SHA = "b7d3d50f479d3e27a3458ecde190c1e251c283f78aa1755e5fff5066a775b521";
+    const voi = (form: SpecContent["form"]): SpecContent => content({ kind: "voiStats", form });
+    expect(await contentSha256(voi(defaultSpecContent().form))).toBe(VOI_DEFAULT_SHA);
+    expect(await contentSha256(voi({ ...defaultSpecContent().form, resampleMm: null }))).toBe(VOI_DEFAULT_SHA);
+    expect(JSON.parse(specText(await buildSpec(voi(defaultSpecContent().form), "p"))).form.resampleMm).toBeNull();
+    const r = await parseSpec(specText(await buildSpec(voi(defaultSpecContent().form), "p")));
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.spec.sha256).toBe(VOI_DEFAULT_SHA);
+  });
+
+  it("the VOI statistics do not use the value kind (their SHA-256 does not change with it)", async () => {
+    const a = await contentSha256(content({ kind: "voiStats", form: { ...defaultSpecContent().form, valueKind: "auto" } }));
+    const b = await contentSha256(content({ kind: "voiStats", form: { ...defaultSpecContent().form, valueKind: "discrete", intensityRounding: true } }));
+    expect(a).toBe(b);
+  });
+
+  it("an unknown value kind, a bad bin width and a bad rounding are refused (negative)", async () => {
+    for (const [mut, detail] of [
+      [(o: any) => { o.form.valueKind = "magic"; }, "form.valueKind"],
+      [(o: any) => { o.form.ivhBinWidth = "0.1"; }, "form.ivhBinWidth"],
+      [(o: any) => { o.form.ivhBinWidth = -1; }, "form.ivhBinWidth"],
+      [(o: any) => { o.form.intensityRounding = "yes"; }, "form.intensityRounding"],
+    ] as const) {
+      const r = await parseSpec(await text(mut));
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.detail).toBe(detail);
+    }
+  });
+
+  it("a rewritten value kind is refused by the SHA-256 (negative)", async () => {
+    const r = await parseSpec(await text((o) => { o.form.valueKind = "discrete"; }));
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toBe("sha_mismatch");
+  });
+
+  it("the form's value kind, bin width and rounding go into the definition and back", () => {
+    const form = { ...defaultRoiFeatureForm(), valueKind: "continuous" as const, ivhBinWidthText: "0.25", intensityRounding: true };
+    const c = specContentFrom(form, defaultSpecContent().qc, []);
+    expect(c.form.valueKind).toBe("continuous");
+    expect(c.form.ivhBinWidth).toBe(0.25);
+    expect(c.form.intensityRounding).toBe(true);
+    const back = applySpecToForm(defaultRoiFeatureForm(), c);
+    expect(back.valueKind).toBe("continuous");
+    expect(back.ivhBinWidthText).toBe("0.25");
+    expect(back.intensityRounding).toBe(true);
+  });
+});
+
+describe("calibration (PET) in the definition", () => {
+  const LEGACY_SHA = "9e08bec6fc61105a4113e5ea626ac8640c405c1b7ec31343b0b928419e43dced";
+
+  it("a new definition writes the calibration (default auto) and its SHA-256 differs from a legacy definition", async () => {
+    const c = defaultSpecContent();
+    expect(c.form.calibration).toBe("auto");
+    expect(canonicalContentJson(c)).toContain('"calibration":"auto"');
+    expect(await contentSha256(c)).not.toBe(LEGACY_SHA);
+    expect(JSON.parse(specText(await buildSpec(c, "p"))).form.calibration).toBe("auto");
+  });
+
+  it("every choice changes the hash, and survives save and load", async () => {
+    const seen = new Set<string>();
+    for (const cal of ["auto", "bw", "sul-james", "sul-janma", "bsa", "none"] as const) {
+      const c = content({ form: { ...defaultSpecContent().form, calibration: cal } });
+      const sha = await contentSha256(c);
+      expect(seen.has(sha)).toBe(false);
+      seen.add(sha);
+      const r = await parseSpec(specText(await buildSpec(c, "p")));
+      expect(r.ok).toBe(true);
+      if (r.ok) expect(r.spec.form.calibration).toBe(cal);
+    }
+  });
+
+  it("a legacy definition (no calibration item) still loads with its old SHA-256 and means 'no calibration'", async () => {
+    const t = specText(await buildSpec(legacy(), "p"));
+    expect(JSON.parse(t).form.calibration).toBeUndefined();
+    const r = await parseSpec(t);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.spec.sha256).toBe(LEGACY_SHA);
+    expect(r.spec.form.calibration).toBeNull();
+    // 従来の結果を再現するため、PET は校正しない
+    expect(applySpecToForm(defaultRoiFeatureForm(), r.spec).calibration).toBe("none");
+  });
+
+  it("an unknown calibration value is refused and nothing is loaded (negative)", async () => {
+    const t = await text((o) => { o.form.calibration = "suv-magic"; });
+    const r = await parseSpec(t);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.detail).toBe("form.calibration");
+  });
+
+  it("a rewritten calibration is refused by the SHA-256 (negative)", async () => {
+    const t = await text((o) => { o.form.calibration = "none"; });
+    const r = await parseSpec(t);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toBe("sha_mismatch");
+  });
+
+  it("the VOI statistics keep the calibration (it is not reset to the default with the hidden fields)", async () => {
+    const a = await contentSha256(content({ kind: "voiStats", form: { ...defaultSpecContent().form, calibration: "bw" } }));
+    const b = await contentSha256(content({ kind: "voiStats", form: { ...defaultSpecContent().form, calibration: "sul-james" } }));
+    expect(a).not.toBe(b);
+  });
+
+  it("the form's calibration goes into the definition and back", () => {
+    const form = { ...defaultRoiFeatureForm(), calibration: "sul-janma" as const };
+    const c = specContentFrom(form, defaultSpecContent().qc, []);
+    expect(c.form.calibration).toBe("sul-janma");
+    expect(applySpecToForm(defaultRoiFeatureForm(), c).calibration).toBe("sul-janma");
+  });
+});
+
+describe("detail settings and the QC skip mode in the definition", () => {
+  // 正準 JSON を文字列として組み立てて、別（Python の hashlib）で求めた値
+  const WITH_SETTINGS_SHA = "deb769a3fb56c381fd62f558bc122ae44c83ef50c023f8d63b5a3e8349e5e5fe"; // 新しい既定 + settings {DOUBLE_zScore: "2.5", INT_deltaGLCM: "2"}
+  const SKIP_SHA = "9e1e4da2633934a48cc0a12f7ffc9d55eedb1df85c8a690b70443eb268a874a8"; // 新しい既定 + qc {smallRoi: SKIP, lossy: STOP}
+  const DEFAULT_SHA = "f0f8273683f4304a247ca1ccad7d54687be5fa5ab313c4ce2613feb1776de81c";
+
+  it("an empty settings leaves the SHA-256 as it was; a non-empty one changes it to the independent value, whatever the insertion order", async () => {
+    const f = defaultSpecContent().form;
+    expect(await contentSha256(content({ form: { ...f, settings: {} } }))).toBe(DEFAULT_SHA);
+    expect(await contentSha256(content({ form: { ...f, settings: { INT_deltaGLCM: "2", DOUBLE_zScore: "2.5" } } }))).toBe(WITH_SETTINGS_SHA);
+    expect(await contentSha256(content({ form: { ...f, settings: { DOUBLE_zScore: "2.5", INT_deltaGLCM: "2" } } }))).toBe(WITH_SETTINGS_SHA);
+    expect(canonicalContentJson(content({ form: { ...f, settings: { INT_deltaGLCM: "2", DOUBLE_zScore: "2.5" } } })))
+      .toContain('"settings":{"DOUBLE_zScore":"2.5","INT_deltaGLCM":"2"}');
+  });
+
+  it("settings survive save and load, and reach the form text", async () => {
+    const c = content({ form: { ...defaultSpecContent().form, settings: { INT_deltaGLCM: "2" } } });
+    const r = await parseSpec(specText(await buildSpec(c, "p")));
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.spec.form.settings).toEqual({ INT_deltaGLCM: "2" });
+    expect(applySpecToForm(defaultRoiFeatureForm(), r.spec).advancedText).toBe("INT_deltaGLCM=2");
+    const back = specContentFrom({ ...defaultRoiFeatureForm(), advancedText: "# a note\nINT_deltaGLCM = 2\nINT_binCount=5" }, defaultSpecContent().qc, []);
+    expect(back.form.settings).toEqual({ INT_deltaGLCM: "2" }); // 他の欄のキーは入らない
+  });
+
+  it("VOI statistics ignore the settings", async () => {
+    const f = defaultSpecContent().form;
+    const a = await contentSha256(content({ kind: "voiStats", form: { ...f, settings: { INT_deltaGLCM: "2" } } }));
+    const b = await contentSha256(content({ kind: "voiStats", form: f }));
+    expect(a).toBe(b);
+  });
+
+  it("bad settings are refused (negative): not an object, a non-string value, an empty value, a bad key, too many", async () => {
+    for (const bad of [[1, 2], { INT_deltaGLCM: 2 }, { INT_deltaGLCM: "" }, { "bad key": "1" }, { "1abc": "1" },
+      Object.fromEntries(Array.from({ length: 101 }, (_, i) => [`INT_k${i}`, "1"]))]) {
+      const r = await parseSpec(await text((o) => { o.form.settings = bad; }));
+      expect(r.ok).toBe(false);
+    }
+  });
+
+  it("a rewritten settings is refused by the SHA-256 (negative)", async () => {
+    const c = content({ form: { ...defaultSpecContent().form, settings: { INT_deltaGLCM: "2" } } });
+    const t = specText(await buildSpec(c, "p"));
+    const o = JSON.parse(t);
+    o.form.settings.INT_deltaGLCM = "3";
+    const r = await parseSpec(JSON.stringify(o));
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toBe("sha_mismatch");
+  });
+
+  it("the QC skip mode is written as it is, has its own SHA-256 (independent), loads, and an unknown mode is refused", async () => {
+    const q = { smallRoi: "SKIP" as const, lossy: "STOP" as const, smallRoiVoxels: null, smallRoiPixels: null };
+    expect(await contentSha256(content({ qc: q }))).toBe(SKIP_SHA);
+    const r = await parseSpec(specText(await buildSpec(content({ qc: q }), "p")));
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.spec.qc).toEqual(q);
+    const bad = await parseSpec(await text((o) => { o.qc.smallRoi = "PAUSE"; }));
+    expect(bad.ok).toBe(false);
+    // 従来の STOP の定義は、そのまま読める（SHA も変わらない）
+    expect(await contentSha256(legacy(content({ qc: { smallRoi: "STOP", lossy: "FLAG", smallRoiVoxels: null, smallRoiPixels: null }, selection: { segmentLabels: ["GTV", "tumor"] } })))).toBe("673da998ba6bff623ef058121cffeb17a9175bb45d7b01efa4309e9246ac636f");
+  });
+});
+
+describe("2D の単位と断面（units・planes）", () => {
+  // Python（hashlib・json）で、正準 JSON を独立に組み立てて求めた値
+  const SEC_SHA = "3c0067c0710d305d0065ad13c6efb9d71a47ccef1358073e4e47bfc31b9a6e26";
+  const BOTH_SHA = "863b37d9c3322c11498ec7b4dfb00085984d725beb7d9b80872a8f2285aca7e8";
+  const BOTH_ALL_SHA = "b329095c279a3859218615b1ec7bdce4a630b010e79c277fef5ce3c2b114e42b";
+  const withUnits = (units2d: Unit2d[], planesAll = false) => content({ form: { ...defaultSpecContent().form, units2d, planesAll } });
+
+  it("3D だけの定義の SHA-256 は変わらない（キーを出さない）。新しい項目の SHA-256 は独立の計算と一致", async () => {
+    expect(await contentSha256(defaultSpecContent())).toBe("f0f8273683f4304a247ca1ccad7d54687be5fa5ab313c4ce2613feb1776de81c");
+    expect(await contentSha256(withUnits(["MAX_SECTION_2D"]))).toBe(SEC_SHA);
+    expect(await contentSha256(withUnits(["MAX_SECTION_2D", "SLICES_2D"]))).toBe(BOTH_SHA);
+    expect(await contentSha256(withUnits(["MAX_SECTION_2D", "SLICES_2D"], true))).toBe(BOTH_ALL_SHA);
+  });
+
+  it("単位の並びに依らず同じ SHA-256。2D の単位が無ければ断面は効かない（SHA-256 も同じ）", async () => {
+    expect(await contentSha256(withUnits(["SLICES_2D", "MAX_SECTION_2D"]))).toBe(BOTH_SHA);
+    expect(await contentSha256(withUnits([], true))).toBe(await contentSha256(defaultSpecContent()));
+  });
+
+  it("保存して読み直すと同じ。VOI 統計では 2D の単位を使わない（SHA-256 に影響しない）", async () => {
+    const c = withUnits(["MAX_SECTION_2D", "SLICES_2D"], true);
+    const r = await parseSpec(specText(await buildSpec(c, "p")));
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.spec.form.units2d).toEqual(["MAX_SECTION_2D", "SLICES_2D"]);
+      expect(r.spec.form.planesAll).toBe(true);
+      expect(applySpecToForm(defaultRoiFeatureForm(), r.spec).units2d).toEqual(["MAX_SECTION_2D", "SLICES_2D"]);
+    }
+    const voi = { ...withUnits(["SLICES_2D"], true), kind: "voiStats" as const };
+    expect(await contentSha256(voi)).toBe(await contentSha256({ ...defaultSpecContent(), kind: "voiStats" }));
+  });
+
+  it("不正な単位・断面は理由つきで断る（何も変えない）", async () => {
+    const c = withUnits(["MAX_SECTION_2D"]);
+    const bad = async (mutate: (o: Record<string, any>) => void) => parseSpec(await text(mutate, c));
+    expect(await bad((o) => { o.form.units = ["WHOLE_3D"]; })).toMatchObject({ ok: false, error: "type" });
+    expect(await bad((o) => { o.form.units = []; })).toMatchObject({ ok: false, error: "type" });
+    expect(await bad((o) => { o.form.units = ["SLICES_2D", "SLICES_2D"]; })).toMatchObject({ ok: false, error: "type" });
+    expect(await bad((o) => { o.form.planes = "SIDEWAYS"; })).toMatchObject({ ok: false, error: "type" });
+    expect(await bad((o) => { delete o.form.units; o.form.planes = "ALL"; })).toMatchObject({ ok: false, error: "type" });
+  });
+});
+
+describe("2D の小さい ROI の基準値（qc.smallRoiPixels）", () => {
+  // Python（hashlib・json）で、正準 JSON を独立に組み立てて求めた値
+  const PX150_SHA = "c8acc416e7a0f1dbb0bad85fe9c3cbffa672d9c56a07a96a1b0b340128480272";
+  const BOTH_SHA = "4fa035371d437b7180f19125757ab3e2b5299c7c9283058ce0f4f1e2afb54d29";
+  const withQc = (qc: SpecContent["qc"]) => content({ qc });
+
+  it("無い定義の SHA-256 は変わらない。指定した値の SHA-256 は独立の計算と一致（ボクセルの基準値と併用も）", async () => {
+    expect(await contentSha256(defaultSpecContent())).toBe("f0f8273683f4304a247ca1ccad7d54687be5fa5ab313c4ce2613feb1776de81c");
+    expect(await contentSha256(withQc({ smallRoi: "FLAG", lossy: "FLAG", smallRoiVoxels: null, smallRoiPixels: 150 }))).toBe(PX150_SHA);
+    expect(await contentSha256(withQc({ smallRoi: "STOP", lossy: "FLAG", smallRoiVoxels: 1000, smallRoiPixels: 150 }))).toBe(BOTH_SHA);
+  });
+
+  it("保存して読み直すと同じ。値が違えば SHA-256 も違う", async () => {
+    const c = withQc({ smallRoi: "STOP", lossy: "FLAG", smallRoiVoxels: 1000, smallRoiPixels: 150 });
+    const r = await parseSpec(specText(await buildSpec(c, "p")));
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.spec.qc.smallRoiPixels).toBe(150);
+    expect(await contentSha256(withQc({ smallRoi: "FLAG", lossy: "FLAG", smallRoiVoxels: null, smallRoiPixels: 151 }))).not.toBe(PX150_SHA);
+  });
+
+  it("不正な値（0・小数・文字・大きすぎる）は理由つきで断る", async () => {
+    const c = withQc({ smallRoi: "FLAG", lossy: "FLAG", smallRoiVoxels: null, smallRoiPixels: 150 });
+    const bad = async (v: unknown) => parseSpec(await text((o) => { o.qc.smallRoiPixels = v; }, c));
+    expect(await bad(0)).toMatchObject({ ok: false, error: "range" });
+    expect(await bad(1.5)).toMatchObject({ ok: false, error: "range" });
+    expect(await bad(2147483648)).toMatchObject({ ok: false, error: "range" });
+    expect(await bad("150")).toMatchObject({ ok: false, error: "type" });
+  });
+});

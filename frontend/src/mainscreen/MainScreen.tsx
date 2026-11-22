@@ -3,7 +3,7 @@
  * Author: Tatsuaki Kobayashi
  */
 import { useEffect, useRef, useState } from "react";
-import { exportSeriesNifti, cancelImportJob, deleteUrlImportFile, getImportJob, submitImportJob, type AppStatus, type ImportJobStatus, type ImportResult, type Study, type Series, type StudyFilters } from "../api";
+import { exportSeriesNifti, exportSeriesNiftiWeb, cancelImportJob, deleteUrlImportFile, getImportJob, submitImportJob, type AppStatus, type ImportJobStatus, type ImportResult, type Study, type Series, type StudyFilters } from "../api";
 import { desktop } from "../desktopBridge";
 import { droppedPaths, hasDroppedFiles } from "./droppedPaths";
 import { ImportProgressBanner } from "./ImportProgressBanner";
@@ -16,6 +16,7 @@ import { LIST_LAYOUT_STORAGE_KEY, isPaneLayout, parseListLayout, type ListLayout
 import { MenuBar } from "./MenuBar";
 import { downloadBlob, niftiExportAvailability, runNiftiExport } from "./niftiExport";
 import { Toolbar, type ToolKind } from "./Toolbar";
+import { ResourcePanel } from "./ResourcePanel";
 import { SearchPanel } from "./SearchPanel";
 import { StatusBar } from "./StatusBar";
 import { useImportWatchStatus } from "./useImportWatchStatus";
@@ -137,6 +138,7 @@ export function MainScreen({
   // ［ファイル］→「NIfTI で書き出し…」の結果の帯（成功・理由つきの失敗）。
   const [niftiMsg, setNiftiMsg] = useState<{ text: string; error: boolean } | null>(null);
   const [niftiBusy, setNiftiBusy] = useState(false);
+  const niftiAbort = useRef<AbortController | null>(null);
   const [selectedStudy, setSelectedStudy] = useState<Study | null>(null);
   const [selectedSeries, setSelectedSeries] = useState<Series | null>(null);
   // 受信・事前取得・削除で保管庫が変わったら、待機中は一覧を自動で読み直し、操作中は状態バーで知らせる。
@@ -480,14 +482,26 @@ export function MainScreen({
     window.dispatchEvent(new CustomEvent(EMR_OPEN_EVENT, { detail: { patientId: patient?.id ?? "" } }));
   };
   const emrOpenProps = isStandalone && !isDemo && emr.status?.enabled && emr.status.valid ? { onClick: handleOpenEmr } : undefined;
-  const niftiAvail = niftiExportAvailability({ series: selectedSeries, isStandalone, busy: niftiBusy });
+  const niftiAvail = niftiExportAvailability({ series: selectedSeries, busy: niftiBusy });
   const handleExportNifti = async () => {
     if (!selectedStudy || !selectedSeries || !niftiAvail.enabled) return;
     setNiftiBusy(true);
-    setNiftiMsg({ text: t("niftiExport.running"), error: false });
+    // web は PACS から取るジョブ（進行を出し、中止できる）。standalone は従来どおり同期で返す
+    const ctl = isStandalone ? null : new AbortController();
+    niftiAbort.current = ctl;
+    setNiftiMsg({ text: t(isStandalone ? "niftiExport.running" : "niftiExport.runningWeb", { done: 0, total: selectedSeries.numberOfInstances ?? 0 }), error: false });
     try {
-      setNiftiMsg(await runNiftiExport(selectedStudy, selectedSeries, { exportSeries: exportSeriesNifti, save: downloadBlob, t }));
+      setNiftiMsg(
+        await runNiftiExport(selectedStudy, selectedSeries, {
+          exportSeries: isStandalone ? exportSeriesNifti : exportSeriesNiftiWeb,
+          save: downloadBlob,
+          t,
+          signal: ctl?.signal,
+          onProgress: (done, total) => setNiftiMsg({ text: t("niftiExport.runningWeb", { done, total }), error: false }),
+        }),
+      );
     } finally {
+      niftiAbort.current = null;
       setNiftiBusy(false);
     }
   };
@@ -541,13 +555,16 @@ export function MainScreen({
       {niftiMsg && (
         <div style={{ ...banner, ...(niftiMsg.error ? { color: "#b00020" } : null) }} data-testid="nifti-export-msg">
           {niftiMsg.text}
+          {niftiBusy && niftiAbort.current && (
+            <button style={{ marginLeft: 8 }} onClick={() => niftiAbort.current?.abort()} data-testid="nifti-export-cancel">{t("niftiExport.cancel")}</button>
+          )}
           <button style={{ marginLeft: 8 }} onClick={() => setNiftiMsg(null)} aria-label={t("common.close")}>×</button>
         </div>
       )}
       <div style={middle}>
         {/* status（isDemo）は非同期取得のため、確定後に isDemo が変わったら SearchPanel を
             再マウントして初期日付(1900/01/01〜当日)を再計算させる。 */}
-        <SearchPanel key={String(isDemo)} onSearch={onSearch} isDemo={isDemo} missingSupported={status?.mode !== "web"} />
+        <SearchPanel key={String(isDemo)} onSearch={onSearch} isDemo={isDemo} missingSupported={status?.mode !== "web"} footer={<ResourcePanel />} />
         <div style={centerColumn}>
         <div style={listArea(listLayout)}>
         <div style={treeArea}>

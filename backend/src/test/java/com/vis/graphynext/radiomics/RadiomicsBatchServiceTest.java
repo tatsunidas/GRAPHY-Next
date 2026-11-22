@@ -448,6 +448,148 @@ class RadiomicsBatchServiceTest {
         assertEquals(RadiomicsBatchService.FLAG_LOSSY, stopped.stopReason());
     }
 
+    private static final RadiomicsBatchService.Qc SKIP_SMALL =
+            new RadiomicsBatchService.Qc(RadiomicsBatchService.QcMode.SKIP, RadiomicsBatchService.QcMode.FLAG);
+
+    @Test
+    void skipModeDoesNotStop_keepsTheRowWithItsReason_andLeavesTheOthersAlone() throws Exception {
+        AtomicInteger computed = new AtomicInteger();
+        RadiomicsBatchService svc = service((req, c) -> {
+            computed.incrementAndGet();
+            return stubQc(req.sourceSeriesUid().equals("src2"), false);
+        });
+        Status s = await(svc, svc.submit(requestQc(List.of(auto(0), auto(1), auto(2), auto(3), auto(4)), SKIP_SMALL, null)));
+
+        assertEquals(JobState.DONE, s.state(), "止めずに最後まで走る");
+        assertEquals(null, s.stopKind());
+        assertEquals(5, computed.get(), "スキップのあとも残りを計算する");
+        assertEquals(4, s.done());
+        assertEquals(1, s.qcSkipped());
+        assertEquals(0, s.notRun());
+        assertEquals(0, s.failed());
+        RadiomicsBatchService.PairStatus skipped = s.pairs().get(2);
+        assertEquals(PairState.QC_SKIPPED, skipped.state());
+        assertTrue(skipped.error().startsWith("QC でスキップ: 小さい ROI（"), skipped.error());
+        assertEquals(List.of(RadiomicsBatchService.FLAG_SMALL_ROI), skipped.qcFlags(), "旗は残る");
+        // 値は返さない（表に入れない）。ほかの組は返す
+        List<RadiomicsBatchService.PairResult> r = svc.results(s.jobId());
+        assertEquals(4, r.size());
+        assertEquals(List.of(0, 1, 3, 4), r.stream().map(RadiomicsBatchService.PairResult::index).toList());
+    }
+
+    @Test
+    void skipModeDoesNotSkipWhatTheFlagModeOrAnAcknowledgedPairKeeps() throws Exception {
+        RadiomicsBatchService svc = service((req, c) -> stubQc(req.sourceSeriesUid().equals("src2"), false));
+        List<BatchPair> pairs = List.of(auto(0), auto(1), auto(2), auto(3));
+        Status flag = await(svc, svc.submit(request(pairs)));
+        assertEquals(0, flag.qcSkipped(), "旗を付けて続ける（FLAG）は値を残す");
+        assertEquals(4, flag.done());
+        Status ack = await(svc, svc.submit(requestQc(pairs, SKIP_SMALL, List.of(pairs.get(2).pairKey()))));
+        assertEquals(0, ack.qcSkipped(), "許容した組はスキップしない");
+        assertEquals(4, ack.done());
+    }
+
+    @Test
+    void stopTakesPrecedenceOverSkipWhenBothAreHit() throws Exception {
+        RadiomicsBatchService svc = service((req, c) -> stubQc(req.sourceSeriesUid().equals("src1"), req.sourceSeriesUid().equals("src1")));
+        RadiomicsBatchService.Qc skipSmallStopLossy =
+                new RadiomicsBatchService.Qc(RadiomicsBatchService.QcMode.SKIP, RadiomicsBatchService.QcMode.STOP);
+        Status s = await(svc, svc.submit(requestQc(List.of(auto(0), auto(1), auto(2)), skipSmallStopLossy, null)));
+        assertEquals(JobState.STOPPED, s.state(), "止めるの指定が先に効く（人が判断する関門）");
+        assertEquals(PairState.DONE, s.pairs().get(1).state());
+    }
+
+    @Test
+    void skipReasonNamesOnlyTheConditionsThatWereAskedToSkip() {
+        RoiFeatureResult r = stubQc(true, true);
+        String both = RadiomicsBatchService.skipReason(
+                new RadiomicsBatchService.Qc(RadiomicsBatchService.QcMode.SKIP, RadiomicsBatchService.QcMode.SKIP), r,
+                List.of(RadiomicsBatchService.FLAG_SMALL_ROI, RadiomicsBatchService.FLAG_LOSSY));
+        assertTrue(both.contains("小さい ROI") && both.contains("非可逆圧縮"), both);
+        String onlyLossy = RadiomicsBatchService.skipReason(
+                new RadiomicsBatchService.Qc(RadiomicsBatchService.QcMode.FLAG, RadiomicsBatchService.QcMode.SKIP), r,
+                List.of(RadiomicsBatchService.FLAG_SMALL_ROI, RadiomicsBatchService.FLAG_LOSSY));
+        assertTrue(onlyLossy.contains("非可逆圧縮") && !onlyLossy.contains("小さい ROI"), onlyLossy);
+    }
+
+    // ───────────── 2D の小さい ROI（SMALL_ROI_2D） ─────────────
+
+    private static RoiFeatureResult.Section sec2d(boolean small) {
+        RoiFeatureResult.RoiSize size = new RoiFeatureResult.RoiSize(100L, 100L, null, null, 150, small);
+        return new RoiFeatureResult.Section(false, 10.0, 50.0, 100, List.of(), null, size);
+    }
+
+    private static RoiFeatureResult.Slices slices2d(List<Double> smallPositions) {
+        return new RoiFeatureResult.Slices(false, List.of(), List.of(), List.of(), List.of(), java.util.Map.of(), 4, null, 150,
+                smallPositions);
+    }
+
+    private static RoiFeatureResult with2d(RoiFeatureResult.Section sec, RoiFeatureResult.Slices sl,
+                                           List<RoiFeatureResult.PlaneResult> planes) {
+        return new RoiFeatureResult("rj", java.time.Instant.EPOCH, false, 1, List.of(), null, null, null,
+                new RoiFeatureResult.RoiSize(5000L, 5000L, 5000L, 1.0, 1000, false), false, sec, sl, null, planes);
+    }
+
+    @Test
+    void small2dIsFlaggedFromTheMaxSection_theSlices_andAnyResslicedPlane_andNotWhenAllAreLargeOrNoThreshold() {
+        assertEquals(List.of(), RadiomicsBatchService.qcFlagsOf(with2d(sec2d(false), slices2d(List.of()), null)), "大きい 2D は旗なし（負例）");
+        assertEquals(List.of(RadiomicsBatchService.FLAG_SMALL_ROI_2D),
+                RadiomicsBatchService.qcFlagsOf(with2d(sec2d(true), slices2d(List.of()), null)), "最大断面だけが小さい");
+        assertEquals(List.of(RadiomicsBatchService.FLAG_SMALL_ROI_2D),
+                RadiomicsBatchService.qcFlagsOf(with2d(sec2d(false), slices2d(List.of(12.0)), null)), "スライスだけが小さい");
+        List<RoiFeatureResult.PlaneResult> planes = List.of(
+                new RoiFeatureResult.PlaneResult("AXIAL", 0.7, sec2d(false), slices2d(List.of()), null),
+                new RoiFeatureResult.PlaneResult("SAGITTAL", 0.7, sec2d(false), slices2d(List.of(3.0)), null));
+        assertEquals(List.of(RadiomicsBatchService.FLAG_SMALL_ROI_2D),
+                RadiomicsBatchService.qcFlagsOf(with2d(sec2d(false), slices2d(List.of()), planes)), "再スライスした断面だけが小さい");
+        // 基準値が無い（判定していない: smallRoi が null）なら旗は付かない
+        RoiFeatureResult.Section unset = new RoiFeatureResult.Section(false, 10.0, 50.0, 100, List.of(), null,
+                new RoiFeatureResult.RoiSize(100L, 100L, null, null, null, null));
+        assertEquals(List.of(), RadiomicsBatchService.qcFlagsOf(with2d(unset, slices2d(List.of()), null)));
+        // 2D の結果が無い 3D だけの結果は旗なし
+        assertEquals(List.of(), RadiomicsBatchService.qcFlagsOf(stubQc(false, false)));
+    }
+
+    @Test
+    void theSmallRoiModeAppliesToThe2dFlagToo_stopSkipAndFlag() throws Exception {
+        RadiomicsBatchService.Qc stop = new RadiomicsBatchService.Qc(RadiomicsBatchService.QcMode.STOP, RadiomicsBatchService.QcMode.FLAG);
+        RadiomicsBatchService svc = service((req, c) -> with2d(sec2d(req.sourceSeriesUid().equals("src1")), slices2d(List.of()), null));
+        Status s = await(svc, svc.submit(requestQc(List.of(auto(0), auto(1), auto(2)), stop, null)));
+        assertEquals(JobState.STOPPED, s.state(), "2D が小さい組で止まる");
+        assertEquals(1, s.stopIndex());
+        assertTrue(s.pairs().get(1).qcFlags().contains(RadiomicsBatchService.FLAG_SMALL_ROI_2D));
+        assertEquals(PairState.DONE, s.pairs().get(0).state());
+
+        RadiomicsBatchService.Qc skip = new RadiomicsBatchService.Qc(RadiomicsBatchService.QcMode.SKIP, RadiomicsBatchService.QcMode.FLAG);
+        Status k = await(svc, svc.submit(requestQc(List.of(auto(0), auto(1), auto(2)), skip, null)));
+        assertEquals(PairState.QC_SKIPPED, k.pairs().get(1).state(), "スキップは値を表に入れない");
+        assertTrue(k.pairs().get(1).error().contains("2D"), k.pairs().get(1).error());
+        assertEquals(PairState.DONE, k.pairs().get(2).state());
+
+        RadiomicsBatchService.Qc flag = new RadiomicsBatchService.Qc(RadiomicsBatchService.QcMode.FLAG, RadiomicsBatchService.QcMode.FLAG);
+        Status f = await(svc, svc.submit(requestQc(List.of(auto(0), auto(1), auto(2)), flag, null)));
+        assertEquals(JobState.DONE, f.state(), "印のみは止めない");
+        assertTrue(f.pairs().get(1).qcFlags().contains(RadiomicsBatchService.FLAG_SMALL_ROI_2D), "旗は常に記録する");
+    }
+
+    @Test
+    void theJsonContractParsesThe2dThreshold_andOldRequestsStillParse() throws Exception {
+        com.fasterxml.jackson.databind.ObjectMapper om = new com.fasterxml.jackson.databind.ObjectMapper();
+        String base = "{\"pairs\":[],\"settings\":{},\"channel\":0,\"timePoint\":0,\"recompute\":false";
+        assertEquals(150, om.readValue(base + ",\"smallRoiWarnPixels\":150}", RadiomicsBatchService.BatchRequest.class).smallRoiWarnPixels());
+        assertNull(om.readValue(base + "}", RadiomicsBatchService.BatchRequest.class).smallRoiWarnPixels());
+    }
+
+    @Test
+    void theJsonContractParsesTheSkipMode() throws Exception {
+        String json = "{\"pairs\":[],\"settings\":{},\"channel\":0,\"timePoint\":0,\"recompute\":false"
+                + ",\"qc\":{\"smallRoi\":\"SKIP\",\"lossy\":\"STOP\"}}";
+        RadiomicsBatchService.BatchRequest b = new com.fasterxml.jackson.databind.ObjectMapper()
+                .readValue(json, RadiomicsBatchService.BatchRequest.class);
+        assertEquals(RadiomicsBatchService.QcMode.SKIP, b.qc().smallRoi());
+        assertEquals(RadiomicsBatchService.QcMode.STOP, b.qc().lossy());
+    }
+
     @Test
     void environmentStopIsMarkedAsEnvironment() throws Exception {
         RadiomicsBatchService svc = service((req, c) -> {
@@ -620,17 +762,22 @@ class RadiomicsBatchServiceTest {
     // ---- 種類（kind）----
 
     private static RadiomicsBatchService.BatchRequest requestKind(List<BatchPair> pairs, String kind) {
+        return requestKind(pairs, kind, null);
+    }
+
+    private static RadiomicsBatchService.BatchRequest requestKind(List<BatchPair> pairs, String kind, String calibration) {
         return new RadiomicsBatchService.BatchRequest(pairs, new HashMap<>(), null, null, null, null, null, null, 0,
-                0, false, null, null, null, kind);
+                0, false, null, null, null, kind, calibration);
     }
 
     @Test
-    void voiStatsRefusesPetPairsOnlyAndKeepsGoing() throws Exception {
-        // src1 だけ PET。その組は入力固有の失敗で記録され、残りは続く（黙って値を出さない・落とさない）
+    void voiStatsRefusesUncalibratedPetPairsOnlyAndKeepsGoing() throws Exception {
+        // src1 だけ PET。校正しない（Bq/mL のまま）と明示した VOI 統計では、その組は入力固有の失敗で記録され、
+        // 残りは続く（黙って値を出さない・落とさない）
         RadiomicsBatchService svc = new RadiomicsBatchService(
                 (req, cancelled) -> stub(false), r -> { }, null, null,
                 (study, series) -> "src1".equals(series) ? "PT" : "CT");
-        Status s = await(svc, svc.submit(requestKind(List.of(auto(0), auto(1), auto(2)), "voiStats")));
+        Status s = await(svc, svc.submit(requestKind(List.of(auto(0), auto(1), auto(2)), "voiStats", "none")));
         assertEquals(RadiomicsBatchService.JobState.DONE, s.state());
         assertEquals(RadiomicsBatchService.PairState.DONE, s.pairs().get(0).state());
         assertEquals(RadiomicsBatchService.PairState.FAILED, s.pairs().get(1).state());
@@ -639,6 +786,28 @@ class RadiomicsBatchServiceTest {
         assertEquals(RadiomicsBatchService.PairState.DONE, s.pairs().get(2).state());
         assertEquals(List.of(0, 2), svc.results(s.jobId()).stream().map(RadiomicsBatchService.PairResult::index).toList(),
                 "PET の組は結果を持たない");
+    }
+
+    @Test
+    void voiStatsDoesNotRefuseAPetThatIsCalibrated() throws Exception {
+        // 校正する（auto・SUV の種類）なら、PET の VOI 統計も出せる。校正はエンジンの読み込みが行う
+        for (String calibration : new String[] { null, "auto", "bw", "sul-james" }) {
+            RadiomicsBatchService svc = new RadiomicsBatchService(
+                    (req, cancelled) -> stub(false), r -> { }, null, null, (study, series) -> "PT");
+            Status s = await(svc, svc.submit(requestKind(List.of(auto(0)), "voiStats", calibration)));
+            assertEquals(RadiomicsBatchService.PairState.DONE, s.pairs().get(0).state(), "calibration=" + calibration);
+        }
+    }
+
+    @Test
+    void anUncalibratedPetIsFlaggedInTheResult() throws Exception {
+        // 利用者が明示して Bq/mL のまま計算した PET は、行に旗（UNCALIBRATED_PT）が付く（黙って混ざらない）
+        RoiFeatureResult.Provenance prov = new RoiFeatureResult.Provenance("dev", "rj", java.time.Instant.EPOCH, "sha",
+                "BQML（未校正）", "none;scale=1.0;uncalibratedPet", true);
+        RoiFeatureResult uncal = new RoiFeatureResult("rj", java.time.Instant.EPOCH, false, 1, List.of(), null, prov, null,
+                new RoiFeatureResult.RoiSize(100L, 100L, 100L, 50.0, 1000, false), false);
+        assertEquals(List.of(RadiomicsBatchService.FLAG_UNCALIBRATED_PT), RadiomicsBatchService.qcFlagsOf(uncal));
+        assertEquals(List.of(), RadiomicsBatchService.qcFlagsOf(stub(false)), "校正した・PET でない結果には旗が付かない");
     }
 
     @Test

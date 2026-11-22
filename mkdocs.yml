@@ -21,8 +21,10 @@ nav:
   - DICOM 通信: dicom-network.md
   - 事前取得（予約一覧から過去検査を取り込む）: prefetch.md
   - 電子カルテ連携（いまの患者を開く）: emr-link.md
+  - 施設の資料パネル（リンク集・参照カード）: resource-panel.md
   - 外部から検査を開く（RIS 連携）: external-open.md
   - プラグイン: plugins.md
+  - 外部 AI クライアント（MCP）: mcp.md
   - 環境設定: settings.md
 
 theme:

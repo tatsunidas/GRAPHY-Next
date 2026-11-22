@@ -20,10 +20,12 @@ import { ImportWatchPanel } from "./ImportWatchPanel";
 import { RetentionPanel } from "./RetentionPanel";
 import { PrefetchPanel } from "./PrefetchPanel";
 import { EmrPanel } from "./EmrPanel";
+import { FacilityPanel } from "./FacilityPanel";
 import { isDesktop } from "../desktopBridge";
 import { useI18n, type Locale, type TFn } from "../i18n/i18n";
 import { getDateFormat, getTimeFormat, setDateFormat, setTimeFormat, type DateFormat, type TimeFormat } from "../i18n/dateFormat";
 import { markRestartRequired } from "../restartRequiredEvents";
+import { changeMouseBindings, isMouseSettingKey, parseMouseBindings } from "../viewer/mouseBindings";
 
 /** 変更が SCP リスナー（自局 AE）に反映されるのにアプリ再起動が要るキー。 */
 const RESTART_REQUIRED_KEYS = new Set([
@@ -79,6 +81,13 @@ export function SettingsDialog({
     if (field.key === "general.timeFormat") {
       setTimeFormat(value as TimeFormat);
       setFmtTick((n) => n + 1);
+      return;
+    }
+    // 中・右ボタンのツール: 開いている 2D・動画ビューアへ（別ウィンドウも）即時に届け、設定へ保存する
+    if (isMouseSettingKey(field.key)) {
+      const next = parseMouseBindings({ ...map, [field.key]: value });
+      setMap((prev) => ({ ...prev, [field.key]: value }));
+      changeMouseBindings(next).catch((e: unknown) => setError(String(e)));
       return;
     }
     // デバッグモードは frontend logger 用に localStorage も即時更新（backend へも保存し DEBUG 切替）
@@ -162,6 +171,8 @@ export function SettingsDialog({
               <PrefetchPanel />
             ) : category.id === "emr" ? (
               <EmrPanel />
+            ) : category.id === "facility" ? (
+              <FacilityPanel />
             ) : category.id === "ai" ? (
               // 🔴 **AI の設定は backend の Settings に載せない。** 提供元・接続先・モデルは
               //    Electron main の ai-providers.json、鍵は safeStorage（fw/ai-routing-design.md §4.1）。
