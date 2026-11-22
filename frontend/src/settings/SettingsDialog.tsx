@@ -25,6 +25,7 @@ import { isDesktop } from "../desktopBridge";
 import { useI18n, type Locale, type TFn } from "../i18n/i18n";
 import { getDateFormat, getTimeFormat, setDateFormat, setTimeFormat, type DateFormat, type TimeFormat } from "../i18n/dateFormat";
 import { markRestartRequired } from "../restartRequiredEvents";
+import { changeMouseBindings, MOUSE_SETTING_KEYS, parseMouseBindings } from "../viewer/mouseBindings";
 
 /** 変更が SCP リスナー（自局 AE）に反映されるのにアプリ再起動が要るキー。 */
 const RESTART_REQUIRED_KEYS = new Set([
@@ -80,6 +81,13 @@ export function SettingsDialog({
     if (field.key === "general.timeFormat") {
       setTimeFormat(value as TimeFormat);
       setFmtTick((n) => n + 1);
+      return;
+    }
+    // 中・右ボタンのツール: 開いている 2D・動画ビューアへ（別ウィンドウも）即時に届け、設定へ保存する
+    if (field.key === MOUSE_SETTING_KEYS.middle || field.key === MOUSE_SETTING_KEYS.right) {
+      const next = parseMouseBindings({ ...map, [field.key]: value });
+      setMap((prev) => ({ ...prev, [field.key]: value }));
+      changeMouseBindings(next).catch((e: unknown) => setError(String(e)));
       return;
     }
     // デバッグモードは frontend logger 用に localStorage も即時更新（backend へも保存し DEBUG 切替）
