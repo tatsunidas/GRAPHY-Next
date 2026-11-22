@@ -1146,7 +1146,10 @@ export function VideoViewer({
             </button>
             {!SHOW_VIDEO_TOOLS && (
               <span style={{ color: "#889", fontSize: 11, marginLeft: 8 }} data-testid="video-mouse-hint">
-                {t("video.mouseHint", { middle: t(`settings.opt.mouse.${mouse.middle}`), right: t(`settings.opt.mouse.${mouse.right}`) })}
+                {t("video.mouseHint", { middle: t(`settings.opt.mouse.${mouse.middle}`), right: t(`settings.opt.mouse.${mouse.right}`) }) +
+                  (mouse.back !== "none" || mouse.forward !== "none"
+                    ? t("video.mouseHint.side", { back: t(`settings.opt.mouse.${mouse.back}`), forward: t(`settings.opt.mouse.${mouse.forward}`) })
+                    : "")}
               </span>
             )}
           </div>

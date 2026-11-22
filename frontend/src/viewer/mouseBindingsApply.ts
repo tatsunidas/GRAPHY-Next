@@ -26,6 +26,10 @@ function toBinding(b: AbstractButton): Binding {
       return { mouseButton: MouseBindings.Auxiliary };
     case "secondary":
       return { mouseButton: MouseBindings.Secondary };
+    case "fourth":
+      return { mouseButton: MouseBindings.Fourth_Button };
+    case "fifth":
+      return { mouseButton: MouseBindings.Fifth_Button };
     case "touch2":
       return TOUCH_ZOOM_BINDING;
   }

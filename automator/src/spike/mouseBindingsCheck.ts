@@ -12,7 +12,10 @@
  * ボタンの入力は Playwright の実マウスイベント（左・中・右）。
  *
  * 経路: ①既定のまま（設定に何も入れない） ②設定画面で右=W/L に変える（ビューアを開いたまま）
- *       ③中=なし・右=ズーム ④ビューアを開き直しても保存した割り当てが効く ⑤既定に戻す。
+ *       ③中=なし・右=ズーム ④ビューアを開き直しても保存した割り当てが効く ⑤既定に戻す
+ *       ⑥サイドボタン（戻る・進む）: 既定（なし）では何も起きない → 戻る=パン・進む=ズームに設定 → 効く・既定動作を止める
+ *          → 開き直しても効く → なしに戻す。サイドボタンの入力は CDP の Input.dispatchMouseEvent（button: back/forward）。
+ *          ⚠️ CDP の入力はレンダラへ直接入るので、OS 側の「戻る」（窓の履歴移動）は再現できない。実機のマウスで別に確かめる。
  * 各経路で「効くはずのものが効く」と「効かないはずのものが動かない」の両方を見る。
  */
 import fs from "node:fs";
@@ -102,7 +105,7 @@ async function main(): Promise<void> {
       await v.waitForTimeout(300);
       return shown;
     };
-    const setMouseSetting = async (key: "mouse.middle" | "mouse.right", value: string) => {
+    const setMouseSetting = async (key: "mouse.middle" | "mouse.right" | "mouse.back" | "mouse.forward", value: string) => {
       await main.getByTestId("mainscreen-menu-system").click();
       await main.getByTestId("menu-item-settings").click();
       await main.getByTestId("settings-dialog").waitFor({ state: "visible", timeout: 10_000 });
@@ -170,6 +173,85 @@ async function main(): Promise<void> {
     await v.waitForTimeout(500);
     r = await drag("middle", 40, 25);
     check(panChanged(r.before, r.after), "中=パンに戻すと中ドラッグでパンが変わる", r);
+
+    // ⑥ サイドボタン（戻る・進む）
+    console.log("⑥ サイドボタン（戻る＝第 4・進む＝第 5）");
+    const installLog = async () =>
+      v.evaluate(() => {
+        const w = window as any;
+        w.__sideLog = [];
+        document.addEventListener("mouseup", (e) => w.__sideLog.push({ b: e.button, dp: e.defaultPrevented }), false);
+      });
+    const sideLog = async (): Promise<{ b: number; dp: boolean }[]> => v.evaluate(() => (window as any).__sideLog);
+    const nav = async () => v.evaluate(() => ({ href: location.href, len: history.length }));
+    let cdp = await v.context().newCDPSession(v);
+    const dragSide = async (which: "back" | "forward", dx: number, dy: number) => {
+      const box = (await host().boundingBox())!;
+      const cx = box.x + box.width / 2;
+      const cy = box.y + box.height / 2;
+      const mask = which === "back" ? 8 : 16;
+      const before = await state(v);
+      await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: cx, y: cy, buttons: 0 });
+      await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", x: cx, y: cy, button: which, buttons: mask, clickCount: 1 });
+      for (let i = 1; i <= 10; i++) {
+        await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: cx + (dx * i) / 10, y: cy + (dy * i) / 10, button: which, buttons: mask });
+      }
+      await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: cx + dx, y: cy + dy, button: which, buttons: 0, clickCount: 1 });
+      await v.waitForTimeout(500);
+      return { before, after: await state(v) };
+    };
+    const nav0 = await nav();
+    await installLog();
+    r = await dragSide("back", 40, 25);
+    check(!panChanged(r.before, r.after) && !zoomChanged(r.before, r.after) && !wlChanged(r.before, r.after), "既定（なし）: 戻るドラッグは何も起きない（負例）", r);
+    r = await dragSide("forward", 0, -50);
+    check(!panChanged(r.before, r.after) && !zoomChanged(r.before, r.after) && !wlChanged(r.before, r.after), "既定（なし）: 進むドラッグは何も起きない（負例）", r);
+    let log = await sideLog();
+    check(log.length === 2 && log.every((x) => x.dp === false), "既定（なし）: サイドボタンの既定動作は止めない（defaultPrevented=false）", log);
+
+    await setMouseSetting("mouse.back", "pan");
+    await setMouseSetting("mouse.forward", "zoom");
+    await v.waitForTimeout(500);
+    r = await dragSide("back", 40, 25);
+    check(panChanged(r.before, r.after), "戻る=パン: 戻るドラッグでパンが変わる（開き直さずに反映）", r);
+    check(!wlChanged(r.before, r.after), "戻る=パン: W/L は変わらない（負例）", r);
+    r = await dragSide("forward", 0, -50);
+    check(zoomChanged(r.before, r.after), "進む=ズーム: 進むドラッグでズームが変わる", r);
+    check(!wlChanged(r.before, r.after), "進む=ズーム: W/L は変わらない（負例）", r);
+    log = await sideLog();
+    const added = log.slice(2);
+    check(added.length === 2 && added.every((x) => x.dp === true), "割り当て後: サイドボタンの既定動作を止める（defaultPrevented=true）", added);
+    const nav1 = await nav();
+    check(nav1.href === nav0.href && nav1.len === nav0.len, "ページの URL と履歴の長さが変わらない", { nav0, nav1 });
+    // 既存の左・中・右は変わらない（回帰）
+    r = await drag("right", 0, -40);
+    check(zoomChanged(r.before, r.after) && !wlChanged(r.before, r.after), "回帰: 右ドラッグは従来どおりズーム", r);
+    r = await drag("middle", 40, 25);
+    check(panChanged(r.before, r.after) && !zoomChanged(r.before, r.after), "回帰: 中ドラッグは従来どおりパン", r);
+    r = await drag("left", 30, -30);
+    check(wlChanged(r.before, r.after) && !zoomChanged(r.before, r.after), "回帰: 左ドラッグは従来どおり W/L", r);
+    await v.screenshot({ path: path.join(OUT_DIR, "6-side-assigned.png") });
+
+    // 開き直しても保存した割り当てが効く
+    await v.close();
+    v = await d.waitForNewPage(
+      () => main.getByTestId("viewer2d-toolbar-button").click(),
+      (url) => url.includes("2dviewer"),
+    );
+    await readyViewer();
+    cdp = await v.context().newCDPSession(v);
+    await installLog();
+    r = await dragSide("back", 40, 25);
+    check(panChanged(r.before, r.after), "開き直しても戻る=パンが効く", r);
+    check((await sideLog()).every((x) => x.dp === true), "開き直しても既定動作を止める");
+
+    // なしに戻す
+    await setMouseSetting("mouse.back", "none");
+    await setMouseSetting("mouse.forward", "none");
+    await v.waitForTimeout(500);
+    r = await dragSide("back", 40, 25);
+    check(!panChanged(r.before, r.after) && !zoomChanged(r.before, r.after) && !wlChanged(r.before, r.after), "なしに戻すと戻るドラッグは何も起きない", r);
+    check((await sideLog()).slice(-1)[0]?.dp === false, "なしに戻すと既定動作を止めない");
   } finally {
     await d.stop();
   }
