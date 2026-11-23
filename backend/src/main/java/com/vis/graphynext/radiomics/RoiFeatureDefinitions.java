@@ -56,6 +56,8 @@ final class RoiFeatureDefinitions {
     static final String NOTE_UNIFORMITY_POSITIVE = "UNIFORMITY_POSITIVE";
     /** IBSI の定義の外にある特徴。 */
     static final String NOTE_NON_IBSI = "NON_IBSI";
+    /** 箱の数を輪郭の多角形の頂点で数える（直線の多い形では小さく出る。RadiomicsJ 2.7.4 の CHANGELOG）。 */
+    static final String NOTE_FRACTAL_OUTLINE_VERTICES = "FRACTAL_OUTLINE_VERTICES";
 
     /** LoG フィルタ後の画像に、元の画像と同じ定義（離散化は掛け直す）を適用した値。IBSI の識別子は付けない。 */
     static final String NOTE_LOG_FILTERED = "LOG_FILTERED";
@@ -118,6 +120,9 @@ final class RoiFeatureDefinitions {
         List<String> notes = new ArrayList<>();
         if (ibsi == null) {
             notes.add(NOTE_NON_IBSI);
+        }
+        if ("Fractal".equals(family)) {
+            notes.add(NOTE_FRACTAL_OUTLINE_VERTICES);
         }
         if ("Kurtosis".equals(feature)
                 && ("IntensityBasedStatistical".equals(family) || "IntensityHistogram".equals(family))) {
