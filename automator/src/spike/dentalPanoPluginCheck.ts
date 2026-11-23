@@ -372,6 +372,37 @@ async function main(): Promise<void> {
       const plain = (await textBoxRows(viewer)).find((r) => r.uid === plainUid);
       check(plain?.statsOffMark === false && plain?.textBoxVisibility === true, "対照: 印の無い ROI（利用者の ROI と同じ扱い）は textBoxVisibility が true のまま（消しすぎていない）", plain);
     }
+    if (plainUid !== null) {
+      // 対照 ROI の脇に統計の文字が実際に描かれているかを、画面で見る（数値だけでは描画の不具合を見逃す）。文字の枠の位置も数値で残す
+      const box = (await viewer.evaluate(() => {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const d = (window as any).__graphyDebug;
+        return d?.getAnnotationCanvasPoints ? d.getAnnotationCanvasPoints() : [];
+      })) as { uid: string; points: number[][]; textBox: number[][] | null }[];
+      const pb = box.find((b) => b.uid === plainUid);
+      const root = await viewer.locator('[data-testid="series-viewer-root"]').first().boundingBox();
+      console.log("  対照 ROI の canvas 座標:", JSON.stringify({ points: pb?.points?.slice(0, 2), textBox: pb?.textBox, viewerRoot: root }));
+      check(!!pb?.textBox, "対照: 印の無い ROI には統計の文字の枠（textBox）が作られている", pb?.textBox);
+      // プラグインの窓が対照 ROI を隠すので、撮る間だけ窓を見えなくする（撮ったら戻す。窓は閉じない＝ROI は消えない）
+      const setDialog = (hidden: boolean): Promise<boolean> => viewer.evaluate((h: boolean) => {
+        let el = document.querySelector('[data-testid="dp-run"]') as HTMLElement | null;
+        while (el && !["fixed", "absolute"].includes(getComputedStyle(el).position)) el = el.parentElement;
+        if (!el) return false;
+        el.style.visibility = h ? "hidden" : "";
+        return true;
+      }, hidden);
+      const hid = await setDialog(true);
+      await viewer.waitForTimeout(500);
+      await viewer.screenshot({ path: path.join(OUT_DIR, "viewer-control-roi.png") });
+      console.log(`  対照 ROI の撮影: プラグインの窓を一時的に隠した=${hid}`);
+      if (pb?.points?.length && root) {
+        const xs = pb.points.map((q) => q[0]).concat((pb.textBox ?? []).map((q) => q[0]));
+        const ys = pb.points.map((q) => q[1]).concat((pb.textBox ?? []).map((q) => q[1]));
+        const x0 = Math.max(0, root.x + Math.min(...xs) - 60), y0 = Math.max(0, root.y + Math.min(...ys) - 60);
+        await viewer.screenshot({ path: path.join(OUT_DIR, "viewer-control-roi-zoom.png"), clip: { x: x0, y: y0, width: Math.min(500, Math.max(...xs) - Math.min(...xs) + 120 + 160), height: Math.min(400, Math.max(...ys) - Math.min(...ys) + 120 + 100) } });
+      }
+      await setDialog(false);
+    }
     await viewer.screenshot({ path: path.join(OUT_DIR, "viewer-result-final.png") });
 
     console.log("\n[6] 保存");
@@ -397,6 +428,91 @@ async function main(): Promise<void> {
     const reqs = events.filter((e: { event: string }) => e.event === "egress-requested");
     const want = MODE === "missing-deps" ? 3 : 2; // 事前チェック・（再確認の事前チェック）・本処理
     check(reqs.length === want && reqs.every((e: { endpointKind: string }) => e.endpointKind === "local"), `監査: 送信の要求は ${want} 件（事前チェックと本処理）で、すべて endpointKind=local`, reqs);
+
+    console.log("\n[7] 保存して、ビューアを開き直した後の復元（プラグインの窓は閉じない）");
+    {
+      const patientKey = (study as unknown as { patientId?: string; patientName?: string }).patientId || (study as unknown as { patientName?: string }).patientName || study.studyInstanceUid;
+      const marked = mine.map((r) => r.uid);
+      const expectUids = plainUid === null ? marked : [...marked, plainUid];
+      type SavedRow = { roiUid: string; custom?: Record<string, string> };
+      const readSaved = async (): Promise<SavedRow[]> => {
+        const res = await fetch(`${base}/api/rois?patientKey=${encodeURIComponent(patientKey)}`);
+        if (res.status !== 200) return [];
+        const dto = (await res.json()) as { json: string | null };
+        return dto.json ? ((JSON.parse(dto.json) as { rois?: SavedRow[] }).rois ?? []) : [];
+      };
+      let saved: SavedRow[] = [];
+      for (let i = 0; i < 40; i++) {
+        saved = await readSaved();
+        if (expectUids.every((u) => saved.some((r) => r.roiUid === u))) break;
+        await viewer.waitForTimeout(500);
+      }
+      const savedMarked = saved.filter((r) => marked.includes(r.roiUid) && r.custom?.["graphy.statsOff"] === "1");
+      check(expectUids.every((u) => saved.some((r) => r.roiUid === u)), "保存先（backend）に、プラグインが置いた ROI（と対照）が全部入っている（待ってから読んだ）", { 保存件数: saved.length, 期待: expectUids.length });
+      check(marked.length > 0 && savedMarked.length === marked.length, "保存された内容に、統計の文字を出さない印（graphy.statsOff）が全部残っている", { 印あり: savedMarked.length, 期待: marked.length });
+      check(!(await viewer.getByTestId("dp-run").isHidden()), "（前提）開き直す前は、プラグインの窓が開いたまま");
+
+      type CP = { uid: string; polyline: number[][]; points: number[][] };
+      const canvasPts = (): Promise<CP[]> => viewer.evaluate(() => {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const d = (window as any).__graphyDebug;
+        return d?.getAnnotationCanvasPoints ? d.getAnnotationCanvasPoints() : [];
+      });
+      {
+        const rawDoc = (await (await fetch(`${base}/api/rois?patientKey=${encodeURIComponent(patientKey)}`)).json()) as { json: string };
+        const first = (JSON.parse(rawDoc.json) as { rois: { roiUid: string; tool: string; points: number[][]; worldSpacing?: number[] }[] }).rois[0];
+        console.log("  保存内容の例:", JSON.stringify({ tool: first.tool, p0: first.points[0], worldSpacing: first.worldSpacing }));
+      }
+      const ptsBefore = new Map((await canvasPts()).filter((c) => expectUids.includes(c.uid)).map((c) => [c.uid, c.points[0]]));
+      await viewer.reload({ waitUntil: "domcontentloaded" });
+      await viewer.getByTestId("series-viewer-root").first().waitFor({ state: "visible", timeout: 60_000 });
+      let restored: TextBoxRow[] = [];
+      for (let i = 0; i < 60; i++) {
+        await viewer.waitForTimeout(500);
+        restored = (await textBoxRows(viewer)).filter((r) => expectUids.includes(r.uid));
+        if (restored.length >= expectUids.length) break;
+      }
+      await viewer.waitForTimeout(2_000);
+      restored = (await textBoxRows(viewer)).filter((r) => expectUids.includes(r.uid));
+      const rMarked = restored.filter((r) => marked.includes(r.uid));
+      await viewer.waitForTimeout(3_000);
+      console.log("  復元後の画素間隔の照合:", JSON.stringify(await viewer.evaluate(() => {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const d = (window as any).__graphyDebug;
+        return d?.getSpacingProbe ? d.getSpacingProbe() : "no-api";
+      })).slice(0, 900));
+      await viewer.screenshot({ path: path.join(OUT_DIR, "viewer-restored.png") });
+      // 切り分け用: 描画が走っていないだけか。ビューア上でマウスを動かして撮り直す（判定には使わない）
+      await viewer.mouse.move(900, 600);
+      await viewer.mouse.move(950, 640);
+      await viewer.waitForTimeout(1_000);
+      await viewer.screenshot({ path: path.join(OUT_DIR, "viewer-restored-after-move.png") });
+      {
+        const cp = (await viewer.evaluate(() => {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const d = (window as any).__graphyDebug;
+          return d?.getAnnotationCanvasPoints ? d.getAnnotationCanvasPoints() : [];
+        })) as { uid: string; polyline: number[][]; points: number[][] }[];
+        const mk = cp.filter((c) => marked.includes(c.uid));
+        console.log("  復元後の例（canvas 座標）:", JSON.stringify(mk.slice(0, 2).map((c) => ({ uid: c.uid.slice(0, 8), p: c.points.slice(0, 2), poly: c.polyline.length }))));
+      }
+      console.log(`  復元された ROI: 印つき ${rMarked.length} / ${marked.length}, 全注釈 ${(await textBoxRows(viewer)).length}`);
+      {
+        const after = new Map((await canvasPts()).filter((c) => expectUids.includes(c.uid)).map((c) => [c.uid, c.points[0]]));
+        const moved = [...ptsBefore].filter(([u, p0]) => { const q = after.get(u); return !q || Math.hypot(q[0] - p0[0], q[1] - p0[1]) > 3; });
+        check(ptsBefore.size > 0 && moved.length === 0, "復元された ROI の位置（画面の座標）が、開き直す前と同じ（3 px 以内）", { 件数: ptsBefore.size, ずれた: moved.length, 例: moved.slice(0, 2).map(([u, p0]) => ({ 前: p0.map(Math.round), 後: after.get(u)?.map(Math.round) })) });
+      }
+      check(rMarked.length > 0, "復元された（印つきの）ROI が 0 件でない（検査が空振りしていない）", { 復元: rMarked.length });
+      check(rMarked.length === marked.length, "置いた ROI が全部復元された", { 復元: rMarked.length, 期待: marked.length });
+      const shown = rMarked.filter((r) => r.textBoxVisibility !== false);
+      check(rMarked.length > 0 && shown.length === 0, "復元後も、印のある ROI はすべて textBoxVisibility が false（統計の文字を出さない）", { 件数: rMarked.length, 出る設定: shown.length, 例: shown.slice(0, 2) });
+      check(rMarked.length > 0 && rMarked.every((r) => r.statsOffMark), "復元後も、印のある ROI はすべて印が付いている", rMarked.filter((r) => !r.statsOffMark).length);
+      if (plainUid !== null) {
+        const p = restored.find((r) => r.uid === plainUid);
+        if (!p) console.log("  未達: 対照（印の無い ROI）は復元されなかった。復元後に『消しすぎていない』ことは未確認");
+        else check(p.statsOffMark === false && p.textBoxVisibility === true, "復元後の対照: 印の無い ROI は textBoxVisibility が true のまま", p);
+      }
+    }
   } catch (e) {
     for (const [i, pg] of driver.app.windows().entries()) await pg.screenshot({ path: path.join(OUT_DIR, `fail-window-${i}.png`) }).catch(() => undefined);
     throw e;
