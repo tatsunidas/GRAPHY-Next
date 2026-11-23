@@ -9,6 +9,7 @@ import { OverlayConfigPanel } from "./OverlayConfigPanel";
 import { RemoteAePanel } from "./RemoteAePanel";
 import { AboutPanel } from "./AboutPanel";
 import { MonitorQcPanel } from "./MonitorQcPanel";
+import { WheelDiagnosticsPanel } from "./WheelDiagnosticsPanel";
 import { RenderEnvPanel } from "./RenderEnvPanel";
 import { PluginManagerPanel } from "./PluginManagerPanel";
 import { AiPanel } from "./AiPanel";
@@ -200,6 +201,7 @@ export function SettingsDialog({
                     ))}
                   </section>
                 ))}
+                {category.id === "viewer" && <WheelDiagnosticsPanel />}
               </>
             )}
           </div>
