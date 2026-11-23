@@ -38,7 +38,7 @@ import { emitToast } from "./toast";
 import { isRoiLocked, partitionByLock } from "./roiLock";
 import { forgetLabelVolume, isLabelVolumeOf } from "./labelVolumeOrigin";
 import type { SavedRoi } from "./roiPersistence";
-import { buildBidirectionalHandles, buildContourVertices, buildRoiHandles, isBidirectionalCreateTool, isContourCreateTool, maxExtentFromImage, sliceToleranceFromStack, type RoiCreateGeometry } from "./roiCreate";
+import { buildBidirectionalHandles, buildContourVertices, buildRoiHandles, isBidirectionalCreateTool, isContourCreateTool, isValidShowStats, maxExtentFromImage, sliceToleranceFromStack, type RoiCreateGeometry } from "./roiCreate";
 import { installTrueMagnification } from "./magnifier";
 import { ERASER_TOOL_ID, WAND2D_TOOL_ID, WAND3D_TOOL_ID, LEVELSET2D_TOOL_ID, SCISSORS_TOOL_ID } from "./toolIds";
 import { commitThreshold } from "./thresholdTool";
@@ -76,7 +76,7 @@ import { getOrCreateCameraSync, getOrCreateVoiSync, getOrCreatePresentationSync,
 import { registerReferenceSource, bumpReference, subscribeReference, computeReferenceSegments, type RefSegment } from "./referenceLines";
 import { srMeasurementPayload } from "./srPayload";
 import { registerViewerCommands, requestTool, type ViewerCommands, type ViewerDerivedSeriesRequest, type ViewerDerivedSeriesResult, type ViewerOverlay, type ViewerPixelData, type ViewerSrRequest, type ViewerSrResult, type ViewerPixelDataOptions, type ViewerAngioReportRequest, type ViewerPresentationStateRequest, type ViewerRoi, type ViewerSpatialCalibration, type ViewerTargetInfo, type ViewerViewState, type ViewerXaState, type ViewerXaCine, ViewerLabelVolume, ViewerLabelVolumeResult } from "./viewerCommands";
-import { buildPluginMeta, computeCalipers, hasShapeCalipers, pickPluginMeta, readRoiStats, roiPointsPx } from "./roiRead";
+import { buildCreatedRoiMeta, buildPluginMeta, computeCalipers, hasShapeCalipers, pickPluginMeta, readRoiStats, roiPointsPx } from "./roiRead";
 import { CONTOUR_TOOL_NAMES, SPLINE_TYPE_LINEAR, cancelContourDrawing } from "./roiContourTools";
 import { POINT_ROI_TOOL_NAME } from "./pointRoiTool";
 import { parsePluginVolumeImageId } from "../plugins/pluginVolumeScheme";
@@ -2642,6 +2642,7 @@ export function Viewer2D({
    * 🔴 作った ROI には出自の印を付ける（`removeCreatedRoi` が、そのプラグインの作った ROI だけを消せるようにするため）。
    */
   const createRoi: ViewerCommands["createRoi"] = (req, by) => {
+    if (!isValidShowStats(req?.showStats)) return { ok: false, reason: "bad-request" };
     if (thickSlabRef.current) return { ok: false, reason: "thick-slab" };
     const v = vp();
     const ctx = pasteContext();
@@ -2716,7 +2717,7 @@ export function Viewer2D({
       sopInstanceUid: sop,
       points: handles.points,
       label,
-      custom: buildPluginMeta(by.pluginId, { created: "1" }),
+      custom: buildCreatedRoiMeta(by.pluginId, req.showStats),
     };
     // 輪郭系・点は本体の手描き（点 ROI は Probe の変換）と同じツール名・保存形にする（復元・統計・ROI マネージャが同じ経路で扱う）
     if (req.tool === "PointROI") {

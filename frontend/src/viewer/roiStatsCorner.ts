@@ -12,6 +12,7 @@
 import { annotation as csAnnotation } from "@cornerstonejs/tools";
 import type { TFn } from "../i18n/i18n";
 import { getRoiMaskMeta } from "./roiMaskStore";
+import { isStatsOff } from "./roiRead";
 import { getRoiStats } from "./roiStatsStore";
 import { roiStatsSummary } from "./roiStatsText";
 
@@ -85,6 +86,8 @@ export function buildRoiStatsCornerRows(
       /* 既定 true */
     }
     if (!visible) continue;
+    // プラグインが統計の文字を出さないと指定した ROI（`createRoi({ showStats: false })`）は、一覧にも番号バッジにも出さない。
+    if (isStatsOff(getRoiMaskMeta(uid)?.custom)) continue;
 
     let cx: number | null = null;
     let cy: number | null = null;

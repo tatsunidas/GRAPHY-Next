@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { buildBidirectionalHandles, buildContourVertices, buildRoiHandles, isSelfIntersecting, type CreateRoiRequest, type RoiCreateGeometry } from "./roiCreate";
+import { buildCreatedRoiMeta } from "./roiRead";
+import { isValidShowStats, buildBidirectionalHandles, buildContourVertices, buildRoiHandles, isSelfIntersecting, type CreateRoiRequest, type RoiCreateGeometry } from "./roiCreate";
 
 /** canvas(px) → world(mm) の仮のアフィン。world = origin + cx·ex·mmPerPx + cy·ey·mmPerPx。 */
 function geom(over: Partial<{ origin: number[]; ex: number[]; ey: number[]; mmPerPx: number; focal: number[]; normal: number[]; tol: number; max: number }> = {}): RoiCreateGeometry {
@@ -342,5 +343,26 @@ describe("buildRoiHandles: PointROI", () => {
 
   it("the ellipse still needs radii (the point exemption does not leak)", () => {
     expect(buildRoiHandles({ tool: "EllipticalROI", centerLps: [0, 0, 5] }, geom())).toEqual({ ok: false, reason: "bad-request" });
+  });
+});
+
+describe("showStats（統計の文字を出さない指定）", () => {
+  it("false だけが印（graphy.statsOff）を付ける。省略・true は created だけ（負例）", () => {
+    expect(buildCreatedRoiMeta("dental", false)).toEqual({ "plugin.dental.created": "1", "graphy.statsOff": "1" });
+    expect(buildCreatedRoiMeta("dental", undefined)).toEqual({ "plugin.dental.created": "1" });
+    expect(buildCreatedRoiMeta("dental", true)).toEqual({ "plugin.dental.created": "1" });
+  });
+
+  it("boolean か省略だけが通り、それ以外は bad-request の対象", () => {
+    expect(isValidShowStats(undefined)).toBe(true);
+    expect(isValidShowStats(true)).toBe(true);
+    expect(isValidShowStats(false)).toBe(true);
+    for (const v of ["false", "off", 0, 1, null, {}, []]) expect(isValidShowStats(v), String(v)).toBe(false);
+  });
+
+  it("形の検査には影響しない（showStats があっても同じハンドル）", () => {
+    const a = buildRoiHandles(ell(), geom());
+    const b = buildRoiHandles(ell({ showStats: false }), geom());
+    expect(b).toEqual(a);
   });
 });

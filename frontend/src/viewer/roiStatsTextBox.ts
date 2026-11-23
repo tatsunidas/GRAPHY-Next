@@ -18,6 +18,8 @@ import { eventTarget } from "@cornerstonejs/core";
 import { annotation as csAnnotation, Enums as csToolsEnums } from "@cornerstonejs/tools";
 import { tOutsideReact } from "../i18n/i18n";
 import { contourToolConfig, renderAnnotations } from "./roiContourTools";
+import { getRoiMaskMeta, subscribeRoiMaskChanged } from "./roiMaskStore";
+import { isStatsOff } from "./roiRead";
 import { getRoiStatsDisplay, subscribeRoiStatsDisplay } from "./roiStatsDisplay";
 import { getRoiStatsByData, scheduleRoiStatsSweep } from "./roiStatsStore";
 import { pickSampleKind, type RoiStatsResult } from "./roiStats";
@@ -120,13 +122,18 @@ export function applyTextBoxVisibility(): void {
     }
   }
   for (const uid of allAnnotationUids()) {
-    const visible = on && (!selectedOnly || selected.has(uid));
+    const visible = on && !statsOff(uid) && (!selectedOnly || selected.has(uid));
     setTextBoxVisible(uid, visible);
   }
 }
 
 function selectedOnlyFallback(on: boolean): void {
-  for (const uid of allAnnotationUids()) setTextBoxVisible(uid, on);
+  for (const uid of allAnnotationUids()) setTextBoxVisible(uid, on && !statsOff(uid));
+}
+
+/** プラグインが `createRoi({ showStats: false })` で付けた印がある ROI か（文字は常に出さない）。 */
+function statsOff(uid: string): boolean {
+  return isStatsOff(getRoiMaskMeta(uid)?.custom);
 }
 
 function setTextBoxVisible(uid: string, visible: boolean): void {
@@ -163,12 +170,20 @@ export function installRoiStatsDisplayWatcher(): () => void {
     renderAnnotations();
   };
   const offDisplay = subscribeRoiStatsDisplay(apply);
+  // ANNOTATION_ADDED は注釈の追加の最中に飛び、ROI の出自の印（custom）はその直後に入る（復元・createRoi）。
+  // 追加の時点では印が読めないので、印が入ったときに、その ROI だけ消し直す。
+  const offMeta = subscribeRoiMaskChanged((uid) => {
+    if (!statsOff(uid)) return;
+    setTextBoxVisible(uid, false);
+    renderAnnotations();
+  });
   const E = csToolsEnums.Events;
   eventTarget.addEventListener(E.ANNOTATION_SELECTION_CHANGE, apply);
   eventTarget.addEventListener(E.ANNOTATION_ADDED, apply);
   apply();
   return () => {
     offDisplay();
+    offMeta();
     eventTarget.removeEventListener(E.ANNOTATION_SELECTION_CHANGE, apply);
     eventTarget.removeEventListener(E.ANNOTATION_ADDED, apply);
     watching = false;

@@ -52,6 +52,15 @@ const annotationCount = (viewer: Page): Promise<number> =>
     return d?.getRoiStatsPair ? d.getRoiStatsPair().length : -1;
   });
 
+type TextBoxRow = { uid: string; tool: string; textBoxVisibility: boolean | null; statsOffMark: boolean };
+// 本体のデバッグ API（dev ビルド）が返す、注釈ごとの textBoxVisibility（統計の文字を出すか）と出さない印の有無
+const textBoxRows = (viewer: Page): Promise<TextBoxRow[]> =>
+  viewer.evaluate(() => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const d = (window as any).__graphyDebug;
+    return d?.getRoiTextBoxVisibility ? d.getRoiTextBoxVisibility() : [];
+  });
+
 function installPlugin(): void {
   const src = process.env.GRAPHY_DENTAL_PLUGIN_DIR ?? path.join(AUTOMATOR_ROOT, "..", "..", "..", "graphy-next-plugin-dental-pano");
   if (!fs.existsSync(path.join(src, "ui.js"))) throw new Error(`プラグインの作業コピーがありません: ${src}`);
@@ -138,6 +147,7 @@ async function main(): Promise<void> {
     await viewer.waitForTimeout(3_000);
     await viewer.screenshot({ path: path.join(OUT_DIR, "viewer-before.png") });
     const before = await annotationCount(viewer);
+    const uidsBefore = new Set((await textBoxRows(viewer)).map((r) => r.uid));
     check(before >= 0, "本体の注釈（cornerstoneTools）を数えられる", before);
     await openAnalysisPlugin(viewer, PLUGIN_ID);
     await viewer.getByTestId("dp-run").waitFor({ state: "visible", timeout: 10_000 });
@@ -343,6 +353,25 @@ async function main(): Promise<void> {
     if (wantDx) await viewer.getByTestId("dp-show-dx").check();
     await viewer.waitForTimeout(800);
     check((await annotationCount(viewer)) - before === nTeeth + nDx, "チェックを戻すと再び置かれる");
+    // プラグインが置いた ROI は、統計の文字（Area / Mean）を出さない設定になっている。利用者の ROI など、印の無い ROI は出る（対照）
+    const rows = await textBoxRows(viewer);
+    const mine = rows.filter((r) => !uidsBefore.has(r.uid));
+    check(mine.length === nTeeth + nDx, "プラグインが置いた ROI の textBoxVisibility を読めた（歯と診断の数）", { mine: mine.length, nTeeth, nDx });
+    const notOff = mine.filter((r) => r.textBoxVisibility !== false);
+    check(mine.length > 0 && notOff.length === 0, "プラグインが置いた ROI はすべて textBoxVisibility が false（統計の文字を出さない）", { 件数: mine.length, 出る設定のまま: notOff.length });
+    check(mine.length > 0 && mine.every((r) => r.statsOffMark), "プラグインが置いた ROI はすべて統計の文字を出さない印が付いている");
+    const plainUid = await viewer.evaluate(() => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const d = (window as any).__graphyDebug;
+      return d?.addPlainRoiForTest ? (d.addPlainRoiForTest() as string | null) : null;
+    });
+    if (plainUid === null) {
+      console.log("  未達: 対照（印の無い ROI）を置けなかった。「消しすぎていない」ことは未確認");
+    } else {
+      await viewer.waitForTimeout(1_000);
+      const plain = (await textBoxRows(viewer)).find((r) => r.uid === plainUid);
+      check(plain?.statsOffMark === false && plain?.textBoxVisibility === true, "対照: 印の無い ROI（利用者の ROI と同じ扱い）は textBoxVisibility が true のまま（消しすぎていない）", plain);
+    }
     await viewer.screenshot({ path: path.join(OUT_DIR, "viewer-result-final.png") });
 
     console.log("\n[6] 保存");
