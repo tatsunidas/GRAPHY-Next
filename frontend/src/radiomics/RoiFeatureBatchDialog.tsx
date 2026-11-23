@@ -24,6 +24,8 @@ import {
   buildBatchRequest,
   cleanLabel,
   duplicateLabels,
+  footerProgress,
+  formatElapsed,
   initialRows,
   pairKey,
   runnable,
@@ -218,6 +220,15 @@ export function RoiFeatureBatchDialog({
   const running = !!job && !BATCH_FINISHED.has(job.state);
   /** 単独実行中、または一覧の実行中。設定・組・出力の欄を触らせない。 */
   const locked = running || queueRunning;
+  const footerText = (() => {
+    if (!job) return null;
+    const fp = footerProgress(job, runRef.current?.labels ?? []);
+    const state = t(`roiFeat.batch.jobState.${job.state}`);
+    const elapsed = formatElapsed(fp.elapsedMs);
+    if (!fp.running) return t("roiFeat.batch.footer.finished", { state, done: fp.done, total: fp.total, failed: fp.failed, elapsed });
+    if (fp.index === null) return t("roiFeat.batch.footer.runningIdle", { state, done: fp.done, total: fp.total, failed: fp.failed, elapsed });
+    return t("roiFeat.batch.footer.running", { n: fp.index + 1, total: fp.total, label: fp.label ? t("roiFeat.batch.footer.label", { label: fp.label }) : "", done: fp.done, failed: fp.failed, elapsed });
+  })();
   /** 範囲の欄が数でない・下限が上限より大きい間は、実行も定義の保存もしない（範囲なしの定義が黙って作られるのを防ぐ）。 */
   const settingsSchema = useSettingsSchema();
   // 詳細設定にエラー（形・重複・他の欄のキー・知らないキー・値の型）がある間は、実行も定義の保存もしない
@@ -483,7 +494,7 @@ export function RoiFeatureBatchDialog({
                             {r.pair.segmentNumber != null && ` · ${r.pair.segmentNumber}${r.pair.segmentLabel ? `: ${r.pair.segmentLabel}` : ""}`}
                           </td>
                           <td style={td} data-testid={`batch-state-${i}`}>
-                            {ps ? `${t(`roiFeat.batch.pairState.${ps.state}`)}${ps.fromCache ? t("roiFeat.batch.cache") : ""}${ps.error ? `: ${ps.error}` : ""}` : stateText(r)}
+                            {ps ? `${t(`roiFeat.batch.pairState.${ps.state}`)}${ps.fromCache ? t("roiFeat.batch.cache") : ps.state === "DONE" ? t("roiFeat.batch.pairElapsed", { elapsed: formatElapsed(ps.elapsedMs) }) : ""}${ps.error ? `: ${ps.error}` : ""}` : stateText(r)}
                             {ps && ps.qcFlags.length > 0 && (
                               <span style={flagStyle} data-testid={`batch-flags-${i}`}>
                                 {" "}⚑ {ps.qcFlags.map((f) => t(`roiFeat.batch.qcflag.${f}`)).join("・")}
@@ -603,6 +614,9 @@ export function RoiFeatureBatchDialog({
           {written != null && <div style={{ ...note, color: "#2f6b2f" }} data-testid="batch-written">{t("roiFeat.batch.written", { n: written })}</div>}
         </div>
         <div style={footer}>
+          {job && footerText && (
+            <span style={footerSummary} data-testid="batch-progress-footer" title={t("roiFeat.tip.bProgress")}>{footerText}</span>
+          )}
           <button type="button" style={btn} data-testid="batch-trial" title={t("roiFeat.tip.bTrial")} disabled={inputProblem !== null || locked || starting || !summary || summary.selected === 0}
             onClick={() => void start(true)}>{t("roiFeat.batch.trial")}</button>
           <button type="button" style={btnPrimary} data-testid="batch-run" title={t("roiFeat.tip.bRun")} disabled={inputProblem !== null || locked || starting || !summary || summary.selected === 0}
@@ -620,7 +634,8 @@ const overlay: React.CSSProperties = { position: "fixed", inset: 0, background: 
 const dialog: React.CSSProperties = { width: 1040, maxWidth: "96vw", maxHeight: "92vh", background: "#fff", borderRadius: 10, boxShadow: "0 12px 40px rgba(0,0,0,0.3)", display: "flex", flexDirection: "column", overflow: "hidden", fontFamily: "system-ui, sans-serif", color: "#1a1a1a", fontSize: 12 };
 const header: React.CSSProperties = { display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 16px", borderBottom: "1px solid #eee", fontSize: 14 };
 const body: React.CSSProperties = { padding: "10px 16px", overflow: "auto", flex: 1 };
-const footer: React.CSSProperties = { display: "flex", gap: 8, justifyContent: "flex-end", padding: "10px 16px", borderTop: "1px solid #eee" };
+const footerSummary: React.CSSProperties = { marginRight: "auto", fontSize: 12, color: "#333", minWidth: 0 };
+const footer: React.CSSProperties = { display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8, justifyContent: "flex-end", padding: "10px 16px", borderTop: "1px solid #eee" };
 const closeBtn: React.CSSProperties = { border: "none", background: "transparent", fontSize: 16, cursor: "pointer", color: "#666" };
 const section: React.CSSProperties = { fontWeight: 600, color: "#0b5cad", marginTop: 12, marginBottom: 4 };
 const note: React.CSSProperties = { color: "#6b7785", fontSize: 11, marginTop: 4, lineHeight: 1.5 };
