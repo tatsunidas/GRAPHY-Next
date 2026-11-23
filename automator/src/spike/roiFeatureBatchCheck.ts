@@ -297,7 +297,26 @@ async function main(): Promise<void> {
     await page.getByTestId("batch-run").click();
     await page.waitForTimeout(600);
     await page.screenshot({ path: path.join(OUT_DIR, "02-progress.png"), fullPage: true });
+    {
+      const footerEl = page.getByTestId("batch-progress-footer");
+      check(await footerEl.isVisible(), "実行中、下端の帯に進捗の要約が出る");
+      const inside = await page.evaluate(() => {
+        const f = document.querySelector('[data-testid="batch-progress-footer"]')?.getBoundingClientRect();
+        const d = document.querySelector('[data-testid="batch-dialog"]')?.getBoundingClientRect();
+        if (!f || !d) return null;
+        return { f: { t: f.top, b: f.bottom, l: f.left, r: f.right, h: f.height }, d: { t: d.top, b: d.bottom, l: d.left, r: d.right } };
+      });
+      check(!!inside && inside.f.h > 0 && inside.f.t >= inside.d.t && inside.f.b <= inside.d.b && inside.f.l >= inside.d.l && inside.f.r <= inside.d.r,
+        "帯の要約は、スクロールせずにダイアログの矩形の内側に見える", inside);
+    }
     const prog = await waitText(page, "batch-progress", /完了 — 6\/6 完了/, 600_000);
+    {
+      const ft = await page.getByTestId("batch-progress-footer").innerText();
+      console.log(`  footer(done): ${ft}`);
+      check(/^完了 — 6\/6・失敗 0・経過 (\d+:)?\d+:\d{2}$/.test(ft.trim()), "終了後の帯に「完了 — 6/6・失敗 0・経過 …」が出る", ft);
+      const st = await page.locator('[data-testid^="batch-state-"]').allInnerTexts();
+      check(st.filter((x) => /^完了 \d+:\d{2}/.test(x)).length + st.filter((x) => /キャッシュ/.test(x)).length >= 6, "計算済みの組の状態に、かかった時間（完了 m:ss）が出る", st);
+    }
     console.log(`  progress: ${prog.replace(/\n/g, " ")}`);
     // この合成データは全検査が同じ間隔（0.7×0.7×2 mm）なので、間隔の注意は出ない（負例。出る側は mixedSpacingCheck）
     check((await page.getByTestId("batch-spacing-warn").count()) === 0 && (await page.getByTestId("batch-spacing-info").count()) === 0, "間隔がそろっているので、間隔の注意は出ない");
@@ -369,6 +388,28 @@ async function main(): Promise<void> {
     const running = await waitText(page, "batch-progress", /実行中 — [1-5]\/6 完了/, 600_000)
       .catch((e: Error) => { check(false, "取り消しを試せる途中の状態を観測できた", e.message); throw e; });
     console.log(`  running: ${running.replace(/\n/g, " ")}`);
+    {
+      // 重い設定で実行中のまま読める。1 回目は計算中の組が見えるまで待つ（組の切り替わりの合間は「待機」形式になる）
+      const footerEl = page.getByTestId("batch-progress-footer");
+      const secOf = (x: string): number => {
+        const m = /経過 (?:(\d+):)?(\d+):(\d{2})/.exec(x);
+        return m ? Number(m[1] ?? 0) * 3600 + Number(m[2]) * 60 + Number(m[3]) : -1;
+      };
+      await footerEl.filter({ hasText: /^計算中 / }).waitFor({ state: "visible", timeout: 60_000 });
+      const t1 = await footerEl.innerText();
+      const bodyProg = await page.getByTestId("batch-progress").innerText();
+      const doneBody = Number(/(\d+)\/\d+ 完了/.exec(bodyProg)?.[1] ?? -1);
+      const m1 = /^計算中 (\d+)\/6（(C\d{3})）・完了 (\d+)・失敗 0・経過 \d+:\d{2}$/.exec(t1.trim());
+      console.log(`  footer(running 1): ${t1} / body: ${bodyProg.replace(/\n/g, " ")}`);
+      check(!!m1 && Number(m1[1]) === Number(m1[3]) + 1, "実行中の帯は「計算中 n/6（ラベル）・完了 N・失敗 0・経過 m:ss」で、n は完了 N の次の組", t1);
+      check(!!m1 && Math.abs(doneBody - Number(m1[3])) <= 1, "帯の「完了 N」が本文の件数と矛盾しない", { t1, bodyProg });
+      check(await footerEl.isVisible(), "重い設定の実行中も帯が見える");
+      await page.screenshot({ path: path.join(OUT_DIR, "04a-running-footer.png"), fullPage: true });
+      await page.waitForTimeout(3000);
+      const t2 = await footerEl.innerText();
+      console.log(`  footer(running 2): ${t2}`);
+      check(/計算中|待機中|実行中/.test(t2) && secOf(t1) >= 0 && secOf(t2) > secOf(t1), "経過時間を（実行中のまま）2 回読んで、後の方が大きい", { t1, t2 });
+    }
     await page.getByTestId("batch-cancel").click();
     const cancelledText = await waitText(page, "batch-progress", /取り消し —/, 600_000);
     console.log(`  cancelled: ${cancelledText.replace(/\n/g, " ")}`);

@@ -223,7 +223,7 @@ export function RoiFeatureSettingsFields({
   const rangeProblem = rangeBounds(form).problem;
   const range = [form.rangeMinText.trim(), form.rangeMaxText.trim()];
   const preprocessText = [
-    form.resampleMm == null ? `${t("roiFeat.field.resampling")} ${t("roiFeat.resampling.none")}` : `${t("roiFeat.field.resampling")} ${t("roiFeat.resampling.iso")} ${form.resampleMm} mm`,
+    form.resampleMm == null ? `${t("roiFeat.field.resampling")} ${t("roiFeat.resampling.none")}` : `${t("roiFeat.field.resampling")} ${t("roiFeat.resampling.iso")} ${Number(form.resampleMm.toPrecision(6))} mm`,
     form.fixedBinNumber ? `${t("roiFeat.field.discretisation")} ${t("roiFeat.disc.binCount")} ${form.binCount}` : `${t("roiFeat.field.discretisation")} ${t("roiFeat.disc.binWidth")} ${form.binWidth}`,
     ...(showRange ? [`${t("roiFeat.field.range")} ${range[0] === "" && range[1] === "" ? t("roiFeat.resampling.none") : `${range[0]}〜${range[1]}`}`] : []),
     ...(preprocessSummary ? [preprocessSummary] : []),

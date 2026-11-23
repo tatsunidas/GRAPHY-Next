@@ -8,7 +8,7 @@
  * <p>患者名・患者 ID はここでは扱わない（画面の確認表にだけ出す）。書き出しは `datasetCsv.ts`。
  */
 import type { RoiFeatureResult } from "../api";
-import type { BatchPair, BatchQc, BatchRequest } from "./batchApi";
+import { BATCH_FINISHED, type BatchPair, type BatchQc, type BatchRequest, type BatchStatus } from "./batchApi";
 import { normalizeLabels, type SpecKind } from "./batchSpec";
 import { ROI_FEATURE_FAMILIES, roiFeatureSettings, valueSpecOf, type RoiFeatureForm } from "./roiFeatureSettings";
 
@@ -242,4 +242,41 @@ export function spacingMixText(m: VoxelSpacingMix): string {
 export function batchFileBase(prefix: string): string {
   const p = prefix.trim().replace(/[\\/:*?"<>|\s]/g, "_");
   return p || "roi-features-batch";
+}
+
+/** 経過時間を 分:秒（1 時間以上は 時:分:秒）にする。負・NaN は 0:00。 */
+export function formatElapsed(ms: number): string {
+  const sec = Number.isFinite(ms) && ms > 0 ? Math.floor(ms / 1000) : 0;
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  const s = sec % 60;
+  const ss = String(s).padStart(2, "0");
+  return h > 0 ? `${h}:${String(m).padStart(2, "0")}:${ss}` : `${m}:${ss}`;
+}
+
+export interface FooterProgress {
+  running: boolean;
+  /** 今計算している組（`job.pairs` で RUNNING の最初の行）の 0 始まりの番号。無ければ null。 */
+  index: number | null;
+  /** 今計算している組の症例ラベル。無ければ null。 */
+  label: string | null;
+  done: number;
+  failed: number;
+  total: number;
+  elapsedMs: number;
+}
+
+/** 下端の帯に出す要約の元。実行中は今計算している組を、終了後は件数と経過だけを使う。 */
+export function footerProgress(job: BatchStatus, labels: readonly string[]): FooterProgress {
+  const running = !BATCH_FINISHED.has(job.state);
+  const cur = running ? job.pairs.find((p) => p.state === "RUNNING") : undefined;
+  return {
+    running,
+    index: cur ? cur.index : null,
+    label: cur ? (labels[cur.index] ?? null) : null,
+    done: job.done,
+    failed: job.failed,
+    total: job.total,
+    elapsedMs: job.elapsedMs,
+  };
 }
