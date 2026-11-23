@@ -2,8 +2,13 @@ import { describe, expect, it, vi } from "vitest";
 import {
   computeToolBindings,
   DEFAULT_MOUSE_BINDINGS,
+  commandOf,
   isMouseSettingKey,
+  MOUSE_COMMANDS,
   parseMouseBindings,
+  runMouseCommand,
+  sideClickCommand,
+  type MouseCommandActions,
   shouldGuardSideButton,
   type MouseBindingTable,
   type ToolNames,
@@ -105,6 +110,53 @@ describe("サイドボタン（戻る・進む）", () => {
     expect(shouldGuardSideButton(3, D)).toBe(false);
     expect(shouldGuardSideButton(4, D)).toBe(false);
     for (const b of [0, 1, 2]) expect(shouldGuardSideButton(b, { ...D, back: "pan", forward: "zoom" })).toBe(false);
+  });
+});
+
+describe("サイドボタンの操作（クリック）", () => {
+  it("設定値: cmd:<操作> は有効、未知の操作は既定（なし）。中・右には操作を割り当てられない", () => {
+    expect(parseMouseBindings({ "mouse.back": "cmd:reset", "mouse.forward": "cmd:invert" })).toMatchObject({ back: "cmd:reset", forward: "cmd:invert" });
+    expect(parseMouseBindings({ "mouse.back": "cmd:bogus" }).back).toBe("none");
+    expect(parseMouseBindings({ "mouse.middle": "cmd:reset", "mouse.right": "cmd:fit" })).toMatchObject({ middle: "pan", right: "zoom" });
+    expect(commandOf("cmd:syncOff")).toBe("syncOff");
+    expect(commandOf("pan")).toBeNull();
+    expect(commandOf("none")).toBeNull();
+  });
+  it("操作はツールではない: Cornerstone の割り当てを作らない（ツールの出力は段 2 から変わらない）", () => {
+    expect(computeToolBindings("WindowLevel", { ...D, back: "cmd:reset", forward: "cmd:invert" }, N, { touchZoom: true })).toEqual(
+      computeToolBindings("WindowLevel", D, N, { touchZoom: true }),
+    );
+  });
+  it("10 個の操作が、対応する既存の操作へ 1 対 1 で渡る。未知の操作は実行しない", () => {
+    const log: string[] = [];
+    const a: MouseCommandActions = {
+      reset: () => log.push("reset"), fit: () => log.push("fit"), invert: () => log.push("invert"),
+      flipH: () => log.push("flipH"), flipV: () => log.push("flipV"), rotate90: () => log.push("rotate90"),
+      undo: () => log.push("undo"), redo: () => log.push("redo"),
+      setSyncTargets: (v) => log.push(v ? "syncOn" : "syncOff"),
+    };
+    for (const c of MOUSE_COMMANDS) {
+      log.length = 0;
+      expect(runMouseCommand(c, a)).toBe(true);
+      expect(log).toEqual([c]);
+    }
+    expect(MOUSE_COMMANDS).toHaveLength(10);
+    log.length = 0;
+    expect(runMouseCommand("bogus" as never, a)).toBe(false);
+    expect(log).toEqual([]);
+  });
+  it("クリック判定: 同じボタン・4 px 以内なら操作。5 px 以上動いた・別のボタン・ツール・なしは null", () => {
+    const t: MouseBindingTable = { ...D, back: "cmd:reset", forward: "pan" };
+    const down = { button: 3, x: 100, y: 100 };
+    expect(sideClickCommand(down, { button: 3, x: 100, y: 100 }, t)).toBe("reset");
+    expect(sideClickCommand(down, { button: 3, x: 102, y: 103 }, t)).toBe("reset"); // 距離 √13 ≈ 3.6 ≤ 4
+    expect(sideClickCommand(down, { button: 3, x: 103, y: 104 }, t)).toBeNull(); // 距離 5 > 4
+    expect(sideClickCommand(down, { button: 3, x: 140, y: 100 }, t)).toBeNull(); // ドラッグ
+    expect(sideClickCommand(down, { button: 4, x: 100, y: 100 }, t)).toBeNull(); // 押したのと別のボタンで離した
+    expect(sideClickCommand(null, { button: 3, x: 100, y: 100 }, t)).toBeNull(); // 押した記録が無い
+    expect(sideClickCommand({ button: 4, x: 0, y: 0 }, { button: 4, x: 0, y: 0 }, t)).toBeNull(); // 進む=ツール（パン）
+    expect(sideClickCommand(down, { button: 3, x: 100, y: 100 }, { ...D, back: "none" })).toBeNull(); // なし
+    expect(sideClickCommand({ button: 0, x: 0, y: 0 }, { button: 0, x: 0, y: 0 }, t)).toBeNull(); // 左ボタン
   });
 });
 

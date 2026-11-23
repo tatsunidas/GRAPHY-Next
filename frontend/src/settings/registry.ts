@@ -190,6 +190,21 @@ const MOUSE_TOOL_OPTIONS: FieldOption[] = [
   { value: "none", labelKey: "settings.opt.mouse.none" },
 ];
 
+// 戻る・進む（サイドボタン）: ドラッグのツールに加えて、クリックで実行する操作（viewer/mouseBindings.ts の MouseCommand）。
+const MOUSE_SIDE_OPTIONS: FieldOption[] = [
+  ...MOUSE_TOOL_OPTIONS,
+  { value: "cmd:reset", labelKey: "settings.opt.mouse.cmd.reset" },
+  { value: "cmd:fit", labelKey: "settings.opt.mouse.cmd.fit" },
+  { value: "cmd:invert", labelKey: "settings.opt.mouse.cmd.invert" },
+  { value: "cmd:flipH", labelKey: "settings.opt.mouse.cmd.flipH" },
+  { value: "cmd:flipV", labelKey: "settings.opt.mouse.cmd.flipV" },
+  { value: "cmd:rotate90", labelKey: "settings.opt.mouse.cmd.rotate90" },
+  { value: "cmd:syncOn", labelKey: "settings.opt.mouse.cmd.syncOn" },
+  { value: "cmd:syncOff", labelKey: "settings.opt.mouse.cmd.syncOff" },
+  { value: "cmd:undo", labelKey: "settings.opt.mouse.cmd.undo" },
+  { value: "cmd:redo", labelKey: "settings.opt.mouse.cmd.redo" },
+];
+
 export const SETTINGS_REGISTRY: CategoryDef[] = [
   {
     id: "general",
@@ -388,10 +403,10 @@ export const SETTINGS_REGISTRY: CategoryDef[] = [
             labelKey: "settings.field.mouseBack",
             type: "select",
             default: "none",
-            options: MOUSE_TOOL_OPTIONS,
+            options: MOUSE_SIDE_OPTIONS,
             helpKey: "settings.field.mouseSide.help",
           },
-          { key: "mouse.forward", labelKey: "settings.field.mouseForward", type: "select", default: "none", options: MOUSE_TOOL_OPTIONS },
+          { key: "mouse.forward", labelKey: "settings.field.mouseForward", type: "select", default: "none", options: MOUSE_SIDE_OPTIONS },
         ],
       },
       {

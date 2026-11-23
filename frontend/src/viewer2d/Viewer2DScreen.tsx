@@ -85,6 +85,7 @@ import { annotationRoiKind } from "../viewer/roiKind";
 import { canConvertMeasureToRoi } from "../viewer/measureToRoi";
 import { isTextEntryTarget, matchesShortcut } from "../shortcuts/registry";
 import { isInsideViewerOverlay } from "../viewer/viewerOverlay";
+import { registerMouseCommandHandler, runMouseCommand } from "../viewer/mouseBindings";
 import { runSeriesCommand } from "../viewer/seriesCommands";
 import { TOOL_IDS } from "../viewer/toolIds";
 import { useAssistantBridge } from "./useAssistantBridge";
@@ -2622,6 +2623,16 @@ function TileGrid({
   actionsRef.current = actions;
   // タイル下の操作バーからのツール切替の依頼（ROI・描画ツール有効中のパンなど）を、画面のツールバーと同じ setTool へ通す。
   useEffect(() => registerToolRequestHandler((name) => actionsRef.current.setTool(name)), []);
+  // 戻る・進むボタンのクリックに割り当てた操作（設定。viewer/mouseBindings.ts）。ツールバーの同じ操作を呼ぶだけ。
+  // 文字入力欄・解析ダイアログなどの上のクリックは、キー操作と同じく実行しない。
+  useEffect(
+    () =>
+      registerMouseCommandHandler((cmd, target) => {
+        if (isTextEntryTarget(target) || isInsideViewerOverlay(target)) return;
+        runMouseCommand(cmd, actionsRef.current);
+      }),
+    [],
+  );
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       // 文字入力欄（ラベル編集など）と、器（解析ダイアログ）の中は触らない。
