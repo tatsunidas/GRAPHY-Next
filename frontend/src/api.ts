@@ -1241,6 +1241,11 @@ export interface TextureMapRequest {
   margin?: number | null;
   seriesDescription?: string | null;
   seriesNumber?: number | null;
+  /**
+   * PET の校正（auto・none・bw・sul-james・sul-janma・bsa）。省略は auto（PET を SUVbw に校正し、CT・MR は何もしない）。
+   * none は Bq/mL のまま。FIRSTORDER・HISTOGRAM のマップの値と、固定ビン幅・範囲の設定は校正後の値に対して働く。
+   */
+  calibration?: string | null;
 }
 export interface TextureMapResult {
   seriesInstanceUid: string;
@@ -2133,6 +2138,8 @@ export interface GlamAnalysisRequest {
   /** 動径分布を見る最大距離（ボクセル, 未指定で 30）。 */
   maxRadius?: number | null;
   settings: Record<string, string>;
+  /** PET の校正（auto・none・bw・sul-james・sul-janma・bsa）。省略は auto（PET を SUVbw に校正し、CT・MR は何もしない）。 */
+  calibration?: string | null;
 }
 
 /**
@@ -2175,6 +2182,10 @@ export interface GlamAnalysis {
   settings: Record<string, string>;
   /** 元画像が非可逆圧縮（特徴量は圧縮の影響を受ける）。保存済みの古い解析には無い。 */
   lossyCompressed?: boolean;
+  /** 計算に使った値の単位（HU・SUVbw・BQML（未校正）など）。単位が分からないときは空。保存済みの古い解析には無い。 */
+  valueUnit?: string | null;
+  /** 掛けた校正の記録（種類;scale=係数;警告）。校正しなかったときは空。保存済みの古い解析には無い。 */
+  calibration?: string | null;
 }
 
 /** 保存された解析の一覧行（JSON 本体は含まない）。 */

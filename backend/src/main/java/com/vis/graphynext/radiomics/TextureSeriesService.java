@@ -96,7 +96,7 @@ public class TextureSeriesService {
         double sliceThickness = tmpl.getDouble(Tag.SliceThickness, 0.0);
         double spacingBetween = tmpl.getDouble(Tag.SpacingBetweenSlices,
                 spacingFromIpp(map.ippPerZ(), sliceThickness));
-        String derivation = derivationDescription(req, featureName, map.lossyCompressed());
+        String derivation = derivationDescription(req, featureName, map.lossyCompressed(), map.valueCalibration());
 
         List<String> sops = new ArrayList<>(map.slices());
         for (int z = 0; z < map.slices(); z++) {
@@ -121,6 +121,12 @@ public class TextureSeriesService {
      * 特に GLAM は maxRadius と境界補正で数値の意味が変わり、後から設定を辿る術が無い。
      */
     static String derivationDescription(TextureSeriesRequest req, String featureName, boolean lossy) {
+        return derivationDescription(req, featureName, lossy, ValueCalibration.UNSET);
+    }
+
+    /** @param calibration 読み込みで掛けた校正。校正しなかった（{@link ValueCalibration#text()} が空）ときは項目を足さない */
+    static String derivationDescription(TextureSeriesRequest req, String featureName, boolean lossy,
+                                        ValueCalibration calibration) {
         StringBuilder sb = new StringBuilder("Texture map ").append(featureName)
                 .append(" (GRAPHY-Next Radiomics; kernel=").append(req.filterSize())
                 .append(", stride=").append(req.stride())
@@ -133,6 +139,10 @@ public class TextureSeriesService {
                     .append(GlamMapSupport.maxRadiusFor(Math.max(1, req.filterSize()), req.settings()))
                     .append(", boundaryCorrection=").append(setting(req, "BOOL_GLAM_boundaryCorrection", "1"))
                     .append(", randomisations=").append(setting(req, "INT_GLAM_numRandomisations", "0"));
+        }
+        if (calibration != null && !calibration.text().isEmpty()) {
+            // PET の SUV 校正など。FIRSTORDER・固定ビン幅のマップは値の単位に直接依存するので、シリーズ自身に残す
+            sb.append(", calibration=").append(calibration.text());
         }
         if (lossy) {
             // 元画像が非可逆圧縮なら、値は圧縮の影響を受けている。派生シリーズだけ見ても分かるように残す
@@ -155,6 +165,7 @@ public class TextureSeriesService {
         if (req.feature() == null || req.feature().isBlank()) {
             throw new IllegalArgumentException("feature は必須です（例 GLCM_JointEntropy）");
         }
+        TextureSeriesRequest.checkCalibration(req.calibration());
     }
 
     /** 全スライスから NaN/Inf を除いた min/max。 */

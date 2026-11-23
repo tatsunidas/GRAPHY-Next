@@ -31,6 +31,10 @@ import java.util.Map;
  *                           <b>0 で RadiomicsJ 2.3.0 以前の挙動</b>（{@code fw/texture-radiomics-design.md} §11.6）
  * @param seriesDescription  出力シリーズ説明（任意）
  * @param seriesNumber       出力シリーズ番号（任意, null で自動採番）
+ * @param calibration        PET の校正の指定（{@link RoiFeatureRequest#CALIBRATIONS} の 6 値。null・空は {@code auto}＝
+ *                           PET は SUVbw、CT・MR はそのまま）。読み込みで画素値に掛けるので、マップの値・離散化・
+ *                           固定ビン幅は校正後の値に対して働く。{@link RadiomicsMapEngine#CALIBRATION_SETTING} として
+ *                           読み込みにだけ渡し、RadiomicsJ の設定・途中結果の設定のキーには入れない
  */
 public record TextureSeriesRequest(
         String studyInstanceUid,
@@ -46,5 +50,41 @@ public record TextureSeriesRequest(
         Map<String, String> settings,
         Integer margin,
         String seriesDescription,
-        Integer seriesNumber) {
+        Integer seriesNumber,
+        String calibration) {
+
+    /** 校正の指定なし（従来の要求。{@code auto}）。 */
+    public TextureSeriesRequest(String studyInstanceUid, String sourceSeriesUid, String maskSeriesUid,
+                                int maskChannel, String feature, int filterSize, int stride, boolean force2D,
+                                int channel, int timePoint, Map<String, String> settings, Integer margin,
+                                String seriesDescription, Integer seriesNumber) {
+        this(studyInstanceUid, sourceSeriesUid, maskSeriesUid, maskChannel, feature, filterSize, stride, force2D,
+                channel, timePoint, settings, margin, seriesDescription, seriesNumber, null);
+    }
+
+    /** 読み込みに渡す校正の指定。null・空は {@code auto}。 */
+    public String calibrationOrAuto() {
+        return calibrationOrAuto(calibration);
+    }
+
+    static String calibrationOrAuto(String calibration) {
+        return calibration == null || calibration.isBlank()
+                ? RoiFeatureRequest.CALIBRATION_AUTO : calibration.trim().toLowerCase(java.util.Locale.ROOT);
+    }
+
+    /** 不正な校正の指定を断る（未知の値は校正の解決で auto 扱いになってしまうので、読み込みの前に止める）。 */
+    static void checkCalibration(String calibration) {
+        if (!RoiFeatureRequest.CALIBRATIONS.contains(calibrationOrAuto(calibration))) {
+            throw new IllegalArgumentException("calibration は auto・none・bw・sul-james・sul-janma・bsa のどれかです: "
+                    + calibration);
+        }
+    }
+
+    /** 読み込み（{@link RadiomicsMapEngine#load}）に渡す設定。呼び出し元の設定の写しに校正の指定だけを足す。 */
+    static Map<String, String> loadSettings(Map<String, String> settings, String calibration) {
+        Map<String, String> out = new java.util.HashMap<>();
+        if (settings != null) out.putAll(settings);
+        out.put(RadiomicsMapEngine.CALIBRATION_SETTING, calibrationOrAuto(calibration));
+        return out;
+    }
 }

@@ -35,6 +35,10 @@ import java.util.Map;
  * @param resampledFrom   リサンプリングした場合の<b>元の</b>ボクセル間隔 (x,y,z) mm。していなければ null
  * @param settings        実際に使われた GLAM の設定（後から値の意味を辿れるように）
  * @param lossyCompressed 元画像が非可逆圧縮（特徴量は圧縮の影響を受ける）
+ * @param valueUnit       計算に使った値の単位（{@code HU}・{@code SUVbw}・{@code BQML（未校正）} など）。
+ *                        分からなければ空。保存済みの解析で欠けていれば null
+ * @param calibration     掛けた校正の記録（{@link ValueCalibration#text()}）。校正しなかったときは空。
+ *                        保存済みの解析で欠けていれば null
  */
 public record GlamAnalysis(
         int featureCount,
@@ -54,5 +58,7 @@ public record GlamAnalysis(
         boolean isotropic,
         double[] resampledFrom,
         Map<String, String> settings,
-        boolean lossyCompressed) {
+        boolean lossyCompressed,
+        String valueUnit,
+        String calibration) {
 }

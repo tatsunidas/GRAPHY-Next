@@ -39,6 +39,8 @@ import {
   binColor,
 } from "./GlamCharts";
 import { GlamFeatureTable } from "./GlamFeatureTable";
+import { PetCalibrationField, calibrationToSend, isPetModality } from "./PetCalibrationField";
+import type { CalibrationChoice } from "./roiFeatureSettings";
 
 /** 2D ビューアから渡される対象（localStorage 経由。ウィンドウを跨ぐため）。 */
 interface GlamContext {
@@ -70,6 +72,8 @@ export function GlamAnalysisScreen() {
   /** チャンネルに対応するセグメント名（番号昇順＝チャンネル順）。取れなければ空。 */
   const [maskSegmentNames, setMaskSegmentNames] = useState<string[]>([]);
   const [maxRadius, setMaxRadius] = useState(30);
+  /** PET の校正。既定 auto（PET は SUVbw）。欄はターゲットが PET のときだけ出す。 */
+  const [calibration, setCalibration] = useState<CalibrationChoice>("auto");
   const [settings, setSettings] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -150,6 +154,11 @@ export function GlamAnalysisScreen() {
     };
   }, [studyUid, maskSeriesUid]);
 
+  const sourceModality = useMemo(
+    () => allSeries.find((s) => s.seriesInstanceUid === sourceSeriesUid)?.modality,
+    [allSeries, sourceSeriesUid],
+  );
+
   const maskCandidates = useMemo(
     () => allSeries.filter((s) => s.seriesInstanceUid !== sourceSeriesUid),
     [allSeries, sourceSeriesUid],
@@ -182,6 +191,7 @@ export function GlamAnalysisScreen() {
         timePoint: 0,
         maxRadius,
         settings,
+        calibration: calibrationToSend(sourceModality, calibration),
       });
       show(result);
     } catch (e) {
@@ -255,6 +265,11 @@ export function GlamAnalysisScreen() {
               ))}
             </select>
           </Field>
+          {isPetModality(sourceModality) && (
+            <PetCalibrationField value={calibration} onChange={setCalibration} disabled={busy}
+              labelKey="glam.field.calibration" noneWarnKey="glam.calibration.noneWarn"
+              testId="glam-calibration" />
+          )}
           <Field label={t("glam.field.mask")}>
             <select value={maskSeriesUid} onChange={(e) => setMaskSeriesUid(e.target.value)}
               disabled={busy} style={input}>
@@ -339,6 +354,13 @@ export function GlamAnalysisScreen() {
                   y: analysis.voxelSpacing[1].toFixed(3),
                   z: analysis.voxelSpacing[2].toFixed(3),
                 })}
+              </span>
+            )}
+            {/* 古い保存済みの解析には無い（undefined）。無いときは単位を出さない（「不明」と断定もしない）。 */}
+            {analysis.valueUnit !== undefined && analysis.valueUnit !== null && (
+              <span style={infoPill} data-testid="glam-value-unit"
+                title={analysis.calibration ?? ""}>
+                {t("glam.unit", { unit: analysis.valueUnit || t("glam.unit.unknown") })}
               </span>
             )}
             {analysis.lossyCompressed && (
@@ -430,7 +452,8 @@ export function GlamAnalysisScreen() {
             <div style={sectionTitle}>{t("glam.features.title")}</div>
             <div style={note}>{t("glam.features.help")}</div>
             <div style={{ marginTop: 8 }}>
-              <GlamFeatureTable features={analysis.features ?? {}} fileLabel={fileLabel} />
+              <GlamFeatureTable features={analysis.features ?? {}} fileLabel={fileLabel}
+                valueUnit={analysis.valueUnit} calibration={analysis.calibration} />
             </div>
           </div>
         </div>
