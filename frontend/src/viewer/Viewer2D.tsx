@@ -50,7 +50,7 @@ import { type PasteContext, copyRoisToClipboard, duplicateRoi as duplicateRoiEnt
 import { emitRoiReveal } from "./roiReveal";
 import { reconcileGlobalAnnotations } from "./globalRoiSync";
 import { loadRoisCached, scheduleRoiSave } from "./roiSaveStore";
-import { addSavedRoiToViewport, restoreRoisIntoStack } from "./roiRestore";
+import { addSavedRoiToViewport, cancelDeferredRestore, restoreRoisIntoStack } from "./roiRestore";
 import { restoreSpheresIntoStack } from "./sphereRestore";
 import { restoreMasks } from "./maskSaveStore";
 import { listSpheres3D, sphereCanvasCircle, subscribeSphere3D, type SphereCanvasCircle } from "./sphere3dStore";
@@ -2959,6 +2959,7 @@ export function Viewer2D({
     const seriesLabel = roiContext?.seriesLabel;
     if (!patientKey || !imageIds.length) return;
     let cancelled = false;
+    const restoreOwner = {};
     void loadRoisCached(patientKey).then((parsed) => {
       if (cancelled) return;
       const v = vp();
@@ -2968,8 +2969,7 @@ export function Viewer2D({
       if (!parsed.rois.length && !parsed.spheres.length) return;
       // 球は Cornerstone の annotation ではなく自前のストア。スタックに参照スライスがある球だけ戻す。
       restoreSpheresIntoStack(parsed.spheres, imageIdsRef.current, patientKey, seriesLabel);
-      const n = restoreRoisIntoStack(parsed.rois, imageIdsRef.current, v, patientKey, seriesLabel);
-      if (n > 0) {
+      const afterRestore = () => {
         try {
           csToolsUtilities.triggerAnnotationRenderForViewportIds([viewportIdRef.current]);
         } catch {
@@ -2977,10 +2977,16 @@ export function Viewer2D({
         }
         // 復元した ROI にも global 追従の評価を通す（scope="all" が保存されていた場合）。
         reconcileGlobalRois();
-      }
+      };
+      const n = restoreRoisIntoStack(parsed.rois, imageIdsRef.current, v, patientKey, seriesLabel, {
+        owner: restoreOwner,
+        onRestored: afterRestore,
+      });
+      if (n > 0) afterRestore();
     });
     return () => {
       cancelled = true;
+      cancelDeferredRestore(restoreOwner);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [roiContext?.patientKey, stackKey, imageIds.length, compact, syncGroupId]);
