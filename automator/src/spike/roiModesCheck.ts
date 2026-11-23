@@ -320,6 +320,13 @@ async function main(): Promise<void> {
     check(ag.rows.length === 3, "集約の CSV は mean・pixelWeightedMean・slicesUsed の 3 行");
     const defs = by["modes-case-seg0_slices2d_definitions.csv"] ?? "";
     check(/GLCM_[^\n]*per-slice/.test(defs), "2D の定義表の離散化に per-slice が付く");
+    const defs3d = parseCsv(by["modes-case-seg0_definitions.csv"] ?? "");
+    const noteCol = defs3d.header.indexOf("notes");
+    const fractalRows = defs3d.rows.filter((x) => x[0].startsWith("Fractal_"));
+    const glcmRows = defs3d.rows.filter((x) => x[0].startsWith("GLCM_"));
+    check(noteCol >= 0 && fractalRows.length > 0 && glcmRows.length > 0, "3D の定義表に notes 列・Fractal 行・GLCM 行が実在する", [noteCol, fractalRows.length, glcmRows.length]);
+    check(fractalRows.every((x) => x[noteCol].split(";").includes("FRACTAL_OUTLINE_VERTICES")), "3D の定義表: Fractal の行の notes に FRACTAL_OUTLINE_VERTICES が入る", fractalRows.map((x) => x[noteCol]));
+    check(glcmRows.every((x) => !x[noteCol].includes("FRACTAL_OUTLINE_VERTICES")), "3D の定義表: GLCM の行には入らない（負例）");
     check((by["modes-case-seg0_maxsection2d_radiomicsj.properties"] ?? "").includes("BOOL_force2D=1"), "2D の設定ファイルに BOOL_force2D=1");
     check(!(by["modes-case-seg0_radiomicsj.properties"] ?? "").includes("BOOL_force2D=1"), "3D の設定ファイルには force2D が無い（負例）");
     check(dl.every((x) => !/PatientName|PatientID|Patient/.test(x.text)), "患者情報の列が出力に無い");
