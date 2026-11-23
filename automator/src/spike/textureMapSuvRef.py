@@ -1,0 +1,156 @@
+"""textureMapSuvCheck.ts の独立の参照（本体のコードは使わない。pydicom + numpy だけ）。
+
+実データの PET（PSMA）と腫瘍の SEG を DICOM から読み直し、次を出す。
+  stats  <PSMA の親ディレクトリ>
+      SUVbw の係数（体重 / (投与量 × 2^(−Δt/半減期)) の式。Δt は投与から Series Time まで。Series Time が最初の
+      Acquisition Time より後なら、最初の Acquisition Time を使う）と、ROI（SEG）の Bq/mL の範囲。
+  map    <PSMA の親ディレクトリ> <マップの DICOM のディレクトリ> <カーネル径> <係数>
+      ROI の各ボクセルについて「3D の窓（kernel^3）∩ ROI」の平均（FIRSTORDER_Mean、margin 0）を、
+      PET の画素 × RescaleSlope（× 係数）から直接計算し、本体が保存した派生シリーズの画素
+      （保存値 × RescaleSlope + RescaleIntercept）と突き合わせる。
+  glam   <PSMA の親ディレクトリ> <係数> <固定ビン数> <固定ビン幅の単位 SUV か Bq> <幅>
+      ROI の値（Bq/mL × 係数）から、固定ビン数・固定ビン幅の離散化の予想（ビン数・ビンごとのボクセル数）を出す。
+
+使い方: python3 -I textureMapSuvRef.py <サブコマンド> ...  （結果は JSON を標準出力へ）
+"""
+import glob
+import json
+import math
+import os
+import sys
+from datetime import datetime
+
+import numpy as np
+import pydicom
+
+
+def tm(date, time):
+    t = str(time).split(".")[0].ljust(6, "0")
+    frac = float("0." + str(time).split(".")[1]) if "." in str(time) and str(time).split(".")[1] else 0.0
+    return datetime.strptime(str(date) + t[:6], "%Y%m%d%H%M%S").timestamp() + frac
+
+
+def load(root):
+    pet = {}
+    for f in glob.glob(os.path.join(root, "PET", "*")):
+        d = pydicom.dcmread(f)
+        pet[str(d.SOPInstanceUID)] = d
+    iop = [float(x) for x in next(iter(pet.values())).ImageOrientationPatient]
+    nrm = np.cross(iop[:3], iop[3:])
+    order = sorted(pet, key=lambda s: float(np.dot(nrm, [float(x) for x in pet[s].ImagePositionPatient])))
+    idx = {s: i for i, s in enumerate(order)}
+    vol = np.zeros((len(order), int(pet[order[0]].Rows), int(pet[order[0]].Columns)), dtype=np.float64)
+    for s in order:
+        d = pet[s]
+        vol[idx[s]] = d.pixel_array.astype(np.float64) * float(d.RescaleSlope) + float(d.RescaleIntercept)
+    seg = pydicom.dcmread(glob.glob(os.path.join(root, "Segmentation*", "*"))[0])
+    frames = seg.pixel_array
+    segnums = set()
+    mask = np.zeros(vol.shape, dtype=bool)
+    for i, fg in enumerate(seg.PerFrameFunctionalGroupsSequence):
+        segnums.add(int(fg.SegmentIdentificationSequence[0].ReferencedSegmentNumber))
+        sop = str(fg.DerivationImageSequence[0].SourceImageSequence[0].ReferencedSOPInstanceUID)
+        mask[idx[sop]] |= frames[i] > 0
+    assert len(segnums) == 1, f"セグメントが複数: {segnums}"
+    return pet, order, idx, vol, mask
+
+
+def suv_scale(pet):
+    any_ds = next(iter(pet.values()))
+    rad = any_ds.RadiopharmaceuticalInformationSequence[0]
+    weight_g = float(any_ds.PatientWeight) * 1000.0
+    dose = float(rad.RadionuclideTotalDose)
+    half = float(rad.RadionuclideHalfLife)
+    inj_time = str(rad.RadiopharmaceuticalStartTime)
+    inj_date = str(getattr(rad, "RadiopharmaceuticalStartDateTime", "") or "")[:8] or str(any_ds.SeriesDate)
+    inj = tm(inj_date, inj_time)
+    series = tm(any_ds.SeriesDate, any_ds.SeriesTime)
+    acq = min(tm(d.AcquisitionDate, d.AcquisitionTime) for d in pet.values())
+    scan = series if series <= acq else acq
+    dt = scan - inj
+    return weight_g / (dose * 2.0 ** (-dt / half)), {
+        "weightG": weight_g, "doseBq": dose, "halfLifeSec": half, "decaySec": dt,
+        "usedSeriesTime": series <= acq, "units": str(any_ds.Units),
+        "decayCorrection": str(any_ds.DecayCorrection),
+    }
+
+
+def cmd_stats(root):
+    pet, order, idx, vol, mask = load(root)
+    scale, info = suv_scale(pet)
+    v = vol[mask]
+    print(json.dumps({"scale": scale, **info, "roiVoxels": int(mask.sum()), "slicesWithRoi": int(mask.any(axis=(1, 2)).sum()),
+                      "bqMin": float(v.min()), "bqMax": float(v.max()), "suvMin": float(v.min() * scale), "suvMax": float(v.max() * scale),
+                      "volumeShape": list(vol.shape)}))
+
+
+def window_mean(vol, mask, k, scale):
+    r = k // 2
+    out = np.zeros(vol.shape)
+    interior = np.zeros(vol.shape, dtype=bool)
+    zs, ys, xs = np.nonzero(mask)
+    n = mask.shape
+    for z, y, x in zip(zs, ys, xs):
+        z0, z1 = max(0, z - r), min(n[0], z + r + 1)
+        y0, y1 = max(0, y - r), min(n[1], y + r + 1)
+        x0, x1 = max(0, x - r), min(n[2], x + r + 1)
+        w = mask[z0:z1, y0:y1, x0:x1]
+        out[z, y, x] = vol[z0:z1, y0:y1, x0:x1][w].mean() * scale
+        interior[z, y, x] = bool(w.all()) and w.size == k ** 3
+    return out, interior
+
+
+def read_map(map_dir, idx):
+    arr = {}
+    slope = None
+    desc = None
+    for f in glob.glob(os.path.join(map_dir, "*.dcm")):
+        d = pydicom.dcmread(f)
+        sop = str(d.SourceImageSequence[0].ReferencedSOPInstanceUID)
+        # 保存値は 16 bit の符号なしを、宣言（BitsStored=15）にかかわらず 16 bit 全部として読む（本体が書く値は 0〜65535 を使う）
+        raw = np.frombuffer(d.PixelData, dtype="<u2").reshape(int(d.Rows), int(d.Columns))
+        arr[idx[sop]] = raw.astype(np.float64) * float(d.RescaleSlope) + float(d.RescaleIntercept)
+        slope = float(d.RescaleSlope)
+        desc = str(d.DerivationDescription)
+    return arr, slope, desc
+
+
+def cmd_map(root, map_dir, k, scale):
+    k, scale = int(k), float(scale)
+    pet, order, idx, vol, mask = load(root)
+    ref, interior = window_mean(vol, mask, k, scale)
+    got_slices, slope, desc = read_map(map_dir, idx)
+    got = np.zeros(vol.shape)
+    for z, a in got_slices.items():
+        got[z] = a
+    diff = np.abs(got - ref)[mask]
+    rel = (diff / np.maximum(np.abs(ref[mask]), 1e-12))
+    inside = mask & interior
+    print(json.dumps({
+        "instances": len(got_slices), "roiVoxels": int(mask.sum()), "interiorVoxels": int(inside.sum()),
+        "slope": slope, "maxAbsDiff": float(diff.max()), "maxAbsDiffOverSlope": float(diff.max() / slope),
+        "maxAbsDiffInterior": float(np.abs(got - ref)[inside].max()) if inside.any() else None,
+        "refMax": float(ref[mask].max()), "refMean": float(ref[mask].mean()), "gotMean": float(got[mask].mean()),
+        "maxRel": float(rel.max()), "derivation": desc,
+        "outsideRoiNonZero": int((got[~mask] != 0).sum()),
+    }))
+
+
+def cmd_glam(root, scale, nbins, unit, width):
+    scale, nbins, width = float(scale), int(nbins), float(width)
+    pet, order, idx, vol, mask = load(root)
+    v = vol[mask] * scale
+    lo, hi = v.min(), v.max()
+    # 固定ビン数（IBSI: floor(n × (x − min)/(max − min)) + 1。最大値は n）
+    b = np.minimum(np.floor(nbins * (v - lo) / (hi - lo)).astype(int), nbins - 1)
+    occ_count = np.bincount(b, minlength=nbins).tolist()
+    # 固定ビン幅（IBSI: floor((x − min)/w) + 1。幅は指定の単位）
+    w_suv = width if unit == "SUV" else width * scale
+    bw = np.floor((v - lo) / w_suv).astype(int)
+    occ_width = np.bincount(bw).tolist()
+    print(json.dumps({"roiVoxels": int(v.size), "occCount": occ_count, "widthSuv": w_suv, "nBinsWidth": len(occ_width), "occWidth": occ_width,
+                      "minValue": float(lo), "maxValue": float(hi)}))
+
+
+if __name__ == "__main__":
+    {"stats": cmd_stats, "map": cmd_map, "glam": cmd_glam}[sys.argv[1]](*sys.argv[2:])

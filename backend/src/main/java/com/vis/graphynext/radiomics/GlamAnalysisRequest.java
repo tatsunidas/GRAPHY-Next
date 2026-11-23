@@ -22,6 +22,8 @@ import java.util.Map;
  * @param timePoint         マルチ次元スタックの T インデックス（既定 0）
  * @param maxRadius         動径分布を見る最大距離（ボクセル, 既定 30）
  * @param settings          Radiomics パラメータ（GRAPHY Property キー→値。ビン設定と GLAM 各種）
+ * @param calibration       PET の校正の指定（{@link RoiFeatureRequest#CALIBRATIONS} の 6 値。null・空は {@code auto}＝
+ *                          PET は SUVbw、CT・MR はそのまま）。固定ビン幅は校正後の値に対して働く
  */
 public record GlamAnalysisRequest(
         String studyInstanceUid,
@@ -31,5 +33,14 @@ public record GlamAnalysisRequest(
         int channel,
         int timePoint,
         Integer maxRadius,
-        Map<String, String> settings) {
+        Map<String, String> settings,
+        String calibration) {
+
+    /** 校正の指定なし（従来の要求。{@code auto}）。 */
+    public GlamAnalysisRequest(String studyInstanceUid, String sourceSeriesUid, String maskSeriesUid,
+                               int maskChannel, int channel, int timePoint, Integer maxRadius,
+                               Map<String, String> settings) {
+        this(studyInstanceUid, sourceSeriesUid, maskSeriesUid, maskChannel, channel, timePoint, maxRadius,
+                settings, null);
+    }
 }

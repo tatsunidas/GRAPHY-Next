@@ -83,7 +83,18 @@ public class RadiomicsMapEngine {
             List<double[]> ippPerZ,         // z ごとの ImagePositionPatient（無ければ null 要素）
             List<String> srcSopPerZ,        // z ごとの元 SOPInstanceUID（SourceImageSequence 用）
             String frameOfReferenceUid,
-            boolean lossyCompressed) {      // 元画像が非可逆圧縮（特徴量は圧縮の影響を受ける）
+            boolean lossyCompressed,        // 元画像が非可逆圧縮（特徴量は圧縮の影響を受ける）
+            ValueCalibration valueCalibration) { // 読み込みで掛けた校正（値の単位・係数）
+
+        /** 校正の記録なし（従来の作り方）。 */
+        public MapResult(int width, int height, int slices, float[][] data, String featureName,
+                         double[] imageOrientationPatient, double pixelSpacingRow, double pixelSpacingCol,
+                         List<double[]> ippPerZ, List<String> srcSopPerZ, String frameOfReferenceUid,
+                         boolean lossyCompressed) {
+            this(width, height, slices, data, featureName, imageOrientationPatient, pixelSpacingRow,
+                    pixelSpacingCol, ippPerZ, srcSopPerZ, frameOfReferenceUid, lossyCompressed,
+                    ValueCalibration.UNSET);
+        }
     }
 
     /** ターゲット（＋任意マスク）から 1 特徴のマップを計算する（進み具合は見ない）。 */
@@ -169,7 +180,9 @@ public class RadiomicsMapEngine {
 
     /**
      * {@link #load} の {@code settings} に入れる、PET の校正の指定のキー（{@link RoiFeatureRequest#calibration}）。
-     * 無いときは校正を扱わない（従来の経路。テクスチャのマップなどは今も Bq/mL のまま）。
+     * 無いときは校正を扱わない（従来の経路）。テクスチャのマップと GLAM 解析は、
+     * {@link TextureSeriesRequest#calibration}・{@link GlamAnalysisRequest#calibration}（既定 auto＝PET は SUVbw）を
+     * ここへ入れて読む。フィルタ済みシリーズ・最大断面は渡さない（フィルタ済みシリーズの出力は元と同じ単位の画像）。
      */
     public static final String CALIBRATION_SETTING = "graphy.calibration";
 
@@ -180,8 +193,11 @@ public class RadiomicsMapEngine {
 
     /** {@link #compute} と同じ計算。スライスごとの途中結果を使い（あれば続きから）、キーも返す。 */
     public Computed computeResumable(TextureSeriesRequest req, TextureProgress progress) throws IOException {
+        TextureSeriesRequest.checkCalibration(req.calibration());
+        // 校正の指定は読み込みにだけ渡す（req.settings() は RadiomicsJ と途中結果のキーに使われるので汚さない）
         LoadedVolume vol = load(req.studyInstanceUid(), req.sourceSeriesUid(), req.channel(), req.timePoint(),
-                req.maskSeriesUid(), req.maskChannel(), parseLabel(req), req.settings());
+                req.maskSeriesUid(), req.maskChannel(), parseLabel(req),
+                TextureSeriesRequest.loadSettings(req.settings(), req.calibration()));
         return computeFrom(req, progress, vol);
     }
 
@@ -522,7 +538,7 @@ public class RadiomicsMapEngine {
                 built.displayName(),
                 vol.imageOrientationPatient(),
                 vol.pixelSpacingRow(), vol.pixelSpacingCol(),
-                ippList, sopList, vol.frameOfReferenceUid(), vol.lossyCompressed()), ckptKey, nZ, restoredCount[0]);
+                ippList, sopList, vol.frameOfReferenceUid(), vol.lossyCompressed(), vol.valueCalibration()), ckptKey, nZ, restoredCount[0]);
     }
 
     /**
