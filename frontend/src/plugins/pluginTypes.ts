@@ -1006,6 +1006,9 @@ export interface Viewer2DPluginHost extends PluginHostBase {
    * 全点が表示中のスライスの面内であること。作った ROI は本体の長径・短径ツールで引いたものと同じ扱いで、端点を動かして直せる。
    * **点 ROI も作れる**（`tool: "PointROI"`）。`centerLps` か `centerPx` の**どちらか一方**で 1 点だけ渡す（`radiiMm` は使わない。渡すと `bad-request`）。
    * 本体の点 ROI ツールで置いたものと同じ扱いで、ドラッグで動かせる。`getRois()` では `points` が 1 点になる。
+   * **統計の文字を消せる**（`showStats: false`。省略は true。boolean 以外は `bad-request`。次の版以降）。ROI の脇と、表示設定が右下の一覧のときの一覧・番号に、面積・平均値などの文字を出さない
+   * （ROI が多くて文字が折り重なるとき用）。**統計の計算は止めない**（ROI マネージャの値・`getRois()` の統計は今までどおり）。出さないのはこのプラグインが作った ROI だけで、利用者の ROI・他のプラグインの ROI には効かない。
+   * 古い本体はこの項目を無視して統計の文字を出す（エラーにはならない）。
    */
   createRoi: (
     tileId: string | undefined,

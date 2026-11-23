@@ -2,8 +2,13 @@
  * Copyright (c) Visionary Imaging Services, Inc. All rights reserved.
  * Author: Tatsuaki Kobayashi
  */
-import { describe, expect, it } from "vitest";
-import { canPlaceTextBox, isMeasurableTool, measureToolConfig } from "./roiStatsTextBox";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { annotation as csAnnotation } from "@cornerstonejs/tools";
+import { applyTextBoxVisibility, canPlaceTextBox, installRoiStatsDisplayWatcher, isMeasurableTool, measureToolConfig } from "./roiStatsTextBox";
+import { deleteRoiMaskMeta, setRoiMaskMeta } from "./roiMaskStore";
+import { buildCreatedRoiMeta } from "./roiRead";
+import { DEFAULT_ROI_STATS_DISPLAY, setRoiStatsDisplay } from "./roiStatsDisplay";
+import { buildRoiStatsCornerRows } from "./roiStatsCorner";
 import { CONTOUR_TOOL_NAMES, contourToolConfig } from "./roiContourTools";
 import { sameCornerRows, type RoiStatsCornerRow } from "./roiStatsCorner";
 import type { RoiSampleKind, RoiStatsResult } from "./roiStats";
@@ -119,5 +124,88 @@ describe("canPlaceTextBox", () => {
   it("data が壊れていても落ちない", () => {
     expect(canPlaceTextBox(null, stats("area"))).toBe(false);
     expect(canPlaceTextBox({}, stats("area"))).toBe(false);
+  });
+});
+
+describe("統計の文字を出さない印（createRoi の showStats: false）", () => {
+  const OFF = "roi-off";
+  const PLAIN = "roi-plain";
+  const OTHER = "roi-other-plugin";
+
+  /** Cornerstone の注釈の状態・スタイルを差し替え、注釈ごとに最後に張られた textBoxVisibility を返す。 */
+  function setup(selected: string[] = []): Map<string, boolean> {
+    const styles = new Map<string, boolean>();
+    const uids = [OFF, PLAIN, OTHER];
+    vi.spyOn(csAnnotation.state, "getAllAnnotations").mockReturnValue(uids.map((annotationUID) => ({ annotationUID })) as never);
+    vi.spyOn(csAnnotation.selection, "getAnnotationsSelected").mockReturnValue(selected);
+    vi.spyOn(csAnnotation.config.style, "setAnnotationStyles").mockImplementation(((uid: string, st: { textBoxVisibility: boolean }) => {
+      styles.set(uid, st.textBoxVisibility);
+    }) as never);
+    setRoiMaskMeta(OFF, { custom: buildCreatedRoiMeta("dental", false) });
+    setRoiMaskMeta(PLAIN, {});
+    setRoiMaskMeta(OTHER, { custom: buildCreatedRoiMeta("other", true) });
+    return styles;
+  }
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    for (const u of [OFF, PLAIN, OTHER]) deleteRoiMaskMeta(u);
+    setRoiStatsDisplay({ ...DEFAULT_ROI_STATS_DISPLAY });
+  });
+
+  it("印のある ROI だけ textBoxVisibility が false。印の無い ROI・他の印だけの ROI は true のまま（負例）", () => {
+    const styles = setup();
+    applyTextBoxVisibility();
+    expect(styles.get(OFF)).toBe(false);
+    expect(styles.get(PLAIN)).toBe(true);
+    expect(styles.get(OTHER)).toBe(true);
+  });
+
+  it("選択中のみ表示: 選択されていても印のある ROI は出ない。選択された印の無い ROI は出て、未選択は出ない", () => {
+    const styles = setup([OFF, PLAIN]);
+    setRoiStatsDisplay({ selectedOnly: true });
+    applyTextBoxVisibility();
+    expect(styles.get(OFF)).toBe(false);
+    expect(styles.get(PLAIN)).toBe(true);
+    expect(styles.get(OTHER)).toBe(false);
+  });
+
+  it("選択が取れないときの退避（selectedOnlyFallback）でも、印のある ROI は出ない", () => {
+    const styles = setup();
+    (csAnnotation.selection.getAnnotationsSelected as unknown as ReturnType<typeof vi.fn>).mockImplementation(() => {
+      throw new Error("no selection");
+    });
+    setRoiStatsDisplay({ selectedOnly: true });
+    applyTextBoxVisibility();
+    expect(styles.get(OFF)).toBe(false);
+    expect(styles.get(PLAIN)).toBe(true);
+  });
+
+  it("印が注釈の追加より後に入っても（復元・createRoi の順序）、その ROI の文字が消える", () => {
+    const styles = setup();
+    deleteRoiMaskMeta(OFF);
+    const off = installRoiStatsDisplayWatcher();
+    try {
+      expect(styles.get(OFF)).toBe(true); // 追加の時点では印が読めず、いったん出る
+      setRoiMaskMeta(OFF, { custom: buildCreatedRoiMeta("dental", false) });
+      expect(styles.get(OFF)).toBe(false);
+      expect(styles.get(PLAIN)).toBe(true);
+    } finally {
+      off();
+    }
+  });
+
+  it("右下の一覧（corner）からも、印のある ROI を除く（印の無い ROI は残る）", () => {
+    setup();
+    (csAnnotation.state.getAllAnnotations as unknown as ReturnType<typeof vi.fn>).mockReturnValue(
+      [OFF, PLAIN, OTHER].map((annotationUID) => ({
+        annotationUID,
+        metadata: { referencedImageId: "img" },
+        data: { handles: { points: [[0, 0, 0], [1, 1, 0]] } },
+      })),
+    );
+    const rows = buildRoiStatsCornerRows({ worldToCanvas: (w) => [w[0], w[1]] }, "img", ((k: string) => k) as never);
+    expect(rows.map((r) => r.uid)).toEqual([PLAIN, OTHER]);
+    expect(rows.map((r) => r.index)).toEqual([1, 2]);
   });
 });

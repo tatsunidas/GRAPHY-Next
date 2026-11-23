@@ -7,6 +7,8 @@ import { ENGINE_ID } from "./Viewer2D";
 import { readCamera, readColormapName, readInvert, readVoiWindow } from "./viewportRead";
 import { annotation as csAnnotation, segmentation as csSegmentation, utilities as csToolsUtilities } from "@cornerstonejs/tools";
 import { getRoiStats, getRoiStatsByData } from "./roiStatsStore";
+import { getRoiMaskMeta } from "./roiMaskStore";
+import { isStatsOff } from "./roiRead";
 import {
   getVesselModel,
   listVesselModels,
@@ -783,6 +785,57 @@ function getRoiStatsPair(): Array<{
 }
 
 /**
+ * 注釈ごとの、ツールが実際に見る `textBoxVisibility`（統計の文字を出すか）と、出さない印（`createRoi({ showStats: false })`）の有無。
+ * 印の有無と実際の表示設定が一致しているかを、automator が全 ROI について突き合わせる。
+ */
+function getRoiTextBoxVisibility(): Array<{ uid: string; tool: string; textBoxVisibility: boolean | null; statsOffMark: boolean }> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const anns = ((csAnnotation.state as any).getAllAnnotations?.() ?? []) as any[];
+  return anns.map((a) => {
+    const uid = (a?.annotationUID as string) ?? "";
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const v = (csAnnotation.config.style as any).getStyleProperty("textBoxVisibility", { annotationUID: uid, toolName: a?.metadata?.toolName });
+    return {
+      uid,
+      tool: (a?.metadata?.toolName as string) ?? "",
+      textBoxVisibility: typeof v === "boolean" ? v : null,
+      statsOffMark: isStatsOff(getRoiMaskMeta(uid)?.custom),
+    };
+  });
+}
+
+/**
+ * 対照用: 既存の注釈（点を持つ最初の 1 件）を複製し、出自の印の無い ROI として足す（利用者が描いた ROI と同じ。本体の追加イベントを通る）。
+ * 複製は少しずらして置く。置けなければ null。
+ */
+function addPlainRoiForTest(): string | null {
+  const engine = getRenderingEngine(ENGINE_ID);
+  const vp = engine?.getViewports()[0];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const src = (((csAnnotation.state as any).getAllAnnotations?.() ?? []) as any[]).find((a) => a?.data?.handles?.points?.length >= 1);
+  if (!vp?.element || !src) return null;
+  const uid = `debug-plain-${Date.now()}`;
+  const shift = (p: number[]) => [p[0] + 5, p[1] + 5, p[2]];
+  const copy = {
+    annotationUID: uid,
+    highlighted: false,
+    invalidated: true,
+    isLocked: false,
+    isVisible: true,
+    metadata: { ...src.metadata },
+    data: {
+      ...src.data,
+      cachedStats: {},
+      handles: { ...src.data.handles, points: (src.data.handles.points as number[][]).map(shift), textBox: undefined },
+      ...(src.data.contour ? { contour: { ...src.data.contour, polyline: (src.data.contour.polyline as number[][]).map(shift) } } : {}),
+    },
+  };
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (csAnnotation.state as any).addAnnotation(copy, vp.element);
+  return uid;
+}
+
+/**
  * 画素間隔の照合（fw/viewer-2d-architecture.md「world の基準の間隔」）。表示中の各ビューポートについて、
  * Cornerstone が画像に付けた間隔・描画の間隔・imagePlaneModule（校正の差し込み後）・loaderSpacingFor を並べ、
  * 既知の画素 (10, 20) の中心を描画の world へ写してから、各経路で画素へ戻した値を返す（正しければ 10.5, 20.5）。
@@ -1059,6 +1112,8 @@ declare global {
       getSpacingProbe: typeof getSpacingProbe;
       probeUserCalibration: typeof probeUserCalibration;
       getRoiStatsPair: typeof getRoiStatsPair;
+      getRoiTextBoxVisibility: typeof getRoiTextBoxVisibility;
+      addPlainRoiForTest: typeof addPlainRoiForTest;
       getAnnotationCanvasPoints: typeof getAnnotationCanvasPoints;
       getSegmentationIds: typeof getSegmentationIds;
       getImagePixelRange: typeof getImagePixelRange;
@@ -1260,6 +1315,8 @@ export function installDebugApi(): void {
     getSpacingProbe,
     probeUserCalibration,
     getRoiStatsPair,
+    getRoiTextBoxVisibility,
+    addPlainRoiForTest,
     getAnnotationCanvasPoints,
     getSegmentationIds,
     getImagePixelRange,
