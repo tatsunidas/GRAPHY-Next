@@ -9,7 +9,7 @@
  * ここは「Cornerstone の annotation state を読む／書く」だけを担う薄い層で、
  * 判断（何を保存するか・何を復元するか）は極力純関数側に置いてある。
  */
-import { getRenderingEngines, metaData } from "@cornerstonejs/core";
+import { cache, getRenderingEngines, imageLoader, metaData } from "@cornerstonejs/core";
 import { annotation as csAnnotation } from "@cornerstonejs/tools";
 import { log } from "../log";
 import { frameOfImageId, sopFromImageId } from "./imageId";
@@ -73,15 +73,53 @@ export function registerLoaderSpacing(fn: (imageId: string) => { row: number; co
  * IPP の無い画像（XA など）は画像が作られたときの間隔が world の基準。未登録（テスト等）は null＝記録も換算もしない。
  */
 export function worldSpacingOf(imageId: string): [number, number] | null {
-  if (!loaderSpacing) return null;
+  const r = resolveWorldBasis(imageId);
+  return r.known ? r.basis : null;
+}
+
+/** world の基準の解決結果。`known: false` は「まだ分からない」（仮の値で埋めない）。 */
+export type WorldBasis = { known: true; basis: [number, number] | null } | { known: false };
+
+/** 一度確定した基準の控え（キャッシュから追い出された後の保存で、仮の値を書かないため）。 */
+const confirmedBasis = new Map<string, [number, number] | null>();
+
+/** テスト用: 控えを捨てる。 */
+export function resetConfirmedBasis(): void {
+  confirmedBasis.clear();
+}
+
+function basisFromLoadedImage(imageId: string): WorldBasis {
+  if (!loaderSpacing) return { known: true, basis: null };
   try {
     const plane = metaData.get("imagePlaneModule", imageId) as { imagePositionPatient?: unknown } | undefined;
-    if (plane?.imagePositionPatient) return null;
+    if (plane?.imagePositionPatient) return { known: true, basis: null };
     const s = loaderSpacing(imageId);
-    return [s.row, s.col];
+    return { known: true, basis: [s.row, s.col] };
   } catch {
-    return null;
+    return { known: true, basis: null };
   }
+}
+
+/**
+ * world の基準を 3 値で解く。🔴 `loaderSpacing` は画像が作られる前に仮の値（1）を返すので、
+ * 基準として使ってよいのは画像（または同じ SOP の別フレーム）がキャッシュにあるときと、以前に確定した控えがあるときだけ。
+ * それ以外は `known: false`。`siblings` は同じ SOP の別フレームの imageId（復元側だけが渡せる）。
+ */
+export function resolveWorldBasis(imageId: string, siblings: string[] = []): WorldBasis {
+  if (!loaderSpacing) return { known: true, basis: null };
+  if (cache.getImage(imageId)) {
+    const r = basisFromLoadedImage(imageId);
+    if (r.known) confirmedBasis.set(imageId, r.basis);
+    return r;
+  }
+  for (const sib of siblings) {
+    if (sib === imageId || !cache.getImage(sib)) continue;
+    const r = basisFromLoadedImage(sib);
+    if (r.known) confirmedBasis.set(imageId, r.basis);
+    return r;
+  }
+  if (confirmedBasis.has(imageId)) return { known: true, basis: confirmedBasis.get(imageId)! };
+  return { known: false };
 }
 
 /**
@@ -193,12 +231,21 @@ export function collectRoisForPatient(patientKey: string, loaded: SavedRoi[] = [
     if (saved) out.push(saved);
   }
 
+  // 復元待ち（基準が未確定で annotation に足していない）の ROI は、保存形のまま持ち越す。
+  // 持ち越さないと、下の「SOP が開いているのに annotation が無い＝削除された」で消える。
+  const deferred = deferredRoisOf(patientKey);
+
   // ⚠ ここが要点: **いま開いていないシリーズの ROI を持ち越す**。
   // 復元は表示中スタックに属する ROI だけを戻すので、別シリーズの ROI は annotation state に無い。
   // 持ち越さないと `roiSaveStore` の差分検出が「消えた」と判定し、墓標を立てて**実際に消す**。
   // 判定は「その ROI の SOP が、いまどこかのビューポートに読み込まれているか」で行う
   // （読み込まれているのに annotation が無い＝ユーザーが削除した、と確定できる）。
   const live = new Set(out.map((r) => r.roiUid));
+  for (const r of deferred) {
+    if (live.has(r.roiUid)) continue;
+    live.add(r.roiUid);
+    out.push(r);
+  }
   const openSops = openStackSops();
   for (const r of loaded) {
     if (live.has(r.roiUid)) continue;
@@ -228,6 +275,7 @@ export function restoreRoisIntoStack(
   viewport: RestoreViewport,
   patientKey: string,
   seriesLabel?: string,
+  deferral?: DeferredRestoreOptions,
 ): number {
   if (!saved.length || !imageIds.length || !viewport?.element) return 0;
   const index = sopIndex(imageIds);
@@ -254,6 +302,11 @@ export function restoreRoisIntoStack(
 
   let restored = 0;
   for (const { roi, imageId } of targets) {
+    // 基準が未確定の IPP 無し画像の ROI は、画像が読み込まれるまで足さない（仮の値で換算して座標を壊すため）。
+    if (deferral && roi.worldSpacing && !resolveWorldBasis(imageId, index.get(roi.sopInstanceUid)).known) {
+      deferRestore(deferral.owner, roi, imageId, { viewport, imageIds, patientKey, seriesLabel }, deferral.onRestored);
+      continue;
+    }
     const ok = addSavedRoiToViewport(roi, imageId, viewport, {
       sliceIndex: imageIds.indexOf(imageId),
       camera,
@@ -264,6 +317,97 @@ export function restoreRoisIntoStack(
   }
   // 再描画は呼び出し側（Viewer2D）が行う。ここは annotation state を触るだけに留める。
   return restored;
+}
+
+/** 復元待ちを使う呼び出し側（タイル）の識別子と、復元できたときの通知。 */
+export interface DeferredRestoreOptions {
+  /** 取り消しの単位。タイルの破棄・スタックの切り替えで {@link cancelDeferredRestore} に同じ値を渡す。 */
+  owner: object;
+  /** 復元待ちの ROI を後から足したときに呼ぶ（再描画・global ROI の追従用）。 */
+  onRestored: () => void;
+}
+
+interface DeferredTarget {
+  viewport: RestoreViewport;
+  imageIds: string[];
+  patientKey: string;
+  seriesLabel?: string;
+  onRestored: () => void;
+}
+
+interface DeferredEntry {
+  roi: SavedRoi;
+  imageId: string;
+  patientKey: string;
+  /** 同じ ROI を複数のタイルが復元しようとしたとき、最初に残っているタイルへ足す。 */
+  owners: Map<object, DeferredTarget>;
+}
+
+/** 復元待ち: roiUid → 保存形・画像・復元先。 */
+const deferredRois = new Map<string, DeferredEntry>();
+/** 画像の読み込み要求を 1 画像 1 回にまとめる。 */
+const deferredLoads = new Set<string>();
+
+/** その患者の復元待ちの ROI（保存形）。保存の収集が持ち越すために読む。 */
+export function deferredRoisOf(patientKey: string): SavedRoi[] {
+  const out: SavedRoi[] = [];
+  for (const e of deferredRois.values()) if (e.patientKey === patientKey) out.push(e.roi);
+  return out;
+}
+
+/** 復元待ちを取り消す（保存形の持ち越しも、このタイルの分は外れる）。 */
+export function cancelDeferredRestore(owner: object): void {
+  for (const [uid, e] of deferredRois) {
+    e.owners.delete(owner);
+    if (e.owners.size === 0) deferredRois.delete(uid);
+  }
+}
+
+function deferRestore(owner: object, roi: SavedRoi, imageId: string, target: Omit<DeferredTarget, "onRestored">, onRestored: () => void): void {
+  let e = deferredRois.get(roi.roiUid);
+  if (!e) {
+    e = { roi, imageId, patientKey: target.patientKey, owners: new Map() };
+    deferredRois.set(roi.roiUid, e);
+  }
+  e.owners.set(owner, { ...target, onRestored });
+  if (deferredLoads.has(imageId)) return;
+  deferredLoads.add(imageId);
+  // 読み込みに失敗したら復元待ちのまま残す（消さない）。
+  void Promise.resolve()
+    .then(() => imageLoader.loadAndCacheImage(imageId))
+    .then(
+      () => flushDeferred(imageId),
+      (err) => log.warn("roi deferred image load failed", imageId, err),
+    )
+    .finally(() => deferredLoads.delete(imageId));
+}
+
+function flushDeferred(imageId: string): void {
+  const done = new Set<DeferredTarget>();
+  for (const [uid, e] of [...deferredRois]) {
+    if (e.imageId !== imageId) continue;
+    const [target] = e.owners.values();
+    if (!target) {
+      deferredRois.delete(uid);
+      continue;
+    }
+    deferredRois.delete(uid);
+    let present = false;
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      present = Boolean((csAnnotation.state as any).getAnnotation(uid));
+    } catch {
+      present = false;
+    }
+    if (present) continue;
+    const ok = addSavedRoiToViewport(e.roi, imageId, target.viewport, {
+      sliceIndex: target.imageIds.indexOf(imageId),
+      patientKey: target.patientKey,
+      seriesLabel: target.seriesLabel,
+    });
+    if (ok) done.add(target);
+  }
+  for (const t of done) t.onRestored();
 }
 
 /** {@link addSavedRoiToViewport} の付帯情報。 */
