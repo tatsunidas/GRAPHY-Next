@@ -323,6 +323,27 @@ export function buildPluginMeta(pluginId: string, patch: Record<string, string> 
   return out;
 }
 
+/**
+ * 統計の文字を出さない印の、`custom` のキー。**本体専用**（`plugin.` の名前空間の外）。
+ * プラグインの `setRoiMeta` は必ず `plugin.<id>.` の下にしか書けないので、プラグインが後から
+ * 利用者の ROI や他プラグインの ROI にこの印を付けることはできない。付けるのは `createRoi` だけ。
+ */
+export const STATS_OFF_KEY = "graphy.statsOff";
+
+/**
+ * `createRoi` が ROI に付ける出自の印（保存用の `custom` パッチ）。純関数。
+ * `showStats === false` のときだけ、統計の文字を出さない印（{@link STATS_OFF_KEY}）を足す。省略・true では足さない。
+ */
+export function buildCreatedRoiMeta(pluginId: string, showStats: boolean | undefined): Record<string, string> {
+  const meta = buildPluginMeta(pluginId, { created: "1" });
+  return showStats === false ? { ...meta, [STATS_OFF_KEY]: "1" } : meta;
+}
+
+/** `custom` に、`createRoi({ showStats: false })` が付けた印があるか。純関数。プラグインの名前空間のキーは見ない。 */
+export function isStatsOff(custom: Record<string, string> | undefined): boolean {
+  return custom?.[STATS_OFF_KEY] === "1";
+}
+
 /** Cornerstone の cachedStats 1 件（読める項目だけ拾う）。 */
 export interface RoiStats {
   length?: number;

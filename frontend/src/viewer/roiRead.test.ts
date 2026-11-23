@@ -4,7 +4,9 @@
  */
 import { describe, expect, it } from "vitest";
 import {
+  buildCreatedRoiMeta,
   buildPluginMeta,
+  isStatsOff,
   computeCalipers,
   convexHull,
   distanceMm,
@@ -474,5 +476,29 @@ describe("worldToPixelOnPlane", () => {
       [5.5, 10.5],
       [15.5, 20.5],
     ]);
+  });
+});
+
+describe("isStatsOff（createRoi が付ける、統計の文字を出さない印）", () => {
+  it("正例: createRoi({ showStats: false }) の印で true", () => {
+    expect(isStatsOff(buildCreatedRoiMeta("dental", false))).toBe(true);
+  });
+  it("負例: created だけ・空は false", () => {
+    expect(isStatsOff(buildCreatedRoiMeta("dental", true))).toBe(false);
+    expect(isStatsOff(buildCreatedRoiMeta("dental", undefined))).toBe(false);
+    expect(isStatsOff({})).toBe(false);
+    expect(isStatsOff(undefined)).toBe(false);
+  });
+  it("負例: プラグインが setRoiMeta で書ける範囲（plugin.<id>. の下）からは、どんなキー・値でも印にならない", () => {
+    // setRoiMeta は buildPluginMeta を通るので、必ず接頭辞が付く。利用者の ROI の文字をプラグインが後から消せない
+    const patches: Record<string, string>[] = [{ stats: "off" }, { statsOff: "1" }, { "graphy.statsOff": "1" }, { created: "1", stats: "off" }];
+    for (const patch of patches) {
+      expect(isStatsOff(buildPluginMeta("evil", patch))).toBe(false);
+    }
+    expect(isStatsOff({ "graphy.statsOff": "0" })).toBe(false);
+  });
+  it("保存・復元で往復する（保存形の文字列 custom のまま読める）", () => {
+    const stored = JSON.parse(JSON.stringify(buildCreatedRoiMeta("dental", false)));
+    expect(isStatsOff(stored)).toBe(true);
   });
 });

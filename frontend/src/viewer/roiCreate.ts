@@ -62,7 +62,12 @@ export interface CreateRoiRequest {
   longAxisPx?: [[number, number], [number, number]];
   shortAxisPx?: [[number, number], [number, number]];
   label?: string;
+  /** false のとき、この ROI の脇（右下の一覧も）に面積・平均値などの統計の文字を出さない。省略は true。boolean 以外は `bad-request`。 */
+  showStats?: boolean;
 }
+
+/** `showStats` の検査（省略か boolean）。 */
+export const isValidShowStats = (v: unknown): boolean => v === undefined || typeof v === "boolean";
 
 export type CreateRoiFailure = "bad-request" | "off-slice" | "no-geometry" | "too-large" | "no-image" | "thick-slab" | "self-intersecting" | "degenerate" | "bad-axes" | "failed";
 
