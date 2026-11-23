@@ -15,6 +15,8 @@
  *       ③中=なし・右=ズーム ④ビューアを開き直しても保存した割り当てが効く ⑤既定に戻す
  *       ⑥サイドボタン（戻る・進む）: 既定（なし）では何も起きない → 戻る=パン・進む=ズームに設定 → 効く・既定動作を止める
  *          → 開き直しても効く → なしに戻す。サイドボタンの入力は CDP の Input.dispatchMouseEvent（button: back/forward）。
+ *       ⑦サイドボタンのクリックで操作: 戻る=白黒反転・進む=リセット（クリックで実行・ドラッグでは実行しない・ツール／なしでは実行しない）、
+ *          戻る=同期 OFF／進む=同期 ON（タイル見出しの同期ボタンの色で見る。1 タイルのみ。2 タイルは未達）。
  *          ⚠️ CDP の入力はレンダラへ直接入るので、OS 側の「戻る」（窓の履歴移動）は再現できない。実機のマウスで別に確かめる。
  * 各経路で「効くはずのものが効く」と「効かないはずのものが動かない」の両方を見る。
  */
@@ -121,6 +123,9 @@ async function main(): Promise<void> {
     await v.screenshot({ path: path.join(OUT_DIR, "1-default-start.png") });
     let r = await drag("right", 0, -60);
     check(zoomChanged(r.before, r.after), "右ドラッグでズームが変わる", r);
+    // 計測用（段 3 の調査）: 右ドラッグのあとに右クリックのメニューが開いていないか。開く場合は、サイドボタンとは無関係な既存の挙動（旧コードと比べて確認する）。
+    console.log(`  [info] ① 右ドラッグ後のフレームメニュー: ${(await v.getByTestId("frame-ctx-tags").count()) > 0 ? "開いている（既存の挙動。変更前の版でも同じ）" : "開いていない"}`);
+    if ((await v.getByTestId("frame-ctx-tags").count()) > 0) await v.keyboard.press("Escape");
     // ズームは焦点をわずかに動かす（旧コードでも同じ値: 0.0127。2026-11-22 に旧・新で比べて確認）。パンとは別物なので、ここは W/L だけを見る。
     check(!wlChanged(r.before, r.after), "右ドラッグで W/L は変わらない（負例）", r);
     r = await drag("middle", 40, 25);
@@ -252,6 +257,91 @@ async function main(): Promise<void> {
     r = await dragSide("back", 40, 25);
     check(!panChanged(r.before, r.after) && !zoomChanged(r.before, r.after) && !wlChanged(r.before, r.after), "なしに戻すと戻るドラッグは何も起きない", r);
     check((await sideLog()).slice(-1)[0]?.dp === false, "なしに戻すと既定動作を止めない");
+
+    // ⑦ サイドボタンのクリックで操作
+    console.log("⑦ サイドボタンのクリックで操作（戻る=白黒反転・進む=リセット）");
+    const inv = async (): Promise<boolean | null> => v.evaluate(() => (window as any).__graphyDebug.getViewportProperties()[0].invert);
+    const clickSide = async (which: "back" | "forward", moveBy = 0) => {
+      const box = (await host().boundingBox())!;
+      const cx = box.x + box.width / 2;
+      const cy = box.y + box.height / 2;
+      const mask = which === "back" ? 8 : 16;
+      await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: cx, y: cy, buttons: 0 });
+      await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", x: cx, y: cy, button: which, buttons: mask, clickCount: 1 });
+      if (moveBy) {
+        for (let i = 1; i <= 10; i++) await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: cx + (moveBy * i) / 10, y: cy, button: which, buttons: mask });
+      }
+      await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: cx + moveBy, y: cy, button: which, buttons: 0, clickCount: 1 });
+      await v.waitForTimeout(500);
+    };
+    // ⚠️ Linux では、右ボタンのドラッグのあとにフレームのメニューが開いたままになる（コンテキストメニューが押した時点で出るため、
+    //    動かしたかどうかの判定が効かない）。サイドボタンとは無関係で、変更前の版（#753 より前）でも同じことを確認した。
+    //    メニューが次の操作（タイルの追加など）を塞ぐので、この検査では Escape で閉じてから進める。
+    const closeMenu = async () => {
+      if ((await v.getByTestId("frame-ctx-tags").count()) > 0) await v.keyboard.press("Escape");
+      await v.waitForTimeout(300);
+    };
+    const noMenu = async (label: string) =>
+      check((await v.getByTestId("frame-ctx-tags").count()) === 0, `${label}: 右クリックのメニューが開いていない`);
+    await noMenu("⑦ の開始時");
+    await setMouseSetting("mouse.back", "cmd:invert");
+    await setMouseSetting("mouse.forward", "cmd:reset");
+    await v.waitForTimeout(500);
+    const inv0 = await inv();
+    await clickSide("back");
+    await noMenu("戻るをクリックした後");
+    const inv1 = await inv();
+    check(inv0 !== null && inv1 === !inv0, "戻る=白黒反転: クリックで反転する", { inv0, inv1 });
+    await v.screenshot({ path: path.join(OUT_DIR, "7-inverted.png") });
+    await clickSide("back");
+    check((await inv()) === inv0, "もう一度クリックで元に戻る", { now: await inv(), inv0 });
+    await clickSide("back", 60); // ドラッグ
+    check((await inv()) === inv0, "ドラッグ（動かして離す）では実行されない（負例）", { now: await inv() });
+    await setMouseSetting("mouse.back", "pan");
+    await v.waitForTimeout(300);
+    await clickSide("back");
+    check((await inv()) === inv0, "戻る=パン（ツール）に変えると、クリックでは何も実行されない（負例）");
+    await setMouseSetting("mouse.back", "none");
+    await v.waitForTimeout(300);
+    await clickSide("back");
+    check((await inv()) === inv0, "戻る=なし に変えると、クリックでは何も実行されない（負例）");
+
+    // 進む=リセット: ズーム・パンを変えてからクリックで元に戻る
+    await clickSide("forward"); // まずリセットして基準を取る
+    const base = await state(v);
+    await noMenu("リセット（進むのクリック）の後");
+    await drag("right", 0, -60);
+    await closeMenu(); // 右ドラッグのあとにメニューが開くのは Linux では旧コードでも同じ（下の注記）
+    await drag("middle", 40, 25);
+    await closeMenu();
+    const moved = await state(v);
+    check(zoomChanged(base, moved) && panChanged(base, moved), "（準備）ズームとパンを変えた", { base, moved });
+    await clickSide("forward");
+    const afterReset = await state(v);
+    check(!zoomChanged(base, afterReset) && !panChanged(base, afterReset), "進む=リセット: クリックでズーム・パンが基準に戻る", { base, afterReset });
+    await v.screenshot({ path: path.join(OUT_DIR, "7-reset.png") });
+    await clickSide("back");
+    await v.waitForTimeout(200);
+
+    // 同期 OFF／ON（2 タイル）
+    await closeMenu();
+    await setMouseSetting("mouse.back", "cmd:syncOff");
+    await setMouseSetting("mouse.forward", "cmd:syncOn");
+    const syncColors = async () =>
+      v.getByTestId("tile-sync-toggle").evaluateAll((els) => els.map((e) => getComputedStyle(e).color));
+    // 2 タイルでの確認は未達（2 本目のシリーズをタイルに足す手順を安定して通せなかった）。1 タイルで、同期ボタンの色の切り替えを見る。
+    console.log("  [未達] 2 タイルでの同期の切り替え（この検査は 1 タイル）");
+    await clickSide("forward"); // 同期 ON
+    const on = await syncColors();
+    await clickSide("back"); // 同期 OFF
+    const off = await syncColors();
+    check(on.length >= 1 && on.every((c) => c === on[0]) && off.every((c) => c === off[0]) && on[0] !== off[0], "戻る=同期 OFF／進む=同期 ON: 同期ボタンの色が切り替わる（1 タイル）", { on, off });
+    await clickSide("forward");
+    check(JSON.stringify(await syncColors()) === JSON.stringify(on), "進む=同期 ON で元の色に戻る", { now: await syncColors(), on });
+    await v.screenshot({ path: path.join(OUT_DIR, "7-sync.png") });
+    // 後片付け
+    await setMouseSetting("mouse.back", "none");
+    await setMouseSetting("mouse.forward", "none");
   } finally {
     await d.stop();
   }

@@ -15,12 +15,28 @@ import { useSyncExternalStore } from "react";
 import { fetchSettings, saveSettings } from "../settings/settingsApi";
 
 export type MouseButtonTool = "pan" | "zoom" | "windowLevel" | "none";
+
+/** サイドボタンのクリックで実行できる操作（2D ビューア画面の既存の操作。新しい挙動は作らない）。 */
+export type MouseCommand = "reset" | "fit" | "invert" | "flipH" | "flipV" | "rotate90" | "syncOn" | "syncOff" | "undo" | "redo";
+export const MOUSE_COMMANDS: MouseCommand[] = ["reset", "fit", "invert", "flipH", "flipV", "rotate90", "syncOn", "syncOff", "undo", "redo"];
+/** 戻る・進むに割り当てられるもの: ドラッグのツール、またはクリックの操作（`cmd:<MouseCommand>`）。 */
+export type MouseButtonAction = MouseButtonTool | `cmd:${MouseCommand}`;
+export const MOUSE_SIDE_ACTIONS: MouseButtonAction[] = [
+  ...(["pan", "zoom", "windowLevel", "none"] as MouseButtonTool[]),
+  ...MOUSE_COMMANDS.map((c) => `cmd:${c}` as const),
+];
+
 export interface MouseBindingTable {
   middle: MouseButtonTool;
   right: MouseButtonTool;
-  /** サイドボタン（戻る＝第 4、進む＝第 5）。 */
-  back: MouseButtonTool;
-  forward: MouseButtonTool;
+  /** サイドボタン（戻る＝第 4、進む＝第 5）。ツール（ドラッグ）か操作（クリック）。 */
+  back: MouseButtonAction;
+  forward: MouseButtonAction;
+}
+
+/** `cmd:reset` → `reset`。操作でなければ null。 */
+export function commandOf(action: MouseButtonAction): MouseCommand | null {
+  return action.startsWith("cmd:") ? (action.slice(4) as MouseCommand) : null;
 }
 
 export const MOUSE_BUTTON_TOOLS: MouseButtonTool[] = ["pan", "zoom", "windowLevel", "none"];
@@ -40,13 +56,13 @@ export function isMouseSettingKey(key: string): boolean {
 
 /** 設定値（文字列・未知の値・undefined）を安全に解釈する。純関数。未知の値は既定に置き換える。 */
 export function parseMouseBindings(settings: Record<string, string> | undefined): MouseBindingTable {
-  const pick = (v: string | undefined, dflt: MouseButtonTool): MouseButtonTool =>
-    MOUSE_BUTTON_TOOLS.includes(v as MouseButtonTool) ? (v as MouseButtonTool) : dflt;
+  const pick = <T extends string>(v: string | undefined, allowed: readonly string[], dflt: T): T =>
+    allowed.includes(v as string) ? (v as T) : dflt;
   return {
-    middle: pick(settings?.[MOUSE_SETTING_KEYS.middle], DEFAULT_MOUSE_BINDINGS.middle),
-    right: pick(settings?.[MOUSE_SETTING_KEYS.right], DEFAULT_MOUSE_BINDINGS.right),
-    back: pick(settings?.[MOUSE_SETTING_KEYS.back], DEFAULT_MOUSE_BINDINGS.back),
-    forward: pick(settings?.[MOUSE_SETTING_KEYS.forward], DEFAULT_MOUSE_BINDINGS.forward),
+    middle: pick(settings?.[MOUSE_SETTING_KEYS.middle], MOUSE_BUTTON_TOOLS, DEFAULT_MOUSE_BINDINGS.middle),
+    right: pick(settings?.[MOUSE_SETTING_KEYS.right], MOUSE_BUTTON_TOOLS, DEFAULT_MOUSE_BINDINGS.right),
+    back: pick(settings?.[MOUSE_SETTING_KEYS.back], MOUSE_SIDE_ACTIONS, DEFAULT_MOUSE_BINDINGS.back),
+    forward: pick(settings?.[MOUSE_SETTING_KEYS.forward], MOUSE_SIDE_ACTIONS, DEFAULT_MOUSE_BINDINGS.forward),
   };
 }
 
@@ -77,7 +93,8 @@ export function computeToolBindings(
     const list = (out[tool] ??= []);
     if (!list.includes(b)) list.push(b);
   };
-  const nameOf = (t: MouseButtonTool): string | null =>
+  // 操作（cmd:*）と「なし」はツールではないので、Cornerstone の割り当てを作らない。
+  const nameOf = (t: MouseButtonAction): string | null =>
     t === "pan" ? names.pan : t === "zoom" ? names.zoom : t === "windowLevel" ? names.windowLevel : null;
   add(primaryTool, "primary");
   const mid = nameOf(table.middle);
@@ -207,12 +224,78 @@ export function shouldGuardSideButton(button: number, table: MouseBindingTable):
   return (button === 3 && table.back !== "none") || (button === 4 && table.forward !== "none");
 }
 
+/** 2D ビューア画面の操作（`Viewer2DScreen` の `actions`）のうち、ここで使う面だけ。 */
+export interface MouseCommandActions {
+  reset(): void;
+  fit(): void;
+  invert(): void;
+  flipH(): void;
+  flipV(): void;
+  rotate90(): void;
+  undo(): void;
+  redo(): void;
+  setSyncTargets(sync: boolean): void;
+}
+
+/** 操作を実行する。**既存の操作へ 1 対 1 で渡すだけ**（新しい挙動を作らない）。未知の操作は false。 */
+export function runMouseCommand(cmd: MouseCommand, a: MouseCommandActions): boolean {
+  switch (cmd) {
+    case "reset": a.reset(); return true;
+    case "fit": a.fit(); return true;
+    case "invert": a.invert(); return true;
+    case "flipH": a.flipH(); return true;
+    case "flipV": a.flipV(); return true;
+    case "rotate90": a.rotate90(); return true;
+    case "undo": a.undo(); return true;
+    case "redo": a.redo(); return true;
+    case "syncOn": a.setSyncTargets(true); return true;
+    case "syncOff": a.setSyncTargets(false); return true;
+    default: return false;
+  }
+}
+
+/** クリックとみなす移動量の上限 [px]（2D ビューアの右クリックのメニュー判定 `RIGHT_CLICK_SLOP_PX` と同じ）。 */
+export const SIDE_CLICK_SLOP_PX = 4;
+
+/** 画面（2D ビューア）が、サイドボタンのクリックで操作を実行する口を 1 つ登録する。 */
+type MouseCommandHandler = (cmd: MouseCommand, target: EventTarget | null) => void;
+let commandHandler: MouseCommandHandler | null = null;
+export function registerMouseCommandHandler(handler: MouseCommandHandler): () => void {
+  commandHandler = handler;
+  return () => {
+    if (commandHandler === handler) commandHandler = null;
+  };
+}
+
+/**
+ * サイドボタンの**クリック**（同じボタンを {@link SIDE_CLICK_SLOP_PX} 以内で押して離す）が、操作の割り当てなら、登録済みの口へ渡す。
+ * 口が無い窓（動画だけの窓など）では何もしない。純関数。
+ */
+export function sideClickCommand(
+  down: { button: number; x: number; y: number } | null,
+  up: { button: number; x: number; y: number },
+  table: MouseBindingTable,
+): MouseCommand | null {
+  if (!down || down.button !== up.button) return null;
+  if (Math.hypot(up.x - down.x, up.y - down.y) > SIDE_CLICK_SLOP_PX) return null;
+  const action = up.button === 3 ? table.back : up.button === 4 ? table.forward : null;
+  return action ? commandOf(action) : null;
+}
+
 let guardInstalled = false;
 export function installSideButtonGuard(): void {
   if (guardInstalled || typeof document === "undefined") return;
   guardInstalled = true;
+  let down: { button: number; x: number; y: number } | null = null;
   const handler = (e: MouseEvent) => {
     if (shouldGuardSideButton(e.button, current)) e.preventDefault();
+    if (e.type === "mousedown") {
+      down = e.button === 3 || e.button === 4 ? { button: e.button, x: e.clientX, y: e.clientY } : null;
+    } else if (e.type === "mouseup") {
+      const cmd = sideClickCommand(down, { button: e.button, x: e.clientX, y: e.clientY }, current);
+      down = null;
+      if (cmd && commandHandler) commandHandler(cmd, e.target);
+    }
   };
   for (const type of ["mousedown", "mouseup", "auxclick"] as const) document.addEventListener(type, handler, true);
 }

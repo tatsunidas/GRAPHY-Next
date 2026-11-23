@@ -77,5 +77,17 @@ describe("設定 > マウスボタン", () => {
     expect(getMouseBindings().back).toBe("pan");
     expect(saved[saved.length - 1]["mouse.back"]).toBe("pan");
     expect(q("settings-field-mouse.back")!.value).toBe("pan");
+
+    // 進むボタンに操作（クリック）を割り当てる
+    const fwd = q("settings-field-mouse.forward")!;
+    expect(Array.from(fwd.options).map((o) => o.value)).toContain("cmd:reset");
+    expect(Array.from(q("settings-field-mouse.right")!.options).map((o) => o.value)).not.toContain("cmd:reset"); // 右はドラッグなので操作は出ない
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")!.set!.call(fwd, "cmd:reset");
+      fwd.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await flush();
+    expect(getMouseBindings().forward).toBe("cmd:reset");
+    expect(saved[saved.length - 1]["mouse.forward"]).toBe("cmd:reset");
   });
 });
