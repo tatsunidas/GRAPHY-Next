@@ -50,6 +50,8 @@ public class RadiomicsMapEngine {
 
     private final DicomStorageService storage;
     private final MapCheckpointStore checkpoints;
+    /** テスト用: false なら従来どおり全ボリュームを RadiomicsJ へ渡す（切り出しとの全画素一致の比較に使う）。 */
+    boolean cropEnabled = true;
     private final PixelCodec codec;
 
     public RadiomicsMapEngine(DicomStorageService storage, MapCheckpointStore checkpoints, PixelCodec codec) {
@@ -549,7 +551,7 @@ public class RadiomicsMapEngine {
         String ckptKey = checkpoints.key(req, vol, filterSize, stride, d2, margin);
         int[] restoredCount = new int[1];
         float[][] full = runMap(glam, req, () -> computePerSlice(img, mask, built, filterSize, d2, stride, margin,
-                mapW, mapH, nZ, sink, ckptKey, restoredCount));
+                mapW, mapH, nZ, sink, ckptKey, restoredCount, hasMask && cropEnabled));
         log.info("[texture] map '{}' {}x{}x{} stride={} filter={} margin={} in {} ms",
                 built.displayName(), w, h, nZ, stride, filterSize, margin, System.currentTimeMillis() - t0);
 
@@ -656,9 +658,20 @@ public class RadiomicsMapEngine {
      */
     private float[][] computePerSlice(ImagePlus img, ImagePlus mask, TextureFeatureCatalog.BuiltFeature built,
                                       int filterSize, boolean d2, int stride, int margin, int w, int h, int s,
-                                      TextureProgress progress, String key, int[] restoredOut) {
+                                      TextureProgress progress, String key, int[] restoredOut, boolean crop) {
         int outW = (int) Math.ceil((double) w / stride);
         int outH = (int) Math.ceil((double) h / stride);
+        MapCrop plan = null;
+        if (crop) {
+            plan = MapCrop.plan(mask, margin, filterSize, d2, stride);
+            if (plan.fallbackReason() == null) {
+                log.info("[texture] cropped per slice: {}", plan.describe());
+            } else {
+                log.info("[texture] not cropped, whole volume {}x{}x{}: {}", w, h, s, plan.fallbackReason());
+                plan = null;
+            }
+        }
+        final MapCrop cropPlan = plan;
         float[][] full = new float[s][];
         int restored = 0;
         progress.update(0, s);
@@ -668,10 +681,29 @@ public class RadiomicsMapEngine {
                 restored++;
             } else {
                 int slice = z + 1;
-                // 抽出がスライスの切れ目で割り込めるよう、1 枚ずつ取る（RadiomicsLock）。
-                ImagePlus one = RadiomicsLock.get(() -> FeatureVisualizationMap.generateFeatureMap(img, mask, slice,
-                        built.calculator(), filterSize, d2, stride, margin, (done, total) -> { }));
-                low = (float[]) one.getStack().getProcessor(1).convertToFloatProcessor().getPixels();
+                if (cropPlan != null && cropPlan.emptySlice(z)) {
+                    // マスクの無いスライスは窓が 1 つも無い（RadiomicsJ は ROI の外に 0f を書く）
+                    low = new float[outW * outH];
+                } else if (cropPlan != null) {
+                    MapCrop.Region r = cropPlan.region(z);
+                    ImagePlus cImg = MapCrop.cropImage(img, r);
+                    ImagePlus cMask = MapCrop.cropMask(mask, r);
+                    int cSlice = z - r.z0() + 1;
+                    ImagePlus one = RadiomicsLock.get(() -> FeatureVisualizationMap.generateFeatureMap(cImg, cMask, cSlice,
+                            built.calculator(), filterSize, d2, stride, margin, (done, total) -> { }));
+                    float[] part = (float[]) one.getStack().getProcessor(1).convertToFloatProcessor().getPixels();
+                    int pw = one.getWidth();
+                    low = new float[outW * outH];
+                    int ox = r.x0() / stride, oy = r.y0() / stride;
+                    for (int j = 0; j < one.getHeight(); j++) {
+                        System.arraycopy(part, j * pw, low, (oy + j) * outW + ox, pw);
+                    }
+                } else {
+                    // 抽出がスライスの切れ目で割り込めるよう、1 枚ずつ取る（RadiomicsLock）。
+                    ImagePlus one = RadiomicsLock.get(() -> FeatureVisualizationMap.generateFeatureMap(img, mask, slice,
+                            built.calculator(), filterSize, d2, stride, margin, (done, total) -> { }));
+                    low = (float[]) one.getStack().getProcessor(1).convertToFloatProcessor().getPixels();
+                }
                 if (key != null && low.length == outW * outH) {
                     checkpoints.save(key, z, low);
                 }
