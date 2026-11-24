@@ -79,6 +79,10 @@ describe("テクスチャのマップのダイアログ: PET の校正", () => {
     expect(sel.value).toBe("auto");
     expect(Array.from(sel.options).map((o) => o.value)).toEqual(["auto", "bw", "sul-james", "sul-janma", "bsa", "none"]);
     expect(q("texture-calibration-none-warn")).toBeNull();
+    // マップ専用の説明文（「その組は…」を使わない）
+    const help = q("texture-calibration-help")?.textContent ?? "";
+    expect(help).toContain("理由つきで失敗します");
+    expect(help).not.toContain("その組");
     await run();
     expect(submitted).toHaveLength(1);
     expect(submitted[0].calibration).toBe("auto");

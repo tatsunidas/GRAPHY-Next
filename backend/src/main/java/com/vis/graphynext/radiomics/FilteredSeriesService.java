@@ -39,11 +39,14 @@ public class FilteredSeriesService {
     private final DicomStorageService storage;
     private final RadiomicsMapEngine engine;
     private final RadiomicsMode mode;
+    private final com.vis.graphynext.microscopy.InstallationIdentity identity;
 
-    public FilteredSeriesService(DicomStorageService storage, RadiomicsMapEngine engine, RadiomicsMode mode) {
+    public FilteredSeriesService(DicomStorageService storage, RadiomicsMapEngine engine, RadiomicsMode mode,
+                                 com.vis.graphynext.microscopy.InstallationIdentity identity) {
         this.storage = storage;
         this.engine = engine;
         this.mode = mode;
+        this.identity = identity;
     }
 
     /** 作った 1 本。{@code scaleMm} は換算後の半径 r、{@code sigmaMm} は LoG の σ。 */
@@ -156,17 +159,8 @@ public class FilteredSeriesService {
             data[z] = (float[]) st.getProcessor(z + 1).convertToFloat().getPixels();
         }
 
-        double[] mm = TextureSeriesService.minMax(data);
-        double min = mm[0], max = mm[1];
-        if (Double.isNaN(min) || Double.isNaN(max) || Double.isInfinite(min) || Double.isInfinite(max)) {
-            min = 0.0;
-            max = 1.0;
-        }
-        if (min == max) {
-            max = min + 1.0;
-        }
-        double slope = (max - min) / 65535.0;
-        double intercept = min;
+        double[] q = TextureSeriesService.quantization(TextureSeriesService.minMax(data));
+        double min = q[0], max = q[1], slope = q[2], intercept = q[3];
         // 0 が中間の灰色になる窓（符号が見える）。幅は最大絶対値の 2 倍。
         double maxAbs = Math.max(1e-6, Math.max(Math.abs(min), Math.abs(max)));
 
@@ -195,7 +189,7 @@ public class FilteredSeriesService {
             byte[] px = TextureSeriesService.to16bit(data[z], slope, intercept);
             Attributes a = TextureSeriesService.buildInstance(tmpl, req.studyInstanceUid(), map, newSeriesUid,
                     seriesNumber, seriesDesc, "LOG", rescaleType, derivation, slope, intercept, 0.0, 2 * maxAbs,
-                    sliceThickness, spacingBetween, z, px);
+                    sliceThickness, spacingBetween, z, px, identity.equipment());
             sops.add(a.getString(Tag.SOPInstanceUID));
             TextureSeriesService.ingest(storage, a);
         }

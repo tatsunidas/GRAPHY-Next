@@ -320,6 +320,7 @@ export function TextureDialog({
         {targetIsPet && (
           <PetCalibrationField value={calibration} onChange={setCalibration} disabled={busy}
             labelKey="texture.field.calibration" noneWarnKey="texture.calibration.noneWarn"
+            helpKey="texture.calibration.help"
             testId="texture-calibration" />
         )}
 

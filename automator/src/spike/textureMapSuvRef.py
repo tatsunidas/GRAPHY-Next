@@ -7,7 +7,7 @@
   map    <PSMA の親ディレクトリ> <マップの DICOM のディレクトリ> <カーネル径> <係数>
       ROI の各ボクセルについて「3D の窓（kernel^3）∩ ROI」の平均（FIRSTORDER_Mean、margin 0）を、
       PET の画素 × RescaleSlope（× 係数）から直接計算し、本体が保存した派生シリーズの画素
-      （保存値 × RescaleSlope + RescaleIntercept）と突き合わせる。
+      （pixel_array × RWVM の傾き + 切片。範囲の外＝値なしは NaN）と突き合わせる。
   glam   <PSMA の親ディレクトリ> <係数> <固定ビン数> <固定ビン幅の単位 SUV か Bq> <幅>
       ROI の値（Bq/mL × 係数）から、固定ビン数・固定ビン幅の離散化の予想（ビン数・ビンごとのボクセル数）を出す。
 
@@ -101,17 +101,22 @@ def window_mean(vol, mask, k, scale):
 
 
 def read_map(map_dir, idx):
+    """マップ（Parametric Map・16 bit 符号なし整数＋RWVM）を pydicom の通常の読み方（pixel_array）で読む。
+    First〜Last Value Mapped の外（画素 0＝値なし）は NaN、ほかは 傾き × 画素 + 切片。"""
     arr = {}
     slope = None
     desc = None
     for f in glob.glob(os.path.join(map_dir, "*.dcm")):
         d = pydicom.dcmread(f)
-        sop = str(d.SourceImageSequence[0].ReferencedSOPInstanceUID)
-        # 保存値は 16 bit の符号なしを、宣言（BitsStored=15）にかかわらず 16 bit 全部として読む（本体が書く値は 0〜65535 を使う）
-        raw = np.frombuffer(d.PixelData, dtype="<u2").reshape(int(d.Rows), int(d.Columns))
-        arr[idx[sop]] = raw.astype(np.float64) * float(d.RescaleSlope) + float(d.RescaleIntercept)
-        slope = float(d.RescaleSlope)
-        desc = str(d.DerivationDescription)
+        der = d.PerFrameFunctionalGroupsSequence[0].DerivationImageSequence[0]
+        sop = str(der.SourceImageSequence[0].ReferencedSOPInstanceUID)
+        rw = d.SharedFunctionalGroupsSequence[0].RealWorldValueMappingSequence[0]
+        raw = d.pixel_array.astype(np.float64)
+        slope = float(rw.RealWorldValueSlope)
+        val = raw * slope + float(rw.RealWorldValueIntercept)
+        val[(raw < rw.RealWorldValueFirstValueMapped) | (raw > rw.RealWorldValueLastValueMapped)] = np.nan
+        arr[idx[sop]] = val
+        desc = str(der.DerivationDescription)
     return arr, slope, desc
 
 
@@ -120,7 +125,7 @@ def cmd_map(root, map_dir, k, scale):
     pet, order, idx, vol, mask = load(root)
     ref, interior = window_mean(vol, mask, k, scale)
     got_slices, slope, desc = read_map(map_dir, idx)
-    got = np.zeros(vol.shape)
+    got = np.full(vol.shape, np.nan)
     for z, a in got_slices.items():
         got[z] = a
     diff = np.abs(got - ref)[mask]
@@ -132,7 +137,9 @@ def cmd_map(root, map_dir, k, scale):
         "maxAbsDiffInterior": float(np.abs(got - ref)[inside].max()) if inside.any() else None,
         "refMax": float(ref[mask].max()), "refMean": float(ref[mask].mean()), "gotMean": float(got[mask].mean()),
         "maxRel": float(rel.max()), "derivation": desc,
-        "outsideRoiNonZero": int((got[~mask] != 0).sum()),
+        "outsideRoiNonZero": int((got[~mask] != 0.0).sum()),  # NaN（値なし）も「0 でない」に数える
+        "outsideRoiNoValue": int(np.isnan(got[~mask]).sum()),
+        "insideRoiNoValue": int(np.isnan(got[mask]).sum()),
     }))
 
 
@@ -152,5 +159,62 @@ def cmd_glam(root, scale, nbins, unit, width):
                       "minValue": float(lo), "maxValue": float(hi)}))
 
 
+def cmd_roistats(root, map_dir):
+    """マップ（新形式）の実値の、ROI（SEG）の中の統計と、ROI が最も多いスライス（ビューアの Z 順＝位置の昇順、0 始まり）。"""
+    pet, order, idx, vol, mask = load(root)
+    got_slices, slope, _ = read_map(map_dir, idx)
+    got = np.full(vol.shape, np.nan)
+    for z, a in got_slices.items():
+        got[z] = a
+    v = got[mask]
+    zc = mask.sum(axis=(1, 2))
+    zbest = int(zc.argmax())
+    ys, xs = np.nonzero(mask[zbest])
+    sl = got[zbest]
+    fin = sl[np.isfinite(sl)]
+    print(json.dumps({"n": int(v.size), "noValue": int(np.isnan(v).sum()), "mean": float(np.nanmean(v)),
+                      "min": float(np.nanmin(v)), "max": float(np.nanmax(v)), "slope": slope, "zBest": zbest,
+                      "nSlices": int(vol.shape[0]), "roiCentroidRC": [float(ys.mean()), float(xs.mean())],
+                      "rows": int(vol.shape[1]), "cols": int(vol.shape[2]),
+                      "sliceMin": float(fin.min()), "sliceMax": float(fin.max()),
+                      "sliceDistinct": sorted({round(float(x), 6) for x in fin.ravel()[:200000]})[:5000]}))
+
+
+def cmd_oldify(map_dir, out_dir):
+    """新形式のマップを、旧形式（main の旧版が書いた形: Secondary Capture・ImageType DERIVED\\SECONDARY\\TEXTURE・
+    BitsStored=15・HighBit=15・トップレベルに Rescale と幾何）に書き換える。旧 jar で作ったものではなく「模した」もの。新しい UID を振る。"""
+    from pydicom.uid import generate_uid
+    os.makedirs(out_dir, exist_ok=True)
+    series = generate_uid()
+    for f in glob.glob(os.path.join(map_dir, "*.dcm")):
+        d = pydicom.dcmread(f)
+        rw = d.SharedFunctionalGroupsSequence[0].RealWorldValueMappingSequence[0]
+        sh = d.SharedFunctionalGroupsSequence[0]
+        pf = d.PerFrameFunctionalGroupsSequence[0]
+        d.SOPClassUID = pydicom.uid.SecondaryCaptureImageStorage
+        d.ImageType = ["DERIVED", "SECONDARY", "TEXTURE"]
+        d.BitsStored = 15
+        d.HighBit = 15
+        d.RescaleSlope = rw.RealWorldValueSlope
+        d.RescaleIntercept = rw.RealWorldValueIntercept
+        d.RescaleType = "FIRSTORDER_Mean"
+        d.ImageOrientationPatient = sh.PlaneOrientationSequence[0].ImageOrientationPatient
+        d.PixelSpacing = sh.PixelMeasuresSequence[0].PixelSpacing
+        d.ImagePositionPatient = pf.PlanePositionSequence[0].ImagePositionPatient
+        d.DerivationDescription = pf.DerivationImageSequence[0].DerivationDescription
+        for kw in ["SharedFunctionalGroupsSequence", "PerFrameFunctionalGroupsSequence", "DimensionOrganizationSequence",
+                   "DimensionIndexSequence", "NumberOfFrames", "ReferencedSeriesSequence", "AcquisitionContextSequence",
+                   "ContentLabel", "ContentDescription", "ContentQualification"]:
+            if kw in d:
+                delattr(d, kw)
+        d.SeriesInstanceUID = series
+        d.SOPInstanceUID = generate_uid()
+        d.SeriesDescription = "OLD-STYLE map (imitated)"
+        d.file_meta.MediaStorageSOPClassUID = d.SOPClassUID
+        d.file_meta.MediaStorageSOPInstanceUID = d.SOPInstanceUID
+        d.save_as(os.path.join(out_dir, d.SOPInstanceUID + ".dcm"))
+    print(json.dumps({"seriesInstanceUid": str(series)}))
+
+
 if __name__ == "__main__":
-    {"stats": cmd_stats, "map": cmd_map, "glam": cmd_glam}[sys.argv[1]](*sys.argv[2:])
+    {"stats": cmd_stats, "map": cmd_map, "glam": cmd_glam, "roistats": cmd_roistats, "oldify": cmd_oldify}[sys.argv[1]](*sys.argv[2:])

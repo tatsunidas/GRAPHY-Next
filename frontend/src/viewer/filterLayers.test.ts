@@ -38,6 +38,15 @@ describe("layerMetaFromTags", () => {
   it("reads r, sigma and the window top (half of WindowWidth)", () => {
     expect(layerMetaFromTags(rows("DERIVED\\SECONDARY\\LOG"))).toEqual({ rMm: 2, sigmaMm: 1.4142, maxAbs: 4 });
   });
+  it("reads the nested form of a Parametric Map (window in stored values, times the real-world slope)", () => {
+    const pm: TagDumpRow[] = [
+      { depth: 0, tag: "(0008,0008)", name: "ImageType", vr: "CS", value: "DERIVED\\PRIMARY\\LOG\\FILTERED" },
+      { depth: 3, tag: "(0008,2111)", name: "DerivationDescription", vr: "ST", value: "filter=LoG; r_mm=2; sigma_mm=1.4142; dim=2D" },
+      { depth: 2, tag: "(0028,1051)", name: "WindowWidth", vr: "DS", value: "40000" },
+      { depth: 2, tag: "(0040,9225)", name: "RealWorldValueSlope", vr: "FD", value: "0.0002" },
+    ];
+    expect(layerMetaFromTags(pm)).toEqual({ rMm: 2, sigmaMm: 1.4142, maxAbs: 4 });
+  });
   it("refuses a series that is not a LoG image", () => {
     expect(layerMetaFromTags(rows("DERIVED\\SECONDARY"))).toBeNull();
     expect(layerMetaFromTags(rows("DERIVED\\SECONDARY\\LOG", "0"))).toBeNull();

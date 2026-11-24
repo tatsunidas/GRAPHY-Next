@@ -229,19 +229,22 @@ class GlamTextureSeriesIntegrationTest {
         // 幾何は元と共有していること（Fusion で重ねられる条件）
         assertEquals(FRAME_OF_REFERENCE_UID, first.getString(Tag.FrameOfReferenceUID));
         assertEquals(STUDY_UID, first.getString(Tag.StudyInstanceUID));
-        assertArrayEqualsWithin(new double[]{1, 0, 0, 0, 1, 0}, first.getDoubles(Tag.ImageOrientationPatient));
-        assertArrayEqualsWithin(new double[]{PIXEL_SPACING, PIXEL_SPACING}, first.getDoubles(Tag.PixelSpacing));
+        assertArrayEqualsWithin(new double[]{1, 0, 0, 0, 1, 0}, PmReadSupport.iop(first));
+        assertArrayEqualsWithin(new double[]{PIXEL_SPACING, PIXEL_SPACING}, PmReadSupport.pixelSpacing(first));
         assertEquals(ROWS, first.getInt(Tag.Rows, 0));
         assertEquals(COLS, first.getInt(Tag.Columns, 0));
 
         // 32bit の原値は Rescale で戻せる形で入っていること
+        assertEquals(UID.ParametricMapStorage, first.getString(Tag.SOPClassUID));
         assertEquals(16, first.getInt(Tag.BitsAllocated, 0));
+        assertEquals(16, first.getInt(Tag.BitsStored, 0));
+        assertEquals(15, first.getInt(Tag.HighBit, 0));
         assertEquals(0, first.getInt(Tag.PixelRepresentation, -1));
-        assertTrue(first.getDouble(Tag.RescaleSlope, 0) > 0);
-        assertEquals("GLAM_SecondVirialCoefficient_Mean", first.getString(Tag.RescaleType));
+        assertTrue(PmReadSupport.slope(first) > 0);
+        assertEquals("GLAM_SecondVirialCoefficient_Mean", PmReadSupport.featureName(first));
 
         // 値の意味を決めたパラメータをシリーズ自身が持っていること
-        String derivation = first.getString(Tag.DerivationDescription);
+        String derivation = PmReadSupport.derivationDescription(first);
         assertNotNull(derivation);
         assertTrue(derivation.contains("maxRadius=3"), derivation);
         assertTrue(derivation.contains("boundaryCorrection="), derivation);
@@ -255,15 +258,15 @@ class GlamTextureSeriesIntegrationTest {
          * 何も書かないとビューアは既定の窓で開き、マップは一様な白に潰れて何も読めない
          * （実機検証で実際にそうなった）。
          */
-        double windowWidth = first.getDouble(Tag.WindowWidth, 0);
-        double windowCenter = first.getDouble(Tag.WindowCenter, Double.NaN);
-        double slope = first.getDouble(Tag.RescaleSlope, 0);
-        double intercept = first.getDouble(Tag.RescaleIntercept, 0);
-        assertTrue(windowWidth > 0, "expected a window width, got " + windowWidth);
-        assertEquals(slope * 65535.0, windowWidth, Math.abs(windowWidth) * 1e-6,
-                "the window should span the whole range the pixels were scaled into");
-        assertEquals(intercept + windowWidth / 2.0, windowCenter,
-                Math.abs(windowCenter) * 1e-6 + 1e-9, "the window should be centred on that range");
+        double[] stored = PmReadSupport.storedWindow(first);
+        double slope = PmReadSupport.slope(first);
+        double intercept = PmReadSupport.intercept(first);
+        assertTrue(stored[1] > 0, "expected a window width, got " + stored[1]);
+        // 窓は保存値の領域（1〜65535 の全域）。Modality LUT は恒等なので、読み手は保存値にそのまま掛ける
+        assertEquals(65534.0, stored[1], 65534.0 * 1e-6, "the window should span the whole range the pixels were scaled into");
+        assertEquals(1 + 65534.0 / 2.0, stored[0], 1e-3, "the window should be centred on that range");
+        assertEquals(slope * 65534.0 + 0, PmReadSupport.realWindow(first)[1], 1e-6 * Math.abs(slope) * 65534.0);
+        assertTrue(Double.isFinite(intercept));
     }
 
     @Test

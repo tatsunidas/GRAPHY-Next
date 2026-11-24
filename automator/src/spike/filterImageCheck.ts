@@ -172,7 +172,7 @@ async function main(): Promise<void> {
       const bytes = Buffer.from(await file.arrayBuffer());
       const text = bytes.toString("latin1");
       check(text.includes(`filter=LoG; r_mm=${label.slice(1)}; sigma_mm=${sigma}; scale_to_sigma=SQRT_D; dim=2D; truncate_sigma=4.0; boundary=MIRROR; radiomicsj=`), `${label}: DerivationDescription に条件が key=value で入る`);
-      check(text.includes("DERIVED") && text.includes("SECONDARY") && text.includes("LOG"), `${label}: ImageType が DERIVED\\SECONDARY\\LOG`);
+      check(text.includes("DERIVED") && text.includes("PRIMARY") && text.includes("LOG") && text.includes("FILTERED") && !text.includes("SECONDARY"), `${label}: ImageType が DERIVED\\PRIMARY\\LOG\\FILTERED（Parametric Map）`);
     }
 
     // 1 本目が新しいタイルで開く
