@@ -14,9 +14,31 @@ import { CALIBRATION_CHOICES, type CalibrationChoice } from "./roiFeatureSetting
 export const isPetModality = (modality: string | null | undefined): boolean =>
   (modality ?? "").trim().toUpperCase() === "PT";
 
-/** 実際に送る校正の指定。PET 以外は選択に関わらず auto。 */
-export const calibrationToSend = (modality: string | null | undefined, choice: CalibrationChoice): CalibrationChoice =>
-  isPetModality(modality) ? choice : "auto";
+/** Parametric Map の SOP クラス。値は校正済み（SUV など）で、backend の ValueCalibration も校正対象外にする。 */
+export const PARAMETRIC_MAP_SOP_CLASS_UID = "1.2.840.10008.5.1.4.1.1.30";
+
+/** 校正済みの値の系列か。SOP クラスが分からない（null・web）ときは false＝従来どおり（backend が守る）。 */
+export const isCalibratedParametricMap = (sopClassUid: string | null | undefined): boolean =>
+  (sopClassUid ?? "").trim() === PARAMETRIC_MAP_SOP_CLASS_UID;
+
+/** 校正の欄を出すか。PET かつ校正済みの値の系列（Parametric Map）ではないとき。 */
+export const showsPetCalibration = (modality: string | null | undefined, sopClassUid?: string | null): boolean =>
+  isPetModality(modality) && !isCalibratedParametricMap(sopClassUid);
+
+/** 実際に送る校正の指定。欄を出さない系列は選択に関わらず auto。 */
+export const calibrationToSend = (
+  modality: string | null | undefined, choice: CalibrationChoice, sopClassUid?: string | null,
+): CalibrationChoice => (showsPetCalibration(modality, sopClassUid) ? choice : "auto");
+
+/** PET の Parametric Map（SUV マップなど）では欄の代わりにこの説明を出す。 */
+export function CalibratedSeriesNote({ testId }: { testId: string }) {
+  const { t } = useI18n();
+  return (
+    <div data-testid={testId} style={{ color: "#6b7785", fontSize: 11, margin: "4px 0", lineHeight: 1.5 }}>
+      {t("petCalibration.calibratedSeries")}
+    </div>
+  );
+}
 
 export function PetCalibrationField({ value, onChange, disabled, labelKey, noneWarnKey, helpKey = "roiFeat.calibration.help", testId }: {
   value: CalibrationChoice;

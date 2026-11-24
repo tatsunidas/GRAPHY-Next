@@ -4097,6 +4097,7 @@ export const ja: Record<string, string> = {
   "texture.dim.3d": "3D（ボリューム）",
   "texture.field.calibration": "校正（PET）",
   "texture.calibration.noneWarn": "校正しない（Bq/mL のまま）: マップの値・固定ビン幅・範囲は放射能濃度に対する値で、SUV とは比べられません。作ったシリーズの記録に「校正なし」と残します。",
+  "petCalibration.calibratedSeries": "この系列は校正済みの値（Parametric Map）です。校正は行わず、そのまま計算します。",
   "texture.calibration.help": "マップの範囲・離散化・特徴量は、校正後の値で計算します。体重・投与量・時刻などが DICOM に無いと、理由つきで失敗します（0 や既定値では埋めません）。",
   "texture.paramsNote": "ビン数・δ・α などの詳細は 環境設定 ▸ テクスチャ の値を使用します。",
   "texture.run": "マップ生成",

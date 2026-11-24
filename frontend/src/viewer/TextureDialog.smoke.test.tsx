@@ -16,6 +16,8 @@ vi.mock("../api", () => ({
   fetchSeries: vi.fn(async () => [
     { seriesInstanceUid: "1.PET", seriesNumber: 1, modality: "PT", seriesDescription: "PET" },
     { seriesInstanceUid: "1.CT", seriesNumber: 2, modality: "CT", seriesDescription: "CT" },
+    { seriesInstanceUid: "1.SUVPM", seriesNumber: 3, modality: "PT", seriesDescription: "SUV map", sopClassUid: "1.2.840.10008.5.1.4.1.1.30" },
+    { seriesInstanceUid: "1.PETIMG", seriesNumber: 4, modality: "PT", seriesDescription: "PET", sopClassUid: "1.2.840.10008.5.1.4.1.1.128" },
   ]),
   fetchSeriesLayout: vi.fn(async () => ({ nC: 1, nT: 1 })),
   submitTextureJob: vi.fn(async (req: Record<string, unknown>) => {
@@ -87,6 +89,20 @@ describe("テクスチャのマップのダイアログ: PET の校正", () => {
     expect(submitted).toHaveLength(1);
     expect(submitted[0].calibration).toBe("auto");
     expect(submitted[0].sourceSeriesUid).toBe("1.PET");
+  });
+
+  it("PET の Parametric Map: 欄が出ず、校正済みの説明が出て、auto を送る", async () => {
+    await open("PT", "1.SUVPM");
+    expect(q("texture-calibration")).toBeNull();
+    expect(q("texture-calibration-calibrated")?.textContent).toContain("校正済み");
+    await run();
+    expect(submitted[0].calibration).toBe("auto");
+  });
+
+  it("PET の原画像（SOP クラスが PET Image Storage）: 欄が出て、説明は出ない", async () => {
+    await open("PT", "1.PETIMG");
+    expect(q("texture-calibration")).not.toBeNull();
+    expect(q("texture-calibration-calibrated")).toBeNull();
   });
 
   it("PET: 校正しないを選ぶと警告が出て none を送る", async () => {
