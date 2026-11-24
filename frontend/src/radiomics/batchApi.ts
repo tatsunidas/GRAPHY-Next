@@ -41,7 +41,7 @@ export interface BatchQc {
 /** QC の旗。SMALL_ROI は環境設定の基準値が未設定なら立たない（「判定していない」）。 */
 export type BatchQcFlag =
   | "SMALL_ROI" | "SMALL_ROI_2D" | "LOSSY_COMPRESSION" | "UNCALIBRATED_PT" | "UNCALIBRATED_SPACING" | "RECTIFIED_GRID"
-  | "VALUEKIND_OVERRIDDEN" | "IVH_BINWIDTH_UNSET" | "ROUNDING_IGNORED" | "IVH_SETTING_EXPLICIT";
+  | "NAN_OUTSIDE_ROI" | "NAN_LOCAL_PEAK_UNDEFINED" | "VALUEKIND_OVERRIDDEN" | "IVH_BINWIDTH_UNSET" | "ROUNDING_IGNORED" | "IVH_SETTING_EXPLICIT";
 
 export interface BatchRequest {
   pairs: BatchPair[];

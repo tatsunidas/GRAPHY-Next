@@ -172,12 +172,27 @@ def cmd_roistats(root, map_dir):
     ys, xs = np.nonzero(mask[zbest])
     sl = got[zbest]
     fin = sl[np.isfinite(sl)]
+    outside = got[~mask]
+    # ROI の外が値なし（画素 0 → NaN）か。実値 0.0 を書いていた旧版では outsideNoValue が 0 だった。
+    # zbest のスライスで、ROI からいちばん遠い（画像の四隅の）画素と、ROI の外で最も ROI に近い側の画素の位置も返す。
+    far = [[0, 0], [0, int(vol.shape[2]) - 1], [int(vol.shape[1]) - 1, 0], [int(vol.shape[1]) - 1, int(vol.shape[2]) - 1]]
     print(json.dumps({"n": int(v.size), "noValue": int(np.isnan(v).sum()), "mean": float(np.nanmean(v)),
                       "min": float(np.nanmin(v)), "max": float(np.nanmax(v)), "slope": slope, "zBest": zbest,
-                      "nSlices": int(vol.shape[0]), "roiCentroidRC": [float(ys.mean()), float(xs.mean())],
+                      "nSlices": int(vol.shape[0]), "outsideN": int(outside.size), "outsideNoValue": int(np.isnan(outside).sum()),
+                      "outsideSliceNoValue": int(np.isnan(sl[~mask[zbest]]).sum()), "outsideSliceN": int((~mask[zbest]).sum()),
+                      "corners": far, "roiCentroidRC": [float(ys.mean()), float(xs.mean())],
                       "rows": int(vol.shape[1]), "cols": int(vol.shape[2]),
                       "sliceMin": float(fin.min()), "sliceMax": float(fin.max()),
                       "sliceDistinct": sorted({round(float(x), 6) for x in fin.ravel()[:200000]})[:5000]}))
+
+
+def cmd_visible(png):
+    """タイル（キャンバス）の画像のうち、中央の帯（四隅のオーバーレイ文字を除く）で、黒でない画素の数。"""
+    from PIL import Image
+    a = np.array(Image.open(png).convert("L"))
+    h, w = a.shape
+    band = a[int(h * 0.2):int(h * 0.9), int(w * 0.15):int(w * 0.85)]
+    print(json.dumps({"visible": int((band > 5).sum()), "max": int(band.max()), "shape": [h, w]}))
 
 
 def cmd_oldify(map_dir, out_dir):
@@ -217,4 +232,4 @@ def cmd_oldify(map_dir, out_dir):
 
 
 if __name__ == "__main__":
-    {"stats": cmd_stats, "map": cmd_map, "glam": cmd_glam, "roistats": cmd_roistats, "oldify": cmd_oldify}[sys.argv[1]](*sys.argv[2:])
+    {"stats": cmd_stats, "map": cmd_map, "glam": cmd_glam, "roistats": cmd_roistats, "visible": cmd_visible, "oldify": cmd_oldify}[sys.argv[1]](*sys.argv[2:])

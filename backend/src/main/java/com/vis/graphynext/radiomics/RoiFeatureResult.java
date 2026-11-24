@@ -223,6 +223,11 @@ public record RoiFeatureResult(
                 provenance, settingsProperties, roiSize, lossyCompressed, section, slices, scales, planeResults);
     }
 
+    RoiFeatureResult withRows(List<Row> newRows) {
+        return new RoiFeatureResult(radiomicsjVersion, computedAt, fromCache, label, newRows, discretisation,
+                provenance, settingsProperties, roiSize, lossyCompressed, section, slices, scales, planeResults);
+    }
+
     RoiFeatureResult withScales(List<ScaleEntry> list) {
         return new RoiFeatureResult(radiomicsjVersion, computedAt, fromCache, label, rows, discretisation,
                 provenance, settingsProperties, roiSize, lossyCompressed, section, slices, list, planeResults);

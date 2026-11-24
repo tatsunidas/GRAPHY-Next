@@ -184,6 +184,10 @@ class MapPetCalibrationIntegrationTest {
         for (int z = 0; z < actual.length; z++) {
             for (int i = 0; i < actual[z].length; i++) {
                 double e = expectedScaled[z][i];
+                if (Float.isNaN(expectedScaled[z][i])) { // ROI の外は値なし（NaN）。位置が一致することを見る
+                    assertTrue(Float.isNaN(actual[z][i]), msg + " z=" + z + " i=" + i + " は値なしのはず");
+                    continue;
+                }
                 assertEquals(e, actual[z][i], Math.abs(e) * relTol + 1e-9, msg + " z=" + z + " i=" + i);
                 if (e != 0) compared++;
             }
@@ -212,8 +216,8 @@ class MapPetCalibrationIntegrationTest {
 
         // 負例: 校正が効いていなければ、none の値（Bq/mL の桁）がそのまま出てしまう
         double noneMax = 0, autoMax = 0;
-        for (float[] s : none.data()) for (float v : s) noneMax = Math.max(noneMax, v);
-        for (float[] s : auto.data()) for (float v : s) autoMax = Math.max(autoMax, v);
+        for (float[] s : none.data()) for (float v : s) if (!Float.isNaN(v)) noneMax = Math.max(noneMax, v);
+        for (float[] s : auto.data()) for (float v : s) if (!Float.isNaN(v)) autoMax = Math.max(autoMax, v);
         assertTrue(noneMax > 1000 && autoMax < 100, "none=" + noneMax + " auto=" + autoMax);
     }
 
@@ -246,7 +250,8 @@ class MapPetCalibrationIntegrationTest {
         double maxDiff = 0;
         for (int z = 0; z < aw.data().length; z++) {
             for (int i = 0; i < aw.data()[z].length; i++) {
-                maxDiff = Math.max(maxDiff, Math.abs(aw.data()[z][i] - nw.data()[z][i]));
+                float d = Math.abs(aw.data()[z][i] - nw.data()[z][i]);
+                if (!Float.isNaN(d)) maxDiff = Math.max(maxDiff, d);
             }
         }
         assertTrue(maxDiff > 0.1, "固定ビン幅は単位が違えば別の離散化になる（負例）: " + maxDiff);

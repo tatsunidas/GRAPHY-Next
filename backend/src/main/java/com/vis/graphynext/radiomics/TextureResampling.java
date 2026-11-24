@@ -228,6 +228,49 @@ final class TextureResampling {
         return out;
     }
 
+    /**
+     * 計算格子の「ROI の内」の印を、出力（元シリーズ）の格子へ最近傍で写す。座標は
+     * {@link #toSourceGrid} と同じ（fx=(x-originX)*scaleX 等）で、四捨五入して 0..w-1 等へ丸める。
+     * 補間した値そのものは変えず、ROI の外を値なしにする印だけを作るために使う。
+     *
+     * @param inside {@code [z][width*height]}（計算格子。true が ROI の内）
+     */
+    static boolean[][] insideOnSourceGrid(boolean[][] inside, int width, int height, int slices, Grid g) {
+        int sw = g.sourceWidth();
+        int sh = g.sourceHeight();
+        int ss = g.sourceSlices();
+        boolean[][] out = new boolean[ss][sw * sh];
+        for (int z = 0; z < ss; z++) {
+            int nz = nearest((z - g.originZ()) * g.scaleZ(), slices);
+            for (int y = 0; y < sh; y++) {
+                int ny = nearest((y - g.originY()) * g.scaleY(), height);
+                for (int x = 0; x < sw; x++) {
+                    int nx = nearest((x - g.originX()) * g.scaleX(), width);
+                    out[z][y * sw + x] = inside[nz][ny * width + nx];
+                }
+            }
+        }
+        return out;
+    }
+
+    private static int nearest(double f, int n) {
+        int i = (int) Math.floor(f + 0.5);
+        return i < 0 ? 0 : (i > n - 1 ? n - 1 : i);
+    }
+
+    /** ROI の外（{@code inside} が false）の画素を NaN（値なし）にする。{@code map} を直接書き換える。 */
+    static void blankOutside(float[][] map, boolean[][] inside) {
+        for (int z = 0; z < map.length; z++) {
+            float[] m = map[z];
+            boolean[] in = inside[z];
+            for (int i = 0; i < m.length; i++) {
+                if (!in[i]) {
+                    m[i] = Float.NaN;
+                }
+            }
+        }
+    }
+
     /** {@code [z][w*h]} の Trilinear サンプル。範囲外は端で丸める（ライブラリの補間と同じ扱い）。 */
     private static float sample(float[][] map, int w, int h, int s, double fx, double fy, double fz) {
         double cx = clamp(fx, 0, w - 1);

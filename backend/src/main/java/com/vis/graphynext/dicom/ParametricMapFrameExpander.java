@@ -234,6 +234,21 @@ public final class ParametricMapFrameExpander {
         return null;
     }
 
+    /** RWVM の First〜Last Value Mapped を実値にした範囲（昇順）。無ければ {0, 1}。 */
+    public static double[] mappedRange(Attributes mapping) {
+        if (mapping != null && mapping.contains(Tag.RealWorldValueFirstValueMapped)
+                && mapping.contains(Tag.RealWorldValueLastValueMapped)) {
+            double slope = mapping.getDouble(Tag.RealWorldValueSlope, 1.0);
+            double intercept = mapping.getDouble(Tag.RealWorldValueIntercept, 0.0);
+            double a = mapping.getInt(Tag.RealWorldValueFirstValueMapped, 0) * slope + intercept;
+            double b = mapping.getInt(Tag.RealWorldValueLastValueMapped, 0) * slope + intercept;
+            if (Double.isFinite(a) && Double.isFinite(b)) {
+                return new double[] { Math.min(a, b), Math.max(a, b) };
+            }
+        }
+        return new double[] { 0.0, 1.0 };
+    }
+
     /** RWVM の単位の表示名（CodeMeaning、無ければコード）。単位なし（UCUM の「1」）・不明は空文字。 */
     public static String unitOf(Attributes mapping) {
         if (mapping == null) {
@@ -398,6 +413,15 @@ public final class ParametricMapFrameExpander {
         out.setDouble(Tag.RescaleSlope, VR.DS, 1.0);
         out.setDouble(Tag.RescaleIntercept, VR.DS, 0.0);
         out.setString(Tag.RescaleType, VR.LO, unitOfFrame(ds, frame));
+        if (!(min <= max)) {
+            // 値が 1 つも無い（全面 NaN）フレーム。窓が無いと、表示側（cornerstone）が最初の画像でこのフレームを出したとき、
+            // 初期の窓の範囲が NaN になって階調の表（転送関数）が NaN で作られ、以後どのスライスも真っ黒になる
+            // （ROI の外が値なしのマップで、ROI の無い先頭スライスが全面 NaN になる）。表示できる値が無いので窓は目安でよいが、
+            // 有限でなければならない。RWVM の値の範囲（First〜Last Value Mapped の実値）があればそれ、無ければ 0〜1。
+            double[] fallback = mappedRange(rwvm(ds, frame));
+            min = (float) fallback[0];
+            max = (float) fallback[1];
+        }
         if (min <= max) {
             double width = Math.max(max - min, Math.ulp(Math.max(Math.abs(min), Math.abs(max))) * 2);
             out.setDouble(Tag.WindowCenter, VR.DS, min + (max - min) / 2.0);
