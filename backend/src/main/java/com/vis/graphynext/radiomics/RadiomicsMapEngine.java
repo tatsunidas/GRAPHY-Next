@@ -184,6 +184,9 @@ public class RadiomicsMapEngine {
      * {@link TextureSeriesRequest#calibration}・{@link GlamAnalysisRequest#calibration}（既定 auto＝PET は SUVbw）を
      * ここへ入れて読む。フィルタ済みシリーズ・最大断面は渡さない（フィルタ済みシリーズの出力は元と同じ単位の画像）。
      */
+    /** 値なし（NaN）を含むシリーズも読む（1）。呼び出し側が {@link NanReach} で入力としてよいか判定する。ROI 特徴量とマップだけが付ける。 */
+    public static final String ALLOW_NAN_SETTING = "GRAPHY_ALLOW_NAN";
+
     public static final String CALIBRATION_SETTING = "graphy.calibration";
 
     /** ターゲット（＋任意マスク）から 1 特徴のマップを計算する。 */
@@ -197,8 +200,38 @@ public class RadiomicsMapEngine {
         // 校正の指定は読み込みにだけ渡す（req.settings() は RadiomicsJ と途中結果のキーに使われるので汚さない）
         LoadedVolume vol = load(req.studyInstanceUid(), req.sourceSeriesUid(), req.channel(), req.timePoint(),
                 req.maskSeriesUid(), req.maskChannel(), parseLabel(req),
-                TextureSeriesRequest.loadSettings(req.settings(), req.calibration()));
+                withAllowNaN(TextureSeriesRequest.loadSettings(req.settings(), req.calibration())));
+        requireNanAcceptable(req, vol);
         return computeFrom(req, progress, vol);
+    }
+
+    /**
+     * 値なし（NaN）を含む入力は、窓が届く範囲（カーネルの半径と余白の小さいほう）に NaN が無いときだけ計算する。
+     * ROI の内側・届く範囲にあれば、窓の値が静かに変わる（NaN を出さずに別の値になる）ので断る。マスクが無い（全面が ROI）ときも断る。
+     */
+    private void requireNanAcceptable(TextureSeriesRequest req, LoadedVolume vol) {
+        float[][] img = NanReach.slicesOf(vol.image(), vol.slices());
+        if (NanReach.countNaN(img) == 0) {
+            return;
+        }
+        boolean[][] roi = NanReach.insideOf(vol.mask(), vol.width(), vol.height(), vol.slices());
+        int kernel = req.filterSize() > 0 ? oddUp(req.filterSize()) : 7;
+        int margin = req.margin() != null ? Math.max(0, req.margin()) : FeatureVisualizationMap.DEFAULT_MARGIN;
+        NanReach.MapNan st = NanReach.assessForMap(img, roi, vol.width(), vol.height(), kernel, margin, req.force2D());
+        if (st == NanReach.MapNan.INSIDE || st == NanReach.MapNan.REACHED) {
+            throw new IllegalArgumentException("値の無い画素（NaN）を含むシリーズは、"
+                    + (st == NanReach.MapNan.INSIDE ? "ROI の内側に NaN があるため" : "窓が届く範囲（ROI から "
+                    + NanReach.mapReachVoxels(kernel, margin) + " 画素以内）に NaN があるため")
+                    + "テクスチャを計算できません（窓の値が静かに変わります）。ROI の外が値なしのマップ"
+                    + "（テクスチャマップなど）を入力にした可能性があります。元の画像のシリーズを入力にしてください。");
+        }
+    }
+
+    /** 読み込みの設定に「値なし（NaN）を含むシリーズも読む」を足した写し。 */
+    static Map<String, String> withAllowNaN(Map<String, String> loadSettings) {
+        Map<String, String> out = new HashMap<>(loadSettings);
+        out.put(ALLOW_NAN_SETTING, "1");
+        return out;
     }
 
     /** 取り込みが済んだ計算の途中結果を消す。 */
@@ -232,6 +265,7 @@ public class RadiomicsMapEngine {
         }
         int ch = clampDim(channel, layout.nC());
         int tp = clampDim(timePoint, layout.nT());
+        final boolean allowNaN = settings != null && "1".equals(settings.get(ALLOW_NAN_SETTING));
 
         // 指定 (C,T) に一致するセルを z 昇順で収集し、連続ボリュームとして扱う。
         // （T/C が空間位置と一致しない＝各グローバル z にそのセルが無いシリーズでも成立する。）
@@ -282,7 +316,7 @@ public class RadiomicsMapEngine {
                         + "（backend ログを確認してください）");
             }
             lossy |= loaded.lossy();
-            long nan = countNaN(loaded.ip());
+            long nan = allowNaN ? 0 : countNaN(loaded.ip());
             if (nan > 0) {
                 // 窓の中の NaN を離散化がどう扱うか（RadiomicsJ）を確かめられていないので、黙って計算しない
                 throw new IllegalArgumentException("値の無い画素（NaN）を含むシリーズはテクスチャを計算できません"
@@ -519,6 +553,14 @@ public class RadiomicsMapEngine {
         log.info("[texture] map '{}' {}x{}x{} stride={} filter={} margin={} in {} ms",
                 built.displayName(), w, h, nZ, stride, filterSize, margin, System.currentTimeMillis() - t0);
 
+        // マスクつきのとき、ROI の外は RadiomicsJ が実値 0.0 を書いている（画素値 < 1 が外）。
+        // 0 は実在する値と区別できないので、値なし（NaN）にする。チェックポイントは生の値のまま
+        // （NaN はここで付けるので、再開しても同じ結果になる）。
+        boolean[][] inside = hasMask ? NanReach.insideOf(mask, w, h, nZ) : null;
+        if (inside != null && vol.resampling() == null) {
+            TextureResampling.blankOutside(full, inside);
+        }
+
         // リサンプリングして計算した場合は、元シリーズの格子へ戻してから DICOM 化する
         // （派生シリーズの幾何を元と一致させ、Fusion で重ねられる状態を保つ）。
         int outW = w;
@@ -527,6 +569,10 @@ public class RadiomicsMapEngine {
         if (vol.resampling() != null) {
             TextureResampling.Grid grid = vol.resampling();
             full = TextureResampling.toSourceGrid(full, w, h, nZ, grid);
+            if (inside != null) {
+                // 補間の後で付ける（先に NaN を入れると補間で ROI の内側へ広がる）。
+                TextureResampling.blankOutside(full, TextureResampling.insideOnSourceGrid(inside, w, h, nZ, grid));
+            }
             outW = grid.sourceWidth();
             outH = grid.sourceHeight();
             outZ = grid.sourceSlices();

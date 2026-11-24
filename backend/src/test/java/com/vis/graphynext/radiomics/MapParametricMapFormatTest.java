@@ -238,4 +238,47 @@ class MapParametricMapFormatTest {
         // 正例: 全部揃えば書ける
         assertEquals(UID.ParametricMapStorage, build(tmpl("CT"), d, "TEXTURE", false).getString(Tag.SOPClassUID));
     }
+
+    /** 値が 1 つも無いフレーム（ROI の無いスライス）の表示用の窓は、有限（RWVM の値の範囲）でなければならない。 */
+    @Test
+    void anAllNoValueFrameStillGetsAFiniteWindow() throws Exception {
+        float[] none = new float[W * H];
+        java.util.Arrays.fill(none, Float.NaN);
+        Attributes a = roundTrip(build(tmpl("PT"), none, "TEXTURE", false));
+        double[] expect = ParametricMapFrameExpander.mappedRange(PmReadSupport.rwvm(a));
+        assertTrue(expect[0] < expect[1], "RWVM の値の範囲がある");
+
+        for (byte[] frame : new byte[][] { ParametricMapFrameExpander.extractFrame(a, 0),
+                ParametricMapFrameExpander.blankFrame(a, new double[] { 0, 0, 0 }) }) {
+            assertNotNull(frame);
+            try (DicomInputStream in = new DicomInputStream(new ByteArrayInputStream(frame))) {
+                in.setIncludeBulkData(DicomInputStream.IncludeBulkData.YES);
+                Attributes sc = in.readDataset();
+                double wc = sc.getDouble(Tag.WindowCenter, Double.NaN);
+                double ww = sc.getDouble(Tag.WindowWidth, Double.NaN);
+                assertTrue(Double.isFinite(wc) && Double.isFinite(ww) && ww > 0, "窓が有限: " + wc + "/" + ww);
+                assertEquals((expect[0] + expect[1]) / 2, wc, 1e-6 * Math.max(1, Math.abs(wc)));
+                assertEquals(expect[1] - expect[0], ww, 1e-6 * Math.max(1, ww));
+                float[] v = ParametricMapFrameExpander.frameValues(sc, 0);
+                for (float f : v) assertTrue(Float.isNaN(f), "画素は値なしのまま");
+            }
+        }
+    }
+
+    /** 【負例】値があるフレームの窓は、従来どおりそのフレームの最小・最大（RWVM の範囲に置き換わらない）。 */
+    @Test
+    void aFrameWithValuesKeepsItsOwnWindow() throws Exception {
+        float[] d = data();
+        Attributes a = roundTrip(build(tmpl("PT"), d, "TEXTURE", false));
+        byte[] frame = ParametricMapFrameExpander.extractFrame(a, 0);
+        try (DicomInputStream in = new DicomInputStream(new ByteArrayInputStream(frame))) {
+            in.setIncludeBulkData(DicomInputStream.IncludeBulkData.YES);
+            Attributes sc = in.readDataset();
+            float[] v = ParametricMapFrameExpander.frameValues(sc, 0);
+            double min = Double.POSITIVE_INFINITY, max = Double.NEGATIVE_INFINITY;
+            for (float f : v) if (Float.isFinite(f)) { min = Math.min(min, f); max = Math.max(max, f); }
+            assertEquals((min + max) / 2, sc.getDouble(Tag.WindowCenter, Double.NaN), 1e-4);
+            assertEquals(max - min, sc.getDouble(Tag.WindowWidth, Double.NaN), 1e-4);
+        }
+    }
 }

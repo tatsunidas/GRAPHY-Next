@@ -131,6 +131,9 @@ async function main(): Promise<void> {
     const stats = py(["roistats", PSMA, mapDir]);
     console.log(`  参照（pydicom の実値）: ${JSON.stringify({ ...stats, sliceDistinct: undefined })}`);
     check(stats.noValue === 0, "ROI の中に値なしは無い", stats.noValue);
+    // ROI の外は値なし（画素 0）。実値 0.0 でない（旧版は外に 0.0 を書き、画素 1 以上の実値になっていた）。
+    console.log(`  ROI の外: ${stats.outsideNoValue} / ${stats.outsideN} が値なし（ROI のあるスライスでは ${stats.outsideSliceNoValue} / ${stats.outsideSliceN}）`);
+    check(stats.outsideN > 0 && stats.outsideNoValue === stats.outsideN, "ROI の外はすべて値なし（pydicom: 画素 0 → NaN）", { noValue: stats.outsideNoValue, n: stats.outsideN });
 
     // ROI が最も多いスライスへ（Z の入力欄）。新しいタイル＝最後
     const tile = viewer.getByTestId("series-viewer-root").last();
@@ -155,6 +158,42 @@ async function main(): Promise<void> {
       if (m && Number(m[1]) !== 0) { read = { v: Number(m[1]), unit: m[2], text: m[0] }; break; }
     }
     await viewer.screenshot({ path: path.join(OUT_DIR, "03-map-pet-hover.png") });
+    // 見せたい物が写っているか: ROI（値のある画素）が画面に見える。W/L が有限。ROI の無いスライス（全面 NaN）を先に出した後に
+    // ROI のあるスライスへ移ると、値域の記憶が壊れて、値の読み取りは正しいのに画像全体が真っ黒になった（viewer/scalarRange.ts）。
+    const canvasPng = path.join(OUT_DIR, "03a-canvas.png");
+    await viewer.screenshot({ path: canvasPng, clip: { x: box.x, y: box.y, width: box.width, height: box.height } });
+    const vis = py(["visible", canvasPng]);
+    // 診断: cornerstone が持っている画像と、タイルごとの W/L（voiRange）。NaN の画素数も見る
+    const csDiag = await viewer.evaluate(`(async () => {
+      const u = performance.getEntriesByType('resource').map((e) => e.name).find((n) => /deps\\/@cornerstonejs_core\\.js/.test(n));
+      if (!u) return [];
+      const core = await import(u);
+      return core.getRenderingEngines().flatMap((e) => e.getViewports()).map((vp) => {
+        const id = vp.getCurrentImageId?.();
+        const px = id ? core.cache.getImage(id)?.getPixelData?.() : null;
+        let nan = 0; if (px) for (let i = 0; i < px.length; i++) if (Number.isNaN(px[i])) nan++;
+        const sd = vp.getImageData?.()?.imageData?.getPointData?.()?.getScalars?.()?.getData?.(); let sNaN = -1; if (sd) { sNaN = 0; for (let i = 0; i < sd.length; i++) if (Number.isNaN(sd[i])) sNaN++; }
+        return { vp: vp.id, nan, renderCopyNaN: sNaN, voi: vp.getProperties?.().voiRange ?? null };
+      }); })()`) as { vp: string; nan: number; voi: { lower: number; upper: number } | null }[];
+    const ranges = csDiag.map((d) => d.voi);
+    console.log(`  タイルの画像: ${JSON.stringify(csDiag)}`);
+    console.log(`  見える画素: ${JSON.stringify(vis)}`);
+    check(csDiag.some((d) => d.nan > 0), "前提: マップのタイルの画像は値なし（NaN）を含む", csDiag);
+    check(vis.visible >= 1000, "マップのタイルに ROI が見える（黒でない画素が千個以上。旧版は約 3000）", vis);
+    check(ranges.length > 0 && ranges.every((r) => r !== null && Number.isFinite(r.lower) && Number.isFinite(r.upper)), "全タイルの W/L（voiRange）が有限", ranges);
+    // ROI の外（スライスの上端の中央付近＝画像の外周側。ROI の画素から十分離れた所）へ移して、値の読み取りが数値でないことを確かめる
+    const inRoiRead = await tile.getByTestId("status-value").first().innerText().catch(() => "");
+    let outRead = "";
+    for (const [fx, fy] of [[0.5, 0.06], [0.06, 0.5], [0.94, 0.5], [0.5, 0.94]]) {
+      const px = box.x + box.width * fx, py2 = box.y + box.height * fy;
+      await viewer.mouse.move(px, py2);
+      await viewer.waitForTimeout(500);
+      outRead = (await tile.getByTestId("status-value").first().innerText().catch(() => "")).trim();
+      console.log(`  ROI の外 (${fx}, ${fy}) の読み取り: ${JSON.stringify(outRead)}`);
+      await viewer.screenshot({ path: path.join(OUT_DIR, `03b-outside-${fx}-${fy}.png`) });
+    }
+    console.log(`  ROI の内の読み取り（status-value）: ${JSON.stringify(inRoiRead.trim())}`);
+    check(outRead !== "" && !/^-?\d+(\.\d+)?(\s|$)/.test(outRead), "ROI の外の読み取りは数値でない（値なし）", outRead);
     console.log(`  値の読み取り: ${JSON.stringify(read)}`);
     check(!!read, "ROI の上で値の読み取りが出る");
     if (read) {
@@ -171,7 +210,11 @@ async function main(): Promise<void> {
     console.log("\n[C] マップを ROI 特徴量の入力にする（API）");
     const body = { studyInstanceUid: studyUid, sourceSeriesUid: mp.seriesInstanceUid, maskSeriesUid: seg.seriesInstanceUid, maskChannel: 0, channel: 0, timePoint: 0,
       settings: {}, recompute: true, roiModes: ["WHOLE_3D"] };
-    const r = await features(base, body);
+    // ROI の外が値なし（NaN）になったマップは、load の「NaN を含むシリーズは計算しない」で断られる（課題 30 で判明した下流の影響）。
+    // 失敗として数え、[D] へ進む。
+    let r: Feat | null = null;
+    try { r = await features(base, body); } catch (e) { check(false, "[C] マップを ROI 特徴量の入力にできる", String((e as Error).message)); }
+    if (r) {
     const col = (re: RegExp) => r.rows.filter((x) => re.test(x.column) && x.value !== null).map((x) => ({ c: x.column, v: x.value as number }));
     const mean = col(/IntensityBasedStatistical_Mean$/)[0];
     const mn = col(/IntensityBasedStatistical_Minimum$/)[0];
@@ -180,6 +223,21 @@ async function main(): Promise<void> {
     const close = (a: number | undefined, b: number) => a !== undefined && Math.abs(a - b) <= 1e-6 * Math.max(1, Math.abs(b));
     check(close(mean?.v, stats.mean) && close(mn?.v, stats.min) && close(mx?.v, stats.max), "平均・最小・最大が pydicom の ROI の実値の統計と一致（相対 1e-6）");
     check(!r.provenance.calibration && !r.provenance.uncalibratedPet, "PET 由来のマップでも校正が掛からない（Provenance の校正が空・未校正 PET の旗なし）", r.provenance);
+    }
+
+    console.log("\n[C2] マップのマップ（ROI の外が値なしのマップを、テクスチャの入力にする）は、理由つきで断られる");
+    {
+      const mm = { ...mapReq, sourceSeriesUid: mp.seriesInstanceUid, margin: 2, seriesDescription: "map of map" };
+      const j = await call<{ jobId: string }>(base, "/api/series/texture/jobs", "POST", mm);
+      let state = "", err = "";
+      for (let i = 0; i < 300 && state !== "FAILED" && state !== "DONE" && state !== "CANCELLED"; i++) {
+        const st = await call<{ state: string; error?: string }>(base, `/api/series/texture/jobs/${j.jobId}`, "GET");
+        state = st.state; err = st.error ?? "";
+        if (state !== "FAILED" && state !== "DONE" && state !== "CANCELLED") await new Promise((r) => setTimeout(r, 500));
+      }
+      console.log(`  断りの文面: ${err}`);
+      check(state === "FAILED" && err.includes("窓が届く範囲") && err.includes("元の画像"), "マップのマップ（余白 2）は、窓が届く範囲の NaN を理由に断られ、元の画像を使う案内がある", { state, err });
+    }
 
     console.log("\n[D] 旧形式を模したシリーズ（SC・TEXTURE・BitsStored=15）は断られる");
     const oldDir = path.join(OUT_DIR, "old-style");

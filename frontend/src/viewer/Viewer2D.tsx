@@ -4,6 +4,7 @@
  */
 import { importLabelVolume } from "./maskFrames";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { prepareScalarsForRender, scalarsOf } from "./scalarRange";
 import { RenderingEngine, Enums, EVENTS, eventTarget, metaData, utilities, type Types } from "@cornerstonejs/core";
 import { sliceIppOf } from "./sliceIpp";
 import {
@@ -1092,6 +1093,10 @@ export function Viewer2D({
       if (!compact) scheduleCapture(); // Undo/Redo 履歴（操作確定後にデバウンス）
     };
 
+    const onStackNewImage = () => {
+      prepareScalarsForRender(scalarsOf(viewportRef.current));
+    };
+
     // VOI(WW/WL) を読み戻す。voiRange は [lower, upper]（モダリティ値）。WW=upper−lower, WL=中点。
     const onVoiModified = () => {
       const vp = viewportRef.current;
@@ -1229,6 +1234,8 @@ export function Viewer2D({
         engine.enableElement({ viewportId, type: Enums.ViewportType.STACK, element });
         const viewport = engine.getViewport(viewportId) as Types.IStackViewport;
         viewportRef.current = viewport;
+        // 1 枚目の描画の前から付ける（1 枚目が値なしだけだと、その値域で描画の状態が壊れる。viewer/scalarRange.ts）。
+        element.addEventListener(EVENTS.STACK_NEW_IMAGE, onStackNewImage);
         await viewport.setStack(imageIdsRef.current, indexRef.current);
         if (disposed) return;
         applyLoadedStack(viewport, () => disposed);
@@ -1355,6 +1362,7 @@ export function Viewer2D({
       disposed = true;
       resizeObserver?.disconnect();
       element.removeEventListener(EVENTS.CAMERA_MODIFIED, onCameraModified);
+      element.removeEventListener(EVENTS.STACK_NEW_IMAGE, onStackNewImage);
       element.removeEventListener("pointerdown", onFocusPointerDown);
       removeSelectionGestures?.();
       // 描画中のまま壊すと全体の描画中フラグが残り、以後どこにも描けなくなる
