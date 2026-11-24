@@ -81,7 +81,7 @@ async function makeLog(base: string, study: string, source: string, scales: numb
   return job.result.series;
 }
 
-/** 派生シリーズの 1 枚目の (行, 列) の値（Rescale を通した値）。API が返す DICOM ファイルを pydicom で読む。 */
+/** 派生シリーズの 1 枚目の (行, 列) の値（RWVM を通した実値）。API が返す DICOM ファイルを pydicom で読む。 */
 async function storedValue(base: string, study: string, c: Created, row: number, col: number): Promise<number> {
   const f = path.join(OUT_DIR, `r${c.scaleMm}.dcm`);
   const res = await fetch(`${base}/api/studies/${study}/series/${c.seriesInstanceUid}/instances/${c.sopInstanceUids[0]}/file`);
@@ -90,7 +90,8 @@ async function storedValue(base: string, study: string, c: Created, row: number,
   const py = spawnSync(process.env.PYTHON ?? "python3", ["-I", "-c", `
 import sys, pydicom
 d = pydicom.dcmread(sys.argv[1]); a = d.pixel_array
-print(float(a[int(sys.argv[2]), int(sys.argv[3])]) * float(d.RescaleSlope) + float(d.RescaleIntercept))
+rw = d.SharedFunctionalGroupsSequence[0].RealWorldValueMappingSequence[0]  # Parametric Map（整数＋RWVM）
+print(float(a[int(sys.argv[2]), int(sys.argv[3])]) * float(rw.RealWorldValueSlope) + float(rw.RealWorldValueIntercept))
 `, f, String(row), String(col)], { encoding: "utf8" });
   return Number(py.stdout.trim());
 }

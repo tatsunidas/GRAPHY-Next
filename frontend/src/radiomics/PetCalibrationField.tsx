@@ -18,12 +18,14 @@ export const isPetModality = (modality: string | null | undefined): boolean =>
 export const calibrationToSend = (modality: string | null | undefined, choice: CalibrationChoice): CalibrationChoice =>
   isPetModality(modality) ? choice : "auto";
 
-export function PetCalibrationField({ value, onChange, disabled, labelKey, noneWarnKey, testId }: {
+export function PetCalibrationField({ value, onChange, disabled, labelKey, noneWarnKey, helpKey = "roiFeat.calibration.help", testId }: {
   value: CalibrationChoice;
   onChange: (v: CalibrationChoice) => void;
   disabled: boolean;
   labelKey: string;
   noneWarnKey: string;
+  /** 説明文の鍵。既定は ROI 特徴量と同じ文言 */
+  helpKey?: string;
   testId: string;
 }) {
   const { t } = useI18n();
@@ -40,7 +42,7 @@ export function PetCalibrationField({ value, onChange, disabled, labelKey, noneW
         </span>
       </div>
       <div style={{ color: "#6b7785", fontSize: 11, marginTop: 4, lineHeight: 1.5 }} data-testid={`${testId}-help`}>
-        {t("roiFeat.calibration.help")}
+        {t(helpKey)}
       </div>
       {value === "none" && (
         <div data-testid={`${testId}-none-warn`} style={{

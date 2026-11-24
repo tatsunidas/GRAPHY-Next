@@ -306,7 +306,7 @@ class MapPetCalibrationIntegrationTest {
             try (DicomInputStream in = new DicomInputStream(files.get(0).toFile())) {
                 h = in.readDatasetUntilPixelData();
             }
-            String d = h.getString(Tag.DerivationDescription);
+            String d = PmReadSupport.derivationDescription(h);
             if (cal == null) {
                 assertTrue(d.contains("calibration=bw;scale="), d);
             } else {

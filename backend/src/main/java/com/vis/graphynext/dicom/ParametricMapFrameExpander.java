@@ -287,6 +287,12 @@ public final class ParametricMapFrameExpander {
                 for (int i = 0; i < n; i++) {
                     v[i] = b.getFloat((int) (off + (long) i * 4));
                 }
+            } else if (!ds.contains(Tag.DoubleFloatPixelData) && isParametricMap(ds) && ds.contains(Tag.PixelData)) {
+                // 整数の Parametric Map（16 bit 符号なしなど）。RWVM の範囲の外（例: 画素 0＝値なし）は NaN にする
+                if (!readIntegerFrame(ds, frame, n, v)) {
+                    return null;
+                }
+                return applyIntegerMapping(ds, frame, v);
             } else if (!ds.contains(Tag.DoubleFloatPixelData) && ConfocalGeometry.isConfocal(ds)) {
                 // 規格どおりの整数の CFM（8 ビット。16 ビットも読む）
                 if (!readIntegerFrame(ds, frame, n, v)) {
@@ -416,6 +422,27 @@ public final class ParametricMapFrameExpander {
         } catch (IOException e) {
             return null;
         }
+    }
+
+    /**
+     * 整数画素の RWVM。First〜Last Value Mapped の外の保存値は「値が無い」（C.7.6.16.2.11.1.2）ので NaN。
+     * RWVM が無いときは保存値そのまま。
+     */
+    private static float[] applyIntegerMapping(Attributes ds, int frame, float[] v) {
+        Attributes m = rwvm(ds, frame);
+        if (m == null) {
+            return v;
+        }
+        double slope = m.getDouble(Tag.RealWorldValueSlope, 1.0);
+        double intercept = m.getDouble(Tag.RealWorldValueIntercept, 0.0);
+        boolean ranged = m.contains(Tag.RealWorldValueFirstValueMapped) && m.contains(Tag.RealWorldValueLastValueMapped);
+        int first = ranged ? m.getInt(Tag.RealWorldValueFirstValueMapped, 0) : 0;
+        int last = ranged ? m.getInt(Tag.RealWorldValueLastValueMapped, 0) : 0;
+        for (int i = 0; i < v.length; i++) {
+            float sv = v[i];
+            v[i] = ranged && (sv < first || sv > last) ? Float.NaN : (float) (sv * slope + intercept);
+        }
+        return v;
     }
 
     /** 整数の Pixel Data（8・16 ビット、符号の有無）の 1 フレームを float に読む。 */

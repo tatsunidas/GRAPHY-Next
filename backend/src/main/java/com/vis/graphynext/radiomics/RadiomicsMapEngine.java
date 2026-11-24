@@ -263,6 +263,11 @@ public class RadiomicsMapEngine {
             if (ipp != null) ippByZ.put(k, ipp);
         }
 
+        // 旧版のマップの誤宣言は、PET の校正（別の理由で先に失敗する）より前に断る。画素の読み込み時の判定も残す
+        Attributes firstHeader = headerOf(sopPerZ[0]);
+        if (firstHeader != null) {
+            requireNotMisdeclaredMap(firstHeader, sopPerZ[0]);
+        }
         ValueCalibration valueCal = resolveCalibration(settings, sopPerZ);
 
         // ターゲットボリュームを積む（dcm4che で画素をデコード。圧縮なら PixelCodec で伸長）。
@@ -939,6 +944,24 @@ public class RadiomicsMapEngine {
         }
     }
 
+    /**
+     * 旧版が書いたマップ・フィルタ済みシリーズ（Secondary Capture・ImageType の 3 つ目が TEXTURE か LOG）は、
+     * 画素が 0〜65535 なのに BitsStored=15・HighBit=15 と宣言している。BitsStored で値を切る読み方では
+     * 32768 以上の画素が化けるので、黙って計算せず断る。表示は変えない。
+     */
+    static void requireNotMisdeclaredMap(Attributes ds, String sop) {
+        if (!UID.SecondaryCaptureImageStorage.equals(ds.getString(Tag.SOPClassUID))) {
+            return;
+        }
+        String[] it = ds.getStrings(Tag.ImageType);
+        String kind = it != null && it.length >= 3 ? it[2] : null;
+        if (("TEXTURE".equals(kind) || "LOG".equals(kind))
+                && ds.getInt(Tag.BitsStored, 0) == 15 && ds.getInt(Tag.HighBit, 0) == 15) {
+            throw new IllegalArgumentException("旧版で作られた、画素の宣言が誤っているシリーズです（BitsStored=15・HighBit=15 だが、"
+                    + "画素は 16 bit 全域を使っています。32768 以上の画素が誤って読まれます）。作り直してください。sop=" + sop);
+        }
+    }
+
     /** dcm4che データセットと（伸長済みの）画素 → モダリティ値(Rescale 適用)の FloatProcessor。 */
     static Loaded processorFrom(Attributes ds, String sop, byte[] px, boolean lossy) {
         int rows = ds.getInt(Tag.Rows, 0);
@@ -948,6 +971,7 @@ public class RadiomicsMapEngine {
             return null;
         }
         requireGrayscale(ds, sop);
+        requireNotMisdeclaredMap(ds, sop);
         if (ParametricMapFrameExpander.hasFloatPixels(ds)) {
             // Parametric Map から切り出した float のフレーム（値は実際の量）。NaN は呼び出し側で断る
             float[] v = ParametricMapFrameExpander.frameValues(ds, 0);

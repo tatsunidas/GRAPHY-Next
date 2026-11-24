@@ -268,6 +268,7 @@ export function GlamAnalysisScreen() {
           {isPetModality(sourceModality) && (
             <PetCalibrationField value={calibration} onChange={setCalibration} disabled={busy}
               labelKey="glam.field.calibration" noneWarnKey="glam.calibration.noneWarn"
+              helpKey="glam.calibration.help"
               testId="glam-calibration" />
           )}
           <Field label={t("glam.field.mask")}>

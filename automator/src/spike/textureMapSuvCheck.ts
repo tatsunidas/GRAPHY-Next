@@ -7,7 +7,7 @@
  *
  * 参照は textureMapSuvRef.py（pydicom + numpy だけ。本体のコードを使わない）。
  *   A. 既定のまま（calibration を送らない）で FIRSTORDER_Mean のマップ（カーネル 3・3D・margin 0・腫瘍の SEG）を作り、
- *      保存された派生シリーズの画素（保存値 × RescaleSlope + RescaleIntercept）が、DICOM から読み直した SUVbw の画素の
+ *      保存された派生シリーズ（Parametric Map）の画素（pydicom の pixel_array × RWVM の傾き + 切片。画素 0＝値なし）が、DICOM から読み直した SUVbw の画素の
  *      「窓 ∩ ROI」の平均と、16 bit 量子化の誤差（slope の半分）の範囲で一致する。係数は Python の式の値と一致する。
  *   B. none のマップは Bq/mL の参照と一致する。負例: 誤った係数の参照（auto に 1.0、none に SUV の係数）では一致しない。
  *   C. GLAM 解析（API）: 固定ビン数は auto と none で同じ離散化、固定ビン幅は同じ数値なら違い、単位を換算した幅なら同じ。
@@ -124,7 +124,7 @@ async function main(): Promise<void> {
     check(a.refMax > 1 && a.refMax < 100, "値の桁が SUV（Bq/mL の桁ではない）", a.refMax);
     const m = /calibration=bw;scale=([0-9.eE+-]+)/.exec(a.derivation ?? "");
     check(!!m && Math.abs(Number(m[1]) - stats.scale) < stats.scale * 1e-9, "DerivationDescription に校正（bw・係数）が残る", a.derivation);
-    check(a.outsideRoiNonZero === 0, "ROI の外は 0");
+    check(a.outsideRoiNonZero === 0 && a.insideRoiNoValue === 0, "ROI の外は実値 0.0（値なしではない。今のエンジンの実態）、ROI の中に値なしは無い", { outside: a.outsideRoiNonZero, noValueOutside: a.outsideRoiNoValue, inside: a.insideRoiNoValue });
     const wrongA = py(["map", PSMA, path.join(OUT_DIR, "map-auto"), "3", "1.0"]);
     check(wrongA.maxAbsDiff > 100 * (0.51 * a.slope), "負例: 既定のマップを Bq/mL の参照（係数 1）と比べると一致しない", { maxAbsDiff: wrongA.maxAbsDiff });
 
