@@ -182,7 +182,7 @@ public class RadiomicsMapEngine {
      * {@link #load} の {@code settings} に入れる、PET の校正の指定のキー（{@link RoiFeatureRequest#calibration}）。
      * 無いときは校正を扱わない（従来の経路）。テクスチャのマップと GLAM 解析は、
      * {@link TextureSeriesRequest#calibration}・{@link GlamAnalysisRequest#calibration}（既定 auto＝PET は SUVbw）を
-     * ここへ入れて読む。フィルタ済みシリーズ・最大断面は渡さない（フィルタ済みシリーズの出力は元と同じ単位の画像）。
+     * ここへ入れて読む。フィルタ済みシリーズ（{@link FilteredSeriesRequest#calibration}）も同じ。最大断面は渡さない。
      */
     /** 値なし（NaN）を含むシリーズも読む（1）。呼び出し側が {@link NanReach} で入力としてよいか判定する。ROI 特徴量とマップだけが付ける。 */
     public static final String ALLOW_NAN_SETTING = "GRAPHY_ALLOW_NAN";

@@ -1303,6 +1303,8 @@ export interface FilteredSeriesRequest {
   dimension?: "2D" | "3D";
   truncate?: number;
   padding?: "MIRROR" | "NEAREST" | "CONSTANT" | "PERIODIC";
+  /** PET の校正（auto・bw・sul-james・sul-janma・bsa・none。既定 auto＝PET は SUVbw、CT・MR はそのまま）。フィルタの前に画素値へ掛ける。 */
+  calibration?: string;
 }
 
 /** 作れた 1 本（backend: FilteredSeriesService.Created）。scaleMm は換算後の半径 r、sigmaMm は LoG の σ。 */

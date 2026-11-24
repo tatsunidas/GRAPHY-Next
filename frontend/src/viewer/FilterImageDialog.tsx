@@ -22,7 +22,8 @@ import {
   type Series,
   type Study,
 } from "../api";
-import { LOG_PADDINGS, SCALE_CONVERSIONS, type LogPadding, type ScaleConversion } from "../radiomics/roiFeatureSettings";
+import { CalibratedSeriesNote, PetCalibrationField, calibrationToSend, isCalibratedParametricMap, isPetModality, showsPetCalibration } from "../radiomics/PetCalibrationField";
+import { LOG_PADDINGS, SCALE_CONVERSIONS, type CalibrationChoice, type LogPadding, type ScaleConversion } from "../radiomics/roiFeatureSettings";
 import {
   DEFAULT_FILTER_SCALES,
   SCALE_NOTATIONS,
@@ -61,12 +62,22 @@ export function FilterImageDialog({
   const [dim3d, setDim3d] = useState(false);
   const [truncate, setTruncate] = useState(4);
   const [padding, setPadding] = useState<LogPadding>("MIRROR");
+  const [calibration, setCalibration] = useState<CalibrationChoice>("auto");
 
   const [busy, setBusy] = useState(false);
   const [job, setJob] = useState<FilteredSeriesJobStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [lossyDone, setLossyDone] = useState(false);
   const jobIdRef = useRef<string | null>(null);
+
+  const targetSeries = useMemo(
+    () => allSeries.find((s) => s.seriesInstanceUid === targetSeriesUid),
+    [allSeries, targetSeriesUid],
+  );
+  const targetModality = targetSeries?.modality;
+  const targetSopClassUid = targetSeries?.sopClassUid;
+  const targetIsPet = showsPetCalibration(targetModality, targetSopClassUid);
+  const targetIsCalibratedPet = isPetModality(targetModality) && isCalibratedParametricMap(targetSopClassUid);
 
   const spec = useMemo(() => parseScaleSpec(scalesText), [scalesText]);
   const hasZero = !!spec.values && spec.values.includes(0);
@@ -163,6 +174,7 @@ export function FilterImageDialog({
         dimension: dim3d ? "3D" : "2D",
         truncate,
         padding,
+        calibration: calibrationToSend(targetModality, calibration, targetSopClassUid),
       });
       jobIdRef.current = status.jobId;
       setJob(status);
@@ -216,6 +228,14 @@ export function FilterImageDialog({
             </select>
           </Field>
         )}
+
+        {/* PET のときだけ。CT・MR は校正の対象外で、auto を送る（backend では何も起きない）。 */}
+        {targetIsPet && (
+          <PetCalibrationField value={calibration} onChange={setCalibration} disabled={busy}
+            labelKey="texture.field.calibration" noneWarnKey="filterImg.calibration.noneWarn"
+            helpKey="filterImg.calibration.help" testId="filterimg-calibration" />
+        )}
+        {targetIsCalibratedPet && <CalibratedSeriesNote testId="filterimg-calibration-calibrated" />}
 
         <Field label={t("roiFeat.scale.notation")}>
           <select value={notation} onChange={(e) => setNotation(e.target.value as ScaleNotation)} disabled={busy}
