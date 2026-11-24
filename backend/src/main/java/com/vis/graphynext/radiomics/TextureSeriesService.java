@@ -249,6 +249,23 @@ public class TextureSeriesService {
                                     double windowCenter, double windowWidth,
                                     double sliceThickness, double spacingBetween, int z, byte[] px,
                                     ConfocalMicroscopyWriter.Equipment eq) {
+        return buildInstance(tmpl, studyInstanceUid, map, newSeriesUid, seriesNumber, seriesDesc, imageTypeLast,
+                rescaleType, derivation, slope, intercept, windowCenter, windowWidth, sliceThickness,
+                spacingBetween, z, px, eq, null);
+    }
+
+    /**
+     * RWVM の単位（UCUM）を持つ版。{@code unit} が null なら「単位なし」（コード {@code 1}）。値が SUV など実量の
+     * ときだけ渡す（フィルタ画像の PET 校正）。
+     *
+     * @param unit {コード値, コードの意味}。コード値は UCUM（Code Value は SH＝16 文字まで）
+     */
+    static Attributes buildInstance(Attributes tmpl, String studyInstanceUid, RadiomicsMapEngine.MapResult map,
+                                    String newSeriesUid, int seriesNumber, String seriesDesc, String imageTypeLast,
+                                    String rescaleType, String derivation, double slope, double intercept,
+                                    double windowCenter, double windowWidth,
+                                    double sliceThickness, double spacingBetween, int z, byte[] px,
+                                    ConfocalMicroscopyWriter.Equipment eq, String[] unit) {
         if (!hasGeometry(map)) {
             // エンジンの入り口（格子として扱えない画像を断る）で先に断られるので、通常は到達しない最後の守り
             throw new IllegalArgumentException(
@@ -256,7 +273,7 @@ public class TextureSeriesService {
         }
         return buildParametricMap(tmpl, studyInstanceUid, map, newSeriesUid, seriesNumber, seriesDesc, imageTypeLast,
                 rescaleType, derivation, slope, intercept, windowCenter, windowWidth, sliceThickness,
-                spacingBetween, z, px, eq);
+                spacingBetween, z, px, eq, unit);
     }
 
     /** 位置情報（IOP・FrameOfReference・全スライスの IPP）が揃うか。Parametric Map の必須。 */
@@ -283,7 +300,7 @@ public class TextureSeriesService {
                                                  String rescaleType, String derivation, double slope,
                                                  double intercept, double windowCenter, double windowWidth,
                                                  double sliceThickness, double spacingBetween, int z, byte[] px,
-                                                 ConfocalMicroscopyWriter.Equipment eq) {
+                                                 ConfocalMicroscopyWriter.Equipment eq, String[] ucum) {
         Attributes a = new Attributes();
         double[] iop = map.imageOrientationPatient();
         double[] ipp = map.ippPerZ().get(z);
@@ -407,9 +424,9 @@ public class TextureSeriesService {
         rw.setString(Tag.LUTLabel, VR.SH, cut(rescaleType, 16));
         rw.setString(Tag.LUTExplanation, VR.LO, cut(rescaleType, 64));
         Attributes unit = new Attributes();
-        unit.setString(Tag.CodeValue, VR.SH, "1");
+        unit.setString(Tag.CodeValue, VR.SH, ucum == null ? "1" : ucum[0]);
         unit.setString(Tag.CodingSchemeDesignator, VR.SH, "UCUM");
-        unit.setString(Tag.CodeMeaning, VR.LO, "no units");
+        unit.setString(Tag.CodeMeaning, VR.LO, ucum == null ? "no units" : ucum[1]);
         rw.newSequence(Tag.MeasurementUnitsCodeSequence, 1).add(unit);
         shared.newSequence(Tag.RealWorldValueMappingSequence, 1).add(rw);
         a.newSequence(Tag.SharedFunctionalGroupsSequence, 1).add(shared);

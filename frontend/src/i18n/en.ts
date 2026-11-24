@@ -4082,6 +4082,8 @@ export const en: Record<string, string> = {
   "filterImg.listLine": "r {{r}} mm → σ {{s}} mm",
   "filterImg.dim.2d": "2D (in-plane)",
   "filterImg.dim.3d": "3D (volume)",
+  "filterImg.calibration.noneWarn": "No calibration (Bq/mL): the filtered values refer to the activity concentration and cannot be compared with SUV. The unit of the derived series is Bq/mL and the record says it is uncalibrated.",
+  "filterImg.calibration.help": "PET is calibrated to SUV before the filter is applied, and the derived series has an SUV unit (SUVbw and so on). A series without the body weight, dose or times in its DICOM fails with the reason (no zero or default is filled in).",
   "filterImg.note": "The filter is applied to the whole image, and one series per scale is saved on the same grid as the source. Values are rounded to 16 bit for display, so use the \"Radiomics features (ROI)\" table for ROI numbers. LoG needs an isotropic grid: all 3 axes for 3D, the 2 in-plane axes for 2D.",
   "filterImg.run": "Create",
   "filterImg.running": "Creating…",

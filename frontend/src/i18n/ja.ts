@@ -4073,6 +4073,8 @@ export const ja: Record<string, string> = {
   "filterImg.listLine": "r {{r}} mm → σ {{s}} mm",
   "filterImg.dim.2d": "2D（面内）",
   "filterImg.dim.3d": "3D（体積）",
+  "filterImg.calibration.noneWarn": "校正しない（Bq/mL のまま）: フィルタ画像の値は放射能濃度に対する値で、SUV とは比べられません。作ったシリーズの単位は Bq/mL で、記録に「校正なし」と残します。",
+  "filterImg.calibration.help": "PET は SUV に校正してからフィルタを掛け、作るシリーズの単位は SUV（SUVbw など）です。体重・投与量・時刻などが DICOM に無いと、理由つきで失敗します（0 や既定値では埋めません）。",
   "filterImg.note": "画像全体に掛け、元と同じ位置・画素間隔のシリーズをスケールごとに保存します。値は表示用に 16 bit へ丸めるため、ROI の数値は「Radiomics 特徴量（ROI）」の表を使ってください。LoG は等方の格子が前提で、3D は 3 軸、2D は面内の 2 軸が揃っている必要があります。",
   "filterImg.run": "作成",
   "filterImg.running": "作成中…",

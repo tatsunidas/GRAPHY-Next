@@ -16,6 +16,8 @@ import java.util.List;
  * @param dimension       {@code 2D}（面内、既定）か {@code 3D}。換算の d も決まる
  * @param truncate        核の切り捨て（σ の倍数、既定 4）
  * @param padding         境界（{@code MIRROR}〔既定〕・{@code NEAREST}・{@code CONSTANT}・{@code PERIODIC}）
+ * @param calibration     PET の校正の指定（{@link RoiFeatureRequest#CALIBRATIONS} の 6 値。null・空は {@code auto}＝
+ *                        PET は SUVbw、CT・MR はそのまま）。フィルタを掛ける前に画素値へ掛ける
  */
 public record FilteredSeriesRequest(
         String studyInstanceUid,
@@ -28,5 +30,14 @@ public record FilteredSeriesRequest(
         Double scaleCoefficient,
         String dimension,
         Double truncate,
-        String padding) {
+        String padding,
+        String calibration) {
+
+    /** 校正の指定なし（従来の要求。{@code auto}）。 */
+    public FilteredSeriesRequest(String studyInstanceUid, String sourceSeriesUid, int channel, int timePoint,
+                                 List<Double> scales, String scaleNotation, String scaleConversion,
+                                 Double scaleCoefficient, String dimension, Double truncate, String padding) {
+        this(studyInstanceUid, sourceSeriesUid, channel, timePoint, scales, scaleNotation, scaleConversion,
+                scaleCoefficient, dimension, truncate, padding, null);
+    }
 }
