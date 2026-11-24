@@ -143,4 +143,24 @@ class SliceLayoutTest {
         assertEquals(SliceLayout.Kind.UNKNOWN, SliceLayout.of(withNull, AXIAL).kind());
         assertEquals(SliceLayout.Kind.UNKNOWN, SliceLayout.of(zs(0, 2.5), null).kind());
     }
+
+    @Test
+    void irregularityMessage_unknownStartsWithTheSentenceNotWithAPeriod() {
+        List<double[]> withNull = zs(0, 2.5, 5);
+        withNull.set(1, null);
+        for (SliceLayout l : new SliceLayout[]{SliceLayout.of(withNull, AXIAL), SliceLayout.of(zs(0, 2.5), null)}) {
+            String m = l.irregularityMessage();
+            assertTrue(m.startsWith("スライスの位置（IPP/IOP）がありません。この解析は"), m);
+        }
+    }
+
+    @Test
+    void irregularityMessage_otherKindsKeepTheirWording() {
+        String missing = SliceLayout.of(zs(cum(2.5, 2.5, 5.0, 2.5)), AXIAL).irregularityMessage();
+        assertTrue(missing.startsWith("スライスが 1 枚欠けています（間隔 2.500〜5.000 mm）。この解析は"), missing);
+        String irregular = SliceLayout.of(zs(0, 2.5, 6, 8.5), AXIAL).irregularityMessage();
+        assertTrue(irregular.startsWith("スライス間隔が不規則です（2.500〜3.500 mm）。この解析は"), irregular);
+        String dup = SliceLayout.of(zs(0, 2.5, 2.5, 5), AXIAL).irregularityMessage();
+        assertTrue(dup.startsWith("同じ位置に複数のスライスがあります。この解析は"), dup);
+    }
 }

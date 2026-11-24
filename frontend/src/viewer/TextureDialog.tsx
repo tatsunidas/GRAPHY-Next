@@ -24,7 +24,7 @@ import {
   type TextureJobStatus,
 } from "../api";
 import { fetchSettings } from "../settings/settingsApi";
-import { PetCalibrationField, calibrationToSend, isPetModality } from "../radiomics/PetCalibrationField";
+import { CalibratedSeriesNote, PetCalibrationField, calibrationToSend, isCalibratedParametricMap, isPetModality, showsPetCalibration } from "../radiomics/PetCalibrationField";
 import type { CalibrationChoice } from "../radiomics/roiFeatureSettings";
 import {
   TEXTURE_FAMILIES,
@@ -108,11 +108,14 @@ export function TextureDialog({
     return spacing ? t("texture.resampling.on", { spacing: spacing.join(", ") }) : null;
   }, [settings, t]);
 
-  const targetModality = useMemo(
-    () => allSeries.find((s) => s.seriesInstanceUid === targetSeriesUid)?.modality,
+  const targetSeries = useMemo(
+    () => allSeries.find((s) => s.seriesInstanceUid === targetSeriesUid),
     [allSeries, targetSeriesUid],
   );
-  const targetIsPet = isPetModality(targetModality);
+  const targetModality = targetSeries?.modality;
+  const targetSopClassUid = targetSeries?.sopClassUid;
+  const targetIsPet = showsPetCalibration(targetModality, targetSopClassUid);
+  const targetIsCalibratedPet = isPetModality(targetModality) && isCalibratedParametricMap(targetSopClassUid);
 
   // ターゲット候補＝同一 study の全シリーズ。マスク候補はターゲットを除いたもの。
   const maskCandidates = useMemo(
@@ -262,7 +265,7 @@ export function TextureDialog({
         margin: null,
         seriesDescription: null,
         seriesNumber: null,
-        calibration: calibrationToSend(targetModality, calibration),
+        calibration: calibrationToSend(targetModality, calibration, targetSopClassUid),
       });
       jobIdRef.current = status.jobId;
       setJob(status);
@@ -323,6 +326,7 @@ export function TextureDialog({
             helpKey="texture.calibration.help"
             testId="texture-calibration" />
         )}
+        {targetIsCalibratedPet && <CalibratedSeriesNote testId="texture-calibration-calibrated" />}
 
         <Field label={t("texture.field.mask")}>
           <select value={maskSeriesUid} onChange={(e) => setMaskSeriesUid(e.target.value)} disabled={busy} style={input}>

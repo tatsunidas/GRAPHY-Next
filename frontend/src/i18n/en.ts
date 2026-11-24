@@ -4106,6 +4106,7 @@ export const en: Record<string, string> = {
   "texture.dim.3d": "3D (volume)",
   "texture.field.calibration": "Calibration (PET)",
   "texture.calibration.noneWarn": "No calibration (Bq/mL): the map values, fixed bin widths and ranges refer to the activity concentration and cannot be compared with SUV. The derived series records that it is uncalibrated.",
+  "petCalibration.calibratedSeries": "This series holds calibrated values (Parametric Map). No calibration is applied; the values are used as they are.",
   "texture.calibration.help": "The map range, discretisation and features use the calibrated values. A series without the body weight, dose or times in its DICOM fails with the reason (no zero or default is filled in).",
   "texture.paramsNote": "Bin count, δ, α and other details use the values in Settings ▸ Texture.",
   "texture.run": "Generate map",

@@ -39,7 +39,7 @@ import {
   binColor,
 } from "./GlamCharts";
 import { GlamFeatureTable } from "./GlamFeatureTable";
-import { PetCalibrationField, calibrationToSend, isPetModality } from "./PetCalibrationField";
+import { CalibratedSeriesNote, PetCalibrationField, calibrationToSend, isCalibratedParametricMap, isPetModality, showsPetCalibration } from "./PetCalibrationField";
 import type { CalibrationChoice } from "./roiFeatureSettings";
 
 /** 2D ビューアから渡される対象（localStorage 経由。ウィンドウを跨ぐため）。 */
@@ -154,10 +154,12 @@ export function GlamAnalysisScreen() {
     };
   }, [studyUid, maskSeriesUid]);
 
-  const sourceModality = useMemo(
-    () => allSeries.find((s) => s.seriesInstanceUid === sourceSeriesUid)?.modality,
+  const sourceSeries = useMemo(
+    () => allSeries.find((s) => s.seriesInstanceUid === sourceSeriesUid),
     [allSeries, sourceSeriesUid],
   );
+  const sourceModality = sourceSeries?.modality;
+  const sourceSopClassUid = sourceSeries?.sopClassUid;
 
   const maskCandidates = useMemo(
     () => allSeries.filter((s) => s.seriesInstanceUid !== sourceSeriesUid),
@@ -191,7 +193,7 @@ export function GlamAnalysisScreen() {
         timePoint: 0,
         maxRadius,
         settings,
-        calibration: calibrationToSend(sourceModality, calibration),
+        calibration: calibrationToSend(sourceModality, calibration, sourceSopClassUid),
       });
       show(result);
     } catch (e) {
@@ -265,11 +267,14 @@ export function GlamAnalysisScreen() {
               ))}
             </select>
           </Field>
-          {isPetModality(sourceModality) && (
+          {showsPetCalibration(sourceModality, sourceSopClassUid) && (
             <PetCalibrationField value={calibration} onChange={setCalibration} disabled={busy}
               labelKey="glam.field.calibration" noneWarnKey="glam.calibration.noneWarn"
               helpKey="glam.calibration.help"
               testId="glam-calibration" />
+          )}
+          {isPetModality(sourceModality) && isCalibratedParametricMap(sourceSopClassUid) && (
+            <CalibratedSeriesNote testId="glam-calibration-calibrated" />
           )}
           <Field label={t("glam.field.mask")}>
             <select value={maskSeriesUid} onChange={(e) => setMaskSeriesUid(e.target.value)}
