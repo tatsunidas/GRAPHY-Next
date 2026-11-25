@@ -206,6 +206,8 @@ contextBridge.exposeInMainWorld("graphyDesktop", {
   computeEnsureDefault: () => ipcRenderer.invoke("graphy:compute-ensure-default"),
   // 名前を付けて保存。上書き確認は OS のダイアログが出す。
   saveFile: (payload) => ipcRenderer.invoke("graphy:save-file", payload),
+  // プラグイン向け renderPdf: HTML → PDF のバイト列（保存はしない）。
+  renderPdf: (req) => ipcRenderer.invoke("graphy:render-pdf", req),
   // 開くダイアログ（プラグインの H43 file.pickFiles）。ファイルだけ。選んだ絶対パスを返す。
   pickFiles: (payload) => ipcRenderer.invoke("graphy:pick-files", payload),
   // H56: プラグインのフォルダ（選んだフォルダの中にだけ書ける）
