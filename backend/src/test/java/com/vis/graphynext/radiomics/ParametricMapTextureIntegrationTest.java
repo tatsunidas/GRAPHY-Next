@@ -77,8 +77,26 @@ class ParametricMapTextureIntegrationTest {
     }
 
     private String ingest(String series, FloatNiftiFixture.Value v) throws IOException {
+        return ingest(series, v, false);
+    }
+
+    /**
+     * {@code nanToInf}: NaN の画素を +Inf に書き換えて保管する（NIfTI の取り込みは Inf を NaN に直すので、
+     * 外部のソフトが作った「Inf を含む float の PM」は、取り込みのあとに画素を書き換えて模す）。
+     */
+    private String ingest(String series, FloatNiftiFixture.Value v, boolean nanToInf) throws IOException {
         Path nii = FloatNiftiFixture.write(Files.createTempFile(tmp, "adc", ".nii"), N, N, NZ, 1.0, 1.0, 1.0, v);
         for (Attributes ds : FloatNiftiFixture.toParametricMap(nii, "PM^TEX", "PM^TEX", STUDY, series, "mm2/s")) {
+            if (nanToInf) {
+                java.nio.ByteBuffer b = java.nio.ByteBuffer.wrap(ds.getBytes(Tag.FloatPixelData))
+                        .order(java.nio.ByteOrder.LITTLE_ENDIAN);
+                for (int i = 0; i < b.capacity(); i += 4) {
+                    if (Float.isNaN(b.getFloat(i))) {
+                        b.putFloat(i, Float.POSITIVE_INFINITY);
+                    }
+                }
+                ds.setBytes(Tag.FloatPixelData, org.dcm4che3.data.VR.OF, b.array());
+            }
             Path f = Files.createTempFile(tmp, "pm", ".dcm");
             try (DicomOutputStream out = new DicomOutputStream(f.toFile())) {
                 out.writeDataset(ds.createFileMetaInformation(UID.ExplicitVRLittleEndian), ds);
@@ -118,6 +136,17 @@ class ParametricMapTextureIntegrationTest {
         IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
                 () -> textureService.create(request(series)));
         assertTrue(e.getMessage().contains("NaN"), e.getMessage());
+    }
+
+    @Test
+    void refusesASeriesWithInfinityTheSameWayAsNaN() throws Exception {
+        // 外部のソフトが作った PM の Inf は「値なし」として NaN と同じに扱う（取り込みの NIfTI・融合の計算と同じ決め）
+        String series = ingest(UIDUtils.createUID(),
+                (i, j, k) -> i == 2 && j == 2 && k == 1 ? Float.NaN : value(i, j, k), true);
+        IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                () -> textureService.create(request(series)));
+        assertTrue(e.getMessage().contains("NaN"), e.getMessage());
+        assertTrue(e.getMessage().contains("無限大"), "無限大も値なしとして扱うと分かる文言: " + e.getMessage());
     }
 
     // ---- 整数の Parametric Map（マップ・フィルタ済みシリーズの新しい形式）を入力にする ----

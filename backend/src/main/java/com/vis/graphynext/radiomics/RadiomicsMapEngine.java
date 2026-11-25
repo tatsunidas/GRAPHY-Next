@@ -221,7 +221,7 @@ public class RadiomicsMapEngine {
         int margin = req.margin() != null ? Math.max(0, req.margin()) : FeatureVisualizationMap.DEFAULT_MARGIN;
         NanReach.MapNan st = NanReach.assessForMap(img, roi, vol.width(), vol.height(), kernel, margin, req.force2D());
         if (st == NanReach.MapNan.INSIDE || st == NanReach.MapNan.REACHED) {
-            throw new IllegalArgumentException("値の無い画素（NaN）を含むシリーズは、"
+            throw new IllegalArgumentException("値の無い画素（NaN・無限大）を含むシリーズは、"
                     + (st == NanReach.MapNan.INSIDE ? "ROI の内側に NaN があるため" : "窓が届く範囲（ROI から "
                     + NanReach.mapReachVoxels(kernel, margin) + " 画素以内）に NaN があるため")
                     + "テクスチャを計算できません（窓の値が静かに変わります）。ROI の外が値なしのマップ"
@@ -321,7 +321,7 @@ public class RadiomicsMapEngine {
             long nan = allowNaN ? 0 : countNaN(loaded.ip());
             if (nan > 0) {
                 // 窓の中の NaN を離散化がどう扱うか（RadiomicsJ）を確かめられていないので、黙って計算しない
-                throw new IllegalArgumentException("値の無い画素（NaN）を含むシリーズはテクスチャを計算できません"
+                throw new IllegalArgumentException("値の無い画素（NaN・無限大）を含むシリーズはテクスチャを計算できません"
                         + "（z=" + z + " に " + nan + " 画素）。Parametric Map の NaN は背景などの「値なし」です。");
             }
             procs.add(valueCal.scales() ? scaled(loaded.ip(), valueCal.scale()) : loaded.ip());
@@ -1047,7 +1047,16 @@ public class RadiomicsMapEngine {
         if (ParametricMapFrameExpander.hasFloatPixels(ds)) {
             // Parametric Map から切り出した float のフレーム（値は実際の量）。NaN は呼び出し側で断る
             float[] v = ParametricMapFrameExpander.frameValues(ds, 0);
-            return v == null ? null : new Loaded(new FloatProcessor(cols, rows, v, null), null, lossy);
+            if (v == null) {
+                return null;
+            }
+            // 無限大は「値なし」として NaN に直す（NIfTI の取り込み・融合の計算と同じ決め）。以降の判定は NaN だけを見る
+            for (int i = 0; i < v.length; i++) {
+                if (Float.isInfinite(v[i])) {
+                    v[i] = Float.NaN;
+                }
+            }
+            return new Loaded(new FloatProcessor(cols, rows, v, null), null, lossy);
         }
         int ba = ds.getInt(Tag.BitsAllocated, 16);
         int bs = ds.getInt(Tag.BitsStored, ba);
