@@ -369,6 +369,18 @@ public final class NiftiToDicom {
         ds.setString(Tag.DeviceSerialNumber, VR.LO, "NIFTI-IMPORT");
         ds.setString(Tag.SoftwareVersions, VR.LO, "GRAPHY-Next");
         ds.setString(Tag.PresentationLUTShape, VR.CS, "IDENTITY");
+        // Parametric Map の Type 1・2（値の決め方は TextureSeriesService と同じ。元の無い Type 2 は空で書く）
+        ds.remove(Tag.ConversionType); // Conversion Type は SC 用で、Parametric Map の General Image には無い
+        ds.setString(Tag.ContentQualification, VR.CS, "RESEARCH");
+        ds.setString(Tag.BurnedInAnnotation, VR.CS, "NO");
+        ds.setString(Tag.RecognizableVisualFeatures, VR.CS, "YES");
+        ds.setString(Tag.LossyImageCompression, VR.CS, "00");
+        ds.newSequence(Tag.AcquisitionContextSequence, 0);
+        nullIfAbsent(ds, Tag.PositionReferenceIndicator, VR.LO);
+        nullIfAbsent(ds, Tag.StudyTime, VR.TM);
+        nullIfAbsent(ds, Tag.AccessionNumber, VR.SH);
+        nullIfAbsent(ds, Tag.ReferringPhysicianName, VR.PN);
+        nullIfAbsent(ds, Tag.StudyID, VR.SH);
 
         String dimOrgUid = ds.getString(Tag.SeriesInstanceUID) + ".1";
         if (dimOrgUid.length() > 64) {
@@ -425,6 +437,13 @@ public final class NiftiToDicom {
         }
         frame.newSequence(Tag.FrameContentSequence, 1).add(fc);
         ds.newSequence(Tag.PerFrameFunctionalGroupsSequence, 1).add(frame);
+    }
+
+    /** Type 2（値が無ければ空で書く）。元にある値は変えない。 */
+    private static void nullIfAbsent(Attributes ds, int tag, VR vr) {
+        if (!ds.contains(tag)) {
+            ds.setNull(tag, vr);
+        }
     }
 
     private static Attributes dimIndexItem(String dimOrgUid, int pointer, int functionalGroupPointer) {

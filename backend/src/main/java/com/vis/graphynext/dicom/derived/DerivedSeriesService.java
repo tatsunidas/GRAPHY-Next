@@ -436,7 +436,25 @@ public class DerivedSeriesService {
         a.setString(Tag.Manufacturer, VR.LO, "Visionary Imaging Services, Inc.");
         a.setString(Tag.ManufacturerModelName, VR.LO, "GRAPHY-Next");
         a.setString(Tag.SoftwareVersions, VR.LO, "GRAPHY-Next");
+        a.setString(Tag.DeviceSerialNumber, VR.LO, "GRAPHY-NEXT");
         a.setString(Tag.PresentationLUTShape, VR.CS, "IDENTITY");
+        // Parametric Map Image・Multi-frame Functional Groups・Acquisition Context の Type 1・2（値の決め方は TextureSeriesService と同じ）
+        a.setString(Tag.ContentQualification, VR.CS, "RESEARCH");
+        java.time.LocalDateTime now = java.time.LocalDateTime.now();
+        a.setString(Tag.ContentDate, VR.DA, now.format(java.time.format.DateTimeFormatter.BASIC_ISO_DATE));
+        a.setString(Tag.ContentTime, VR.TM, now.format(java.time.format.DateTimeFormatter.ofPattern("HHmmss")));
+        a.setString(Tag.BurnedInAnnotation, VR.CS, "NO");
+        a.setString(Tag.RecognizableVisualFeatures, VR.CS, "YES");
+        boolean lossy = "01".equals(tmpl.getString(Tag.LossyImageCompression));
+        a.setString(Tag.LossyImageCompression, VR.CS, lossy ? "01" : "00");
+        if (lossy) {
+            for (int tag : new int[] { Tag.LossyImageCompressionRatio, Tag.LossyImageCompressionMethod }) {
+                if (tmpl.containsValue(tag)) {
+                    a.setValue(tag, tmpl.getVR(tag), tmpl.getValue(tag));
+                }
+            }
+        }
+        a.newSequence(Tag.AcquisitionContextSequence, 0);
 
         String dimOrgUid = newSeriesUid + ".1";
         if (dimOrgUid.length() > 64) {
