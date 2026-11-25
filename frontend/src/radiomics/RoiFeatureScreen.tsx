@@ -69,6 +69,7 @@ import {
 } from "./roiFeatureSettings";
 import { parseAdvanced } from "./advancedSettings";
 import { useSettingsSchema } from "./useSettingsSchema";
+import { InfoMark } from "./InfoMark";
 
 interface RoiFeatureContext {
   studyInstanceUid: string;
@@ -1033,7 +1034,7 @@ function FamilyRows({ label, raw, discretisation, rows, t }: {
 function Field({ label, children, tip }: { label: string; children: React.ReactNode; tip?: string }) {
   return (
     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, padding: "3px 0" }}>
-      <span style={{ ...fieldLabel, flex: "none", minWidth: 150 }} title={tip}>{label}</span>
+      <span style={{ ...fieldLabel, flex: "none", minWidth: 150 }} title={tip}>{label}{tip && <InfoMark tip={tip} />}</span>
       <span style={{ flex: 1, textAlign: "right" }}>{children}</span>
     </div>
   );

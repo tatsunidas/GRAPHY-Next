@@ -4,6 +4,7 @@
  */
 import { useRef } from "react";
 import { useI18n } from "../i18n/i18n";
+import { InfoMark } from "./InfoMark";
 import { ERR_DUPLICATE_PREFIX, ERR_NO_PAIRS, queueSummary, type QueueEntry } from "./batchQueue";
 
 /** 一括抽出ダイアログの「定義の一覧」。状態は親が持つ（実行中の更新を受けるため）。 */
@@ -50,21 +51,21 @@ export function BatchQueuePanel({
   const enabledCount = entries.filter((e) => e.enabled).length;
   return (
     <div style={{ marginTop: 12, borderTop: "1px solid #eef2f6", paddingTop: 6 }} data-testid="batch-queue">
-      <div style={{ fontWeight: 600, color: "#0b5cad" }}>{t("roiFeat.batch.queue.title")}</div>
+      <div style={{ fontWeight: 600, color: "#0b5cad" }} title={t("roiFeat.tip.bQueue")}>{t("roiFeat.batch.queue.title")}<InfoMark tip={t("roiFeat.tip.bQueue")} /></div>
       <div style={note}>{t("roiFeat.batch.queue.note")}</div>
       <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 6 }}>
-        <button type="button" style={btn} data-testid="batch-queue-add" disabled={running} onClick={() => fileRef.current?.click()}>
+        <button type="button" style={btn} data-testid="batch-queue-add" title={t("roiFeat.tip.bQueueAdd")} disabled={running} onClick={() => fileRef.current?.click()}>
           {t("roiFeat.batch.queue.add")}
         </button>
         <input ref={fileRef} data-testid="batch-queue-file" type="file" multiple accept=".json,application/json" style={{ display: "none" }}
           onChange={(e) => { const fs = Array.from(e.target.files ?? []); if (fs.length > 0) onAddFiles(fs); e.target.value = ""; }} />
-        <button type="button" style={btn} data-testid="batch-queue-add-current" disabled={running || !canAddCurrent} onClick={onAddCurrent}>
+        <button type="button" style={btn} data-testid="batch-queue-add-current" title={t("roiFeat.tip.bQueueAddCurrent")} disabled={running || !canAddCurrent} onClick={onAddCurrent}>
           {t("roiFeat.batch.queue.addCurrent")}
         </button>
-        <button type="button" style={btnPrimary} data-testid="batch-queue-run" disabled={running || busy || enabledCount === 0} onClick={onRun}>
+        <button type="button" style={btnPrimary} data-testid="batch-queue-run" title={t("roiFeat.tip.bQueueRun")} disabled={running || busy || enabledCount === 0} onClick={onRun}>
           {t("roiFeat.batch.queue.run")}
         </button>
-        {running && <button type="button" style={btn} data-testid="batch-queue-cancel" onClick={onCancel}>{t("roiFeat.batch.queue.cancel")}</button>}
+        {running && <button type="button" style={btn} data-testid="batch-queue-cancel" title={t("roiFeat.tip.bQueueCancel")} onClick={onCancel}>{t("roiFeat.batch.queue.cancel")}</button>}
         {entries.length > 0 && (
           <span style={note} data-testid="batch-queue-summary">
             {t("roiFeat.batch.queue.summary", { done: s.done, failed: s.failed, qc: s.qcStopped, pending: s.pending })}
@@ -79,7 +80,7 @@ export function BatchQueuePanel({
             {entries.map((e, i) => (
               <tr key={e.id} data-testid={`batch-queue-row-${i}`} style={{ borderTop: "1px solid #eef2f6" }}>
                 <td style={td}>
-                  <input type="checkbox" data-testid={`batch-queue-enabled-${i}`} checked={e.enabled} disabled={running}
+                  <input type="checkbox" data-testid={`batch-queue-enabled-${i}`} title={t("roiFeat.tip.bQueueEnabled")} checked={e.enabled} disabled={running}
                     onChange={(ev) => set(e.id, { enabled: ev.target.checked })} />
                 </td>
                 <td style={td}>{i + 1}. {e.spec.output.prefix || "roi-features-batch"}</td>
