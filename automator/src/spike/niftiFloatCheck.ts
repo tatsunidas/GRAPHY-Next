@@ -227,7 +227,8 @@ async function main(): Promise<void> {
     // 取り込みの画面: NIfTI を選ぶと「値の単位」が出て選べる（F2）
     // メニューとツールバーに同じ文字の項目があるので、ツールバーのボタン（同じダイアログを開く）を押す
     await page.getByText("非DICOM取込", { exact: true }).first().click();
-    await page.locator('input[type="file"][multiple]').setInputFiles(nii);
+    // ダイアログには RAW 用のファイル入力（raw-file-input）もあるので、それを除いた NIfTI などの入力を選ぶ
+    await page.locator('input[type="file"][multiple]:not([data-testid="raw-file-input"])').setInputFiles(nii);
     const unitSel = page.getByTestId("nifti-unit");
     await unitSel.waitFor({ state: "visible", timeout: 10_000 });
     await unitSel.selectOption("other");
