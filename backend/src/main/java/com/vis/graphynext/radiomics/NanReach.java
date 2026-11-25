@@ -11,6 +11,7 @@ import java.util.Arrays;
 
 /**
  * 値なし（NaN）を含む画像を Radiomics の入力にしてよいかの判定（画素だけを見る純関数）。
+ * 無限大は読み込み（{@code RadiomicsMapEngine.processorFrom}）で NaN に直してあるので、ここでは NaN だけを見る。
  *
  * <p>実測（RadiomicsJ 2.7.4、合成画像）: ROI の<b>内側</b>の NaN は全族の値を変え、一次統計の多くは NaN になる。
  * ROI の<b>外側</b>の NaN は、① ROI 特徴量では局所強度（LocalIntensityPeak・GlobalIntensityPeak）の 2 列だけを変える

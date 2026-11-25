@@ -4512,7 +4512,7 @@ export const en: Record<string, string> = {
   "roiFeat.batch.qcflag.UNCALIBRATED_PT": "uncalibrated PET (Bq/mL)",
   "roiFeat.batch.qcflag.UNCALIBRATED_SPACING": "no pixel spacing (in-plane in pixels)",
   "roiFeat.batch.qcflag.RECTIFIED_GRID": "computed on a regridded volume (missing / uneven slices or tilt)",
-  "roiFeat.batch.qcflag.NAN_OUTSIDE_ROI": "no-value (NaN) voxels outside the ROI (none inside)",
+  "roiFeat.batch.qcflag.NAN_OUTSIDE_ROI": "no-value (NaN / infinite) voxels outside the ROI (none inside)",
   "roiFeat.batch.qcflag.NAN_LOCAL_PEAK_UNDEFINED": "the two local-intensity peak columns are blank (no-value voxels nearby)",
   "roiFeat.batch.qcflag.VALUEKIND_OVERRIDDEN": "value kind overridden",
   "roiFeat.batch.qcflag.IVH_BINWIDTH_UNSET": "IVH bin width not set (computed as arbitrary units)",

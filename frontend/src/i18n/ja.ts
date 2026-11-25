@@ -4503,7 +4503,7 @@ export const ja: Record<string, string> = {
   "roiFeat.batch.qcflag.UNCALIBRATED_PT": "未校正の PET（Bq/mL）",
   "roiFeat.batch.qcflag.UNCALIBRATED_SPACING": "画素間隔なし（面内は pixel）",
   "roiFeat.batch.qcflag.RECTIFIED_GRID": "取り直した格子で計算（欠損・不等間隔・チルト）",
-  "roiFeat.batch.qcflag.NAN_OUTSIDE_ROI": "ROI の外に値なし（NaN）あり（ROI の内側には無い）",
+  "roiFeat.batch.qcflag.NAN_OUTSIDE_ROI": "ROI の外に値なし（NaN・無限大）あり（ROI の内側には無い）",
   "roiFeat.batch.qcflag.NAN_LOCAL_PEAK_UNDEFINED": "局所強度ピークの 2 列は空欄（近傍に値なし）",
   "roiFeat.batch.qcflag.VALUEKIND_OVERRIDDEN": "値の種類を上書き",
   "roiFeat.batch.qcflag.IVH_BINWIDTH_UNSET": "IVH のビン幅が未指定（任意単位で計算）",

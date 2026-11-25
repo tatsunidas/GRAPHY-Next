@@ -367,7 +367,7 @@ public class RoiFeatureService {
                 c.pixelDepth > 0 ? c.pixelDepth : 1);
         String hint = "ROI の外が値なしのマップ（テクスチャマップなど）を入力にした可能性があります。";
         if (st == NanReach.RoiNan.INSIDE) {
-            throw new IllegalArgumentException("値の無い画素（NaN）が ROI の内側にあるため、特徴量を計算できません"
+            throw new IllegalArgumentException("値の無い画素（NaN・無限大）が ROI の内側にあるため、特徴量を計算できません"
                     + "（全族の値が変わります）。" + hint + "ROI を値のある範囲に絞るか、元の画像を入力にしてください。");
         }
         String spread = null;
@@ -379,7 +379,7 @@ public class RoiFeatureService {
         else if (req.has(RoiFeatureRequest.RoiMode.MAX_SECTION_2D) || req.has(RoiFeatureRequest.RoiMode.SLICES_2D)
                 || req.allPlanes()) spread = "2D の単位・全断面";
         if (spread != null) {
-            throw new IllegalArgumentException("値の無い画素（NaN）を含む画像は、" + spread
+            throw new IllegalArgumentException("値の無い画素（NaN・無限大）を含む画像は、" + spread
                     + "を伴う計算に使えません（NaN が ROI の中へ広がります）。" + hint
                     + "元の画像を入力にするか、3D の単位だけ・補間とフィルタなしで計算してください。");
         }
