@@ -10,7 +10,7 @@
 import type { RoiFeatureResult } from "../api";
 import { BATCH_FINISHED, type BatchPair, type BatchQc, type BatchRequest, type BatchStatus } from "./batchApi";
 import { normalizeLabels, type SpecKind } from "./batchSpec";
-import { ROI_FEATURE_FAMILIES, roiFeatureSettings, valueSpecOf, type RoiFeatureForm } from "./roiFeatureSettings";
+import { ROI_FEATURE_FAMILIES, defaultRoiFeatureForm, roiFeatureSettings, valueSpecOf, type RoiFeatureForm } from "./roiFeatureSettings";
 
 export interface PairRow {
   pair: BatchPair;
@@ -83,6 +83,33 @@ export function summarize(rows: readonly PairRow[]): PairSummary {
     if (r.included && runnable(r)) s.selected++;
   }
   return s;
+}
+
+/**
+ * 対象にした（実行できる）組の元画像のモダリティの集合（昇順）。元画像が決まっていない組・モダリティが分からない組は数えない
+ * （分からないものを 1 種類として扱うと、混在の判定を誤る）。
+ */
+export function includedSourceModalities(
+  rows: readonly PairRow[], modalityOf: (studyUid: string, seriesUid: string) => string | null | undefined,
+): string[] {
+  const found = new Set<string>();
+  for (const r of rows) {
+    if (!(r.included && runnable(r)) || !r.source) continue;
+    const m = modalityOf(r.pair.studyUid, r.source)?.trim().toUpperCase();
+    if (m) found.add(m);
+  }
+  return [...found].sort();
+}
+
+/** 2 種類以上のモダリティが混ざっているか。 */
+export const modalitiesMixed = (modalities: readonly string[]): boolean => modalities.length >= 2;
+
+/**
+ * PET を対象にしているのに、固定ビン幅が初期値（CT の HU 向け）のままか。しきい値の判定ではなく「既定値のまま PET を計算しようとしている」ことの検出。
+ * 固定ビン数・VOI 統計（離散化を使わない）のときは false。
+ */
+export function petWithDefaultBinWidth(form: RoiFeatureForm, modalities: readonly string[], kind: SpecKind): boolean {
+  return kind !== "voiStats" && modalities.includes("PT") && !form.fixedBinNumber && form.binWidth === defaultRoiFeatureForm().binWidth;
 }
 
 /** 症例ラベルに使えない文字（改行）を空白にする。CSV の行を壊さないため。 */

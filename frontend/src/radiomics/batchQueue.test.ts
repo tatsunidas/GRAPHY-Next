@@ -169,7 +169,7 @@ describe("runQueue", () => {
     const a = await spec("same");
     const { api, log } = fakeApi(() => "ok");
     const saved: { name: string; text: string }[] = [];
-    await runQueue([entry(1, a)], ctx(), { ...api, save: (fs) => saved.push(...fs) }, () => undefined);
+    await runQueue([entry(1, a)], ctx(), { ...api, save: (fs) => { saved.push(...fs); } }, () => undefined);
     // 単独実行の経路（画面の write()）が呼ぶ関数に、同じ組・同じ結果を渡す
     const chosen = selectedPairs(assignCaseLabels(baseRows));
     const job = (await api.get("job0"));

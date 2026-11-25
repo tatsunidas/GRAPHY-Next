@@ -4,6 +4,7 @@
  */
 import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
 import { NumberField } from "../hooks/NumberField";
+import { InfoMark } from "./InfoMark";
 import { useI18n } from "../i18n/i18n";
 import { advancedToText, managedKeys, parseAdvanced } from "./advancedSettings";
 import { useSettingsSchema } from "./useSettingsSchema";
@@ -77,10 +78,10 @@ export function AdvancedSettingsField({ form, setForm, disabled, testIdPrefix }:
     });
   return (
     <details open={form.advancedText.trim() !== ""} style={{ marginTop: 8 }} data-testid={`${p}-advanced`}>
-      <summary style={{ cursor: "pointer", color: "#5a6672" }} title={t("roiFeat.tip.advanced")}>{t("roiFeat.advanced.title")}</summary>
+      <summary style={{ cursor: "pointer", color: "#5a6672" }} title={t("roiFeat.tip.advanced")}>{t("roiFeat.advanced.title")}<InfoMark tip={t("roiFeat.tip.advanced")} /></summary>
       <div style={{ color: "#5a6672", fontSize: 11, margin: "4px 0" }} data-testid={`${p}-advanced-help`}>{t("roiFeat.advanced.help")}</div>
       <textarea value={form.advancedText} disabled={disabled} rows={4} spellCheck={false}
-        placeholder={t("roiFeat.advanced.placeholder")} data-testid={`${p}-advanced-text`}
+        placeholder={t("roiFeat.advanced.placeholder")} data-testid={`${p}-advanced-text`} title={t("roiFeat.tip.advancedText")}
         style={{ ...input, width: "100%", fontFamily: "monospace", resize: "vertical" }}
         onChange={(e) => setForm((f) => ({ ...f, advancedText: e.target.value }))} />
       {parsed.errors.length > 0 && (
@@ -91,16 +92,16 @@ export function AdvancedSettingsField({ form, setForm, disabled, testIdPrefix }:
       )}
       <details style={{ marginTop: 4 }} data-testid={`${p}-advanced-defaults`}
         onToggle={(e) => setDefaultsOpen((e.currentTarget as HTMLDetailsElement).open)}>
-        <summary style={{ cursor: "pointer", color: "#5a6672", fontSize: 11 }}>{t("roiFeat.advanced.defaults.title")}</summary>
+        <summary style={{ cursor: "pointer", color: "#5a6672", fontSize: 11 }} title={t("roiFeat.tip.advancedDefaults")}>{t("roiFeat.advanced.defaults.title")}<InfoMark tip={t("roiFeat.tip.advancedDefaults")} /></summary>
         {defaultsOpen && !schema && <div style={{ color: "#7a4b00", fontSize: 11 }}>{t("roiFeat.advanced.defaults.unavailable")}</div>}
         {defaultsOpen && schema && (
           <>
             <input value={filter} onChange={(e) => setFilter(e.target.value)} placeholder={t("roiFeat.advanced.defaults.filter")}
-              data-testid={`${p}-advanced-filter`} style={{ ...input, width: 220, margin: "4px 0" }} />
+              data-testid={`${p}-advanced-filter`} title={t("roiFeat.tip.advancedFilter")} style={{ ...input, width: 220, margin: "4px 0" }} />
             <div style={{ maxHeight: 160, overflowY: "auto", fontSize: 11, fontFamily: "monospace" }}>
               {shown.map((e) => (
                 <div key={e.key} style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                  <button type="button" disabled={disabled} style={{ fontSize: 11 }} data-testid={`${p}-advanced-add-${e.key}`}
+                  <button type="button" disabled={disabled} style={{ fontSize: 11 }} data-testid={`${p}-advanced-add-${e.key}`} title={t("roiFeat.tip.advancedAdd")}
                     onClick={() => append(e.key, e.defaultValue)}>{t("roiFeat.advanced.defaults.add")}</button>
                   <span>{e.key}</span>
                   <span style={{ color: "#6b7785" }}>= {e.defaultValue === null || e.defaultValue === "" ? t("roiFeat.advanced.defaults.none") : e.defaultValue}</span>
@@ -238,7 +239,7 @@ export function RoiFeatureSettingsFields({
         {contentSlot}
       {showPreset && row(t("roiFeat.field.preset"), 8, (
         <select value={presetScale36 && isScale36(form) ? "scale36" : isSixStatistics(form) ? "six" : isTexture(form) ? "texture" : isAllFamilies(form) ? "all" : "custom"} disabled={disabled}
-          style={{ ...input, width: 260 }} data-testid={`${p}-preset`}
+          style={{ ...input, width: 260 }} data-testid={`${p}-preset`} title={t("roiFeat.tip.preset")}
           onChange={(e) => {
             if (e.target.value === "six") setForm((f) => applySixStatistics(f));
             if (e.target.value === "scale36") setForm((f) => applyScale36(f));
@@ -252,7 +253,7 @@ export function RoiFeatureSettingsFields({
           {presetScale36 && <option value="scale36">{t("roiFeat.preset.scale36")}</option>}
         </select>
       ), t("roiFeat.tip.preset"))}
-      <div style={{ color: "#5a6672", marginTop: 6 }} title={t("roiFeat.tip.families")}>{t("roiFeat.field.families")}</div>
+      <div style={{ color: "#5a6672", marginTop: 6 }} title={t("roiFeat.tip.families")}>{t("roiFeat.field.families")}<InfoMark tip={t("roiFeat.tip.families")} /></div>
       <div style={familyGrid}>
         {ROI_FEATURE_FAMILIES.map((fam) => {
           const u = familyUnits(fam.key);
@@ -265,7 +266,7 @@ export function RoiFeatureSettingsFields({
               <input type="checkbox" checked={!!form.families[fam.key] && !blocked} disabled={disabled || blocked}
                 data-testid={`${p}-family-${fam.key}`}
                 onChange={(e) => setForm((f) => ({ ...f, families: { ...f.families, [fam.key]: e.target.checked } }))} />{" "}
-              {familyLabel(fam.key)}{unitNote && <span style={{ color: "#5a6672", fontSize: 11 }}>{unitNote}</span>}
+              {familyLabel(fam.key)}{unitNote && <span style={{ color: "#5a6672", fontSize: 11 }}>{unitNote}</span>}<InfoMark tip={blocked ? t("roiFeat.family.needs2d") : t(`roiFeat.tip.fam.${fam.key}`)} />
             </label>
           );
         })}
@@ -276,14 +277,14 @@ export function RoiFeatureSettingsFields({
       {row(t("roiFeat.field.resampling"), 8, (
         <>
           <select value={form.resampleMm == null ? "none" : "iso"} disabled={disabled} style={{ ...input, width: 110 }}
-            data-testid={`${p}-resampling`}
+            data-testid={`${p}-resampling`} title={t("roiFeat.tip.resampling")}
             onChange={(e) => setForm((f) => ({ ...f, resampleMm: e.target.value === "none" ? null : 1 }))}>
             <option value="none">{t("roiFeat.resampling.none")}</option>
             <option value="iso">{t("roiFeat.resampling.iso")}</option>
           </select>
           {form.resampleMm != null && (
             <>
-              <span data-testid={`${p}-resample-mm`}>
+              <span data-testid={`${p}-resample-mm`} title={t("roiFeat.tip.resampling")}>
                 <NumberField value={form.resampleMm} onChange={(v) => setForm((f) => ({ ...f, resampleMm: v }))}
                   min={0.05} max={20} step={0.1} disabled={disabled} style={{ ...input, width: 64 }} />
               </span>
@@ -294,20 +295,21 @@ export function RoiFeatureSettingsFields({
       ), t("roiFeat.tip.resampling"))}
       {row(t("roiFeat.field.discretisation"), 8, (
         <>
-          <label>
+          <label title={t("roiFeat.tip.discBinCount")}>
             <input type="radio" checked={form.fixedBinNumber} disabled={disabled}
               onChange={() => setForm((f) => ({ ...f, fixedBinNumber: true }))} /> {t("roiFeat.disc.binCount")}
           </label>
-          <span data-testid={`${p}-bincount`}>
+          <span data-testid={`${p}-bincount`} title={t("roiFeat.tip.discBinCount")}>
             <NumberField value={form.binCount} onChange={(v) => setForm((f) => ({ ...f, binCount: v }))}
               min={2} max={1024} disabled={disabled || !form.fixedBinNumber} style={{ ...input, width: 64 }} />
           </span>
-          <label>
+          <label title={t("roiFeat.tip.discBinWidth")}>
             <input type="radio" checked={!form.fixedBinNumber} disabled={disabled}
               onChange={() => setForm((f) => ({ ...f, fixedBinNumber: false }))} /> {t("roiFeat.disc.binWidth")}
           </label>
           <NumberField value={form.binWidth} onChange={(v) => setForm((f) => ({ ...f, binWidth: v }))}
-            min={0.001} max={100000} step={0.5} disabled={disabled || form.fixedBinNumber} style={{ ...input, width: 64 }} />
+            min={0.001} max={100000} step={0.5} disabled={disabled || form.fixedBinNumber} style={{ ...input, width: 64 }}
+            title={t("roiFeat.tip.discBinWidth")} />
         </>
       ), t("roiFeat.tip.discretisation"))}
       {showRange && (
@@ -315,11 +317,11 @@ export function RoiFeatureSettingsFields({
           {row(t("roiFeat.field.range"), 6, (
             <>
               <input value={form.rangeMinText} disabled={disabled} style={{ ...input, width: 72 }} inputMode="decimal"
-                placeholder={t("roiFeat.range.min")} data-testid={`${p}-range-min`}
+                placeholder={t("roiFeat.range.min")} data-testid={`${p}-range-min`} title={t("roiFeat.tip.range")}
                 onChange={(e) => setForm((f) => ({ ...f, rangeMinText: e.target.value }))} />
               <span>〜</span>
               <input value={form.rangeMaxText} disabled={disabled} style={{ ...input, width: 72 }} inputMode="decimal"
-                placeholder={t("roiFeat.range.max")} data-testid={`${p}-range-max`}
+                placeholder={t("roiFeat.range.max")} data-testid={`${p}-range-max`} title={t("roiFeat.tip.range")}
                 onChange={(e) => setForm((f) => ({ ...f, rangeMaxText: e.target.value }))} />
               <span style={{ color: "#5a6672", fontSize: 11 }} data-testid={`${p}-range-unit`}>{t("roiFeat.range.unit")}</span>
             </>
@@ -396,7 +398,7 @@ function Row({ label, layout, gap, children, tip }: {
   if (layout.align === "right") {
     return (
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, padding: "3px 0" }}>
-        <span style={{ color: "#5a6672", flex: "none", minWidth: layout.labelMinWidth }} title={tip}>{label}</span>
+        <span style={{ color: "#5a6672", flex: "none", minWidth: layout.labelMinWidth }} title={tip}>{label}{tip && <InfoMark tip={tip} />}</span>
         <span style={{ flex: 1, textAlign: "right" }}>
           <span style={{ display: "inline-flex", gap, alignItems: "center", justifyContent: "flex-end" }}>{children}</span>
         </span>
@@ -405,7 +407,7 @@ function Row({ label, layout, gap, children, tip }: {
   }
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "3px 0", flexWrap: "wrap" }}>
-      <span style={{ color: "#5a6672", minWidth: layout.labelMinWidth }} title={tip}>{label}</span>
+      <span style={{ color: "#5a6672", minWidth: layout.labelMinWidth }} title={tip}>{label}{tip && <InfoMark tip={tip} />}</span>
       {children}
     </div>
   );
