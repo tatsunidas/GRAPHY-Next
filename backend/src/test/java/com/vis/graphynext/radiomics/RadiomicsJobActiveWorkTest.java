@@ -101,6 +101,8 @@ class RadiomicsJobActiveWorkTest {
         block[0] = false;
         String done = svc.submit(mock(FilteredSeriesRequest.class)).jobId();
         waitUntil(() -> svc.get(done).state() == FilteredSeriesJobService.State.DONE, "DONE になる");
+        // state が DONE になってから finishedAt が入る（finally）までは一瞬ずれる。数え方が finishedAt なので、数える条件そのものを待つ
+        waitUntil(() -> svc.activeCount() == 0, "完了したジョブは数えない（0 になる）");
         assertEquals(0, svc.activeCount());
     }
 
@@ -139,6 +141,8 @@ class RadiomicsJobActiveWorkTest {
         block[0] = false;
         String done = svc.submit(mock(RoiFeatureRequest.class)).jobId();
         waitUntil(() -> svc.get(done).state() == RoiFeatureJobService.State.DONE, "DONE になる");
+        // state が DONE になってから finishedAt が入る（finally）までは一瞬ずれる。数え方が finishedAt なので、数える条件そのものを待つ
+        waitUntil(() -> svc.activeCount() == 0, "完了したジョブは数えない（0 になる）");
         assertEquals(0, svc.activeCount());
     }
 }
