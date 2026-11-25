@@ -25,8 +25,11 @@ import { createStepRecorder } from "../checklist/types.js";
 import { AUTOMATOR_ROOT } from "../fixtures/manifest.js";
 import { PY, PY_FLAGS } from "./pythonCmd.js";
 
-const OUT_DIR = path.join(AUTOMATOR_ROOT, ".results", "texture-pm-view-check");
-const PSMA = path.join(os.homedir(), "graphy-demo-samples", "PSMA_0198cdca94fbb95f", "PET", "CT whole-body PSMA");
+const OUT_DIR = path.join(AUTOMATOR_ROOT, ".results", `texture-pm-view-check${process.env.MAP_MODALITY ? "-" + process.env.MAP_MODALITY : ""}`);
+// 既定は PSMA の PET。CT の症例（NSCLC など）で確かめるときは、MAP_ROOT（症例の親フォルダ。MAP_SRC_SUB・MAP_SEG_SUB の下に画像と SEG）と
+// MAP_MODALITY=CT を渡す（textureMapSuvRef.py も同じ環境変数を読む）。
+const PSMA = process.env.MAP_ROOT ?? path.join(os.homedir(), "graphy-demo-samples", "PSMA_0198cdca94fbb95f", "PET", "CT whole-body PSMA");
+const MODALITY = process.env.MAP_MODALITY ?? "PT";
 const REF = path.join(import.meta.dirname, "textureMapSuvRef.py");
 const CONF = path.join(import.meta.dirname, "pmConformanceCheck.py");
 
@@ -81,7 +84,7 @@ async function main(): Promise<void> {
     const studies = await call<{ studyInstanceUid: string }[]>(base, "/api/studies", "GET");
     const studyUid = studies[0].studyInstanceUid;
     const before = await call<Series[]>(base, `/api/studies/${studyUid}/series`, "GET");
-    const pet = before.find((s) => s.modality === "PT")!;
+    const pet = before.find((s) => s.modality === MODALITY)!;
     const seg = before.find((s) => s.modality === "SEG")!;
     check(!!pet && !!seg, "PET・SEG がある");
 
