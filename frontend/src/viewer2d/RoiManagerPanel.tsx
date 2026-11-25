@@ -50,6 +50,8 @@ import { useFusionMeasure } from "../viewer/fusionMeasureContext";
 import { NumField } from "./WandDialog";
 import { formatNumber, valueUnitLabel } from "../viewer/roiStatsText";
 import { meanTimesVolumeLabelKey } from "../viewer/maskStatsCore";
+import { EyeIcon } from "./EyeIcon";
+import { foldKey, toggleFold, type FoldList } from "./roiFold";
 
 const LABELMAP = csToolsEnums.SegmentationRepresentations.Labelmap;
 
@@ -88,6 +90,7 @@ export interface PanelSeries {
 const patientSec = (pk: string) => `p:${pk}`;
 const groupSec = (groupId: string) => `g:${groupId}`;
 const seriesSec = (pk: string, uid: string) => `s:${pk}|${uid}`;
+
 function inSection(o: RowOwner, sec: string): boolean {
   if (sec.startsWith("g:")) return !!o.groupId && o.groupId === sec.slice(2);
   if (sec.startsWith("p:")) return o.patientKey === sec.slice(2);
@@ -686,7 +689,7 @@ export function RoiManagerPanel({
   const renameAnnotation = (uid: string, value: string) => setRoiMaskMeta(uid, { label: value });
   const annotationBasics = (r: { uid: string; tool: string; visible: boolean; locked: boolean }) => (
     <>
-      <button onClick={(e) => { e.stopPropagation(); toggleRoi(r.uid, !r.visible); }} style={eyeBtn} title={t("roiMgr.visible")} data-testid="roi-row-visible">{r.visible ? "👁" : "🚫"}</button>
+      <button onClick={(e) => { e.stopPropagation(); toggleRoi(r.uid, !r.visible); }} style={eyeBtn} title={t("roiMgr.visible")} data-testid="roi-row-visible"><EyeIcon open={r.visible} /></button>
       <button
         onClick={(e) => { e.stopPropagation(); toggleRoiLock(r.uid, !r.locked); }}
         style={eyeBtn}
@@ -856,7 +859,7 @@ export function RoiManagerPanel({
             onClick={() => { setSegmentVisible(r.maskId, r.segIndex, !r.visible); renderAll(); refresh(); }}
             style={eyeBtn} title={t("roiMgr.visible")} data-testid="roi-row-visible"
           >
-            {r.visible ? "👁" : "🚫"}
+            <EyeIcon open={r.visible} />
           </button>
           <input type="checkbox" checked={selected.has(r.key)} onChange={() => toggleSelect(r.key)} title={t("roiMgr.select")} data-testid="roi-row-select" />
           <span title={t("roiMgr.iconPainted")} style={{ color: col ?? "#5a6672" }}>▨</span>
@@ -930,7 +933,7 @@ export function RoiManagerPanel({
     if (!s) return null;
     return (
       <div key={s.id} style={row} data-testid="roi-row" data-kind="sphere" data-roi-key={s.id}>
-        <button onClick={() => updateSphere3D(s.id, { visible: !s.visible })} style={eyeBtn} title={t("roiMgr.visible")} data-testid="roi-row-visible">{s.visible ? "👁" : "🚫"}</button>
+        <button onClick={() => updateSphere3D(s.id, { visible: !s.visible })} style={eyeBtn} title={t("roiMgr.visible")} data-testid="roi-row-visible"><EyeIcon open={s.visible} /></button>
         <input type="checkbox" checked={selected.has(s.id)} onChange={() => toggleSelect(s.id)} title={t("roiMgr.select")} data-testid="roi-row-select" />
         <span title={t("roiMgr.iconSphere")} style={{ color: s.color }}>◍</span>
         <input type="text" style={name} defaultValue={s.label ?? "Sphere"} onChange={(e) => updateSphere3D(s.id, { label: e.target.value })} />
@@ -1037,7 +1040,7 @@ export function RoiManagerPanel({
     renderAll();
     refresh();
   };
-  const groupHead = (gid: string, name: string) => {
+  const groupHead = (gid: string, name: string, list: FoldList) => {
     const g = groupRowsOf(gid);
     const uids = groupAnnUids(gid);
     const allLocked = uids.length > 0 && uids.every(isRoiLocked);
@@ -1045,10 +1048,11 @@ export function RoiManagerPanel({
     // 塗り ROI・球はロックの対象ではない。グループ全体がロック中でも、これらを含むグループは削除できる。
     const tempOnly = g.rois.some((r) => r.rowKind !== "shape");
     const sec = groupSec(gid);
+    const fk = foldKey(list, sec);
     return (
       <div key={`h:${sec}:${gid}`} style={groupHeadStyle} data-testid="roi-group-head" data-group-id={gid}>
-        <button onClick={() => toggleCollapsed(sec)} style={eyeBtn} title={t("roiMgr.sectionFold")} aria-expanded={!collapsed.has(sec)}>
-          {collapsed.has(sec) ? "▸" : "▾"}
+        <button onClick={() => toggleCollapsed(fk)} style={eyeBtn} title={t("roiMgr.sectionFold")} aria-expanded={!collapsed.has(fk)}>
+          {collapsed.has(fk) ? "▸" : "▾"}
         </button>
         <input
           type="text" style={{ ...name_, fontWeight: 600, flex: "1 1 80px" }} defaultValue={name} title={t("roiMgr.group.rename")}
@@ -1057,7 +1061,7 @@ export function RoiManagerPanel({
         />
         <span style={countBadge}>{g.rois.length + g.measures.length}</span>
         <button onClick={() => setRowsVisible(g.rois, g.measures, !anyVisible)} style={eyeBtn} title={t("roiMgr.sectionEye")} data-testid="roi-group-visible">
-          {anyVisible ? "👁" : "🚫"}
+          <EyeIcon open={anyVisible} />
         </button>
         <button onClick={() => lockGroup(gid)} disabled={uids.length === 0} style={eyeBtn} title={t("roiMgr.group.lock")} aria-pressed={allLocked} data-testid="roi-group-lock">
           {allLocked ? "🔒" : "🔓"}
@@ -1074,8 +1078,7 @@ export function RoiManagerPanel({
   // 1 患者・1 シリーズだけで、グループも無いときは見出しを出さない（従来の見た目のまま）。
   const anyGroup = [...groupSizes.keys()].some((gid) => isRealGroup(gid));
   const grouping = !!shownSeries && (new Set(shownSeries.map((x) => x.patientKey)).size > 1 || shownSeries.length > 1 || anyGroup);
-  const toggleCollapsed = (k: string) =>
-    setCollapsed((c) => { const n = new Set(c); if (n.has(k)) n.delete(k); else n.add(k); return n; });
+  const toggleCollapsed = (k: string) => setCollapsed((c) => toggleFold(c, k));
   const roiVisible = (r: RoiRow): boolean =>
     r.rowKind === "sphere" ? (spheres.find((x) => x.id === r.id)?.visible ?? true) : r.visible;
   // 見出し配下をまとめて表示・非表示（1 つでも見えていれば隠す、全部隠れていれば出す）。
@@ -1089,13 +1092,14 @@ export function RoiManagerPanel({
     renderAll();
     refresh();
   };
-  const sectionHead = (sec: string, title: string, level: 0 | 1, rois: RoiRow[], measures: MeasureRow[], isFocus = false) => {
+  const sectionHead = (sec: string, title: string, level: 0 | 1, rois: RoiRow[], measures: MeasureRow[], list: FoldList, isFocus = false) => {
     const n = rois.length + measures.length;
     const anyVisible = rois.some(roiVisible) || measures.some((m) => m.visible);
+    const fk = foldKey(list, sec);
     return (
-      <div key={`h:${sec}`} style={level === 0 ? patientHead : seriesHead} data-testid="roi-section-head" data-section={sec}>
-        <button onClick={() => toggleCollapsed(sec)} style={eyeBtn} title={t("roiMgr.sectionFold")} aria-expanded={!collapsed.has(sec)}>
-          {collapsed.has(sec) ? "▸" : "▾"}
+      <div key={`h:${sec}`} style={level === 0 ? patientHead : seriesHead} data-testid="roi-section-head" data-section={sec} data-fold-list={list}>
+        <button onClick={() => toggleCollapsed(fk)} style={eyeBtn} title={t("roiMgr.sectionFold")} aria-expanded={!collapsed.has(fk)}>
+          {collapsed.has(fk) ? "▸" : "▾"}
         </button>
         <span style={headTitle} title={title}>{title}</span>
         {isFocus && <span style={focusBadge} title={t("roiMgr.focusPatient")}>●</span>}
@@ -1103,7 +1107,7 @@ export function RoiManagerPanel({
         {n > 0 && (
           <>
             <button onClick={() => setRowsVisible(rois, measures, !anyVisible)} style={eyeBtn} title={t("roiMgr.sectionEye")} data-testid="roi-section-visible">
-              {anyVisible ? "👁" : "🚫"}
+              <EyeIcon open={anyVisible} />
             </button>
             <button onClick={() => setStatsOpen({ section: sec })} style={editBtn} title={t("roiMgr.sectionStats")} data-testid="roi-section-stats">Σ</button>
           </>
@@ -1117,6 +1121,7 @@ export function RoiManagerPanel({
     render: (r: T) => React.ReactNode,
     asRois: (rs: T[]) => RoiRow[],
     asMeasures: (rs: T[]) => MeasureRow[],
+    list: FoldList,
   ): React.ReactNode[] {
     if (!grouping || !shownSeries) return rows.map(render);
     const out: React.ReactNode[] = rows.filter((r) => !r.patientKey).map(render);
@@ -1124,13 +1129,13 @@ export function RoiManagerPanel({
     for (const [pk, pname] of patients) {
       const prow = rows.filter((r) => r.patientKey === pk);
       const psec = patientSec(pk);
-      out.push(sectionHead(psec, pname || pk, 0, asRois(prow), asMeasures(prow), pk === activePatientKey));
-      if (collapsed.has(psec)) continue;
+      out.push(sectionHead(psec, pname || pk, 0, asRois(prow), asMeasures(prow), list, pk === activePatientKey));
+      if (collapsed.has(foldKey(list, psec))) continue;
       // グループ: 所属 ROI はグループ見出しの下にだけ出す（シリーズ区画には重複させない）。
       for (const gid of [...new Set(prow.map((r) => r.groupId).filter(isRealGroup))]) {
         const grow = prow.filter((r) => r.groupId === gid);
-        out.push(groupHead(gid, grow[0].groupName ?? ""));
-        if (!collapsed.has(groupSec(gid))) out.push(...grow.map(render));
+        out.push(groupHead(gid, grow[0].groupName ?? "", list));
+        if (!collapsed.has(foldKey(list, groupSec(gid)))) out.push(...grow.map(render));
       }
       const ungrouped = prow.filter((r) => !isRealGroup(r.groupId));
       const seriesOf = shownSeries.filter((x) => x.patientKey === pk);
@@ -1140,8 +1145,8 @@ export function RoiManagerPanel({
         const srow = ungrouped.filter((r) => r.seriesUid === se.seriesUid);
         if (seriesOf.length > 1) {
           const ssec = seriesSec(pk, se.seriesUid);
-          out.push(sectionHead(ssec, se.label, 1, asRois(srow), asMeasures(srow)));
-          if (collapsed.has(ssec)) continue;
+          out.push(sectionHead(ssec, se.label, 1, asRois(srow), asMeasures(srow), list));
+          if (collapsed.has(foldKey(list, ssec))) continue;
         }
         out.push(...srow.map(render));
       }
@@ -1219,6 +1224,7 @@ export function RoiManagerPanel({
         },
         (rs) => rs,
         () => [],
+        "roi",
       )}
 
       {shapeCount + paintedRows.length > 0 && (
@@ -1238,7 +1244,7 @@ export function RoiManagerPanel({
 
       <div style={section} title={t("roiMgr.measuresNote")}>{t("roiMgr.measures")} ({model.measures.length})</div>
       {model.measures.length === 0 && <div style={empty}>{t("roiMgr.empty")}</div>}
-      {renderGrouped<MeasureRow>(model.measures, renderMeasureRow, () => [], (ms) => ms)}
+      {renderGrouped<MeasureRow>(model.measures, renderMeasureRow, () => [], (ms) => ms, "meas")}
 
       <div style={note}>{t("roiMgr.m1note")}</div>
       {editId && <RoiMetaEditDialog itemId={editId} onClose={() => { setEditId(null); refresh(); }} />}
