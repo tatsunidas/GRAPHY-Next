@@ -80,6 +80,7 @@ export type {
 export type { PluginSeriesPanelHandle, PluginSeriesPanelOptions } from "./pluginSeriesPanelApi";
 export type { AiGenerationOptions, AiGenerationOutcome } from "./pluginAiApi";
 export type { PluginSaveFileOptions } from "./pluginFileApi";
+export type { PluginRenderPdfRequest } from "./pluginPdfApi";
 
 export type {
   ViewerDerivedSeriesRequest,
@@ -123,7 +124,8 @@ import type { CachePutOutcome, PluginCache, PluginCacheCheckpoint } from "./plug
 export type { CachePutOutcome, PluginCache, PluginCacheCheckpoint };
 import type { PickDirectoryResult, PluginSaveArtifactOptions, PluginSaveFileOptions } from "./pluginFileApi";
 export type { PickDirectoryResult, PluginSaveArtifactOptions };
-import type { SaveFileResult } from "../desktopBridge";
+import type { SaveFileResult, RenderPdfResult } from "../desktopBridge";
+import type { PluginRenderPdfRequest } from "./pluginPdfApi";
 import type {
   PickFilesResult,
   PluginJobOptions,
@@ -281,6 +283,14 @@ interface PluginHostBase {
   ai: {
     generate: (req: Omit<AiGenerationOptions, "manifest">) => Promise<AiGenerationOutcome>;
   };
+  /**
+   * HTML を PDF のバイト列にする（**0.6.7 以降**）。実装は `pluginPdfApi.ts`。保存はしない（`file.saveAs` へ渡す）。
+   *
+   * <p>表示しない窓で描き、**JavaScript は動かず、外部への通信（http(s)・file）は全部止める**。画像は `data:` で埋め込む。
+   * 入力の HTML は 8 MB まで。同時に走るのは 1 件。例外は投げない（`{ok:false, error}`）。
+   * エラー: `bad-request` / `too-large` / `timeout` / `render-failed` / `desktop-only`（web は使えない）。
+   */
+  renderPdf: (req: PluginRenderPdfRequest) => Promise<RenderPdfResult>;
   /**
    * 名前を付けて保存（H41）。実装は `pluginFileApi.ts`。
    *
@@ -1414,7 +1424,7 @@ type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K>
  */
 export type PluginHostSeed = DistributiveOmit<
   PluginHost,
-  "ai" | "file" | "runBackendJob" | "db" | "video" | "apiBase" | "compute" | "storage" | "microscopy" | "cache" | "nifti"
+  "ai" | "file" | "runBackendJob" | "db" | "video" | "apiBase" | "compute" | "storage" | "microscopy" | "cache" | "nifti" | "renderPdf"
 >;
 
 /**

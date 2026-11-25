@@ -334,6 +334,11 @@ export type SaveFileResult =
   | { ok: true; filePath: string }
   | { ok: false; canceled?: boolean; error?: string };
 
+/** `renderPdf` の結果。`blocked` は、HTML の中から出ようとして止めた外部要求（診断用）。 */
+export type RenderPdfResult =
+  | { ok: true; bytes: Uint8Array; blocked?: string[] }
+  | { ok: false; error: string };
+
 /** 開くダイアログの結果（H43）。`canceled` はユーザーが取り消しただけで、失敗ではない。 */
 export type PickFilesResult =
   | { ok: true; paths: string[] }
@@ -734,6 +739,8 @@ export interface GraphyDesktop {
     bytes: Uint8Array;
     filters?: { name: string; extensions: string[] }[];
   }) => Promise<SaveFileResult>;
+  /** HTML → PDF（表示しない窓・JS 無し・外部通信なし）。保存はしない。 */
+  renderPdf?: (req: { html: string; pageSize?: "A4" | "Letter"; landscape?: boolean }) => Promise<RenderPdfResult>;
   /** 開くダイアログ（ファイルだけ）。選んだ絶対パスを返す。 */
   pickFiles?: (payload: {
     title?: string;
