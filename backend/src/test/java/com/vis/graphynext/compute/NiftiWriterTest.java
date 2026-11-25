@@ -154,6 +154,11 @@ class NiftiWriterTest {
 
     /** 合成 CT（または PET 相当）を保管庫の形で書く。{@code reverse} で InstanceNumber を位置の逆順にする。 */
     private DatasetFixture series(Spec sp, String modality) throws IOException {
+        return series(sp, modality, false, false);
+    }
+
+    /** {@code legacyMap}: 旧版のマップ（SC・ImageType の 3 つ目 TEXTURE・BitsStored=15 の誤宣言・画素 40000+i）を模す。 */
+    private DatasetFixture series(Spec sp, String modality, boolean legacyMap, boolean highPixels) throws IOException {
         DatasetFixture fx = new DatasetFixture(dir);
         double[] r = {sp.iop()[0], sp.iop()[1], sp.iop()[2]};
         double[] c = {sp.iop()[3], sp.iop()[4], sp.iop()[5]};
@@ -227,8 +232,12 @@ class NiftiWriterTest {
             ds.setInt(Tag.Rows, VR.US, NY);
             ds.setInt(Tag.Columns, VR.US, NX);
             ds.setInt(Tag.BitsAllocated, VR.US, sp.bits());
-            ds.setInt(Tag.BitsStored, VR.US, sp.bits());
-            ds.setInt(Tag.HighBit, VR.US, sp.bits() - 1);
+            ds.setInt(Tag.BitsStored, VR.US, legacyMap ? 15 : sp.bits());
+            ds.setInt(Tag.HighBit, VR.US, legacyMap ? 15 : sp.bits() - 1);
+            if (legacyMap) {
+                ds.setString(Tag.SOPClassUID, VR.UI, UID.SecondaryCaptureImageStorage);
+                ds.setString(Tag.ImageType, VR.CS, "DERIVED", "PRIMARY", "TEXTURE", "FILTERED");
+            }
             ds.setInt(Tag.PixelRepresentation, VR.US, sp.signed() ? 1 : 0);
             ds.setString(Tag.RescaleType, VR.LO, "HU");
             ds.setDouble(Tag.WindowCenter, VR.DS, 40);
@@ -237,7 +246,7 @@ class NiftiWriterTest {
             for (int j = 0; j < NY; j++) {
                 for (int i = 0; i < NX; i++) {
                     for (int s = 0; s < sp.samples(); s++) {
-                        px.putShort((short) (ph == null ? stored(i, j, k, sp.marks()) : phaseValue(i, j, k, t)));
+                        px.putShort((short) (highPixels ? 40000 + i : ph == null ? stored(i, j, k, sp.marks()) : phaseValue(i, j, k, t)));
                     }
                 }
             }
@@ -493,6 +502,16 @@ class NiftiWriterTest {
         // RGB
         Spec rgb = new Spec(axial, null, true, -1, false, 16, false, 1.0, 0.0, 3, NZ, List.of(), null);
         assertEquals("npz-not-grayscale", reason(series(rgb, "CT")));
+    }
+
+    @Test
+    void refusesALegacyMisdeclaredMap_insteadOfWritingCorruptedValues() throws Exception {
+        Spec s = new Spec(orients().get(0).iop(), null, true, -1, false, 16, false, 1.0, 0.0, 1, NZ, List.of(), null);
+        assertEquals("npz-misdeclared-map", reason(series(s, "CT", true, true)));
+        // 同じ画素で宣言が正しい（BitsStored=16・通常の SOP クラス）なら通り、値は化けない（正例）
+        byte[] nii = gunzip(write(series(s, "CT", false, true)).file());
+        assertEquals(40000f, voxel(nii, 0, 0, 0), 0f, "宣言が正しければ 32768 以上も化けない");
+        assertEquals(40000f + 5, voxel(nii, 5, 0, 0), 0f);
     }
 
     private String reason(DatasetFixture fx) {

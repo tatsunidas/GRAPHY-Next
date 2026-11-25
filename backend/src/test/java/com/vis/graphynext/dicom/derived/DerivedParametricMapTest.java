@@ -65,6 +65,21 @@ class DerivedParametricMapTest {
 
         assertEquals(UID.ParametricMapStorage, a.getString(Tag.SOPClassUID));
         assertEquals("OT", a.getString(Tag.Modality));
+        // 規格の Type 1・2（検査器 dicom-validator で欠落が出ていたもの）
+        assertEquals("RESEARCH", a.getString(Tag.ContentQualification));
+        assertEquals("NO", a.getString(Tag.BurnedInAnnotation));
+        assertEquals("YES", a.getString(Tag.RecognizableVisualFeatures));
+        assertEquals("00", a.getString(Tag.LossyImageCompression));
+        assertNotNull(a.getString(Tag.DeviceSerialNumber));
+        assertNotNull(a.getString(Tag.ContentDate));
+        assertNotNull(a.getString(Tag.ContentTime));
+        assertEquals(true, a.contains(Tag.AcquisitionContextSequence));
+        String dumpDir = System.getProperty("pm.dump.dir");
+        if (dumpDir != null) {
+            try (org.dcm4che3.io.DicomOutputStream out = new org.dcm4che3.io.DicomOutputStream(new java.io.File(dumpDir, "derived-pm.dcm"))) {
+                out.writeDataset(a.createFileMetaInformation(UID.ExplicitVRLittleEndian), a);
+            }
+        }
         // 元の患者・検査・座標系は引き継ぐ
         assertEquals("P001", a.getString(Tag.PatientID));
         assertEquals("Test^Patient", a.getString(Tag.PatientName));

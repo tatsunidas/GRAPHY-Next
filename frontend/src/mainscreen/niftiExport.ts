@@ -48,6 +48,7 @@ const REFUSAL_REASONS = new Set([
   "npz-big-endian",
   "npz-mixed-geometry",
   "npz-not-grayscale",
+  "npz-misdeclared-map",
   "npz-pixels-unreadable",
   "npz-too-large",
   "npz-empty",

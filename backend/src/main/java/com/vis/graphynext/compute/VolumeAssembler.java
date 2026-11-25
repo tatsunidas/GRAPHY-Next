@@ -120,6 +120,9 @@ final class VolumeAssembler implements AnonymizeService.Sink {
             addParametricMap(ds);
             return;
         }
+        if (com.vis.graphynext.dicom.LegacyMapDeclaration.matches(ds)) {
+            throw new UnsupportedLayout("npz-misdeclared-map"); // BitsStored=15 で切ると 32768 以上が化ける
+        }
         if (Boolean.TRUE.equals(floatValues)) {
             throw new UnsupportedLayout("npz-mixed-geometry");
         }

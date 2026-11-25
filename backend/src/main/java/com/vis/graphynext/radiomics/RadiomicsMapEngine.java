@@ -996,13 +996,7 @@ public class RadiomicsMapEngine {
      * 32768 以上の画素が化けるので、黙って計算せず断る。表示は変えない。
      */
     static void requireNotMisdeclaredMap(Attributes ds, String sop) {
-        if (!UID.SecondaryCaptureImageStorage.equals(ds.getString(Tag.SOPClassUID))) {
-            return;
-        }
-        String[] it = ds.getStrings(Tag.ImageType);
-        String kind = it != null && it.length >= 3 ? it[2] : null;
-        if (("TEXTURE".equals(kind) || "LOG".equals(kind))
-                && ds.getInt(Tag.BitsStored, 0) == 15 && ds.getInt(Tag.HighBit, 0) == 15) {
+        if (com.vis.graphynext.dicom.LegacyMapDeclaration.matches(ds)) {
             throw new IllegalArgumentException("旧版で作られた、画素の宣言が誤っているシリーズです（BitsStored=15・HighBit=15 だが、"
                     + "画素は 16 bit 全域を使っています。32768 以上の画素が誤って読まれます）。作り直してください。sop=" + sop);
         }
