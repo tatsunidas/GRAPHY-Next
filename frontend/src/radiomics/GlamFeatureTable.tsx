@@ -13,7 +13,7 @@
  * <p>自己ペアだけで定義される行列（Compressibility）は、対角/非対角に分ける統計を持たない。
  * その 2 セルは空欄になる（バックエンドが null を返す）。
  *
- * <p>CSV は `name,value` の 150 行。表計算や統計ソフトへそのまま渡せる形にしてある
+ * <p>CSV は `name,value,value_unit,calibration` の 150 行（単位と校正は末尾の列。全行に同じ値）。表計算や統計ソフトへそのまま渡せる形にしてある
  * （このアプリは 1 症例ずつ回す道具なので、複数症例をまとめるのは受け取った側の仕事）。
  */
 import { useMemo } from "react";
@@ -28,13 +28,49 @@ export function formatFeatureValue(v: number | null | undefined): string {
   return String(Number(v.toPrecision(4)));
 }
 
+/** CSV の 1 セル。`,` `"` 改行を含むときだけ引用する。 */
+function csvCell(v: string): string {
+  return /[",\r\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v;
+}
+
+/**
+ * 特徴量の CSV。既存の列（name,value）と順は変えず、末尾に値の単位と校正の記録を足す
+ * （保存済みの古い解析で無いときは空）。
+ */
+export function glamFeaturesCsv(
+  features: Record<string, number | null>,
+  valueUnit?: string | null,
+  calibration?: string | null,
+): string {
+  const unit = csvCell(valueUnit ?? "");
+  const cal = csvCell(calibration ?? "");
+  const rows = [["name", "value", "value_unit", "calibration"]];
+  for (const m of GLAM_MATRICES) {
+    for (const s of GLAM_STATISTICS) {
+      const name = `${m.name}_${s}`;
+      // 存在しない組み合わせ（自己ペアだけの行列 × 対角/非対角）は行ごと出さない。
+      // 表では空欄でよいが、CSV に無い特徴の名前が並ぶと受け取った側が困る。
+      if (!(name in features)) continue;
+      const v = features[name];
+      rows.push([name, v == null || !Number.isFinite(v) ? "" : String(v), unit, cal]);
+    }
+  }
+  return rows.map((r) => r.join(",")).join("\r\n");
+}
+
 export function GlamFeatureTable({
   features,
   fileLabel,
+  valueUnit,
+  calibration,
 }: {
   features: Record<string, number | null>;
   /** CSV のファイル名に使う識別子（シリーズ番号など）。 */
   fileLabel: string;
+  /** 計算に使った値の単位（CSV の末尾の列）。古い保存済みの解析には無い。 */
+  valueUnit?: string | null;
+  /** 校正の記録（CSV の末尾の列）。 */
+  calibration?: string | null;
 }) {
   const { t } = useI18n();
 
@@ -44,18 +80,7 @@ export function GlamFeatureTable({
   );
 
   const onCsv = () => {
-    const rows = [["name", "value"]];
-    for (const m of GLAM_MATRICES) {
-      for (const s of GLAM_STATISTICS) {
-        const name = `${m.name}_${s}`;
-        // 存在しない組み合わせ（自己ペアだけの行列 × 対角/非対角）は行ごと出さない。
-        // 表では空欄でよいが、CSV に無い特徴の名前が並ぶと受け取った側が困る。
-        if (!(name in features)) continue;
-        const v = features[name];
-        rows.push([name, v == null || !Number.isFinite(v) ? "" : String(v)]);
-      }
-    }
-    const csv = rows.map((r) => r.join(",")).join("\r\n");
+    const csv = glamFeaturesCsv(features, valueUnit, calibration);
     const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
     const a = document.createElement("a");
     a.href = url;

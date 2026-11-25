@@ -73,7 +73,8 @@ public class GlamAnalysisService {
 
         int label = labelOf(req.settings());
         RadiomicsMapEngine.LoadedVolume vol = engine.load(req.studyInstanceUid(), req.sourceSeriesUid(),
-                req.channel(), req.timePoint(), req.maskSeriesUid(), req.maskChannel(), label, req.settings(), true);
+                req.channel(), req.timePoint(), req.maskSeriesUid(), req.maskChannel(), label,
+                TextureSeriesRequest.loadSettings(req.settings(), req.calibration()), true);
 
         if (vol.slices() < 2) {
             throw new IllegalArgumentException(
@@ -202,7 +203,8 @@ public class GlamAnalysisService {
 
         return new GlamAnalysis(GLAMFeatureType.values().length, bins, radius, roiVoxels, occupancy, radii,
                 self, selfRandom, cross, crossOmitted, matrices, diagonalOnly, features,
-                spacing, isotropic, resampledFrom, used, vol.lossyCompressed());
+                spacing, isotropic, resampledFrom, used, vol.lossyCompressed(),
+                vol.valueCalibration().valueUnit(), vol.valueCalibration().text());
     }
 
     /**
@@ -254,6 +256,7 @@ public class GlamAnalysisService {
             // 全面を ROI にすると、動径分布が組織ではなく画像の外形を測ってしまう
             throw new IllegalArgumentException("GLAM 解析には ROI マスクシリーズが必要です。");
         }
+        TextureSeriesRequest.checkCalibration(req.calibration());
     }
 
     /** 実際に中心として使われるボクセル数（0＝間引かない＝ROI 全体）。 */

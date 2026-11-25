@@ -1493,6 +1493,14 @@ interface PluginHostBase {
     generate: (req: AiGenerationRequest) => Promise<AiGenerationOutcome>;
   };
   /**
+   * HTML を PDF のバイト列にする（**0.6.7 以降**）。保存はしない（`file.saveAs` へ渡す）。
+   * 表示しない窓で描き、JavaScript は動かず、外部への通信（http(s)・file）は全部止める。画像は `data:` で埋め込む。
+   * HTML は 8 MB まで。例外は投げない。エラー: `bad-request` / `too-large` / `timeout` / `render-failed` / `desktop-only`。
+   */
+  renderPdf: (req: { html: string; pageSize?: "A4" | "Letter"; landscape?: boolean }) => Promise<
+    { ok: true; bytes: Uint8Array } | { ok: false; error: string }
+  >;
+  /**
    * 名前を付けて保存（H41）。OS の保存ダイアログを出すので、
    * **同名ファイルの上書き確認は OS が行う**（自前で確認しないこと）。
    * `{ok:false, canceled:true}` は取り消しであって失敗ではない。デスクトップ専用。

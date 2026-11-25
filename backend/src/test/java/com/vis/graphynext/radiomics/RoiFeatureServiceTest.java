@@ -92,8 +92,9 @@ class RoiFeatureServiceTest {
         @Override
         public LoadedVolume load(String study, String series, int channel, int timePoint, String maskSeries,
                                  int maskChannel, int label, Map<String, String> settings) {
-            // Next のテクスチャ設定は渡さない。渡してよいのは PET の校正の指定（既定の auto）だけ
-            assertEquals(java.util.Set.of(RadiomicsMapEngine.CALIBRATION_SETTING), settings.keySet(), "Next のテクスチャ設定は渡さない");
+            // Next のテクスチャ設定は渡さない。渡してよいのは PET の校正の指定（既定の auto）と、NaN を読む指定（判定は assessNan）だけ
+            assertEquals(java.util.Set.of(RadiomicsMapEngine.CALIBRATION_SETTING, RadiomicsMapEngine.ALLOW_NAN_SETTING),
+                    settings.keySet(), "Next のテクスチャ設定は渡さない");
             assertEquals("auto", settings.get(RadiomicsMapEngine.CALIBRATION_SETTING));
             return vol;
         }
@@ -101,8 +102,9 @@ class RoiFeatureServiceTest {
         @Override
         public LoadedVolume load(String study, String series, int channel, int timePoint, String maskSeries,
                                  int maskChannel, int label, Map<String, String> settings, boolean allowRectify) {
-            // Next のテクスチャ設定は渡さない。渡してよいのは PET の校正の指定（既定の auto）だけ
-            assertEquals(java.util.Set.of(RadiomicsMapEngine.CALIBRATION_SETTING), settings.keySet(), "Next のテクスチャ設定は渡さない");
+            // Next のテクスチャ設定は渡さない。渡してよいのは PET の校正の指定（既定の auto）と、NaN を読む指定（判定は assessNan）だけ
+            assertEquals(java.util.Set.of(RadiomicsMapEngine.CALIBRATION_SETTING, RadiomicsMapEngine.ALLOW_NAN_SETTING),
+                    settings.keySet(), "Next のテクスチャ設定は渡さない");
             assertEquals("auto", settings.get(RadiomicsMapEngine.CALIBRATION_SETTING));
             return vol;
         }
@@ -179,6 +181,14 @@ class RoiFeatureServiceTest {
         assertTrue(row(r, "IntensityHistogram_Entropy").notes().contains("LOG2_DISCRETISED"));
         assertEquals("Q4LE", row(r, "IntensityBasedStatistical_Mean").ibsi());
         assertTrue(row(r, "Fractal_Capacity").notes().contains("NON_IBSI"));
+        for (RoiFeatureResult.Row x : r.rows()) {
+            assertEquals(x.family().equals("Fractal"),
+                    x.notes().contains(RoiFeatureDefinitions.NOTE_FRACTAL_OUTLINE_VERTICES), x.column());
+        }
+        assertTrue(r.rows().stream().anyMatch(x -> x.family().equals("Fractal")), "Fractal の行が実在する");
+        assertTrue(row(r, "Fractal_Capacity").notes().contains("FRACTAL_OUTLINE_VERTICES"));
+        assertFalse(row(r, "GLCM_JointMaximum").notes().contains("FRACTAL_OUTLINE_VERTICES"));
+        assertFalse(row(r, "NGTDM_Coarseness").notes().contains("FRACTAL_OUTLINE_VERTICES"));
         // パラメータ付きの IBSI 特徴（IVH の割合 10%/90%）は枝番付きで IBSI。独自量は IBSI 外のまま。
         assertEquals("BC2M_1", row(r, "IntensityVolumeHistogram_VolumeAtIntensityFraction10").ibsi());
         assertEquals("GBPN_2", row(r, "IntensityVolumeHistogram_IntensityAtVolumeFraction90").ibsi());

@@ -55,14 +55,24 @@ export function parseDerivation(text: string): { rMm: number; sigmaMm: number; d
 
 const normTag = (t: string) => t.replace(/[\s()]/g, "").toLowerCase();
 
-/** 派生シリーズ 1 枚のタグ一覧から、層に要る値を読む。LoG の派生画像でなければ null。 */
+/**
+ * 派生シリーズ 1 枚のタグ一覧から、層に要る値を読む。LoG の派生画像でなければ null。
+ * 新しい形式（Parametric Map）は、DerivationDescription が Derivation Image 機能グループの中、窓が Frame VOI LUT の中にあり、
+ * 窓は保存値の単位なので、Real World Value の傾きを掛けて実値の幅にする。旧形式（トップレベルの値）も読む。
+ */
 export function layerMetaFromTags(rows: readonly TagDumpRow[]): { rMm: number; sigmaMm: number; maxAbs: number } | null {
-  const find = (tag: string, name: string) =>
-    rows.find((r) => r.depth === 0 && (normTag(r.tag) === tag || r.name === name));
+  const find = (tag: string, name: string, anyDepth = false) =>
+    rows.find((r) => (anyDepth || r.depth === 0) && (normTag(r.tag) === tag || r.name === name));
   const imageType = find("00080008", "ImageType")?.value ?? "";
   if (!imageType.split("\\").map((s) => s.trim()).includes("LOG")) return null;
-  const d = parseDerivation(find("00082111", "DerivationDescription")?.value ?? "");
-  const ww = Number(String(find("00281051", "WindowWidth")?.value ?? "").split("\\")[0]);
+  const d = parseDerivation((find("00082111", "DerivationDescription") ?? find("00082111", "DerivationDescription", true))?.value ?? "");
+  const topWw = find("00281051", "WindowWidth");
+  let ww = topWw ? Number(String(topWw.value).split("\\")[0]) : NaN;
+  if (!topWw) {
+    const stored = Number(String(find("00281051", "WindowWidth", true)?.value ?? "").split("\\")[0]);
+    const slope = Number(find("00409225", "RealWorldValueSlope", true)?.value);
+    ww = stored * slope;
+  }
   if (!d || !Number.isFinite(ww) || ww <= 0) return null;
   return { rMm: d.rMm, sigmaMm: d.sigmaMm, maxAbs: ww / 2 };
 }

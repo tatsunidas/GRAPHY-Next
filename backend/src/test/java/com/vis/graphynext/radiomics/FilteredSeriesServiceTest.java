@@ -14,6 +14,7 @@ import org.dcm4che3.data.Attributes;
 import org.dcm4che3.data.Sequence;
 import org.dcm4che3.data.Tag;
 import org.dcm4che3.data.UID;
+import org.dcm4che3.data.UID;
 import org.dcm4che3.io.DicomInputStream;
 import org.dcm4che3.io.DicomOutputStream;
 import org.dcm4che3.util.UIDUtils;
@@ -109,16 +110,9 @@ class FilteredSeriesServiceTest {
         return out;
     }
 
-    /** Rescale を通した値（float 復元）。 */
+    /** RWVM を通した値（float 復元。画素 0＝値なしは NaN）。 */
     private static float[] decode(Attributes a) throws IOException {
-        byte[] px = a.getBytes(Tag.PixelData);
-        ByteBuffer bb = ByteBuffer.wrap(px).order(ByteOrder.LITTLE_ENDIAN);
-        double slope = a.getDouble(Tag.RescaleSlope, 1), intercept = a.getDouble(Tag.RescaleIntercept, 0);
-        float[] v = new float[px.length / 2];
-        for (int i = 0; i < v.length; i++) {
-            v[i] = (float) ((bb.getShort() & 0xFFFF) * slope + intercept);
-        }
-        return v;
+        return PmReadSupport.decode(a);
     }
 
     /** 直接 RadiomicsJ の LoG を掛けた float（スライスごと）。 */
@@ -150,32 +144,34 @@ class FilteredSeriesServiceTest {
             for (int z = 0; z < NZ; z++) {
                 Attributes a = made.get(z), s = source.get(z);
                 // 幾何が元と同じ
-                assertArrayEquals(s.getDoubles(Tag.ImagePositionPatient), a.getDoubles(Tag.ImagePositionPatient), 1e-9);
-                assertArrayEquals(s.getDoubles(Tag.ImageOrientationPatient), a.getDoubles(Tag.ImageOrientationPatient), 1e-9);
-                assertArrayEquals(s.getDoubles(Tag.PixelSpacing), a.getDoubles(Tag.PixelSpacing), 1e-9);
+                assertArrayEquals(s.getDoubles(Tag.ImagePositionPatient), PmReadSupport.ipp(a), 1e-9);
+                assertArrayEquals(s.getDoubles(Tag.ImageOrientationPatient), PmReadSupport.iop(a), 1e-9);
+                assertArrayEquals(s.getDoubles(Tag.PixelSpacing), PmReadSupport.pixelSpacing(a), 1e-9);
                 assertEquals(s.getInt(Tag.Rows, 0), a.getInt(Tag.Rows, -1));
                 assertEquals(s.getInt(Tag.Columns, 0), a.getInt(Tag.Columns, -1));
                 // 値: 直接の LoG と量子化の刻み（RescaleSlope）の半分以内
-                double tol = a.getDouble(Tag.RescaleSlope, 1) / 2.0 + 1e-6;
+                double tol = PmReadSupport.slope(a) / 2.0 + 1e-6;
                 float[] got = decode(a);
                 assertEquals(want[z].length, got.length);
                 for (int i = 0; i < got.length; i++) {
                     assertEquals(want[z][i], got[i], tol, "z=" + z + " i=" + i);
                 }
                 // 参照
-                Sequence ref = a.getSequence(Tag.SourceImageSequence);
+                Sequence ref = PmReadSupport.derivation(a).getSequence(Tag.SourceImageSequence);
                 assertNotNull(ref);
                 assertEquals(s.getString(Tag.SOPInstanceUID), ref.get(0).getString(Tag.ReferencedSOPInstanceUID));
             }
             Attributes first = made.get(0);
-            assertArrayEquals(new String[] {"DERIVED", "SECONDARY", "LOG"}, first.getStrings(Tag.ImageType));
-            String d = first.getString(Tag.DerivationDescription);
+            assertArrayEquals(new String[] {"DERIVED", "PRIMARY", "LOG", "FILTERED"}, first.getStrings(Tag.ImageType));
+            String d = PmReadSupport.derivationDescription(first);
             assertTrue(d.startsWith("filter=LoG; r_mm=" + FilterScale.settingValue(c.scaleMm())
                     + "; sigma_mm=" + FilterScale.settingValue(c.sigmaMm())
                     + "; scale_to_sigma=SQRT_D; dim=2D; truncate_sigma=4.0; boundary=MIRROR; radiomicsj="), d);
-            assertEquals("LoG_r" + FilterScale.settingValue(c.scaleMm()), first.getString(Tag.RescaleType));
-            assertEquals(0.0, first.getDouble(Tag.WindowCenter, 1), "0 が窓の中心（符号が見える）");
-            assertTrue(first.getDouble(Tag.WindowWidth, 0) > 0);
+            assertEquals("LoG_r" + FilterScale.settingValue(c.scaleMm()), PmReadSupport.featureName(first));
+            double[] w = PmReadSupport.realWindow(first);
+            assertEquals(0.0, w[0], PmReadSupport.slope(first), "0 が窓の中心（符号が見える）");
+            assertTrue(w[1] > 0);
+            assertEquals(UID.ParametricMapStorage, first.getString(Tag.SOPClassUID));
         }
     }
 
@@ -203,10 +199,10 @@ class FilteredSeriesServiceTest {
         String iso = ingest(0.7, 0.7);
         FilteredSeriesService.Result r = service.create(req(iso, List.of(2.0), null, null, "3D"));
         assertEquals(1.1547, r.series().get(0).sigmaMm());
-        assertTrue(read(r.series().get(0).seriesInstanceUid()).get(0).getString(Tag.DerivationDescription).contains("dim=3D"));
+        assertTrue(PmReadSupport.derivationDescription(read(r.series().get(0).seriesInstanceUid()).get(0)).contains("dim=3D"));
         float[][] want = direct(iso, 1.1547, false);
         List<Attributes> made = read(r.series().get(0).seriesInstanceUid());
-        double tol = made.get(0).getDouble(Tag.RescaleSlope, 1) / 2.0 + 1e-6;
+        double tol = PmReadSupport.slope(made.get(0)) / 2.0 + 1e-6;
         float[] got = decode(made.get(NZ / 2));
         for (int i = 0; i < got.length; i++) assertEquals(want[NZ / 2][i], got[i], tol);
     }

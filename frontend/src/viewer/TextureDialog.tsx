@@ -24,6 +24,8 @@ import {
   type TextureJobStatus,
 } from "../api";
 import { fetchSettings } from "../settings/settingsApi";
+import { CalibratedSeriesNote, PetCalibrationField, calibrationToSend, isCalibratedParametricMap, isPetModality, showsPetCalibration } from "../radiomics/PetCalibrationField";
+import type { CalibrationChoice } from "../radiomics/roiFeatureSettings";
 import {
   TEXTURE_FAMILIES,
   GLAM_FAMILY_KEY,
@@ -65,6 +67,8 @@ export function TextureDialog({
   const [timePoint, setTimePoint] = useState(0);
   const [nC, setNC] = useState(1);
   const [nT, setNT] = useState(1);
+  /** PET の校正。既定 auto（PET は SUVbw）。欄はターゲットが PET のときだけ出す。 */
+  const [calibration, setCalibration] = useState<CalibrationChoice>("auto");
 
   // GLAM は 19 行列 × 8 統計。1 本のドロップダウンでは選べないので、行列と統計を別々に選ばせる。
   const [glamMatrixName, setGlamMatrixName] = useState(GLAM_MATRICES[0].name);
@@ -103,6 +107,15 @@ export function TextureDialog({
     const spacing = resamplingSpacing(settings);
     return spacing ? t("texture.resampling.on", { spacing: spacing.join(", ") }) : null;
   }, [settings, t]);
+
+  const targetSeries = useMemo(
+    () => allSeries.find((s) => s.seriesInstanceUid === targetSeriesUid),
+    [allSeries, targetSeriesUid],
+  );
+  const targetModality = targetSeries?.modality;
+  const targetSopClassUid = targetSeries?.sopClassUid;
+  const targetIsPet = showsPetCalibration(targetModality, targetSopClassUid);
+  const targetIsCalibratedPet = isPetModality(targetModality) && isCalibratedParametricMap(targetSopClassUid);
 
   // ターゲット候補＝同一 study の全シリーズ。マスク候補はターゲットを除いたもの。
   const maskCandidates = useMemo(
@@ -252,6 +265,7 @@ export function TextureDialog({
         margin: null,
         seriesDescription: null,
         seriesNumber: null,
+        calibration: calibrationToSend(targetModality, calibration, targetSopClassUid),
       });
       jobIdRef.current = status.jobId;
       setJob(status);
@@ -304,6 +318,15 @@ export function TextureDialog({
             </select>
           </Field>
         )}
+
+        {/* PET のときだけ。CT・MR は校正の対象外で、auto を送る（backend では何も起きない）。 */}
+        {targetIsPet && (
+          <PetCalibrationField value={calibration} onChange={setCalibration} disabled={busy}
+            labelKey="texture.field.calibration" noneWarnKey="texture.calibration.noneWarn"
+            helpKey="texture.calibration.help"
+            testId="texture-calibration" />
+        )}
+        {targetIsCalibratedPet && <CalibratedSeriesNote testId="texture-calibration-calibrated" />}
 
         <Field label={t("texture.field.mask")}>
           <select value={maskSeriesUid} onChange={(e) => setMaskSeriesUid(e.target.value)} disabled={busy} style={input}>

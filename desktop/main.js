@@ -58,6 +58,7 @@ const messages = require("./startupMessages");
 const secretStore = require("./secretStore");
 const aiGateway = require("./aiGateway");
 const { isAssistantSender } = require("./assistantSender");
+const pdfRender = require("./pdfRender");
 const { createRelay, createJournal, readJournal } = require("./viewerRelay");
 const { createRequestLog, createEvalStore } = require("./aiRequestLog");
 const { createStore: createMacroStore } = require("./assistantMacros");
@@ -3076,6 +3077,11 @@ ipcMain.handle("graphy:save-file", async (e, payload) => {
     return { ok: false, error: String(err.message) };
   }
 });
+
+// プラグイン向け host.renderPdf。HTML → PDF（表示しない窓・JS 無し・外部通信は全部止める）。保存は別（graphy:save-file）。
+// 受け取るのは検証済みの小さな要求だけで、ここで新しい権限は生まれない（書き出しも通信もしない）。
+const renderPdfOnce = pdfRender.create({ BrowserWindow, session });
+ipcMain.handle("graphy:render-pdf", (_e, req) => renderPdfOnce(req));
 
 // 起動を続けても意味が無い（backend が動かない）失敗。スプラッシュは一瞬で閉じてしまうので、
 // これらだけは OS のダイアログでも出して、原因が読める状態で残す。

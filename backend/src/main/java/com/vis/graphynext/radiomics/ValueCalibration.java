@@ -76,8 +76,15 @@ public record ValueCalibration(String valueUnit, String type, double scale, List
     }
 
     private static ValueCalibration resolveCalibration(String req, String modality, Attributes first, Attributes last) {
-        boolean pet = modality.equals("PT") || modality.equals("PET");
         PetSuvCalibration.Type type = PetSuvCalibration.Type.of(req);
+        if (first != null && com.vis.graphynext.dicom.ParametricMapFrameExpander.isParametricMap(first)) {
+            // Parametric Map は元のモダリティを保つが、値は RWVM で実値になっている（校正の対象外）。PET のままだと SUV を掛けようとして失敗する
+            if (type != null) {
+                throw new IllegalArgumentException("Parametric Map は値がすでに実際の量です。SUV の校正はできません");
+            }
+            return UNSET;
+        }
+        boolean pet = modality.equals("PT") || modality.equals("PET");
         if (!pet) {
             if (type != null) {
                 throw new IllegalArgumentException("SUV の校正は PET（Modality=PT）だけです（このシリーズは "

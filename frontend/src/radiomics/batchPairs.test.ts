@@ -4,13 +4,15 @@
  */
 import { describe, expect, it } from "vitest";
 import type { RoiFeatureResult, RoiFeatureRow } from "../api";
-import type { BatchPair } from "./batchApi";
+import type { BatchJobState, BatchPair, BatchPairState, BatchStatus } from "./batchApi";
 import {
   applyLabelFilter,
   assignCaseLabels,
   batchFileBase,
   buildBatchRequest,
   duplicateLabels,
+  footerProgress,
+  formatElapsed,
   initialRows,
   selectedPairs,
   setIncluded,
@@ -328,5 +330,46 @@ describe("元画像の画素間隔がそろっているか（voxelSpacingMix）"
     const none = voxelSpacingMix([]);
     expect(none).toEqual({ mixed: false, perAxis: [null, null, null], usable: 0, unknown: 0 });
     expect(spacingMixText(none)).toBe("x —、y —、z —");
+  });
+});
+
+describe("formatElapsed", () => {
+  it("分:秒、1 時間以上は 時:分:秒。負・NaN は 0:00", () => {
+    expect(formatElapsed(0)).toBe("0:00");
+    expect(formatElapsed(59_000)).toBe("0:59");
+    expect(formatElapsed(61_000)).toBe("1:01");
+    expect(formatElapsed(252_000)).toBe("4:12");
+    expect(formatElapsed(3_600_000)).toBe("1:00:00");
+    expect(formatElapsed(8_045_000)).toBe("2:14:05");
+    expect(formatElapsed(-5)).toBe("0:00");
+    expect(formatElapsed(Number.NaN)).toBe("0:00");
+  });
+});
+
+describe("footerProgress", () => {
+  const job = (state: BatchJobState, states: BatchPairState[]): BatchStatus => ({
+    jobId: "j", state, elapsedMs: 252_000, total: states.length, done: states.filter((s) => s === "DONE").length, failed: 0,
+    skipped: 0, notRun: 0, cancelled: 0, qcSkipped: 0, stopReason: null, stopKind: null, stopIndex: null,
+    pairs: states.map((s, index) => ({ index, state: s, pair: {} as BatchPair, failureKind: null, error: null, fromCache: false, elapsedMs: 0, qcFlags: [] })),
+  });
+  const labels = ["C001", "C002", "C003"];
+  it("実行中は今計算している組の番号とラベルを返す", () => {
+    const f = footerProgress(job("RUNNING", ["DONE", "DONE", "RUNNING"]), labels);
+    expect(f).toMatchObject({ running: true, index: 2, label: "C003", done: 2, failed: 0, total: 3, elapsedMs: 252_000 });
+  });
+  it("実行中でも計算中の組が無ければ index・ラベルは null（待機の合間）", () => {
+    const f = footerProgress(job("QUEUED", ["PENDING", "PENDING", "PENDING"]), labels);
+    expect(f).toMatchObject({ running: true, index: null, label: null });
+  });
+  it("ラベルが足りないときは label が null", () => {
+    expect(footerProgress(job("RUNNING", ["RUNNING"]), []).label).toBeNull();
+  });
+  it("停止・取り消し・完了は running でなく、組の RUNNING 行があっても index を出さない", () => {
+    for (const st of ["STOPPED", "CANCELLED", "DONE"] as const) {
+      const f = footerProgress(job(st, ["DONE", "RUNNING", "PENDING"]), labels);
+      expect(f.running).toBe(false);
+      expect(f.index).toBeNull();
+      expect(f.label).toBeNull();
+    }
   });
 });

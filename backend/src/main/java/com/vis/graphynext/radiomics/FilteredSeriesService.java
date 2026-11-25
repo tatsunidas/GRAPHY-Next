@@ -39,11 +39,14 @@ public class FilteredSeriesService {
     private final DicomStorageService storage;
     private final RadiomicsMapEngine engine;
     private final RadiomicsMode mode;
+    private final com.vis.graphynext.microscopy.InstallationIdentity identity;
 
-    public FilteredSeriesService(DicomStorageService storage, RadiomicsMapEngine engine, RadiomicsMode mode) {
+    public FilteredSeriesService(DicomStorageService storage, RadiomicsMapEngine engine, RadiomicsMode mode,
+                                 com.vis.graphynext.microscopy.InstallationIdentity identity) {
         this.storage = storage;
         this.engine = engine;
         this.mode = mode;
+        this.identity = identity;
     }
 
     /** 作った 1 本。{@code scaleMm} は換算後の半径 r、{@code sigmaMm} は LoG の σ。 */
@@ -71,6 +74,7 @@ public class FilteredSeriesService {
         if (req.scales() == null || req.scales().isEmpty()) {
             throw new IllegalArgumentException("スケールを 1 つ以上指定してください。");
         }
+        TextureSeriesRequest.checkCalibration(req.calibration());
     }
 
     /**
@@ -106,7 +110,8 @@ public class FilteredSeriesService {
 
         // 元の格子のまま読む（マスク無し・リサンプリング無し）。
         RadiomicsMapEngine.LoadedVolume vol = engine.load(req.studyInstanceUid(), req.sourceSeriesUid(),
-                req.channel(), req.timePoint(), null, 0, 1, new HashMap<>());
+                req.channel(), req.timePoint(), null, 0, 1,
+                TextureSeriesRequest.loadSettings(new HashMap<>(), req.calibration()));
         var cal = vol.calibration();
         LogGrid.require(cal, volumeFilter);
         if (notation == FilterScale.Notation.WIDTH_PX
@@ -156,17 +161,8 @@ public class FilteredSeriesService {
             data[z] = (float[]) st.getProcessor(z + 1).convertToFloat().getPixels();
         }
 
-        double[] mm = TextureSeriesService.minMax(data);
-        double min = mm[0], max = mm[1];
-        if (Double.isNaN(min) || Double.isNaN(max) || Double.isInfinite(min) || Double.isInfinite(max)) {
-            min = 0.0;
-            max = 1.0;
-        }
-        if (min == max) {
-            max = min + 1.0;
-        }
-        double slope = (max - min) / 65535.0;
-        double intercept = min;
+        double[] q = TextureSeriesService.quantization(TextureSeriesService.minMax(data));
+        double min = q[0], max = q[1], slope = q[2], intercept = q[3];
         // 0 が中間の灰色になる窓（符号が見える）。幅は最大絶対値の 2 倍。
         double maxAbs = Math.max(1e-6, Math.max(Math.abs(min), Math.abs(max)));
 
@@ -188,14 +184,15 @@ public class FilteredSeriesService {
         double spacingBetween = tmpl.getDouble(Tag.SpacingBetweenSlices,
                 TextureSeriesService.spacingFromIpp(ipps, sliceThickness));
         String derivation = derivationDescription(r, sigma, conversion, req.scaleCoefficient(), volumeFilter,
-                truncate, padding, vol.lossyCompressed());
+                truncate, padding, vol.lossyCompressed(), vol.valueCalibration());
 
+        String[] ucum = ucumUnit(vol.valueCalibration());
         List<String> sops = new ArrayList<>(n);
         for (int z = 0; z < n; z++) {
             byte[] px = TextureSeriesService.to16bit(data[z], slope, intercept);
             Attributes a = TextureSeriesService.buildInstance(tmpl, req.studyInstanceUid(), map, newSeriesUid,
                     seriesNumber, seriesDesc, "LOG", rescaleType, derivation, slope, intercept, 0.0, 2 * maxAbs,
-                    sliceThickness, spacingBetween, z, px);
+                    sliceThickness, spacingBetween, z, px, identity.equipment(), ucum);
             sops.add(a.getString(Tag.SOPInstanceUID));
             TextureSeriesService.ingest(storage, a);
         }
@@ -204,10 +201,43 @@ public class FilteredSeriesService {
         return new Created(r, sigma, newSeriesUid, sops);
     }
 
+    /**
+     * 出力の RWVM に書く UCUM の単位 {コード値, 意味}。PET を SUV に校正したときは {@code g/ml{SUVbw}}・{@code g/ml{SUVlbm}}・{@code g/ml{SUVjanma}}・{@code cm2/ml{SUVbsa}}、
+     * 校正しない PET（Bq/mL）は {@code Bq/ml}。それ以外（CT・MR・すでに SUV の系列・単位不明）は null＝従来の「単位なし」。
+     */
+    static String[] ucumUnit(ValueCalibration cal) {
+        if (cal == null || cal.type() == null) {
+            return null;
+        }
+        PetSuvCalibration.Type t = PetSuvCalibration.Type.of(cal.type());
+        if (t != null) {
+            // フロントの保存（calibratedSeriesSave.ts の calibrationUnit）と同じコード。Janmahasatian の正式コードは SH に入らない
+            String code = switch (t) {
+                case BW -> "g/ml{SUVbw}";
+                case SUL_JAMES -> "g/ml{SUVlbm}";
+                case SUL_JANMA -> "g/ml{SUVjanma}";
+                case BSA -> "cm2/ml{SUVbsa}";
+            };
+            return new String[] { code, t.unit() };
+        }
+        if (cal.uncalibratedPet() && cal.valueUnit() != null && cal.valueUnit().startsWith("BQML")) {
+            return new String[] { "Bq/ml", "Bq/mL" };
+        }
+        return null;
+    }
+
     /** DerivationDescription は key=value を {@code "; "} でつなぐ（後から値の意味を辿れるように）。 */
     static String derivationDescription(double r, double sigma, FilterScale.Conversion conversion, Double k,
                                         boolean volumeFilter, double truncate, ImageFiltering.Padding padding,
                                         boolean lossy) {
+        return derivationDescription(r, sigma, conversion, k, volumeFilter, truncate, padding, lossy,
+                ValueCalibration.UNSET);
+    }
+
+    /** @param calibration 読み込みで掛けた校正。校正の記録が空（CT・MR・従来）のときは項目を足さない */
+    static String derivationDescription(double r, double sigma, FilterScale.Conversion conversion, Double k,
+                                        boolean volumeFilter, double truncate, ImageFiltering.Padding padding,
+                                        boolean lossy, ValueCalibration calibration) {
         StringBuilder sb = new StringBuilder("filter=LoG; r_mm=").append(FilterScale.settingValue(r))
                 .append("; sigma_mm=").append(FilterScale.settingValue(sigma))
                 .append("; scale_to_sigma=").append(conversion == FilterScale.Conversion.COEFFICIENT && k != null
@@ -216,6 +246,11 @@ public class FilteredSeriesService {
                 .append("; truncate_sigma=").append(truncate)
                 .append("; boundary=").append(padding.name())
                 .append("; radiomicsj=").append(RadiomicsJ.version);
+        if (calibration != null && !calibration.text().isEmpty()) {
+            // フィルタは線形なので、校正してから掛けた値は、掛けてから校正した値と同じ。入力に掛けた校正を残す
+            sb.append("; input_calibration=").append(calibration.text())
+                    .append("; input_unit=").append(calibration.valueUnit());
+        }
         if (lossy) {
             sb.append("; source: lossy compressed");
         }

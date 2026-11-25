@@ -301,15 +301,18 @@ public class RoiFeatureService {
         // PET の校正（SUV）。読み込みで画素値に掛けるので、離散化・範囲・特徴量はすべて校正後の値に対して働く。
         Map<String, String> loadSettings = new HashMap<>();
         loadSettings.put(RadiomicsMapEngine.CALIBRATION_SETTING, req.calibrationOrAuto());
+        // NaN を含むシリーズも読み、入力としてよいかはこのあと assessNan が決める（ROI の内側にあれば断る）
+        loadSettings.put(RadiomicsMapEngine.ALLOW_NAN_SETTING, "1");
         RadiomicsMapEngine.LoadedVolume vol = engine.load(req.studyInstanceUid(), req.sourceSeriesUid(),
                 req.channel(), req.timePoint(), req.maskSeriesUid(), req.maskChannel(), label, loadSettings, true);
 
         // 値の種類（離散の校正値・連続の校正値・任意単位）で IVH のモードと補間後の丸めを決める。要求ごとの設定に足す
         // （RadiomicsJ の static には書かない。キャッシュの鍵・2D・スケールごとの設定・設定の SHA に同じ値が乗る）。
         settings = applyValueKind(settings, kindOf(req, vol));
+        NanReach.RoiNan nan = assessNan(req, vol, label, settings, inputs != null);
 
         if (inputs == null) {
-            return computeUnits(req, vol, label, settings, settings, phase, progress, cancelled);
+            return computeUnits(req, vol, label, settings, settings, phase, progress, cancelled, nan);
         }
         List<ResolvedScale> scales = resolveScales(inputs, notation, vol);
         List<RoiFeatureResult.ScaleEntry> entries = new ArrayList<>();
@@ -323,7 +326,7 @@ public class RoiFeatureService {
             Double s3 = FilterScale.sigmaMm(r, 3, conversion, req.scaleCoefficient());
             Double s2 = FilterScale.sigmaMm(r, 2, conversion, req.scaleCoefficient());
             RoiFeatureResult res = computeUnits(req, vol, label, withSigma(settings, s3), withSigma(settings, s2),
-                    phase, progress, cancelled);
+                    phase, progress, cancelled, nan);
             entries.add(new RoiFeatureResult.ScaleEntry(r, s3, s2, conversion.name(), req.scaleCoefficient(),
                     notation == FilterScale.Notation.WIDTH_PX ? "width_px" : "radius_mm", sc.input().value(),
                     sc.pixelSpacingMm(), sc.input().label(), res));
@@ -331,6 +334,86 @@ public class RoiFeatureService {
         scaleProgress.scale(scales.size(), scales.size(), scales.get(scales.size() - 1).radiusMm());
         // 先頭のスケールの結果をトップレベルに置く（スケールを知らない呼び手はそれを読む）
         return entries.get(0).result().withScales(entries);
+    }
+
+    /** 値なし（NaN）が ROI の外にある画像を入力にした（ROI の内側には無い）。 */
+    public static final String FLAG_NAN_OUTSIDE_ROI = "NAN_OUTSIDE_ROI";
+
+    /** NaN が局所強度の近傍（球半径 {@link NanReach#LOCAL_PEAK_RADIUS_MM}）に届くので、LocalIntensityPeak・GlobalIntensityPeak を空欄にした。 */
+    public static final String FLAG_NAN_LOCAL_PEAK_UNDEFINED = "NAN_LOCAL_PEAK_UNDEFINED";
+
+    /** 空欄にした列に付ける注記の符号（{@link RoiFeatureDefinitions} の NOTE_*）。 */
+    static final String NOTE_NAN_NEIGHBOUR = "NAN_NEIGHBOUR";
+
+    /** 近傍の NaN で値が決まらない 2 列。 */
+    private static final java.util.Set<String> LOCAL_PEAK_COLUMNS =
+            java.util.Set.of("LocalIntensity_LocalIntensityPeak", "LocalIntensity_GlobalIntensityPeak");
+
+    /**
+     * 値なし（NaN）を含む画像を入力にしてよいか決める（断るときは例外）。
+     * ROI の内側の NaN は全族の値を変えるので断る。外側だけなら、ROI 特徴量は局所強度の 2 列を除いて NaN の有無に依らない
+     * （実測: {@link NanReach}）。ただし補間・フィルタ・再スライスは NaN を ROI の中へ広げるので、それらを伴う指定は断る。
+     */
+    static NanReach.RoiNan assessNan(RoiFeatureRequest req, RadiomicsMapEngine.LoadedVolume vol, int label,
+                                     Map<String, String> settings, boolean scales) {
+        float[][] img = NanReach.slicesOf(vol.image(), vol.slices());
+        if (NanReach.countNaN(img) == 0) {
+            return NanReach.RoiNan.NONE;
+        }
+        boolean[][] roi = labelInside(vol, label);
+        ij.measure.Calibration c = vol.calibration();
+        NanReach.RoiNan st = NanReach.assessForRoi(img, roi, vol.width(), vol.height(),
+                c.pixelWidth > 0 ? c.pixelWidth : 1, c.pixelHeight > 0 ? c.pixelHeight : 1,
+                c.pixelDepth > 0 ? c.pixelDepth : 1);
+        String hint = "ROI の外が値なしのマップ（テクスチャマップなど）を入力にした可能性があります。";
+        if (st == NanReach.RoiNan.INSIDE) {
+            throw new IllegalArgumentException("値の無い画素（NaN・無限大）が ROI の内側にあるため、特徴量を計算できません"
+                    + "（全族の値が変わります）。" + hint + "ROI を値のある範囲に絞るか、元の画像を入力にしてください。");
+        }
+        String spread = null;
+        String resample = settings.get("DOUBLEARRAY_resamplingFactorXYZ");
+        String sigma = settings.get("DOUBLEARRAY_logSigmaMm");
+        if (resample != null && !resample.isBlank()) spread = "リサンプリング";
+        else if ((sigma != null && !sigma.isBlank()) || scales) spread = "LoG フィルタ（スケール）";
+        else if (vol.rectified()) spread = "取り直した格子（不等間隔・チルトのシリーズ）";
+        else if (req.has(RoiFeatureRequest.RoiMode.MAX_SECTION_2D) || req.has(RoiFeatureRequest.RoiMode.SLICES_2D)
+                || req.allPlanes()) spread = "2D の単位・全断面";
+        if (spread != null) {
+            throw new IllegalArgumentException("値の無い画素（NaN・無限大）を含む画像は、" + spread
+                    + "を伴う計算に使えません（NaN が ROI の中へ広がります）。" + hint
+                    + "元の画像を入力にするか、3D の単位だけ・補間とフィルタなしで計算してください。");
+        }
+        return st;
+    }
+
+    /** ラベルの ROI の内（マスク画素値 &gt;= ラベル）。 */
+    private static boolean[][] labelInside(RadiomicsMapEngine.LoadedVolume vol, int label) {
+        int hit = Math.max(1, label);
+        boolean[][] in = new boolean[vol.slices()][vol.width() * vol.height()];
+        for (int z = 0; z < vol.slices(); z++) {
+            ij.process.ImageProcessor ip = vol.mask().getStack().getProcessor(z + 1);
+            for (int y = 0; y < vol.height(); y++) {
+                for (int x = 0; x < vol.width(); x++) {
+                    in[z][y * vol.width() + x] = ip.getf(x, y) >= hit;
+                }
+            }
+        }
+        return in;
+    }
+
+    /** 局所強度の 2 列を空欄（null）にし、理由の注記を付ける。ほかの列は触らない。 */
+    static List<RoiFeatureResult.Row> withoutLocalPeaks(List<RoiFeatureResult.Row> rows) {
+        List<RoiFeatureResult.Row> out = new ArrayList<>(rows.size());
+        for (RoiFeatureResult.Row r : rows) {
+            if (LOCAL_PEAK_COLUMNS.contains(r.column())) {
+                List<String> notes = new ArrayList<>(r.notes());
+                notes.add(NOTE_NAN_NEIGHBOUR);
+                out.add(new RoiFeatureResult.Row(r.column(), r.family(), r.feature(), r.ibsi(), null, List.copyOf(notes)));
+            } else {
+                out.add(r);
+            }
+        }
+        return out;
     }
 
     /** 画素間隔（PixelSpacing）が DICOM に無く、面内が pixel のまま読み込まれた。 */
@@ -492,11 +575,11 @@ public class RoiFeatureService {
     private RoiFeatureResult computeUnits(RoiFeatureRequest req, RadiomicsMapEngine.LoadedVolume vol, int label,
                                           Map<String, String> s3, Map<String, String> s2,
                                           java.util.function.Consumer<Phase> phase, Progress progress,
-                                          BooleanSupplier cancelled) throws IOException {
+                                          BooleanSupplier cancelled, NanReach.RoiNan nan) throws IOException {
         boolean with2d = req.has(RoiFeatureRequest.RoiMode.MAX_SECTION_2D)
                 || req.has(RoiFeatureRequest.RoiMode.SLICES_2D);
         checkLogGrid(s3, vol, with2d);
-        RoiFeatureResult whole = compute3d(req, vol, label, s3, phase);
+        RoiFeatureResult whole = compute3d(req, vol, label, s3, phase, nan);
         if (!with2d) {
             return whole;
         }
@@ -630,11 +713,17 @@ public class RoiFeatureService {
     }
 
     private RoiFeatureResult compute3d(RoiFeatureRequest req, RadiomicsMapEngine.LoadedVolume vol, int label,
-                                       Map<String, String> requested, java.util.function.Consumer<Phase> phase)
-            throws IOException {
+                                       Map<String, String> requested, java.util.function.Consumer<Phase> phase,
+                                       NanReach.RoiNan nan) throws IOException {
         Integer threshold = smallRoiThreshold(req);
         // 2D 形状は 1 枚の画像の特徴量で、多断面の体積では RadiomicsJ が黙って計算しない。3D の設定には渡さず、記録に残す
         List<String> flags3d = new ArrayList<>(loadFlagsOf(vol));
+        if (nan == NanReach.RoiNan.OUTSIDE_FAR || nan == NanReach.RoiNan.OUTSIDE_NEAR) {
+            flags3d.add(FLAG_NAN_OUTSIDE_ROI);
+        }
+        if (nan == NanReach.RoiNan.OUTSIDE_NEAR) {
+            flags3d.add(FLAG_NAN_LOCAL_PEAK_UNDEFINED);
+        }
         final Map<String, String> settings;
         if (isTrue(requested.get(SHAPE2D_KEY))) {
             settings = new TreeMap<>(requested);
@@ -679,6 +768,9 @@ public class RoiFeatureService {
             throw e;
         } catch (Exception e) {
             throw new IllegalStateException("Radiomics 特徴量の計算に失敗しました: " + e.getMessage(), e);
+        }
+        if (nan == NanReach.RoiNan.OUTSIDE_NEAR) {
+            result = result.withRows(withoutLocalPeaks(result.rows()));
         }
         log.info("[roi-features] {} features, roi={} voxels, {} ms", result.rows().size(), roiVoxels,
                 System.currentTimeMillis() - t0);

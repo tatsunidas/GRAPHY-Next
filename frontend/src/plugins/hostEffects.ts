@@ -61,6 +61,8 @@ export const HOST_EFFECTS: Record<HostKey, ToolEffect> = {
   selectRoi: "display",
   subscribeRois: "display",
   openWindow: "display",
+  // HTML → PDF のバイト列を返すだけ（ディスクにも外部にも書かない。保存は file＝write）
+  renderPdf: "display",
   mountViewport: "display",
   mountVolumeView: "display",
   mountSeriesPanel: "display",

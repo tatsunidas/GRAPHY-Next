@@ -18,6 +18,7 @@ import { log } from "../log";
 import type { PluginHost, PluginHostSeed, PluginManifest, PluginCategory, PluginModule, PluginSurface } from "./pluginTypes";
 import { DEMO_MODULES, MOCK_ENABLED, MOCK_MANIFESTS } from "./mockPlugins";
 import { requestAiGeneration, type AiGenerationOptions } from "./pluginAiApi";
+import { renderPdf } from "./pluginPdfApi";
 import { pickDirectory, saveFileAs, saveJobArtifact, saveJobArtifactTo, writeToDirectory } from "./pluginFileApi";
 import { createPluginCache } from "./pluginCacheApi";
 import { ensureLocal, storageStatus } from "./pluginStorageApi";
@@ -111,6 +112,7 @@ function withHostApis(m: PluginManifest, host: PluginHostSeed): PluginHost {
       generate: (req: Omit<AiGenerationOptions, "manifest">) =>
         requestAiGeneration({ ...req, manifest: m }),
     },
+    renderPdf,
     file: { saveAs: saveFileAs, pickFiles, saveJobArtifact, pickDirectory, saveJobArtifactTo, writeToDirectory },
     // H59: 外部の計算機。要求・同意・ジョブはマニフェストの id に固定する（権限もそこで見る）
     compute: {

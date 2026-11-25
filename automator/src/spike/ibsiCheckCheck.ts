@@ -161,7 +161,7 @@ async function main(): Promise<void> {
     await c.waitFor({ state: "visible", timeout: 10_000 });
     check((await dd.count()) === 1, "構成 D の記録が出る");
     const cText = await c.innerText();
-    // 2.7.2 までは構成 C に不合格が 1 件（Intensity at 10% volume）あった。2.7.3 は IBSI の定義どおりで 0 件（API の記録の件数と画面が一致）
+    // 2.7.2 までは構成 C に不合格が 1 件（Intensity at 10% volume）あった。2.7.3 以降は IBSI の定義どおりで 0 件（API の記録の件数と画面が一致）
     const apiRecs = (await (await fetch(`${base}/api/radiomics/ibsi-check/records`)).json()) as { dataSet: string; counts: Record<string, number> }[];
     const apiC = apiRecs.find((r) => r.dataSet === "configuration C");
     check(apiC?.counts.FAIL === 0, "API: 構成 C の記録は不合格 0", apiC?.counts);

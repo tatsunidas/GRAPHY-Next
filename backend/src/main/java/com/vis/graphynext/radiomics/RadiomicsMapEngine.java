@@ -50,6 +50,8 @@ public class RadiomicsMapEngine {
 
     private final DicomStorageService storage;
     private final MapCheckpointStore checkpoints;
+    /** テスト用: false なら従来どおり全ボリュームを RadiomicsJ へ渡す（切り出しとの全画素一致の比較に使う）。 */
+    boolean cropEnabled = true;
     private final PixelCodec codec;
 
     public RadiomicsMapEngine(DicomStorageService storage, MapCheckpointStore checkpoints, PixelCodec codec) {
@@ -83,7 +85,18 @@ public class RadiomicsMapEngine {
             List<double[]> ippPerZ,         // z ごとの ImagePositionPatient（無ければ null 要素）
             List<String> srcSopPerZ,        // z ごとの元 SOPInstanceUID（SourceImageSequence 用）
             String frameOfReferenceUid,
-            boolean lossyCompressed) {      // 元画像が非可逆圧縮（特徴量は圧縮の影響を受ける）
+            boolean lossyCompressed,        // 元画像が非可逆圧縮（特徴量は圧縮の影響を受ける）
+            ValueCalibration valueCalibration) { // 読み込みで掛けた校正（値の単位・係数）
+
+        /** 校正の記録なし（従来の作り方）。 */
+        public MapResult(int width, int height, int slices, float[][] data, String featureName,
+                         double[] imageOrientationPatient, double pixelSpacingRow, double pixelSpacingCol,
+                         List<double[]> ippPerZ, List<String> srcSopPerZ, String frameOfReferenceUid,
+                         boolean lossyCompressed) {
+            this(width, height, slices, data, featureName, imageOrientationPatient, pixelSpacingRow,
+                    pixelSpacingCol, ippPerZ, srcSopPerZ, frameOfReferenceUid, lossyCompressed,
+                    ValueCalibration.UNSET);
+        }
     }
 
     /** ターゲット（＋任意マスク）から 1 特徴のマップを計算する（進み具合は見ない）。 */
@@ -169,8 +182,13 @@ public class RadiomicsMapEngine {
 
     /**
      * {@link #load} の {@code settings} に入れる、PET の校正の指定のキー（{@link RoiFeatureRequest#calibration}）。
-     * 無いときは校正を扱わない（従来の経路。テクスチャのマップなどは今も Bq/mL のまま）。
+     * 無いときは校正を扱わない（従来の経路）。テクスチャのマップと GLAM 解析は、
+     * {@link TextureSeriesRequest#calibration}・{@link GlamAnalysisRequest#calibration}（既定 auto＝PET は SUVbw）を
+     * ここへ入れて読む。フィルタ済みシリーズ（{@link FilteredSeriesRequest#calibration}）も同じ。最大断面は渡さない。
      */
+    /** 値なし（NaN）を含むシリーズも読む（1）。呼び出し側が {@link NanReach} で入力としてよいか判定する。ROI 特徴量とマップだけが付ける。 */
+    public static final String ALLOW_NAN_SETTING = "GRAPHY_ALLOW_NAN";
+
     public static final String CALIBRATION_SETTING = "graphy.calibration";
 
     /** ターゲット（＋任意マスク）から 1 特徴のマップを計算する。 */
@@ -180,9 +198,42 @@ public class RadiomicsMapEngine {
 
     /** {@link #compute} と同じ計算。スライスごとの途中結果を使い（あれば続きから）、キーも返す。 */
     public Computed computeResumable(TextureSeriesRequest req, TextureProgress progress) throws IOException {
+        TextureSeriesRequest.checkCalibration(req.calibration());
+        // 校正の指定は読み込みにだけ渡す（req.settings() は RadiomicsJ と途中結果のキーに使われるので汚さない）
         LoadedVolume vol = load(req.studyInstanceUid(), req.sourceSeriesUid(), req.channel(), req.timePoint(),
-                req.maskSeriesUid(), req.maskChannel(), parseLabel(req), req.settings());
+                req.maskSeriesUid(), req.maskChannel(), parseLabel(req),
+                withAllowNaN(TextureSeriesRequest.loadSettings(req.settings(), req.calibration())));
+        requireNanAcceptable(req, vol);
         return computeFrom(req, progress, vol);
+    }
+
+    /**
+     * 値なし（NaN）を含む入力は、窓が届く範囲（カーネルの半径と余白の小さいほう）に NaN が無いときだけ計算する。
+     * ROI の内側・届く範囲にあれば、窓の値が静かに変わる（NaN を出さずに別の値になる）ので断る。マスクが無い（全面が ROI）ときも断る。
+     */
+    private void requireNanAcceptable(TextureSeriesRequest req, LoadedVolume vol) {
+        float[][] img = NanReach.slicesOf(vol.image(), vol.slices());
+        if (NanReach.countNaN(img) == 0) {
+            return;
+        }
+        boolean[][] roi = NanReach.insideOf(vol.mask(), vol.width(), vol.height(), vol.slices());
+        int kernel = req.filterSize() > 0 ? oddUp(req.filterSize()) : 7;
+        int margin = req.margin() != null ? Math.max(0, req.margin()) : FeatureVisualizationMap.DEFAULT_MARGIN;
+        NanReach.MapNan st = NanReach.assessForMap(img, roi, vol.width(), vol.height(), kernel, margin, req.force2D());
+        if (st == NanReach.MapNan.INSIDE || st == NanReach.MapNan.REACHED) {
+            throw new IllegalArgumentException("値の無い画素（NaN・無限大）を含むシリーズは、"
+                    + (st == NanReach.MapNan.INSIDE ? "ROI の内側に NaN があるため" : "窓が届く範囲（ROI から "
+                    + NanReach.mapReachVoxels(kernel, margin) + " 画素以内）に NaN があるため")
+                    + "テクスチャを計算できません（窓の値が静かに変わります）。ROI の外が値なしのマップ"
+                    + "（テクスチャマップなど）を入力にした可能性があります。元の画像のシリーズを入力にしてください。");
+        }
+    }
+
+    /** 読み込みの設定に「値なし（NaN）を含むシリーズも読む」を足した写し。 */
+    static Map<String, String> withAllowNaN(Map<String, String> loadSettings) {
+        Map<String, String> out = new HashMap<>(loadSettings);
+        out.put(ALLOW_NAN_SETTING, "1");
+        return out;
     }
 
     /** 取り込みが済んだ計算の途中結果を消す。 */
@@ -216,6 +267,7 @@ public class RadiomicsMapEngine {
         }
         int ch = clampDim(channel, layout.nC());
         int tp = clampDim(timePoint, layout.nT());
+        final boolean allowNaN = settings != null && "1".equals(settings.get(ALLOW_NAN_SETTING));
 
         // 指定 (C,T) に一致するセルを z 昇順で収集し、連続ボリュームとして扱う。
         // （T/C が空間位置と一致しない＝各グローバル z にそのセルが無いシリーズでも成立する。）
@@ -247,6 +299,11 @@ public class RadiomicsMapEngine {
             if (ipp != null) ippByZ.put(k, ipp);
         }
 
+        // 旧版のマップの誤宣言は、PET の校正（別の理由で先に失敗する）より前に断る。画素の読み込み時の判定も残す
+        Attributes firstHeader = headerOf(sopPerZ[0]);
+        if (firstHeader != null) {
+            requireNotMisdeclaredMap(firstHeader, sopPerZ[0]);
+        }
         ValueCalibration valueCal = resolveCalibration(settings, sopPerZ);
 
         // ターゲットボリュームを積む（dcm4che で画素をデコード。圧縮なら PixelCodec で伸長）。
@@ -261,10 +318,10 @@ public class RadiomicsMapEngine {
                         + "（backend ログを確認してください）");
             }
             lossy |= loaded.lossy();
-            long nan = countNaN(loaded.ip());
+            long nan = allowNaN ? 0 : countNaN(loaded.ip());
             if (nan > 0) {
                 // 窓の中の NaN を離散化がどう扱うか（RadiomicsJ）を確かめられていないので、黙って計算しない
-                throw new IllegalArgumentException("値の無い画素（NaN）を含むシリーズはテクスチャを計算できません"
+                throw new IllegalArgumentException("値の無い画素（NaN・無限大）を含むシリーズはテクスチャを計算できません"
                         + "（z=" + z + " に " + nan + " 画素）。Parametric Map の NaN は背景などの「値なし」です。");
             }
             procs.add(valueCal.scales() ? scaled(loaded.ip(), valueCal.scale()) : loaded.ip());
@@ -494,9 +551,17 @@ public class RadiomicsMapEngine {
         String ckptKey = checkpoints.key(req, vol, filterSize, stride, d2, margin);
         int[] restoredCount = new int[1];
         float[][] full = runMap(glam, req, () -> computePerSlice(img, mask, built, filterSize, d2, stride, margin,
-                mapW, mapH, nZ, sink, ckptKey, restoredCount));
+                mapW, mapH, nZ, sink, ckptKey, restoredCount, hasMask && cropEnabled));
         log.info("[texture] map '{}' {}x{}x{} stride={} filter={} margin={} in {} ms",
                 built.displayName(), w, h, nZ, stride, filterSize, margin, System.currentTimeMillis() - t0);
+
+        // マスクつきのとき、ROI の外は RadiomicsJ が実値 0.0 を書いている（画素値 < 1 が外）。
+        // 0 は実在する値と区別できないので、値なし（NaN）にする。チェックポイントは生の値のまま
+        // （NaN はここで付けるので、再開しても同じ結果になる）。
+        boolean[][] inside = hasMask ? NanReach.insideOf(mask, w, h, nZ) : null;
+        if (inside != null && vol.resampling() == null) {
+            TextureResampling.blankOutside(full, inside);
+        }
 
         // リサンプリングして計算した場合は、元シリーズの格子へ戻してから DICOM 化する
         // （派生シリーズの幾何を元と一致させ、Fusion で重ねられる状態を保つ）。
@@ -506,6 +571,10 @@ public class RadiomicsMapEngine {
         if (vol.resampling() != null) {
             TextureResampling.Grid grid = vol.resampling();
             full = TextureResampling.toSourceGrid(full, w, h, nZ, grid);
+            if (inside != null) {
+                // 補間の後で付ける（先に NaN を入れると補間で ROI の内側へ広がる）。
+                TextureResampling.blankOutside(full, TextureResampling.insideOnSourceGrid(inside, w, h, nZ, grid));
+            }
             outW = grid.sourceWidth();
             outH = grid.sourceHeight();
             outZ = grid.sourceSlices();
@@ -522,7 +591,7 @@ public class RadiomicsMapEngine {
                 built.displayName(),
                 vol.imageOrientationPatient(),
                 vol.pixelSpacingRow(), vol.pixelSpacingCol(),
-                ippList, sopList, vol.frameOfReferenceUid(), vol.lossyCompressed()), ckptKey, nZ, restoredCount[0]);
+                ippList, sopList, vol.frameOfReferenceUid(), vol.lossyCompressed(), vol.valueCalibration()), ckptKey, nZ, restoredCount[0]);
     }
 
     /**
@@ -589,9 +658,20 @@ public class RadiomicsMapEngine {
      */
     private float[][] computePerSlice(ImagePlus img, ImagePlus mask, TextureFeatureCatalog.BuiltFeature built,
                                       int filterSize, boolean d2, int stride, int margin, int w, int h, int s,
-                                      TextureProgress progress, String key, int[] restoredOut) {
+                                      TextureProgress progress, String key, int[] restoredOut, boolean crop) {
         int outW = (int) Math.ceil((double) w / stride);
         int outH = (int) Math.ceil((double) h / stride);
+        MapCrop plan = null;
+        if (crop) {
+            plan = MapCrop.plan(mask, margin, filterSize, d2, stride);
+            if (plan.fallbackReason() == null) {
+                log.info("[texture] cropped per slice: {}", plan.describe());
+            } else {
+                log.info("[texture] not cropped, whole volume {}x{}x{}: {}", w, h, s, plan.fallbackReason());
+                plan = null;
+            }
+        }
+        final MapCrop cropPlan = plan;
         float[][] full = new float[s][];
         int restored = 0;
         progress.update(0, s);
@@ -601,10 +681,29 @@ public class RadiomicsMapEngine {
                 restored++;
             } else {
                 int slice = z + 1;
-                // 抽出がスライスの切れ目で割り込めるよう、1 枚ずつ取る（RadiomicsLock）。
-                ImagePlus one = RadiomicsLock.get(() -> FeatureVisualizationMap.generateFeatureMap(img, mask, slice,
-                        built.calculator(), filterSize, d2, stride, margin, (done, total) -> { }));
-                low = (float[]) one.getStack().getProcessor(1).convertToFloatProcessor().getPixels();
+                if (cropPlan != null && cropPlan.emptySlice(z)) {
+                    // マスクの無いスライスは窓が 1 つも無い（RadiomicsJ は ROI の外に 0f を書く）
+                    low = new float[outW * outH];
+                } else if (cropPlan != null) {
+                    MapCrop.Region r = cropPlan.region(z);
+                    ImagePlus cImg = MapCrop.cropImage(img, r);
+                    ImagePlus cMask = MapCrop.cropMask(mask, r);
+                    int cSlice = z - r.z0() + 1;
+                    ImagePlus one = RadiomicsLock.get(() -> FeatureVisualizationMap.generateFeatureMap(cImg, cMask, cSlice,
+                            built.calculator(), filterSize, d2, stride, margin, (done, total) -> { }));
+                    float[] part = (float[]) one.getStack().getProcessor(1).convertToFloatProcessor().getPixels();
+                    int pw = one.getWidth();
+                    low = new float[outW * outH];
+                    int ox = r.x0() / stride, oy = r.y0() / stride;
+                    for (int j = 0; j < one.getHeight(); j++) {
+                        System.arraycopy(part, j * pw, low, (oy + j) * outW + ox, pw);
+                    }
+                } else {
+                    // 抽出がスライスの切れ目で割り込めるよう、1 枚ずつ取る（RadiomicsLock）。
+                    ImagePlus one = RadiomicsLock.get(() -> FeatureVisualizationMap.generateFeatureMap(img, mask, slice,
+                            built.calculator(), filterSize, d2, stride, margin, (done, total) -> { }));
+                    low = (float[]) one.getStack().getProcessor(1).convertToFloatProcessor().getPixels();
+                }
                 if (key != null && low.length == outW * outH) {
                     checkpoints.save(key, z, low);
                 }
@@ -923,6 +1022,18 @@ public class RadiomicsMapEngine {
         }
     }
 
+    /**
+     * 旧版が書いたマップ・フィルタ済みシリーズ（Secondary Capture・ImageType の 3 つ目が TEXTURE か LOG）は、
+     * 画素が 0〜65535 なのに BitsStored=15・HighBit=15 と宣言している。BitsStored で値を切る読み方では
+     * 32768 以上の画素が化けるので、黙って計算せず断る。表示は変えない。
+     */
+    static void requireNotMisdeclaredMap(Attributes ds, String sop) {
+        if (com.vis.graphynext.dicom.LegacyMapDeclaration.matches(ds)) {
+            throw new IllegalArgumentException("旧版で作られた、画素の宣言が誤っているシリーズです（BitsStored=15・HighBit=15 だが、"
+                    + "画素は 16 bit 全域を使っています。32768 以上の画素が誤って読まれます）。作り直してください。sop=" + sop);
+        }
+    }
+
     /** dcm4che データセットと（伸長済みの）画素 → モダリティ値(Rescale 適用)の FloatProcessor。 */
     static Loaded processorFrom(Attributes ds, String sop, byte[] px, boolean lossy) {
         int rows = ds.getInt(Tag.Rows, 0);
@@ -932,10 +1043,20 @@ public class RadiomicsMapEngine {
             return null;
         }
         requireGrayscale(ds, sop);
+        requireNotMisdeclaredMap(ds, sop);
         if (ParametricMapFrameExpander.hasFloatPixels(ds)) {
             // Parametric Map から切り出した float のフレーム（値は実際の量）。NaN は呼び出し側で断る
             float[] v = ParametricMapFrameExpander.frameValues(ds, 0);
-            return v == null ? null : new Loaded(new FloatProcessor(cols, rows, v, null), null, lossy);
+            if (v == null) {
+                return null;
+            }
+            // 無限大は「値なし」として NaN に直す（NIfTI の取り込み・融合の計算と同じ決め）。以降の判定は NaN だけを見る
+            for (int i = 0; i < v.length; i++) {
+                if (Float.isInfinite(v[i])) {
+                    v[i] = Float.NaN;
+                }
+            }
+            return new Loaded(new FloatProcessor(cols, rows, v, null), null, lossy);
         }
         int ba = ds.getInt(Tag.BitsAllocated, 16);
         int bs = ds.getInt(Tag.BitsStored, ba);

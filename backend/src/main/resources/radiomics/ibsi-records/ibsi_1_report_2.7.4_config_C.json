@@ -1,6 +1,6 @@
 {
   "dataSet": "configuration C",
-  "radiomicsjVersion": "2.7.3",
+  "radiomicsjVersion": "2.7.4",
   "referenceFile": "validation/IBSI_ValidationFile.xlsx",
   "referenceSha256": "06d2212c529f9bbfb1ca6ff9e82828254f636143fe79d367f43f100343dacb7c",
   "settingsFile": "validation/ParamsTestCT_PAT1_Config_C.properties",

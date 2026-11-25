@@ -87,7 +87,7 @@ GRAPHY-Next の「見つける」一覧に出すには、公式の索引リポ�
 
 | サーフェス | 出る場所 | `host` の主なプロパティ |
 |---|---|---|
-| `viewer2d.menu` | 2D Viewer の **Plug-ins** メニュー | `actions`（`invert()` / `rotate90()` / `fit()` / `setWindowLevel()` …）<br>`getTargets()` / `getViewState()` / `getPixelData()` / `showOverlay()` / `clearOverlay()` / `saveDerivedSeries()` / `getRois()` / `getRoiMeta()` / `setRoiMeta()` / `subscribeRois()`（**0.1.9 以降**）<br>`saveStructuredReport()` / `loadStore()` / `saveStore()` / `deleteStore()`（**0.1.12 以降**）<br>`goTo()` / `selectRoi()`（**0.1.13 以降**）<br>`loadVolume()` / `estimateVolume()` / `registerVolumes()` / `resampleVolume()`（**0.2.0 以降**） |
+| `viewer2d.menu` | 2D Viewer の **Plug-ins** メニュー | `actions`（`invert()` / `rotate90()` / `fit()` / `setWindowLevel()` …）<br>`getTargets()` / `getViewState()` / `getPixelData()` / `showOverlay()` / `clearOverlay()` / `saveDerivedSeries()` / `getRois()` / `getRoiMeta()` / `setRoiMeta()` / `subscribeRois()`（**0.1.9 以降**）<br>`saveStructuredReport()` / `loadStore()` / `saveStore()` / `deleteStore()`（**0.1.12 以降**）<br>`goTo()` / `selectRoi()`（**0.1.13 以降**）<br>`loadVolume()` / `estimateVolume()` / `registerVolumes()` / `resampleVolume()`（**0.2.0 以降**）<br>`renderPdf()`（**0.6.7 以降**・HTML → PDF のバイト列。保存は `file.saveAs`） |
 | `viewer2d.menu.analysis` | 2D Viewer の **解析**メニュー（**0.2.1 以降**） | `viewer2d.menu` と**完全に同じ**。違うのは出る場所だけ。本体機能と並ぶので、**本体が区切り線と「（プラグイン）」の印を付ける** — 名前に「プラグイン」と入れないこと（二重に出る） |
 | `mainscreen.menu` | MainScreen の Plug-Ins メニュー | `selectedStudyUid`（選択中スタディ UID） |
 

@@ -183,6 +183,7 @@ final class SliceLayout {
             case MISSING -> sb.append(String.format("スライスが %d 枚欠けています（間隔 %.3f〜%.3f mm）", missingCount, minGap, maxGap));
             case IRREGULAR -> sb.append(String.format("スライス間隔が不規則です（%.3f〜%.3f mm）", minGap, maxGap));
             case DUPLICATES -> sb.append("同じ位置に複数のスライスがあります");
+            case UNKNOWN -> sb.append("スライスの位置（IPP/IOP）がありません");
             default -> { }
         }
         if (hasTilt()) {

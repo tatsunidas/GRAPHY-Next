@@ -234,6 +234,21 @@ public final class ParametricMapFrameExpander {
         return null;
     }
 
+    /** RWVM の First〜Last Value Mapped を実値にした範囲（昇順）。無ければ {0, 1}。 */
+    public static double[] mappedRange(Attributes mapping) {
+        if (mapping != null && mapping.contains(Tag.RealWorldValueFirstValueMapped)
+                && mapping.contains(Tag.RealWorldValueLastValueMapped)) {
+            double slope = mapping.getDouble(Tag.RealWorldValueSlope, 1.0);
+            double intercept = mapping.getDouble(Tag.RealWorldValueIntercept, 0.0);
+            double a = mapping.getInt(Tag.RealWorldValueFirstValueMapped, 0) * slope + intercept;
+            double b = mapping.getInt(Tag.RealWorldValueLastValueMapped, 0) * slope + intercept;
+            if (Double.isFinite(a) && Double.isFinite(b)) {
+                return new double[] { Math.min(a, b), Math.max(a, b) };
+            }
+        }
+        return new double[] { 0.0, 1.0 };
+    }
+
     /** RWVM の単位の表示名（CodeMeaning、無ければコード）。単位なし（UCUM の「1」）・不明は空文字。 */
     public static String unitOf(Attributes mapping) {
         if (mapping == null) {
@@ -287,6 +302,12 @@ public final class ParametricMapFrameExpander {
                 for (int i = 0; i < n; i++) {
                     v[i] = b.getFloat((int) (off + (long) i * 4));
                 }
+            } else if (!ds.contains(Tag.DoubleFloatPixelData) && isParametricMap(ds) && ds.contains(Tag.PixelData)) {
+                // 整数の Parametric Map（16 bit 符号なしなど）。RWVM の範囲の外（例: 画素 0＝値なし）は NaN にする
+                if (!readIntegerFrame(ds, frame, n, v)) {
+                    return null;
+                }
+                return applyIntegerMapping(ds, frame, v);
             } else if (!ds.contains(Tag.DoubleFloatPixelData) && ConfocalGeometry.isConfocal(ds)) {
                 // 規格どおりの整数の CFM（8 ビット。16 ビットも読む）
                 if (!readIntegerFrame(ds, frame, n, v)) {
@@ -392,6 +413,15 @@ public final class ParametricMapFrameExpander {
         out.setDouble(Tag.RescaleSlope, VR.DS, 1.0);
         out.setDouble(Tag.RescaleIntercept, VR.DS, 0.0);
         out.setString(Tag.RescaleType, VR.LO, unitOfFrame(ds, frame));
+        if (!(min <= max)) {
+            // 値が 1 つも無い（全面 NaN）フレーム。窓が無いと、表示側（cornerstone）が最初の画像でこのフレームを出したとき、
+            // 初期の窓の範囲が NaN になって階調の表（転送関数）が NaN で作られ、以後どのスライスも真っ黒になる
+            // （ROI の外が値なしのマップで、ROI の無い先頭スライスが全面 NaN になる）。表示できる値が無いので窓は目安でよいが、
+            // 有限でなければならない。RWVM の値の範囲（First〜Last Value Mapped の実値）があればそれ、無ければ 0〜1。
+            double[] fallback = mappedRange(rwvm(ds, frame));
+            min = (float) fallback[0];
+            max = (float) fallback[1];
+        }
         if (min <= max) {
             double width = Math.max(max - min, Math.ulp(Math.max(Math.abs(min), Math.abs(max))) * 2);
             out.setDouble(Tag.WindowCenter, VR.DS, min + (max - min) / 2.0);
@@ -416,6 +446,27 @@ public final class ParametricMapFrameExpander {
         } catch (IOException e) {
             return null;
         }
+    }
+
+    /**
+     * 整数画素の RWVM。First〜Last Value Mapped の外の保存値は「値が無い」（C.7.6.16.2.11.1.2）ので NaN。
+     * RWVM が無いときは保存値そのまま。
+     */
+    private static float[] applyIntegerMapping(Attributes ds, int frame, float[] v) {
+        Attributes m = rwvm(ds, frame);
+        if (m == null) {
+            return v;
+        }
+        double slope = m.getDouble(Tag.RealWorldValueSlope, 1.0);
+        double intercept = m.getDouble(Tag.RealWorldValueIntercept, 0.0);
+        boolean ranged = m.contains(Tag.RealWorldValueFirstValueMapped) && m.contains(Tag.RealWorldValueLastValueMapped);
+        int first = ranged ? m.getInt(Tag.RealWorldValueFirstValueMapped, 0) : 0;
+        int last = ranged ? m.getInt(Tag.RealWorldValueLastValueMapped, 0) : 0;
+        for (int i = 0; i < v.length; i++) {
+            float sv = v[i];
+            v[i] = ranged && (sv < first || sv > last) ? Float.NaN : (float) (sv * slope + intercept);
+        }
+        return v;
     }
 
     /** 整数の Pixel Data（8・16 ビット、符号の有無）の 1 フレームを float に読む。 */

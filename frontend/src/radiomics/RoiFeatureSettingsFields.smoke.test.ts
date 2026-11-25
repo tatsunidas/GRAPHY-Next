@@ -278,6 +278,17 @@ describe("設定の群（折りたたみ）", () => {
     expect(q("batch-group-preprocess-summary")?.textContent).toContain("リサンプリング なし");
   });
 
+  it("要約の間隔は、浮動小数点の端数を出さない（0.35000000000000003 を 0.35 と書く）", async () => {
+    function Odd() {
+      const [form, setForm] = useState<RoiFeatureForm>({ ...defaultRoiFeatureForm(), resampleMm: 0.35000000000000003 });
+      latest = form;
+      return createElement(RoiFeatureSettingsFields, { form, setForm, disabled: false, testIdPrefix: "batch", layout: { labelMinWidth: 110, align: "left" }, showRange: true, showPreset: true });
+    }
+    await render(Odd);
+    expect(String(latest.resampleMm)).toBe("0.35000000000000003"); // 入力欄の操作で実際に出た値（実アプリの検査のスクリーンショット）
+    expect(q("batch-group-preprocess-summary")?.textContent).toContain("等方 0.35 mm");
+  });
+
   it("IVH のビン幅に誤りを入れると、閉じた ③ が自動で開き、赤の印が出る。直すと印は消える", async () => {
     await render(Full);
     expect(open("values")).toBe(false);
