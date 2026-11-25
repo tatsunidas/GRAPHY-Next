@@ -580,6 +580,7 @@ export const en: Record<string, string> = {
   "niftiExport.refused.npz-big-endian": "Big-endian images cannot be exported.",
   "niftiExport.refused.npz-mixed-geometry": "Images with different orientation, size or pixel spacing are mixed, so they cannot form one volume. Split the series.",
   "niftiExport.refused.npz-not-grayscale": "Color (RGB) images cannot be exported.",
+  "niftiExport.refused.npz-misdeclared-map": "This map was made by an older version with a wrong pixel declaration, so its values would be corrupted. Please regenerate it.",
   "niftiExport.refused.npz-pixels-unreadable": "Some images have unreadable pixels (for example an unsupported compression).",
   "niftiExport.refused.npz-too-large": "Too large to export (up to 1 GiB of source pixels).",
   "niftiExport.refused.npz-empty": "There are no images.",

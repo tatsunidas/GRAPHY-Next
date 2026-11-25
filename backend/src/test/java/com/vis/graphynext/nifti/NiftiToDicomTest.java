@@ -227,6 +227,18 @@ class NiftiToDicomTest {
         assertThat(first.getInt(Tag.BitsAllocated, 0)).isEqualTo(32);
         // 1 インスタンス 1 フレーム（fw/nifti-import.md §3.1）
         assertThat(first.getInt(Tag.NumberOfFrames, 0)).isEqualTo(1);
+        // 規格の Type 1・2（検査器 dicom-validator で欠落が出ていたもの）
+        assertThat(first.getString(Tag.ContentQualification)).isEqualTo("RESEARCH");
+        assertThat(first.getString(Tag.BurnedInAnnotation)).isEqualTo("NO");
+        assertThat(first.getString(Tag.RecognizableVisualFeatures)).isEqualTo("YES");
+        assertThat(first.getString(Tag.LossyImageCompression)).isEqualTo("00");
+        assertThat(first.contains(Tag.AcquisitionContextSequence)).isTrue();
+        assertThat(first.contains(Tag.ConversionType)).isFalse();
+        for (int t : new int[] { Tag.PositionReferenceIndicator, Tag.StudyTime, Tag.AccessionNumber,
+                Tag.ReferringPhysicianName, Tag.StudyID }) {
+            assertThat(first.contains(t)).as(org.dcm4che3.util.TagUtils.toString(t)).isTrue();
+        }
+        dumpForValidator(first, "nifti-pm.dcm");
         float[] v = new float[16];
         ByteBuffer.wrap(first.getBytes(Tag.FloatPixelData)).order(ByteOrder.LITTLE_ENDIAN).asFloatBuffer().get(v);
         assertThat(v[3]).isEqualTo(1.5f);
@@ -276,5 +288,15 @@ class NiftiToDicomTest {
         assertThat(NiftiToDicom.sopClassOf("PT")).isEqualTo(UID.PositronEmissionTomographyImageStorage);
         assertThat(NiftiToDicom.sopClassOf(null)).isEqualTo(UID.MRImageStorage);
         assertThat(NiftiToDicom.sopClassOf("なにか")).isEqualTo(UID.MRImageStorage);
+    }
+
+    private static void dumpForValidator(Attributes a, String name) throws IOException {
+        String dir = System.getProperty("pm.dump.dir");
+        if (dir == null) {
+            return;
+        }
+        try (org.dcm4che3.io.DicomOutputStream out = new org.dcm4che3.io.DicomOutputStream(new java.io.File(dir, name))) {
+            out.writeDataset(a.createFileMetaInformation(UID.ExplicitVRLittleEndian), a);
+        }
     }
 }

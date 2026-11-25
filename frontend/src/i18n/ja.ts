@@ -580,6 +580,7 @@ export const ja: Record<string, string> = {
   "niftiExport.refused.npz-big-endian": "ビッグエンディアンの画像は書き出せません。",
   "niftiExport.refused.npz-mixed-geometry": "向き・大きさ・画素間隔が異なる画像が混ざっているため、1 つのボリュームにできません。シリーズを分けてください。",
   "niftiExport.refused.npz-not-grayscale": "カラー（RGB）の画像は書き出せません。",
+  "niftiExport.refused.npz-misdeclared-map": "旧版が作ったマップ（画素の宣言が誤っています）は、値が化けるので書き出せません。作り直してください。",
   "niftiExport.refused.npz-pixels-unreadable": "画素を読み出せない画像があります（圧縮形式が展開できないなど）。",
   "niftiExport.refused.npz-too-large": "大きすぎて書き出せません（元の画素で 1 GiB まで）。",
   "niftiExport.refused.npz-empty": "画像がありません。",
