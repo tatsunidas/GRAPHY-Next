@@ -1,0 +1,221 @@
+/*
+ * 研究統計プラグイン（Research Stats）の画面の実機検証スパイク（Electron・実 backend）。
+ *
+ * 実行:  cd automator && RS_PLUGIN_DIR=<plugin.json と ui.js のあるフォルダ> RS_FEAT=<特徴量の CSV> RS_CLIN=<PatientID 鍵の臨床 CSV> \
+ *          RS_CLIN_SUBJECT=<SubjectCode 鍵の臨床 CSV> RS_OUT=<撮影の保存先> \
+ *          GRAPHY_AUTOMATOR_HTTP_PORT=19680 GRAPHY_AUTOMATOR_SCP_PORT=19681 GRAPHY_AUTOMATOR_VITE_PORT=19683 \
+ *          AUTOMATOR_DATA_DIR=$PWD/.results/run-data/rs-ui timeout 900 npx tsx src/spike/researchStatsUiCheck.ts
+ *   前提: backend jar を今のコードで作り直してある。
+ *
+ *   [1] ファイルを選ぶと、名前・行数・列数が一覧に残る（以前は No file chosen のまま）。取り消し（×）で外れる
+ *   [2] データセットの確認（Skill から独立）: ID の列が、実際の値の重なりから選ばれ、結合できた人数が出る
+ *   [3] 結合できないデータ（重なり 0）では、次の区画（解析の種類）が無効になり、理由が出る。結合できるデータで有効になる（負例と正例）
+ *   [4] 解析の種類を選ぶと、その解析の目的変数だけが、臨床 CSV のヘッダーから選べて、型の検査が出る
+ *   [5]（RS_FEAT_2D があれば）2D の単位を含む表: ID の重複で止まらない。「解析に使う単位」の既定は WHOLE_3D。絞り込みと平均の注意
+ *   [6]（RS_FEAT_LEAK・RS_CLIN56 があれば）リーク検査: ID・記録の列（RowIndex）、目的変数の混入（LeakSep）を検出し、外せる。
+ *       リークの無い表（元の 56 例の表）では検出しない（負例）
+ */
+import fs from "node:fs";
+import path from "node:path";
+
+import { DesktopDriver, DESKTOP_RUN_DATA_DIR } from "../driver/desktopDriver.js";
+import { dismissStartupDialogs } from "../common/dismissDialogs.js";
+import { AUTOMATOR_ROOT } from "../fixtures/manifest.js";
+import { dismissUpdateDialog } from "./dismissUpdateDialog.js";
+
+const PLUGIN_DIR = process.env.RS_PLUGIN_DIR ?? "";
+const FEAT = process.env.RS_FEAT ?? "";
+const CLIN = process.env.RS_CLIN ?? "";
+const CLIN_SUBJECT = process.env.RS_CLIN_SUBJECT ?? "";
+const FEAT_2D = process.env.RS_FEAT_2D ?? ""; // 2D の単位を含む一括抽出の表
+const FEAT_LEAK = process.env.RS_FEAT_LEAK ?? ""; // 56 例の表に、リークの列（LeakSep・RowIndex）を足したもの
+const CLIN56 = process.env.RS_CLIN56 ?? ""; // その臨床表（SubjectCode 鍵）
+const OUT = process.env.RS_OUT ?? path.join(AUTOMATOR_ROOT, ".results", "rs-ui-check");
+const PLUGIN_ID = "research-stats";
+
+const failures: string[] = [];
+let passed = 0;
+function check(cond: boolean, label: string, detail?: unknown): void {
+  if (cond) { passed++; console.log(`  [ok  ] ${label}`); } else { console.log(`  [FAIL] ${label}${detail === undefined ? "" : ` — ${JSON.stringify(detail)}`}`); failures.push(label); }
+}
+
+/** 特徴量の欄は、選び直すと「追加」になる。別の表に替えるときは、読み込み済みのものを先に外す。 */
+async function clearFeatures(page: import("@playwright/test").Page): Promise<void> {
+  for (let i = 0; i < 10; i++) {
+    const x = page.getByTestId("rs-file-features-remove-0");
+    if (!(await x.count())) break;
+    await x.click();
+    await page.waitForTimeout(300);
+  }
+}
+
+async function main(): Promise<void> {
+  for (const p of [PLUGIN_DIR, FEAT, CLIN, CLIN_SUBJECT]) if (!p || !fs.existsSync(p)) { console.log(`[未達] 入力が無い: ${p}`); process.exitCode = 2; return; }
+  fs.mkdirSync(OUT, { recursive: true });
+  // 重なりが 0 の臨床 CSV（負例）。ID を別の値にする
+  const noOverlap = path.join(OUT, "clinical-no-overlap.csv");
+  fs.writeFileSync(noOverlap, "PatientID,EGFR\nX001,Mutant\nX002,Wildtype\nX003,Wildtype\n");
+
+  const dst = path.join(DESKTOP_RUN_DATA_DIR, "plugins", PLUGIN_ID);
+  fs.rmSync(dst, { recursive: true, force: true });
+  fs.mkdirSync(dst, { recursive: true });
+  for (const f of ["plugin.json", "ui.js"]) fs.copyFileSync(path.join(PLUGIN_DIR, f), path.join(dst, f));
+
+  const d = new DesktopDriver();
+  await d.start();
+  try {
+    const page = d.page;
+    page.on("console", (m) => { if (m.type() === "error") console.log(`[renderer error] ${m.text().slice(0, 300)}`); });
+    await page.getByTestId("search-patientid-input").waitFor({ state: "visible", timeout: 60_000 });
+    await dismissStartupDialogs(page);
+    await page.evaluate("localStorage.setItem('graphy.locale', 'ja')");
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await page.getByTestId("search-patientid-input").waitFor({ state: "visible", timeout: 60_000 });
+    await dismissUpdateDialog(page, 8000);
+    await page.getByTestId("mainscreen-menu-plugins").click({ timeout: 10_000 });
+    await page.getByTestId(`plugin-item-${PLUGIN_ID}`).click();
+    await page.getByTestId("rs-root").waitFor({ state: "visible", timeout: 15_000 });
+    const root = page.getByTestId("rs-root");
+    await root.screenshot({ path: path.join(OUT, "01-initial.png") });
+    check((await page.getByTestId("rs-loaded").count()) === 0, "ファイルを選ぶ前は、読み込んだファイルの一覧が空");
+    check(await page.getByTestId("rs-reason-check").isVisible().catch(() => false) || (await root.innerText()).length > 0, "最初の画面が出る");
+
+    console.log("\n[1] ファイルの選択と一覧");
+    await page.getByTestId("rs-file-features").setInputFiles([FEAT]);
+    await page.getByTestId("rs-file-clinical").setInputFiles(CLIN);
+    await page.waitForTimeout(1500);
+    const loaded = await page.getByTestId("rs-loaded").allInnerTexts();
+    console.log(`  読み込み一覧: ${JSON.stringify(loaded.map((x) => x.replace(/\s+/g, " ")))}`);
+    check(loaded.length === 2 && loaded.some((x) => x.includes(path.basename(FEAT))) && loaded.some((x) => x.includes(path.basename(CLIN))),
+      "選んだ 2 ファイルの名前が一覧に出る（No file chosen のままにならない）", loaded);
+    check(loaded.every((x) => /\d/.test(x)), "行数・列数が一覧に出る", loaded);
+    await root.screenshot({ path: path.join(OUT, "02-loaded.png") });
+    // 別の操作（再描画）のあとも残る
+    await page.getByTestId("rs-seed").scrollIntoViewIfNeeded().catch(() => undefined);
+    check((await page.getByTestId("rs-loaded").count()) === 2, "再描画のあとも、一覧が残る");
+
+    console.log("\n[2] データセットの確認（Skill から独立）");
+    await page.getByTestId("rs-check-pass").waitFor({ state: "visible", timeout: 30_000 }).catch(() => undefined);
+    const pairs = await page.getByTestId("rs-best-pair").innerText().catch(() => "");
+    console.log(`  最良の組: ${pairs.replace(/\s+/g, " ")}`);
+    const counts = await page.getByTestId("rs-counts").innerText().catch(() => "");
+    console.log(`  人数: ${counts.replace(/\s+/g, " ")}`);
+    check(await page.getByTestId("rs-check-pass").isVisible().catch(() => false), "結合できて、確認が通る");
+    check(/PatientID/.test(pairs), "ID の列の候補が、値の重なりから PatientID になる", pairs);
+    check(/3/.test(counts), "結合できた人数（3）が出る", counts);
+    const skillOptions = await page.getByTestId("rs-skill").locator("option").allInnerTexts();
+    console.log(`  Skill の選択肢: ${JSON.stringify(skillOptions)}`);
+    check(!skillOptions.some((o) => /Dataset check|データセットの確認/.test(o)), "Skill の選択肢に Dataset check が無い（独立した手順になった）", skillOptions);
+    await root.screenshot({ path: path.join(OUT, "03-check.png") });
+
+    console.log("\n[3] 結合できないデータ（負例）と、できるデータ（正例）");
+    await page.getByTestId("rs-file-clinical").setInputFiles(noOverlap);
+    await page.waitForTimeout(1500);
+    const noNote = await page.getByTestId("rs-note-no-overlap").isVisible().catch(() => false);
+    const zero = await page.getByTestId("rs-zero-joined").isVisible().catch(() => false);
+    const skillDisabled = await page.getByTestId("rs-skill").isDisabled().catch(() => true);
+    console.log(`  重なり 0 の注意: ${noNote}、結合 0 人の表示: ${zero}、Skill が無効: ${skillDisabled}`);
+    check(noNote || zero, "重なりが 0 のデータでは、その旨が出る", { noNote, zero });
+    check(skillDisabled, "結合できないあいだ、解析の種類が選べない（無効）");
+    check(await page.getByTestId("rs-reason-skill").isVisible().catch(() => false) || (await root.innerText()).includes("確認"), "次へ進めない理由が出る");
+    await root.screenshot({ path: path.join(OUT, "04-no-overlap.png") });
+    await page.getByTestId("rs-file-clinical").setInputFiles(CLIN_SUBJECT);
+    await page.waitForTimeout(1500);
+    const best2 = await page.getByTestId("rs-best-pair").innerText().catch(() => "");
+    console.log(`  SubjectCode 鍵の臨床表での最良の組: ${best2.replace(/\s+/g, " ")}`);
+    check(await page.getByTestId("rs-check-pass").isVisible().catch(() => false), "SubjectCode 鍵の臨床表でも、重なりの最大の組が選ばれて結合できる（以前は 0 行）");
+    check(/SubjectCode/.test(best2), "その組は SubjectCode", best2);
+    check(!(await page.getByTestId("rs-skill").isDisabled().catch(() => true)), "結合できると、解析の種類が選べる");
+    await page.getByTestId("rs-file-clinical").setInputFiles(CLIN);
+    await page.waitForTimeout(1200);
+
+    console.log("\n[4] 解析の種類と目的変数");
+    await page.getByTestId("rs-skill").selectOption("r2-discrimination");
+    await page.waitForTimeout(500);
+    const hasOutcome = await page.getByTestId("rs-outcome").isVisible().catch(() => false);
+    const hasTime = await page.getByTestId("rs-time").count();
+    check(hasOutcome && hasTime === 0, "2 群の判別: 結果ラベルが選べて、時間は出ない", { hasOutcome, hasTime });
+    const outcomeOpts = await page.getByTestId("rs-outcome").locator("option").allInnerTexts();
+    console.log(`  結果ラベルの選択肢（臨床 CSV のヘッダー）: ${JSON.stringify(outcomeOpts)}`);
+    check(outcomeOpts.includes("EGFR"), "選択肢は、実際の臨床 CSV のヘッダー（EGFR がある）", outcomeOpts);
+    await page.getByTestId("rs-outcome").selectOption("EGFR");
+    await page.waitForTimeout(500);
+    await root.screenshot({ path: path.join(OUT, "05-r2.png") });
+    const qcText = await root.innerText();
+    check(/Wildtype|Mutant/.test(qcText), "選んだ列の値と人数が、その場で出る", qcText.slice(0, 80));
+    await page.getByTestId("rs-skill").selectOption("r1-prognosis");
+    await page.waitForTimeout(500);
+    check((await page.getByTestId("rs-time").isVisible().catch(() => false)) && (await page.getByTestId("rs-event").isVisible().catch(() => false)) && !(await page.getByTestId("rs-outcome").isVisible().catch(() => false)),
+      "生存との関連: 時間とイベントが出て、結果ラベルは出ない");
+    await root.screenshot({ path: path.join(OUT, "06-r1.png") });
+    if (FEAT_2D && fs.existsSync(FEAT_2D)) {
+      console.log("\n[5] 2D の単位を含む表");
+      await clearFeatures(page);
+      await page.getByTestId("rs-file-features").setInputFiles([FEAT_2D]);
+      await page.getByTestId("rs-file-clinical").setInputFiles(CLIN);
+      await page.waitForTimeout(2500);
+      const errs = await page.getByTestId("rs-check-errors").innerText().catch(() => "");
+      check(!/重複/.test(errs), "行の ID が重複していても、止まらない（以前は「行の ID「C001」が重複しています」で止まった）", errs);
+      check(await page.getByTestId("rs-check-pass").isVisible().catch(() => false), "結合できて、確認が通る");
+      const fid = await page.getByTestId("rs-feature-id").inputValue().catch(() => "");
+      console.log(`  行 ID の列: ${fid}`);
+      check(fid === "RowKey", "行 ID は一意な RowKey が自動で選ばれる", fid);
+      check(await page.getByTestId("rs-units").isVisible().catch(() => false), "「解析に使う単位」の欄が出る");
+      const w3d = page.getByTestId("rs-unit-Unit-WHOLE_3D");
+      const ms2d = page.getByTestId("rs-unit-Unit-MAX_SECTION_2D");
+      check((await w3d.isChecked()) && !(await ms2d.isChecked()), "既定は WHOLE_3D だけが選ばれている");
+      check(!(await page.getByTestId("rs-note-averaged").isVisible().catch(() => false)), "WHOLE_3D だけなら、平均の注意は出ない（患者ごとに 1 行）");
+      await root.screenshot({ path: path.join(OUT, "07-2d-default.png") });
+      await ms2d.check();
+      await page.waitForTimeout(1200);
+      const avg = await page.getByTestId("rs-note-averaged").innerText().catch(() => "");
+      console.log(`  平均の注意: ${avg.replace(/\s+/g, " ")}`);
+      check(/平均/.test(avg), "WHOLE_3D と MAX_SECTION_2D の両方を選ぶと、患者ごとに平均される旨の注意が出る", avg);
+      await root.screenshot({ path: path.join(OUT, "08-2d-both.png") });
+      await w3d.uncheck();
+      await page.waitForTimeout(1000);
+      check(await page.getByTestId("rs-check-pass").isVisible().catch(() => false), "MAX_SECTION_2D だけでも結合できる");
+      await ms2d.uncheck();
+      await page.waitForTimeout(1000);
+      check(await page.getByTestId("rs-check-errors").isVisible().catch(() => false), "1 行も残らない選択では、エラーが出て先へ進めない（負例）");
+      await w3d.check();
+      await page.waitForTimeout(800);
+    }
+    if (FEAT_LEAK && CLIN56 && fs.existsSync(FEAT_LEAK) && fs.existsSync(CLIN56)) {
+      console.log("\n[6] リーク検査");
+      await clearFeatures(page);
+      await page.getByTestId("rs-file-features").setInputFiles([FEAT_LEAK]);
+      await page.getByTestId("rs-file-clinical").setInputFiles(CLIN56);
+      await page.waitForTimeout(3000);
+      const cols = await page.getByTestId("rs-leak-col").allInnerTexts().catch(() => []);
+      console.log(`  ID・記録の列の警告: ${JSON.stringify(cols.map((c) => c.replace(/\s+/g, " ")))}`);
+      check(cols.some((c) => c.includes("RowIndex")), "連番の列（RowIndex）が、ID・記録の列として警告される");
+      await root.screenshot({ path: path.join(OUT, "09-leak-cols.png") });
+      await page.getByTestId("rs-skill").selectOption("r2-discrimination");
+      await page.getByTestId("rs-outcome").selectOption("EGFR");
+      await page.waitForTimeout(1500);
+      const tgt = await page.getByTestId("rs-leak-target").innerText().catch(() => "");
+      console.log(`  目的変数の混入: ${tgt.replace(/\s+/g, " ").slice(0, 200)}`);
+      check(/LeakSep/.test(tgt), "結果ラベルを完全に分ける列（LeakSep）が、目的変数の混入として警告される");
+      await root.screenshot({ path: path.join(OUT, "10-leak-target.png") });
+      await page.getByTestId("rs-leak-target-exclude-LeakSep").click();
+      await page.waitForTimeout(1200);
+      check(!(await page.getByTestId("rs-leak-target").isVisible().catch(() => false)), "「特徴量から外す」と、警告が消える");
+      // 負例: リークの無い元の表
+      const clean = FEAT_LEAK.replace("nsclc_leak56.csv", "nsclc_clean56.csv");
+      if (fs.existsSync(clean)) {
+        await clearFeatures(page);
+        await page.getByTestId("rs-file-features").setInputFiles([clean]);
+        await page.waitForTimeout(2500);
+        const cols2 = await page.getByTestId("rs-leak-col").count();
+        const tgt2 = await page.getByTestId("rs-leak-target").isVisible().catch(() => false);
+        check(cols2 === 0 && !tgt2, "リークの無い表では、警告が出ない（負例）", { cols2, tgt2 });
+      }
+    }
+  } finally {
+    await d.stop();
+  }
+  console.log(`\n結果: 合格 ${passed} / 失敗 ${failures.length}`);
+  if (failures.length) { console.log(failures.map((x) => `  - ${x}`).join("\n")); process.exitCode = 1; }
+}
+main().catch((e) => { console.error(e); process.exitCode = 1; });
