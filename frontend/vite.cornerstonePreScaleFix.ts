@@ -9,6 +9,8 @@ import type { Plugin } from "vite";
  *
  * 1. `decodeImageFrameWorker.js`（ワーカー）の `_handlePreScaleSetup`: スケール前に型を決める。
  *    修正: スケールの係数（rescaleSlope / rescaleIntercept / suvbw / doseGridScaling）に小数が 1 つでもあれば Float32Array。
+ *    **入力の画素がすでに Float32Array のとき**（Float Pixel Data の Parametric Map など。係数は slope 1・intercept 0 の整数）も
+ *    Float32Array（最小・最大が整数だと、間の小数が Uint8/Uint16 へのコピーで切り捨てられる。例: 0〜1 の確率マップが 2 値になる）。
  * 2. `imageLoader/setPixelDataType.js`（メインスレッド、`createImage` がデコード後に呼ぶ）: 最小・最大から型を決め直し、
  *    ワーカーが返した Float32Array を `new Uint16Array(float32)` で**もう一度**切り捨てる。
  *    修正: すでに Float32Array なら作り直さない。
@@ -33,9 +35,9 @@ export const PATCHES: readonly Patch[] = [
     name: "decodeImageFrameWorker.js",
     file: /@cornerstonejs[\\/]dicom-image-loader[\\/]dist[\\/]esm[\\/]decodeImageFrameWorker\.js$/,
     target: WORKER_TARGET,
-    replacement: `    // GRAPHY patch (vite.cornerstonePreScaleFix.ts): 係数に小数があれば、最小・最大が整数でも Float32Array にする。
+    replacement: `    // GRAPHY patch (vite.cornerstonePreScaleFix.ts): 係数に小数がある、または入力がすでに float なら、最小・最大が整数でも Float32Array にする。
     const hasFloatScaling = Object.values(scalingParameters).some((v) => typeof v === 'number' && !Number.isInteger(v));
-    if (hasFloatScaling) {
+    if (hasFloatScaling || imageFrame.pixelData instanceof Float32Array) {
         const floatArray = new Float32Array(imageFrame.pixelData.length);
         floatArray.set(imageFrame.pixelData, 0);
         return floatArray;

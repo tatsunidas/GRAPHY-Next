@@ -105,6 +105,9 @@ async function main(): Promise<void> {
     const texBody = await tex.text();
     check(tex.status >= 400 && tex.status < 500 && /NaN/.test(texBody), `テクスチャは NaN を含むシリーズを断る（${tex.status}）`, texBody.slice(0, 300));
 
+    // 検査は日本語の画面の文言（「設定」「自動」「閉じる」「非DICOM取込」）で探すので、言語を日本語に固定してから読み直す。
+    // 固定しないと、Electron のプロファイルに残った言語（既定は OS の言語）しだいで、英語の画面になり「設定」を待って止まる。
+    await page.evaluate("localStorage.setItem('graphy.locale', 'ja')");
     await page.reload({ waitUntil: "domcontentloaded" });
     await page.getByTestId("search-patientid-input").waitFor({ state: "visible", timeout: 60_000 });
     await dismissStartupDialogs(page);
