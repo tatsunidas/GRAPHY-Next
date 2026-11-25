@@ -56,6 +56,29 @@ describe("applyPreScaleFloatFix", () => {
     expect(Array.from(a)).toEqual([200, 1389, 2200]); // 元の整数値がそのまま入り、スケールはこの後に掛かる
   });
 
+  it("【再現】修正前: 入力が float32 で係数が整数でも、最小・最大が整数だと Uint16Array になり、4272.8 が切り捨てられる", () => {
+    const frame = { pixelData: Float32Array.from([4000, 4272.7998046875, 16000]) };
+    const a = before(opts({}), 4000, 16000, frame);
+    expect(a).toBeInstanceOf(Uint16Array);
+    expect(Array.from(a)).toEqual([4000, 4272, 16000]);
+  });
+
+  it("【再現】修正前: 両端が 0 と 1 の float の確率マップが、Uint8Array で 0 と 1 の 2 値になる", () => {
+    const frame = { pixelData: Float32Array.from([0, 0.37, 1]) };
+    const a = before(opts({}), 0, 1, frame);
+    expect(a).toBeInstanceOf(Uint8Array);
+    expect(Array.from(a)).toEqual([0, 0, 1]);
+  });
+
+  it("修正後: 入力が float32 なら、係数が整数でも Float32Array で、小数が残る", () => {
+    const f1 = after(opts({}), 4000, 16000, { pixelData: Float32Array.from([4000, 4272.7998046875, 16000]) });
+    expect(f1).toBeInstanceOf(Float32Array);
+    expect(Array.from(f1)).toEqual([4000, 4272.7998046875, 16000]);
+    const f2 = after(opts({}), 0, 1, { pixelData: Float32Array.from([0, 0.37, 1]) });
+    expect(f2).toBeInstanceOf(Float32Array);
+    expect(f2[1]).toBeCloseTo(0.37, 6);
+  });
+
   it("【負例】係数が全部整数（CT: slope 1・intercept −1024）なら修正前と同じ型のまま", () => {
     const frame = { pixelData: Uint16Array.from([0, 1024, 3000]) };
     const o = opts({ rescaleSlope: 1, rescaleIntercept: -1024 });
@@ -63,6 +86,14 @@ describe("applyPreScaleFloatFix", () => {
     const b = after(o, 0, 3000, frame);
     expect(b.constructor).toBe(a.constructor);
     expect(b).toBeInstanceOf(Int16Array);
+  });
+
+  it("【負例】整数の入力（Uint16・係数は整数）は修正前と同じ型のまま。float 入力の修正が整数の画像に波及しない", () => {
+    const frame = { pixelData: Uint16Array.from([0, 100, 255]) };
+    const a = before(opts({}), 0, 255, frame);
+    const b = after(opts({}), 0, 255, frame);
+    expect(b.constructor).toBe(a.constructor);
+    expect(b).toBeInstanceOf(Uint8Array);
   });
 
   it("SUV 係数（小数）があるときも Float32Array", () => {
