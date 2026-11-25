@@ -33,6 +33,7 @@ const FEAT_2D = process.env.RS_FEAT_2D ?? ""; // 2D の単位を含む一括抽�
 const FEAT_LEAK = process.env.RS_FEAT_LEAK ?? ""; // 56 例の表に、リークの列（LeakSep・RowIndex）を足したもの
 const CLIN56 = process.env.RS_CLIN56 ?? ""; // その臨床表（SubjectCode 鍵）
 const FEAT_CLEAN56 = process.env.RS_FEAT56 ?? ""; // 56 例の表（SubjectCode 鍵）。前処理の検証用
+const FEAT_SYNTH2D = process.env.RS_FEAT_SYNTH2D ?? ""; // 56 例の各症例に WHOLE_3D と MAX_SECTION_2D の 2 行を持つ合成の表（流れの検査用。値に意味は無い）
 const OUT = process.env.RS_OUT ?? path.join(AUTOMATOR_ROOT, ".results", "rs-ui-check");
 const PLUGIN_ID = "research-stats";
 
@@ -282,6 +283,53 @@ async function main(): Promise<void> {
       console.log(`  p 値による除外の記録の書き出し: ${JSON.stringify(dl3.map((x) => x.name))}`);
       check(dl3.some((x) => /pdrop/.test(x.name) && x.text.split("\n").length > 5), "折ごとの p 値による除外の記録が CSV に書き出せる", dl3.map((x) => x.name));
       await root.screenshot({ path: path.join(OUT, "14-pre-p4-result.png") });
+    }
+    if (FEAT_SYNTH2D && CLIN56 && fs.existsSync(FEAT_SYNTH2D) && fs.existsSync(CLIN56)) {
+      console.log("\n[8] 行のまま解析（P4 のみ）");
+      await clearFeatures(page);
+      await page.getByTestId("rs-file-features").setInputFiles([FEAT_SYNTH2D]);
+      await page.getByTestId("rs-file-clinical").setInputFiles(CLIN56);
+      await page.waitForTimeout(3000);
+      // 単位を両方選ぶ → 同じ患者に 2 行が残る
+      await page.getByTestId("rs-unit-Unit-MAX_SECTION_2D").check();
+      await page.waitForTimeout(1500);
+      check(await page.getByTestId("rs-rows-mode").isVisible().catch(() => false), "同じ患者に複数行が残ると、「行の扱い」が出る");
+      const setNum = async (id: string, v: string) => { await page.getByTestId(id).fill(v); await page.getByTestId(id).press("Enter"); };
+      await page.getByTestId("rs-skill").selectOption("r2-discrimination");
+      await page.waitForTimeout(500);
+      const optsR2 = await page.getByTestId("rs-rows-mode").locator("option").evaluateAll((os) => os.map((o) => ({ v: (o as HTMLOptionElement).value, dis: (o as HTMLOptionElement).disabled })));
+      console.log(`  R2 の「行の扱い」: ${JSON.stringify(optsR2)}`);
+      check(optsR2.some((o) => /as-?is/i.test(o.v) && o.dis) || !(await page.getByTestId("rs-rows-mode").isEnabled().catch(() => true)), "R2 では「行のまま」が選べない（理由が出る）", optsR2);
+      check(await page.getByTestId("rs-rows-mode-reason").isVisible().catch(() => false), "R2: 選べない理由が出る");
+      await page.getByTestId("rs-skill").selectOption("p4-pipeline");
+      await page.getByTestId("rs-p4-kind").selectOption("binary");
+      await page.getByTestId("rs-outcome").selectOption("EGFR");
+      await page.getByTestId("rs-positive").selectOption("Mutant");
+      await page.getByTestId("rs-p4-lock").selectOption("none");
+      await setNum("rs-p4-outer", "5"); await setNum("rs-p4-inner", "3"); await setNum("rs-p4-repeats", "2"); await setNum("rs-p4-k", "1, 2, 3");
+      await page.waitForTimeout(500);
+      const optsP4 = await page.getByTestId("rs-rows-mode").locator("option").evaluateAll((os) => os.map((o) => ({ v: (o as HTMLOptionElement).value, dis: (o as HTMLOptionElement).disabled })));
+      console.log(`  P4 の「行の扱い」: ${JSON.stringify(optsP4)}`);
+      check(optsP4.every((o) => !o.dis), "P4 では「行のまま」が選べる", optsP4);
+      const asis = optsP4.find((o) => /as-?is|row/i.test(o.v) && !/avg|average|mean/i.test(o.v))?.v;
+      await page.getByTestId("rs-rows-mode").selectOption(asis ?? optsP4[1].v);
+      await page.getByTestId("rs-p4-missing").selectOption("impute"); // 欠損のある特徴量があるので、訓練の分割の中央値で補う
+      await page.waitForTimeout(800);
+      await root.screenshot({ path: path.join(OUT, "15-rows-asis.png") });
+      await page.getByTestId("rs-run").click();
+      const st8 = await Promise.race([
+        page.getByTestId("rs-p4-cv").waitFor({ state: "visible", timeout: 900_000 }).then(() => "ok"),
+        page.getByTestId("rs-errors").waitFor({ state: "visible", timeout: 900_000 }).then(() => "errors"),
+      ]);
+      check(st8 === "ok", "P4: 行のままで、最後まで実行できる", await page.getByTestId("rs-errors").innerText().catch(() => ""));
+      const info = (await page.getByTestId("rs-p4-rows-asis").innerText().catch(() => "")).replace(/\s+/g, " ");
+      console.log(`  行のままの表示: ${info}`);
+      // EGFR が空の 12 人は除かれる（56 − 12 = 44 人 × 2 行 = 88 行）
+      check(/88 行（44 人）/.test(info), "結果に、行数（88）と患者数（44）が出る", info);
+      const leak = await page.getByTestId("rs-p4-leak").innerText().catch(() => "");
+      console.log(`  リーク検査: ${leak.replace(/\s+/g, " ").slice(0, 200)}`);
+      check(/分か|同じ患者/.test(leak) && !/NG/.test(leak), "同じ患者が訓練と検証に分かれていない（リーク検査）", leak.slice(0, 120));
+      await root.screenshot({ path: path.join(OUT, "16-rows-asis-result.png") });
     }
   } finally {
     await d.stop();
