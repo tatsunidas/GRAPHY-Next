@@ -5144,6 +5144,8 @@ export const en: Record<string, string> = {
   "settings.mcp.allowViewerEditHelp": "These operations change data (ROIs, measurements). Each time, the app shows the details and asks you to confirm (no answer means cancelled). A created ROI can be removed again by the client's undo; clearing all measurements cannot be undone.",
   "settings.mcp.allowViewerCapture": "Allow returning the displayed 2D viewer image (pixels)",
   "settings.mcp.allowViewerCaptureHelp": "An image may have patient names or IDs burned into it. The app can neither detect nor remove patient information inside an image. Each time, the app shows you the image and asks you to confirm (no answer means cancelled). You are responsible for images you confirm and return.",
+  "settings.mcp.allowDbTransfer": "Allow requests to copy studies (export for another computer) and to import transfer packages",
+  "settings.mcp.allowDbTransferHelp": "Used to move work to GRAPHY-Next on another computer. Each request is shown for your approval, and you choose the destination or source folder; the AI client is not told the location. Exported DICOM files contain patient information and the destination is not encrypted. Source data is never deleted.",
   "settings.mcp.sec.plugins": "Plugins to expose",
   "settings.mcp.plugins.help": "Expose the AI tools that plugins declare to external AI clients. Choose which plugins (this is separate from the assistant's setting). Plugin code runs inside the 2D viewer and can touch pixels and patient-related values. Results are shown to you for confirmation the first time they are returned.",
   "settings.mcp.plugins.none": "No plugin declares AI tools.",

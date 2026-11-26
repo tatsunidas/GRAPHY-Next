@@ -17,16 +17,16 @@ const tmpDir = () => fs.mkdtempSync(path.join(os.tmpdir(), "graphy-mcp-"));
 test("prefs: 既定はすべてオフ。保存して読み戻せる", () => {
   const file = path.join(tmpDir(), "mcp.json");
   const p = createMcpPrefs({ file });
-  assert.deepEqual(p.get(), { enabled: false, includePhi: false, allowAnalysis: false, allowViewerControl: false, allowViewerEdit: false, allowViewerCapture: false, pluginTools: [] });
+  assert.deepEqual(p.get(), { enabled: false, includePhi: false, allowAnalysis: false, allowViewerControl: false, allowViewerEdit: false, allowViewerCapture: false, allowDbTransfer: false, pluginTools: [] });
   p.set({ enabled: true });
-  assert.deepEqual(createMcpPrefs({ file }).get(), { enabled: true, includePhi: false, allowAnalysis: false, allowViewerControl: false, allowViewerEdit: false, allowViewerCapture: false, pluginTools: [] });
+  assert.deepEqual(createMcpPrefs({ file }).get(), { enabled: true, includePhi: false, allowAnalysis: false, allowViewerControl: false, allowViewerEdit: false, allowViewerCapture: false, allowDbTransfer: false, pluginTools: [] });
 });
 
 test("prefs: 負例 — 壊れた保存・未知のキー・真偽値以外は、既定に戻す／例外", () => {
   const file = path.join(tmpDir(), "mcp.json");
   fs.writeFileSync(file, "{not json");
   const p = createMcpPrefs({ file });
-  assert.deepEqual(p.get(), { enabled: false, includePhi: false, allowAnalysis: false, allowViewerControl: false, allowViewerEdit: false, allowViewerCapture: false, pluginTools: [] });
+  assert.deepEqual(p.get(), { enabled: false, includePhi: false, allowAnalysis: false, allowViewerControl: false, allowViewerEdit: false, allowViewerCapture: false, allowDbTransfer: false, pluginTools: [] });
   assert.equal(p.readError(), "corrupt");
   fs.writeFileSync(file, JSON.stringify({ enabled: "yes" }));
   assert.equal(p.readError(), "corrupt");
@@ -150,7 +150,7 @@ test("projection: deep — 患者キーを落とし、UID を札にする（形�
 
 // ---- ツール ----
 const OFF = { includePhi: false, allowAnalysis: false, allowViewerControl: false, allowViewerEdit: false, allowViewerCapture: false };
-const ON = { includePhi: true, allowAnalysis: true, allowViewerControl: true, allowViewerEdit: true, allowViewerCapture: true };
+const ON = { includePhi: true, allowAnalysis: true, allowViewerControl: true, allowViewerEdit: true, allowViewerCapture: true, allowDbTransfer: true };
 
 test("tools: listTools — 解析がオフなら analysis は出ない。患者情報がオフなら患者名の引数も出ない", () => {
   const names = (prefs) => T.listTools(prefs).map((t) => t.name);
@@ -225,10 +225,14 @@ test("tools: すべてのツールが、組み立てた要求を checkBackendCal
     const a = {};
     for (const k of t.inputSchema.required) a[k] = args[k];
     if (t.name === "create_contour_roi") a.shape = "polygon"; // shape の enum がツールごとに違う
+    if (t.name === "db_copy_submit") a.studies = [U];
+    if (t.name === "db_transfer_status") a.jobId = `dbj_${"0".repeat(32)}`;
     const r = T.buildRequest(t.name, a, { projector: P, prefs: ON });
     assert.equal(r.error, undefined, `${t.name}: ${r.error}`);
     // 2D ビューア窓から読むツールは backend の要求でなく、固定の kind だけを返す（それ以外の kind は作れない）
-    if (t.via === "viewer") {
+    if (t.via === "main") {
+      assert.deepEqual(Object.keys(r), ["main"], t.name); // backend の要求は作らない
+    } else if (t.via === "viewer") {
       assert.deepEqual(Object.keys(r), ["viewer"], t.name);
       assert.ok(T.VIEWER_KINDS.includes(r.viewer.kind), `${t.name}: ${r.viewer.kind}`);
       if (r.viewer.kind === "action") assert.ok(T.VIEWER_ACTIONS.includes(r.viewer.id) || T.VIEWER_WRITE_ACTIONS.includes(r.viewer.id), `${t.name}: ${r.viewer.id}`);

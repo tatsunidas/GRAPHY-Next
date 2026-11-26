@@ -94,7 +94,7 @@ function createDbImportFlow(deps) {
         return { ok: false, reason: problem || (s.stalePartials > 0 ? "only-interrupted" : "no-packages") };
       }
       if (!s.enoughSpace) return { ok: false, reason: "not-enough-space", requiredBytes: s.requiredBytes, freeBytes: s.freeBytes };
-      if (!(await confirm(summaryText(s, deps.ja())))) return { ok: false, canceled: true };
+      if (!(await confirm(summaryText(s, overrides.ja ?? deps.ja())))) return { ok: false, canceled: true };
       const r = await deps.call("POST", BASE, { folder }, 120000);
       if (!r.ok || !r.body || !r.body.jobId) return { ok: false, reason: reasonOf(r) };
       return { ok: true, jobId: r.body.jobId };

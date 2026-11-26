@@ -544,7 +544,9 @@ class DbTransferTest {
         pluginDocs.save(new PluginDocument("demo-a", "PL1", json));
         pluginDocs.save(new PluginDocument("demo-gone", "PL1", "{}")); // 移し元から外したあとに記録だけ残る
 
-        transfer.transfer(List.of("pl.st"), target.toString(), DbTransferService.Mode.copy);
+        var exported = transfer.transfer(List.of("pl.st"), target.toString(), DbTransferService.Mode.copy);
+        assertEquals(List.of(new TransferManifest.PluginVersion("demo-a", "1.2.0"),
+                new TransferManifest.PluginVersion("demo-gone", null)), exported.pluginVersions());
         Path pkg = onlyPackage();
         TransferManifest m = mapper.readValue(pkg.resolve("manifest.json").toFile(), TransferManifest.class);
         assertEquals(List.of(new TransferManifest.PluginVersion("demo-a", "1.2.0"),
