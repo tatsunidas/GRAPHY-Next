@@ -144,7 +144,7 @@ class MeasurementReportServiceTest {
         Attributes unit = measured.getNestedDataset(Tag.MeasurementUnitsCodeSequence);
         assertEquals("mm", unit.getString(Tag.CodeValue));
         assertEquals("UCUM", unit.getString(Tag.CodingSchemeDesignator));
-        assertEquals("24.5",
+        assertEquals("24.50",
                 shortAxis.get(0).getNestedDataset(Tag.MeasuredValueSequence).getString(Tag.NumericValue));
     }
 
@@ -257,10 +257,36 @@ class MeasurementReportServiceTest {
 
     @Test
     void 数値の書式はDSに収まる() {
-        assertEquals("76", MeasurementReportService.trimNumber(76.0));
+        // 1 以上は小数第 2 位まで（末尾の 0 も残す）。
+        assertEquals("76.00", MeasurementReportService.trimNumber(76.0));
         assertEquals("76.05", MeasurementReportService.trimNumber(76.05));
-        assertEquals("0", MeasurementReportService.trimNumber(0));
-        assertTrue(MeasurementReportService.trimNumber(1234567890.123456).length() <= 16);
+        assertEquals("-95.25", MeasurementReportService.trimNumber(-95.25));
+        assertEquals("1.00", MeasurementReportService.trimNumber(1.0));
+        assertEquals("439300000000.00", MeasurementReportService.trimNumber(4.393e11));
+        assertEquals("0.00", MeasurementReportService.trimNumber(0));
+        assertEquals("0.00", MeasurementReportService.trimNumber(-0.0));
+        // 1 未満は有効数字 3 桁の指数表記。
+        assertEquals("1.23E-4", MeasurementReportService.trimNumber(0.000123456789));
+        assertEquals("5.30E-1", MeasurementReportService.trimNumber(0.53));
+        assertEquals("-5.30E-1", MeasurementReportService.trimNumber(-0.53));
+        assertEquals("1.23E-12", MeasurementReportService.trimNumber(1.23e-12));
+        assertEquals("1.00E0", MeasurementReportService.trimNumber(0.9996));
+        // DS は 16 文字まで。収まらない大きな値は指数表記に落とし、桁を切り捨てない。
+        assertEquals("1.00E15", MeasurementReportService.trimNumber(1e15));
+        assertEquals("-1.23E-300", MeasurementReportService.trimNumber(-1.2345e-300));
+        assertTrue(MeasurementReportService.trimNumber(-Double.MAX_VALUE).length() <= 16);
+    }
+
+    @Test
+    void 数値の書式は既定のロケールに依存しない() {
+        java.util.Locale before = java.util.Locale.getDefault();
+        java.util.Locale.setDefault(java.util.Locale.GERMANY);
+        try {
+            assertEquals("76.05", MeasurementReportService.trimNumber(76.05));
+            assertEquals("5.30E-1", MeasurementReportService.trimNumber(0.53));
+        } finally {
+            java.util.Locale.setDefault(before);
+        }
     }
 
     @Test
@@ -292,7 +318,9 @@ class MeasurementReportServiceTest {
         Attributes dose = find(sr, "ABSORBED_DOSE").get(0);
         assertEquals("NUM", dose.getString(Tag.ValueType));
         Attributes measured = dose.getNestedDataset(Tag.MeasuredValueSequence);
-        assertEquals("1.3215", measured.getString(Tag.NumericValue));
+        assertEquals("1.32", measured.getString(Tag.NumericValue));
+        // 丸める前の値は FD に残る。
+        assertEquals(1.3215, measured.getDouble(Tag.FloatingPointValue, Double.NaN));
         // 単位を省略したら種別ごとの既定（UCUM）が入る。**換算はしない**。
         assertEquals("Gy", measured.getNestedDataset(Tag.MeasurementUnitsCodeSequence).getString(Tag.CodeValue));
 
@@ -352,7 +380,7 @@ class MeasurementReportServiceTest {
         Attributes sr = service.build(template(), request(List.of(g), null), NOW);
 
         Attributes area = find(sr, "AREA").get(0).getNestedDataset(Tag.MeasuredValueSequence);
-        assertEquals("12.5", area.getString(Tag.NumericValue));
+        assertEquals("12.50", area.getString(Tag.NumericValue));
         assertEquals("cm2", area.getNestedDataset(Tag.MeasurementUnitsCodeSequence).getString(Tag.CodeValue));
         Attributes mean = find(sr, "MEAN_VALUE").get(0).getNestedDataset(Tag.MeasuredValueSequence);
         assertEquals("-95.25", mean.getString(Tag.NumericValue));
@@ -440,7 +468,7 @@ class MeasurementReportServiceTest {
         Attributes num = numOf(sr, "PERCENT");
         assertEquals("99GRAPHY", num.getNestedDataset(Tag.ConceptNameCodeSequence).getString(Tag.CodingSchemeDesignator));
         assertEquals("%", unitOf(num));
-        assertEquals("55.2", valueOf(num));
+        assertEquals("55.20", valueOf(num));
         // 量の名前は同じ NUM の修飾（HAS CONCEPT MOD、TEXT）
         Attributes mod = num.getSequence(Tag.ContentSequence).get(0);
         assertEquals("HAS CONCEPT MOD", mod.getString(Tag.RelationshipType));
@@ -465,9 +493,9 @@ class MeasurementReportServiceTest {
         assertEquals("mm", unitOf(numOf(sr, "PERIMETER")));
         assertEquals("mm", unitOf(numOf(sr, "DIAMETER")));
         assertEquals("mm", unitOf(numOf(sr, "DISTANCE")));
-        assertEquals("-3.5", valueOf(numOf(sr, "DISTANCE")));
+        assertEquals("-3.50", valueOf(numOf(sr, "DISTANCE")));
         assertEquals("deg", unitOf(numOf(sr, "ANGLE")));
-        assertEquals("42", valueOf(numOf(sr, "ANGLE")));
+        assertEquals("42.00", valueOf(numOf(sr, "ANGLE")));
         // 名前を付けなかった長さ系には修飾が付かない
         assertNull(numOf(sr, "PERIMETER").getSequence(Tag.ContentSequence));
     }

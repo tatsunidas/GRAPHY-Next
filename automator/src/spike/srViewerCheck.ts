@@ -49,6 +49,7 @@ async function main(): Promise<void> {
     };
     const cycle = await post({ studyInstanceUid: studyUid, ...fx.request });
     const evil = await post({ studyInstanceUid: studyUid, seriesDescription: "Evil SR", documentTitle: EVIL, groups: [], findings: [{ label: EVIL, text: EVIL }] });
+    const small = await post({ studyInstanceUid: studyUid, seriesDescription: "Small SR", documentTitle: "Small", groups: [{ trackingId: "small", measurements: [{ type: "absorbedDose", value: 0.000123456789 }] }] });
 
     await page.evaluate("localStorage.setItem('graphy.locale', 'ja')");
     await page.reload({ waitUntil: "domcontentloaded" });
@@ -73,10 +74,17 @@ async function main(): Promise<void> {
     const liver = cells[0] ?? [];
     const dose = liver.find((r) => r[0] === "Absorbed Dose");
     const teff = liver.find((r) => r[0] === "Effective Half-Life");
-    check(!!dose && dose[2] === "Gy" && Math.abs(Number(dose[1]) - fx.record.vois[0].doseGy) < 1e-3, `★ 表の吸収線量が、書いた値と一致する（${dose?.join(" ")} / 書いた ${fx.record.vois[0].doseGy}）`, dose);
-    check(!!teff && teff[2] === "h" && Math.abs(Number(teff[1]) - fx.record.vois[0].effectiveHalfLifeH) < 1e-3, `★ 表の有効半減期が、書いた値と一致する（${teff?.join(" ")}）`, teff);
+    check(!!dose && dose[2] === "Gy" && dose[1] === fx.record.vois[0].doseGy.toFixed(2), `★ 表の吸収線量が、書いた値と一致する（${dose?.join(" ")} / 書いた ${fx.record.vois[0].doseGy}）`, dose);
+    check(!!teff && teff[2] === "h" && teff[1] === fx.record.vois[0].effectiveHalfLifeH.toFixed(2), `★ 表の有効半減期が、書いた値と一致する（${teff?.join(" ")}）`, teff);
     const bodyText = (await page.getByTestId("sr-viewer").first().textContent()) ?? "";
     check(bodyText.includes("cycle=2;voi=liver") && bodyText.includes("dosimetry-schema: 1") && bodyText.includes("Dosimetry cycle 2 (Lu-177, 7400 MBq)"), "追跡 ID・文書タイトル・所見（サイクルのメタ情報）が読める");
+
+    // 1 未満の値は有効数字 3 桁の指数表記で出る（固定小数だと桁が落ちる）
+    await page.locator(`[data-testid="series-row-${small.seriesInstanceUid}"]`).click();
+    await page.waitForFunction(() => document.body.textContent?.includes("1.23E-4"), null, { timeout: 30_000 }).catch(() => {});
+    await page.screenshot({ path: path.join(OUT_DIR, "1b-studylist-small-sr.png") });
+    const smallCells = (await page.evaluate(`[...document.querySelectorAll('[data-testid="sr-group-table"] tbody tr')].map(tr => [...tr.children].map(c => c.textContent))`)) as string[][];
+    check(smallCells.some((r) => r[0] === "Absorbed Dose" && r[1] === "1.23E-4"), "★ 0.000123456789 Gy が表で 1.23E-4 と出る", smallCells);
 
     // 2) 危険な文字列の SR
     await page.locator(`[data-testid="series-row-${evil.seriesInstanceUid}"]`).click();
@@ -96,7 +104,7 @@ async function main(): Promise<void> {
     await viewer.waitForTimeout(800);
     await viewer.screenshot({ path: path.join(OUT_DIR, "3-viewer2d-sr-tile.png") });
     const vText = (await viewer.getByTestId("sr-viewer").first().textContent()) ?? "";
-    check(vText.includes("Imaging Measurement Report") && vText.includes("Dosimetry cycle 2") && vText.includes("1.3215"), "★ 2D ビューアでも、SR のタイルが出る（断らない。計測の値も読める）");
+    check(vText.includes("Imaging Measurement Report") && vText.includes("Dosimetry cycle 2") && vText.includes(fx.record.vois[0].doseGy.toFixed(2)), "★ 2D ビューアでも、SR のタイルが出る（断らない。計測の値も読める）");
     check((await viewer.getByTestId("sr-group-table").count()) === fx.record.vois.length, "2D ビューアのタイルにも、計測グループの表が出る");
 
     // 4) 負例: SR でないインスタンスは、理由を出す（画面が空にならない）
