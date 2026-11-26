@@ -25,6 +25,7 @@ import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Set;
 
 /**
@@ -261,6 +262,7 @@ public class MeasurementReportService {
         Attributes n = item("CONTAINS", "NUM", measurementCode(m.type()));
         Attributes measured = new Attributes(2);
         measured.setString(Tag.NumericValue, VR.DS, trimNumber(m.value()));
+        measured.setDouble(Tag.FloatingPointValue, VR.FD, m.value()); // 丸めない値
         measured.newSequence(Tag.MeasurementUnitsCodeSequence, 1)
                 .add(code(unitOf(m), "UCUM", unitOf(m)));
         n.newSequence(Tag.MeasuredValueSequence, 1).add(measured);
@@ -437,14 +439,22 @@ public class MeasurementReportService {
         return img;
     }
 
-    /** 数値を DS（16 文字）に収める。桁あふれで保存が壊れないようにする。 */
+    /**
+     * 表示用の DS（16 文字まで）の書式。絶対値が 1 以上（と 0）は小数第 2 位まで、1 未満は有効数字 3 桁の
+     * 指数表記（固定小数では小さな値の桁が落ちる）。丸める前の値は FloatingPointValue に入れる。
+     */
     static String trimNumber(double v) {
-        String s = String.format("%.4f", v);
-        // 末尾 0 を落とす（"76.0000" → "76"）。
-        if (s.contains(".")) {
-            s = s.replaceAll("0+$", "").replaceAll("\\.$", "");
+        if (v == 0) {
+            return "0.00"; // -0.0 も同じ表記にする。
         }
-        return s.length() <= 16 ? s : s.substring(0, 16);
+        if (Math.abs(v) >= 1) {
+            String s = String.format(Locale.ROOT, "%.2f", v);
+            if (s.length() <= 16) {
+                return s;
+            }
+        }
+        // "1.23E-04" → "1.23E-4"、"1.00E+15" → "1.00E15"
+        return String.format(Locale.ROOT, "%.2E", v).replaceFirst("E\\+?(-?)0*(?=\\d)", "E$1");
     }
 
     static String seriesDescription(MeasurementReportRequest req) {

@@ -98,10 +98,10 @@ class SrContentReaderTest {
         assertEquals("label=liver;dose=1.3215094748221", all(d, "121071").get(0).text());
         Node dose = all(d, "ABSORBED_DOSE").get(0);
         assertEquals("NUM", dose.valueType());
-        assertEquals("1.3215", dose.num().value());
+        assertEquals("1.32", dose.num().value());
         assertEquals("Gy", dose.num().unit().value());
         assertEquals("UCUM", dose.num().unit().scheme());
-        assertEquals("58.7346", all(d, "T_EFF").get(0).num().value());
+        assertEquals("58.73", all(d, "T_EFF").get(0).num().value());
         // UIDREF（追跡 UID）と、計測した画像への参照（IMAGE）
         assertEquals("UIDREF", all(d, "112040").get(0).valueType());
         assertNotNull(all(d, "112040").get(0).uid());
