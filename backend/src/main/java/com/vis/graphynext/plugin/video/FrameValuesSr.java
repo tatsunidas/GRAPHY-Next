@@ -4,6 +4,7 @@
  */
 package com.vis.graphynext.plugin.video;
 
+import com.vis.graphynext.dicom.Utf8Output;
 import org.dcm4che3.data.Attributes;
 import org.dcm4che3.data.Sequence;
 import org.dcm4che3.data.Tag;
@@ -117,7 +118,6 @@ public final class FrameValuesSr {
                 Tag.AccessionNumber, Tag.StudyDescription, Tag.ReferringPhysicianName,
         };
         for (int tag : inherit) copy(video, a, tag);
-        if (a.getString(Tag.SpecificCharacterSet) == null) a.setSpecificCharacterSet("ISO_IR 192");
 
         a.setString(Tag.Modality, VR.CS, "SR");
         a.setString(Tag.SOPClassUID, VR.UI, UID.ComprehensiveSRStorage);
@@ -179,6 +179,7 @@ public final class FrameValuesSr {
             for (Double v : s.values()) nums.add(num(seriesCode, unit, v));
             content.add(box);
         }
+        Utf8Output.apply(a); // 元からの写しがすべて終わった後で呼ぶ
         return a;
     }
 
