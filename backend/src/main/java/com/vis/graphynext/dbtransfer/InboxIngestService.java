@@ -65,6 +65,7 @@ public class InboxIngestService implements ActiveWork {
             .disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES);
 
     private volatile boolean running;
+    private final java.util.concurrent.atomic.AtomicInteger external = new java.util.concurrent.atomic.AtomicInteger();
     private final List<PackageResult> results = new CopyOnWriteArrayList<>();
     private final List<String> stale = new CopyOnWriteArrayList<>();
 
@@ -124,6 +125,24 @@ public class InboxIngestService implements ActiveWork {
                         List.of(String.valueOf(e.getMessage())), 0, 0, 0, List.of()));
             }
         }
+    }
+
+    /**
+     * 外付けから写した書きかけを確定して取り込む。名前を変えてから取り込み終わるまでを {@link #ingestAll} と
+     * 同じロックで通す（確定した瞬間に起動時の取り込みが拾って、二重に処理しないように）。
+     */
+    synchronized PackageResult ingestStaged(Path partial, Path ready) throws IOException {
+        Files.move(partial, ready, StandardCopyOption.ATOMIC_MOVE);
+        return ingestOne(ready);
+    }
+
+    /** 外付けからの取り込みも「取り込み中」として、終了時の確認に数える。 */
+    void externalStarted() {
+        external.incrementAndGet();
+    }
+
+    void externalFinished() {
+        external.decrementAndGet();
     }
 
     PackageResult ingestOne(Path pkg) throws IOException {
@@ -190,7 +209,7 @@ public class InboxIngestService implements ActiveWork {
 
     @Override
     public int activeCount() {
-        return running ? 1 : 0;
+        return running || external.get() > 0 ? 1 : 0;
     }
 
     @Override
