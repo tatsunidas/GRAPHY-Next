@@ -262,7 +262,6 @@ class MeasurementReportServiceTest {
         assertEquals("76.05", MeasurementReportService.trimNumber(76.05));
         assertEquals("-95.25", MeasurementReportService.trimNumber(-95.25));
         assertEquals("1.00", MeasurementReportService.trimNumber(1.0));
-        assertEquals("439300000000.00", MeasurementReportService.trimNumber(4.393e11));
         assertEquals("0.00", MeasurementReportService.trimNumber(0));
         assertEquals("0.00", MeasurementReportService.trimNumber(-0.0));
         // 1 未満は有効数字 3 桁の指数表記。
@@ -271,7 +270,14 @@ class MeasurementReportServiceTest {
         assertEquals("-5.30E-1", MeasurementReportService.trimNumber(-0.53));
         assertEquals("1.23E-12", MeasurementReportService.trimNumber(1.23e-12));
         assertEquals("1.00E0", MeasurementReportService.trimNumber(0.9996));
-        // DS は 16 文字まで。収まらない大きな値は指数表記に落とし、桁を切り捨てない。
+        // 100 万以上も指数表記。境目は丸めた後の値で見る（"1000000.00" と書かない）。
+        assertEquals("999999.00", MeasurementReportService.trimNumber(999999.0));
+        assertEquals("-999999.99", MeasurementReportService.trimNumber(-999999.99));
+        assertEquals("1.00E6", MeasurementReportService.trimNumber(1_000_000.0));
+        assertEquals("1.00E6", MeasurementReportService.trimNumber(999999.996));
+        assertEquals("-1.23E7", MeasurementReportService.trimNumber(-12_345_678.0));
+        assertEquals("4.39E11", MeasurementReportService.trimNumber(4.393e11));
+        // DS は 16 文字まで。どれだけ大きくても収まる。
         assertEquals("1.00E15", MeasurementReportService.trimNumber(1e15));
         assertEquals("-1.23E-300", MeasurementReportService.trimNumber(-1.2345e-300));
         assertTrue(MeasurementReportService.trimNumber(-Double.MAX_VALUE).length() <= 16);
