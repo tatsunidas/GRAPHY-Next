@@ -77,6 +77,8 @@ const tlsPasswords = require("./tlsPasswords");
 const { waitPortFree } = require("./portWait");
 const { ensureDefaultEndpoint, resolveDefault, effectiveDefaultId, LOCAL_ID } = require("./computeDefault");
 const computeBridge = require("./computeBridge");
+const { createDbImportFlow, reasonOf } = require("./dbImportFlow");
+const { createMcpDbTransfer } = require("./mcpDbTransfer");
 const computeConsent = require("./computeConsent");
 const computeKeepAwake = require("./computeKeepAwake").create(powerSaveBlocker);
 const { createColabAuth, REFRESH_KEY: COLAB_REFRESH_KEY } = require("./colabAuth");
@@ -769,6 +771,10 @@ const MCP_ENABLE_TEXT = {
     message: "AI クライアントが、2D ビューアの表示中の画像（画素）を受け取れるようにします。",
     detail: "画像に、患者の氏名・ID などの文字が焼き込まれていることがあります。アプリは、画像の中の患者情報を検出も除去もできません。受け取った画像は、そのクライアントを通じてクラウドの AI へ送られる可能性があります。実行のたびに、アプリが画像を示して確認します（答えなければ取り消し）。確認した上で返した画像の責任は、あなたにあります。",
   },
+  allowDbTransfer: {
+    message: "AI クライアントが、検査のコピー（外付けドライブなどへの書き出し）と、荷物の取り込みを依頼できるようにします。",
+    detail: "別の PC の GRAPHY-Next へ移行するための操作です。依頼のたびに、アプリが内容を示して確認し（答えなければ取り消し）、フォルダはあなたが選びます。AI クライアントへフォルダの場所は伝えません。書き出す DICOM には患者情報が含まれ、書き出し先は暗号化されません。移し元のデータは消しません。取り込みは、今の DB のデータを上書きしません。",
+  },
   allowViewerEdit: {
     message: "AI クライアントが、2D ビューアに ROI を作成し、計測をすべて削除できるようにします。",
     detail: "データ（ROI・計測）を変える操作です。実行のたびに、アプリが内容を示して確認します（答えなければ取り消し）。ROI の作成は、AI クライアントの「元に戻す」でその ROI だけ消せます。計測の全削除は元に戻せません（ロックされた計測は残ります）。",
@@ -813,7 +819,7 @@ async function mcpConfirmClient(client) {
     cancelId: 1,
     title: "外部 AI クライアントの接続",
     message: `外部 AI クライアント「${client}」が、GRAPHY-Next への接続を求めています。`,
-    detail: `クライアント名は相手の自己申告で、確認できません。心当たりがなければ［拒否］を選んでください（拒否すると、アプリを再起動するまで受け付けません）。\n現在の設定: 患者情報 = ${p.includePhi ? "返す" : "伏せる"} ／ 解析の実行 = ${p.allowAnalysis ? "許可" : "許可しない"} ／ 2D ビューアの表示操作 = ${p.allowViewerControl ? "許可" : "許可しない"} ／ ROI の作成・計測の全削除 = ${p.allowViewerEdit ? "許可（実行のたびに確認）" : "許可しない"} ／ 画像（画素）を返す = ${p.allowViewerCapture ? "許可（実行のたびに確認）" : "許可しない"}`,
+    detail: `クライアント名は相手の自己申告で、確認できません。心当たりがなければ［拒否］を選んでください（拒否すると、アプリを再起動するまで受け付けません）。\n現在の設定: 患者情報 = ${p.includePhi ? "返す" : "伏せる"} ／ 解析の実行 = ${p.allowAnalysis ? "許可" : "許可しない"} ／ 2D ビューアの表示操作 = ${p.allowViewerControl ? "許可" : "許可しない"} ／ ROI の作成・計測の全削除 = ${p.allowViewerEdit ? "許可（実行のたびに確認）" : "許可しない"} ／ 画像（画素）を返す = ${p.allowViewerCapture ? "許可（実行のたびに確認）" : "許可しない"} ／ 検査のコピー・荷物の取り込み = ${p.allowDbTransfer ? "依頼を許可（実行のたびに確認）" : "許可しない"}`,
   });
   return r.response === 0;
 }
@@ -936,11 +942,66 @@ function mcpViewer(kind, { client, includePhi, allowViewerEdit }, desc) {
   return viewerRelay.relay(`mcp:${client}`, { kind, includeLabels: includePhi === true }, opts);
 }
 
+/**
+ * 大きな検査のコピーは数分を超える。Node の fetch は応答の開始を 5 分しか待たないので、この要求だけ http で送る（待つ上限は画面と同じ 60 分）。
+ */
+function mcpCopyStudies(studyUids, targetFolder) {
+  const url = new URL("/api/db-transfer", API_BASE);
+  const body = JSON.stringify({ studyUids, targetFolder, mode: "copy" });
+  return new Promise((resolve) => {
+    const req = http.request(url, { method: "POST", headers: { "content-type": "application/json", "content-length": Buffer.byteLength(body) } }, (res) => {
+      const chunks = [];
+      res.on("data", (c) => chunks.push(c));
+      res.on("end", () => {
+        let json = null;
+        try {
+          json = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+        } catch {
+          /* JSON でない本文は使わない */
+        }
+        if (res.statusCode >= 200 && res.statusCode < 300 && json) resolve({ ok: true, body: json });
+        else resolve({ ok: false, reason: reasonOf({ status: res.statusCode, body: json }) });
+      });
+    });
+    req.setTimeout(60 * 60 * 1000, () => {
+      req.destroy();
+      resolve({ ok: false, reason: "timeout" });
+    });
+    req.on("error", () => resolve({ ok: false, reason: "backend-unreachable" }));
+    req.end(body);
+  });
+}
+
+// 外部 AI クライアントからの、検査のコピーと荷物の取り込み（mcpDbTransfer.js）。確認は待ち行列を通し、フォルダは利用者が選ぶ。
+function mcpDbTransfer(audit) {
+  return createMcpDbTransfer({
+    describeStudies: async (uids) => {
+      const r = await mcpBackend("GET", "/api/studies", { query: { studyInstanceUid: uids.join(",") } });
+      if (r.status !== 200 || !Array.isArray(r.json)) return null;
+      const found = uids.map((u) => r.json.find((s) => s.studyInstanceUid === u));
+      return found.every(Boolean) ? found : null;
+    },
+    ask: (options, opt) => mcpDialogs.ask(options, opt),
+    pickTargetDirectory: async () => {
+      const parent = mainWin && !mainWin.isDestroyed() ? mainWin : undefined;
+      const result = await dialog.showOpenDialog(parent, { title: "書き出し先のフォルダを選ぶ（外付けドライブの空のフォルダなど）", properties: ["openDirectory", "createDirectory"] });
+      return result.canceled || result.filePaths.length === 0 ? null : result.filePaths[0];
+    },
+    validateTarget: (p) => dbFolders.validateOpen(p),
+    copy: mcpCopyStudies,
+    importFlow: dbImportFlow,
+    audit: (record) => audit.append(record),
+  });
+}
+
 function mcpBridge() {
   if (!mcpBridgeInst) {
+    const audit = createMcpAudit({ file: path.join(app.getPath("userData"), "mcp-audit.jsonl") });
+    const transfers = mcpDbTransfer(audit);
     mcpBridgeInst = createMcpBridge({
       prefs: mcpPrefs(),
-      audit: createMcpAudit({ file: path.join(app.getPath("userData"), "mcp-audit.jsonl") }),
+      audit,
+      mainOps: (kind, ctx, desc) => transfers.run(kind, ctx, desc),
       backend: mcpBackend,
       confirmClient: mcpConfirmClient,
       viewer: mcpViewer,
@@ -1751,6 +1812,36 @@ ipcMain.handle("graphy:db-folders-switch", (e, payload) => {
   relaunchApp();
   return { ok: true };
 });
+
+// 外付けなどの荷物を今の DB に取り込む。フォルダの選択と内容の確認は main が出し、場所はレンダラに返さない（dbImportFlow.js）。
+const localeIsJa = () => String(app.getLocale() || "").startsWith("ja");
+const dbImportFlow = createDbImportFlow({
+  call: computeBridge.call,
+  ja: localeIsJa,
+  pickDirectory: async () => {
+    const result = await dialog.showOpenDialog(mainWin, {
+      title: localeIsJa() ? "荷物のあるフォルダを選ぶ（取り込み元）" : "Choose the folder with the transfer package (source)",
+      properties: ["openDirectory"],
+    });
+    return result.canceled || result.filePaths.length === 0 ? null : result.filePaths[0];
+  },
+  confirm: async (detail) => {
+    const ja = localeIsJa();
+    const r = await dialog.showMessageBox(mainWin, {
+      type: "question",
+      buttons: ja ? ["取り込む", "取り消す"] : ["Import", "Cancel"],
+      defaultId: 1,
+      cancelId: 1,
+      title: ja ? "荷物の取り込み" : "Import transfer package",
+      message: ja ? "この荷物を今の DB に取り込みますか？" : "Import into the current database?",
+      detail,
+    });
+    return r.response === 0;
+  },
+});
+ipcMain.handle("graphy:db-import-start", (e) => (isMainSender(e) ? dbImportFlow.start() : { ok: false, reason: "forbidden" }));
+ipcMain.handle("graphy:db-import-status", (e, payload) =>
+  (isMainSender(e) ? dbImportFlow.status(String((payload && payload.jobId) || "")) : { ok: false, reason: "forbidden" }));
 
 ipcMain.handle("graphy:db-folders-forget", (_e, payload) => dbFolders.forget(String((payload && payload.folder) || "")));
 

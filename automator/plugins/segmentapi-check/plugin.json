@@ -1,0 +1,12 @@
+{
+  "id": "segmentapi-check",
+  "name": "Segment API Check",
+  "version": "0.1.0",
+  "engines": { "graphy": ">=0.1.16" },
+  "description": "H80 (listSegments) / H81 (loadSegmentMask) の実機検証用プローブ。画面は出さず、window.__segCheck に呼び出し口を置くだけ。",
+  "author": "Visionary Imaging Services, Inc.",
+  "license": "AGPL-3.0-or-later",
+  "contributes": ["viewer2d.menu"],
+  "ui": "ui.js",
+  "permissions": ["read-pixels"]
+}

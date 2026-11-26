@@ -313,7 +313,7 @@ describe("設定の群（折りたたみ）", () => {
     expect(q("batch-group-qc-summary")?.textContent).toContain("小さい ROI 印のみ");
     expect(q("batch-group-qc-changed")).toBeNull();
     expect(q("batch-group-content")?.contains(q("batch-units"))).toBe(true);
-    expect(q("batch-group-content-summary")?.textContent).toContain("全腫瘍（3D）");
+    expect(q("batch-group-content-summary")?.textContent).toContain("ボリューム（3D）");
     await click("batch-unit-SLICES_2D");
     expect(q("batch-group-content-summary")?.textContent).toContain("スライス別（2D）");
     const stop = host.querySelector<HTMLInputElement>('[data-testid="batch-qc-small"] input[type="radio"]:nth-of-type(1)');

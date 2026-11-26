@@ -11,6 +11,7 @@ import com.vis.graphynext.activity.ActiveWork;
 import com.vis.graphynext.dbtransfer.TransferManifest.FileEntry;
 import com.vis.graphynext.dicom.store.DicomInstanceRepository;
 import com.vis.graphynext.dicom.store.DicomStorageService;
+import com.vis.graphynext.plugin.PluginRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
@@ -34,7 +35,7 @@ import java.util.stream.Stream;
  * <p>起動を待たせないよう、起動完了のあと別スレッドで処理する。
  * <ul>
  *   <li>この DB に同じ SOP があれば取り込まない（上書きしない）。</li>
- *   <li>sha256 が目録と違うファイルは取り込まず、荷物ごと残す。</li>
+ *   <li>sha256 か中身の SOP UID が目録と違うファイルは取り込まず、荷物ごと残す。</li>
  *   <li>付随データは {@link RelatedData#apply}。衝突は {@code inbox/conflicts/<id>/} に JSON で残す。</li>
  *   <li>終わったら {@code inbox/done/<id>/} に目録と結果を残す（取り込めなかったファイルがあれば DICOM も残す）。</li>
  *   <li>{@code .partial} は書きかけ（移し元が途中で止まった）なので取り込まず、報告だけする。</li>
@@ -48,7 +49,8 @@ public class InboxIngestService implements ActiveWork {
 
     public record PackageResult(String id, String mode, String sourceDbFolder, String processedAt,
                                 int imported, int skippedExisting, int failed, List<String> errors,
-                                int relatedInserted, int relatedSame, int conflicts) {
+                                int relatedInserted, int relatedSame, int conflicts,
+                                List<PluginVersions.Note> pluginNotes) {
     }
 
     public record Status(boolean running, List<PackageResult> results, List<String> stalePartials) {
@@ -57,19 +59,22 @@ public class InboxIngestService implements ActiveWork {
     private final DicomInstanceRepository repo;
     private final DicomStorageService storage;
     private final RelatedData related;
+    private final PluginRegistry pluginRegistry;
     private final Path inbox;
     private final ObjectMapper mapper = new ObjectMapper().enable(SerializationFeature.INDENT_OUTPUT)
             .disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES);
 
     private volatile boolean running;
+    private final java.util.concurrent.atomic.AtomicInteger external = new java.util.concurrent.atomic.AtomicInteger();
     private final List<PackageResult> results = new CopyOnWriteArrayList<>();
     private final List<String> stale = new CopyOnWriteArrayList<>();
 
     public InboxIngestService(DicomInstanceRepository repo, DicomStorageService storage, RelatedData related,
-                              DbTransferService transfer) {
+                              DbTransferService transfer, PluginRegistry pluginRegistry) {
         this.repo = repo;
         this.storage = storage;
         this.related = related;
+        this.pluginRegistry = pluginRegistry;
         this.inbox = transfer.currentFolder().resolve("inbox");
     }
 
@@ -117,9 +122,27 @@ public class InboxIngestService implements ActiveWork {
             } catch (IOException | RuntimeException e) {
                 log.error("[db-inbox] 荷物を取り込めません: {}", p, e);
                 results.add(new PackageResult(name, null, null, Instant.now().toString(), 0, 0, 0,
-                        List.of(String.valueOf(e.getMessage())), 0, 0, 0));
+                        List.of(String.valueOf(e.getMessage())), 0, 0, 0, List.of()));
             }
         }
+    }
+
+    /**
+     * 外付けから写した書きかけを確定して取り込む。名前を変えてから取り込み終わるまでを {@link #ingestAll} と
+     * 同じロックで通す（確定した瞬間に起動時の取り込みが拾って、二重に処理しないように）。
+     */
+    synchronized PackageResult ingestStaged(Path partial, Path ready) throws IOException {
+        Files.move(partial, ready, StandardCopyOption.ATOMIC_MOVE);
+        return ingestOne(ready);
+    }
+
+    /** 外付けからの取り込みも「取り込み中」として、終了時の確認に数える。 */
+    void externalStarted() {
+        external.incrementAndGet();
+    }
+
+    void externalFinished() {
+        external.decrementAndGet();
     }
 
     PackageResult ingestOne(Path pkg) throws IOException {
@@ -142,6 +165,11 @@ public class InboxIngestService implements ActiveWork {
                     errors.add("照合に失敗: " + f.path());
                     continue;
                 }
+                // 重複の判定は目録の UID で行う。中身の UID が違うと、「無い」と判定した画像が既存の画像を置き換える
+                if (!f.sopUid().equals(DbTransferService.sopInstanceUid(p))) {
+                    errors.add("SOP UID が目録と違います: " + f.path());
+                    continue;
+                }
                 storage.importFromFile(p);
                 imported++;
             } catch (IOException | RuntimeException e) {
@@ -151,7 +179,8 @@ public class InboxIngestService implements ActiveWork {
         RelatedData.ApplyResult rel = related.apply(m.related(), pkg);
         errors.addAll(rel.errors());
         if (!rel.conflicts().isEmpty()) {
-            Path dir = inbox.resolve("conflicts").resolve(m.id());
+            // 目録の id はパスに使わない（荷物の中身で書き出し先が決まらないようにする）
+            Path dir = inbox.resolve("conflicts").resolve(pkg.getFileName().toString());
             Files.createDirectories(dir);
             int n = 0;
             for (RelatedData.Conflict c : rel.conflicts()) {
@@ -161,7 +190,8 @@ public class InboxIngestService implements ActiveWork {
                     rel.conflicts().size(), dir);
         }
         PackageResult r = new PackageResult(m.id(), m.mode(), m.sourceDbFolder(), Instant.now().toString(), imported,
-                skipped, errors.size(), errors, rel.inserted(), rel.same(), rel.conflicts().size());
+                skipped, errors.size(), errors, rel.inserted(), rel.same(), rel.conflicts().size(),
+                PluginVersions.compare(m, PluginVersions.installed(pluginRegistry)));
         mapper.writeValue(pkg.resolve("result.json").toFile(), r);
         if (errors.isEmpty()) {
             DbTransferService.deleteTree(pkg.resolve("dicom"));
@@ -184,7 +214,7 @@ public class InboxIngestService implements ActiveWork {
 
     @Override
     public int activeCount() {
-        return running ? 1 : 0;
+        return running || external.get() > 0 ? 1 : 0;
     }
 
     @Override

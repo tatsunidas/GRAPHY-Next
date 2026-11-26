@@ -1847,6 +1847,19 @@ function TileGrid({
           return (rois ?? []).map((r) => ({ tileId: id, ...r }));
         });
       },
+      // H80 / H81: ラベルマップ（Wand・ブラシ）のセグメント。tileId 省略時は**対象タイル全部**（getRois と同じ）。
+      listSegments: (tileId) => {
+        const ids = tileId ? [tileId] : pluginTargets();
+        return ids.flatMap((id) => {
+          const segs = queryViewerCommand(id, (c) => c.listSegments());
+          return (segs ?? []).map((s) => ({ tileId: id, ...s }));
+        });
+      },
+      loadSegmentMask: async (tileId, segmentationId, segmentIndex) => {
+        const id = tileId ?? pluginTargets()[0];
+        if (!id) return null;
+        return queryViewerCommand(id, (c) => c.loadSegmentMask(segmentationId, segmentIndex)) ?? null;
+      },
       // ROI メタはタイルに依存しない（annotation は本体でグローバル）。登録済みタイルのどれかで解決できればよい。
       getRoiMeta: (roiUid, pluginId) => {
         for (const id of pluginTargets()) {

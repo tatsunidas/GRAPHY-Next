@@ -43,7 +43,7 @@ async function click(id: string) {
 
 /** main の mcp-get / mcp-set の偽物。confirm=false なら、オンにする変更で確認が取り消される。 */
 function fakeMain(o: { listenFails?: boolean; confirm?: boolean; readError?: McpState["readError"]; relayCommand?: string; forbidden?: boolean; knownPlugins?: string[] } = {}) {
-  let prefs: McpPrefs = { enabled: false, includePhi: false, allowAnalysis: false, allowViewerControl: false, allowViewerEdit: false, allowViewerCapture: false, pluginTools: [] };
+  let prefs: McpPrefs = { enabled: false, includePhi: false, allowAnalysis: false, allowViewerControl: false, allowViewerEdit: false, allowViewerCapture: false, allowDbTransfer: false, pluginTools: [] };
   let listening = false;
   const sent: Partial<McpPrefs>[] = [];
   const state = (): McpState => ({ prefs, readError: o.readError ?? null, listening, ...(o.relayCommand ? { relayCommand: o.relayCommand } : {}) });

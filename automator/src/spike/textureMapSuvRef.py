@@ -30,9 +30,16 @@ def tm(date, time):
     return datetime.strptime(str(date) + t[:6], "%Y%m%d%H%M%S").timestamp() + frac
 
 
+def dcm_files(pattern):
+    """フォルダの DICOM（LICENSE などの添付は除く。拡張子 .dcm があればそれだけ）。"""
+    fs = sorted(f for f in glob.glob(os.path.join(pattern, "*")) if os.path.isfile(f))
+    dcm = [f for f in fs if f.endswith(".dcm")]
+    return dcm or fs
+
+
 def load(root):
     pet = {}
-    for f in glob.glob(os.path.join(root, "PET", "*")):
+    for f in dcm_files(os.path.join(root, os.environ.get("MAP_SRC_SUB", "PET"))):
         d = pydicom.dcmread(f)
         pet[str(d.SOPInstanceUID)] = d
     iop = [float(x) for x in next(iter(pet.values())).ImageOrientationPatient]
@@ -43,12 +50,14 @@ def load(root):
     for s in order:
         d = pet[s]
         vol[idx[s]] = d.pixel_array.astype(np.float64) * float(d.RescaleSlope) + float(d.RescaleIntercept)
-    seg = pydicom.dcmread(glob.glob(os.path.join(root, "Segmentation*", "*"))[0])
+    seg = pydicom.dcmread(dcm_files(os.path.join(root, os.environ.get("MAP_SEG_SUB", "Segmentation*")))[0])
     frames = seg.pixel_array
     segnums = set()
     mask = np.zeros(vol.shape, dtype=bool)
     for i, fg in enumerate(seg.PerFrameFunctionalGroupsSequence):
-        segnums.add(int(fg.SegmentIdentificationSequence[0].ReferencedSegmentNumber))
+        # SegmentIdentificationSequence は、セグメントが 1 つの SEG では Shared 側に置かれることがある
+        sid = fg.SegmentIdentificationSequence if "SegmentIdentificationSequence" in fg else seg.SharedFunctionalGroupsSequence[0].SegmentIdentificationSequence
+        segnums.add(int(sid[0].ReferencedSegmentNumber))
         sop = str(fg.DerivationImageSequence[0].SourceImageSequence[0].ReferencedSOPInstanceUID)
         mask[idx[sop]] |= frames[i] > 0
     assert len(segnums) == 1, f"セグメントが複数: {segnums}"

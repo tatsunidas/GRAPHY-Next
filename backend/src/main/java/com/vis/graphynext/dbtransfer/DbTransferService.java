@@ -10,6 +10,9 @@ import com.vis.graphynext.dbtransfer.TransferManifest.FileEntry;
 import com.vis.graphynext.dicom.store.DicomInstance;
 import com.vis.graphynext.dicom.store.DicomInstanceRepository;
 import com.vis.graphynext.dicom.store.StorageLayout;
+import com.vis.graphynext.plugin.PluginRegistry;
+import org.dcm4che3.data.Tag;
+import org.dcm4che3.io.DicomInputStream;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -53,20 +56,24 @@ public class DbTransferService {
 
     public enum Mode { copy, move }
 
-    public record TransferResult(String id, String mode, int studies, int files, long bytes, boolean sourceDeleted) {
+    /** {@code pluginVersions} は荷物に記録を入れたプラグインの、この PC の版。 */
+    public record TransferResult(String id, String mode, int studies, int files, long bytes, boolean sourceDeleted,
+                                 List<TransferManifest.PluginVersion> pluginVersions) {
     }
 
     private final DicomInstanceRepository repo;
     private final StorageLayout layout;
     private final RelatedData related;
+    private final PluginRegistry pluginRegistry;
     private final Path currentFolder;
     private final ObjectMapper mapper = new ObjectMapper().enable(SerializationFeature.INDENT_OUTPUT);
 
     public DbTransferService(DicomInstanceRepository repo, StorageLayout layout, RelatedData related,
-                             @Value("${graphy.db.folder:}") String dbFolder) {
+                             PluginRegistry pluginRegistry, @Value("${graphy.db.folder:}") String dbFolder) {
         this.repo = repo;
         this.layout = layout;
         this.related = related;
+        this.pluginRegistry = pluginRegistry;
         this.currentFolder = dbFolder == null || dbFolder.isBlank()
                 ? layout.root().getParent() : Path.of(dbFolder).toAbsolutePath().normalize();
     }
@@ -118,6 +125,7 @@ public class DbTransferService {
         Path done = inbox.resolve(id);
         StorageLayout pkgLayout = new StorageLayout(partial.resolve("dicom"));
         Files.createDirectories(partial);
+        List<TransferManifest.PluginVersion> sourcePlugins;
         try {
             List<FileEntry> files = new ArrayList<>();
             for (int i = 0; i < rows.size(); i++) {
@@ -136,9 +144,11 @@ public class DbTransferService {
                 patientKeys.add(RelatedData.patientKey(r));
             }
             TransferManifest.Related rel = related.collect(studies, series, patientKeys, partial);
+            sourcePlugins = PluginVersions.ofSource(rel, PluginVersions.installed(pluginRegistry));
             int version = rel.masks().isEmpty() ? TransferManifest.BASE_FORMAT_VERSION : TransferManifest.FORMAT_VERSION;
             TransferManifest manifest = new TransferManifest(version, id,
-                    Instant.now().toString(), mode.name(), currentFolder.toString(), List.copyOf(studies), files, rel);
+                    Instant.now().toString(), mode.name(), currentFolder.toString(), List.copyOf(studies), files, rel,
+                    sourcePlugins);
             mapper.writeValue(partial.resolve("manifest.json").toFile(), manifest);
 
             verify(partial, mapper.readValue(partial.resolve("manifest.json").toFile(), TransferManifest.class));
@@ -155,7 +165,7 @@ public class DbTransferService {
             deleteSource(studies, rows);
             deleted = true;
         }
-        return new TransferResult(id, mode.name(), studies.size(), rows.size(), bytes, deleted);
+        return new TransferResult(id, mode.name(), studies.size(), rows.size(), bytes, deleted, sourcePlugins);
     }
 
     /**
@@ -256,6 +266,13 @@ public class DbTransferService {
             in.transferTo(out);
         }
         return HexFormat.of().formatHex(md.digest());
+    }
+
+    /** ファイルの中身の SOP Instance UID（画素は読まない）。 */
+    static String sopInstanceUid(Path p) throws IOException {
+        try (DicomInputStream in = new DicomInputStream(p.toFile())) {
+            return in.readDatasetUntilPixelData().getString(Tag.SOPInstanceUID);
+        }
     }
 
     static String sha256(Path p) throws IOException {

@@ -14,6 +14,7 @@ import { useMemo, useState } from "react";
 import { getRoiMaskMeta, setRoiMaskMeta, type DimScope, type RoiScope } from "../viewer/roiMaskStore";
 import { useI18n } from "../i18n/i18n";
 
+import { backdropClose } from "../ui/backdropClose";
 type DimKey = "z" | "c" | "t";
 
 /** scope の 1 次元編集行（all チェック + index 入力）。 */
@@ -95,7 +96,7 @@ export function RoiMetaEditDialog({ itemId, onClose }: { itemId: string; onClose
   };
 
   return (
-    <div style={backdrop} onClick={onClose}>
+    <div style={backdrop} {...backdropClose(onClose)}>
       <div style={dialog} onClick={(e) => e.stopPropagation()}>
         <div style={dlgHead}>
           <strong style={{ fontSize: 13 }}>{t("roiMgr.editTitle")}</strong>

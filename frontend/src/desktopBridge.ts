@@ -344,6 +344,28 @@ export type PickFilesResult =
   | { ok: true; paths: string[] }
   | { ok: false; canceled?: boolean; error?: string };
 
+/** 荷物の取り込みの状態（desktop/dbImportFlow.js の戻り値）。フォルダの場所は含まない。 */
+export type DbImportStatus = { ok: false; reason?: string } | DbImportJob;
+
+export interface DbImportJob {
+  ok: true;
+  state: "running" | "done" | "failed";
+  studies: number;
+  studyUids: string[];
+  packages: DbImportPackage[];
+}
+
+export interface DbImportPackage {
+  outcome: "imported" | "too-new" | "invalid-manifest" | "incomplete" | "damaged" | "failed";
+  imported: number;
+  skippedExisting: number;
+  failed: number;
+  relatedInserted: number;
+  relatedSame: number;
+  conflicts: number;
+  pluginNotes: { id: string; sourceVersion: string | null; localVersion: string | null; kind: "missing" | "different" | "unknown" }[];
+}
+
 /** DB フォルダ（索引と DICOM 保管庫をまとめたフォルダ）。 */
 export interface DbFolderRow {
   path: string;
@@ -517,6 +539,9 @@ export interface GraphyDesktop {
   dbFoldersSwitch?: (folder: string) => Promise<DbFolderPickResult>;
   /** 最近使った一覧から外す（フォルダの中身には触れない）。 */
   dbFoldersForget?: (folder: string) => Promise<{ ok: boolean; reason?: string }>;
+  /** 外付けなどの荷物を今の DB に取り込み始める。取り込み元の選択と内容の確認は main が出す。 */
+  dbImportStart?: () => Promise<{ ok: boolean; canceled?: boolean; jobId?: string; reason?: string }>;
+  dbImportStatus?: (jobId: string) => Promise<DbImportStatus>;
   /** Drive バックアップ: 状態 / ログイン / ログアウト / 保存先を選んで有効化 / 解除（確認は main）。 */
   gdriveStatus?: () => Promise<GdriveDesktopStatus>;
   gdriveSignIn?: () => Promise<{ ok: boolean; email?: string | null; error?: string }>;
@@ -907,6 +932,8 @@ export interface McpPrefs {
   allowViewerControl: boolean;
   allowViewerEdit: boolean;
   allowViewerCapture: boolean;
+  /** 検査のコピー（別の PC への書き出し）と荷物の取り込みの依頼を受けるか（実行のたびに main が確認する）。 */
+  allowDbTransfer: boolean;
   /** 外部 AI クライアントへツールを公開するプラグインの ID（アシスタントの toggle store とは別の一覧）。 */
   pluginTools: string[];
 }

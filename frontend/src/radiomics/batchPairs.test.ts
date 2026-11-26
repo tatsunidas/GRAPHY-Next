@@ -13,7 +13,10 @@ import {
   duplicateLabels,
   footerProgress,
   formatElapsed,
+  includedSourceModalities,
   initialRows,
+  modalitiesMixed,
+  petWithDefaultBinWidth,
   selectedPairs,
   setIncluded,
   setSource,
@@ -371,5 +374,43 @@ describe("footerProgress", () => {
       expect(f.index).toBeNull();
       expect(f.label).toBeNull();
     }
+  });
+});
+
+describe("対象の組の元画像のモダリティ", () => {
+  const mods: Record<string, string> = { CTS: "CT", PTS: "PT", CT2: "ct ", MRS: "MR" };
+  const lookup = (_study: string, series: string) => mods[series];
+  const rowOf = (source: string | null, included = true) =>
+    ({ ...initialRows([pair({ sourceSeriesUid: source, sourceCandidates: source ? [source] : [] })])[0], source, included });
+
+  it("CT と PT が混ざると 2 種類（混在あり）", () => {
+    const m = includedSourceModalities([rowOf("CTS"), rowOf("PTS")], lookup);
+    expect(m).toEqual(["CT", "PT"]);
+    expect(modalitiesMixed(m)).toBe(true);
+  });
+  it("1 種類だけなら混在なし（大文字小文字・空白は無視して同じ扱い）", () => {
+    const m = includedSourceModalities([rowOf("CTS"), rowOf("CT2")], lookup);
+    expect(m).toEqual(["CT"]);
+    expect(modalitiesMixed(m)).toBe(false);
+  });
+  it("対象から外した組・元画像が未確定の組・モダリティが分からない組は数えない", () => {
+    const rows = [rowOf("CTS"), rowOf("PTS", false), rowOf(null), rowOf("UNKNOWN")];
+    expect(includedSourceModalities(rows, lookup)).toEqual(["CT"]);
+    expect(includedSourceModalities([], lookup)).toEqual([]);
+  });
+});
+
+describe("PET の固定ビン幅が初期値のまま", () => {
+  const base = defaultRoiFeatureForm();
+  const binWidthMode = { ...base, fixedBinNumber: false };
+  it("PET を含み、固定ビン幅が初期値の 25 のままなら true", () => {
+    expect(petWithDefaultBinWidth(binWidthMode, ["PT"], "radiomics")).toBe(true);
+    expect(petWithDefaultBinWidth(binWidthMode, ["CT", "PT"], "radiomics")).toBe(true);
+  });
+  it("PET が無い・ビン幅を変えた・固定ビン数・VOI 統計なら false", () => {
+    expect(petWithDefaultBinWidth(binWidthMode, ["CT"], "radiomics")).toBe(false);
+    expect(petWithDefaultBinWidth({ ...binWidthMode, binWidth: 0.1 }, ["PT"], "radiomics")).toBe(false);
+    expect(petWithDefaultBinWidth(base, ["PT"], "radiomics")).toBe(false);
+    expect(petWithDefaultBinWidth(binWidthMode, ["PT"], "voiStats")).toBe(false);
   });
 });

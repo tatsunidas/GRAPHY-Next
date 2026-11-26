@@ -25,6 +25,7 @@ import {
   serializeTagList,
 } from "./tagPathUtil";
 
+import { backdropClose } from "../ui/backdropClose";
 /** よく使うタグのプリセット（クイック追加）。 */
 const PRESETS = ["00100010", "00100020", "00080060", "0008103E", "00180015", "00081030", "00080020"];
 
@@ -173,7 +174,7 @@ export function TagExtractorDialog({
   const canRun = !busy && paths.length > 0;
 
   return (
-    <div style={overlay} onClick={onClose}>
+    <div style={overlay} {...backdropClose(onClose)}>
       <div data-testid="tag-extractor-dialog" style={dialog} onClick={(e) => e.stopPropagation()}>
         <div style={header}>
           <span style={{ fontWeight: 700 }}>{t("tagext.title")}</span>

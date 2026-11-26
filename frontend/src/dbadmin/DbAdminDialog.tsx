@@ -27,6 +27,7 @@ import { VBarChart, HBarChart, PieChart, formatBytes } from "./charts";
 import { useI18n } from "../i18n/i18n";
 import { desktop } from "../desktopBridge";
 import { DbTransferDialog } from "./DbTransferDialog";
+import { DbImportDialog } from "./DbImportDialog";
 import { deleteRelatedNote } from "./dbAdminApi";
 import { friendlyDbAdminError } from "./dbAdminErrors";
 import { SeriesExtractorPanel } from "../mainscreen/SeriesExtractorPanel";
@@ -34,6 +35,7 @@ import { DbScopePicker } from "./DbScopePicker";
 import type { ScopeSpec } from "../mainscreen/seriesScopeUtil";
 import { formatDicomDate } from "../i18n/dateFormat";
 
+import { backdropClose } from "../ui/backdropClose";
 type Tab = "patients" | "series" | "stats";
 
 export function DbAdminDialog({
@@ -76,7 +78,7 @@ export function DbAdminDialog({
   };
 
   return (
-    <div style={overlay} onClick={onClose}>
+    <div style={overlay} {...backdropClose(onClose)}>
       <div data-testid="dbadmin-dialog" style={tab === "series" ? { ...dialog, ...seriesDialog } : dialog} onClick={(e) => e.stopPropagation()}>
         <div style={header}>
           <span style={{ fontWeight: 700 }}>{t("dbadmin.title")}</span>
@@ -192,6 +194,9 @@ function PatientsTab({
   // 別の DB フォルダへコピー・移動（デスクトップのみ。DB フォルダの一覧は Electron main が持つ）
   const [transferring, setTransferring] = useState<{ study: Study; patient: Patient } | null>(null);
   const canTransfer = !!desktop()?.dbFoldersList;
+  // 外付けなどの荷物を今の DB に取り込む
+  const [importing, setImporting] = useState(false);
+  const canImport = !!desktop()?.dbImportStart;
 
   const [onlyMissing, setOnlyMissing] = useState(false);
   const reload = (query: string, missing: boolean = onlyMissing) => {
@@ -358,6 +363,11 @@ function PatientsTab({
         <button data-testid="dbadmin-search-button" onClick={() => reload(q)} style={btn}>
           {t("common.search")}
         </button>
+        {canImport && (
+          <button data-testid="dbadmin-import-button" onClick={() => setImporting(true)} style={{ ...btn, whiteSpace: "nowrap" }}>
+            {t("dbImport.button")}
+          </button>
+        )}
         <label style={{ display: "flex", alignItems: "center", gap: 4, whiteSpace: "nowrap" }}>
           <input
             data-testid="dbadmin-only-missing"
@@ -585,6 +595,7 @@ function PatientsTab({
           }}
         />
       )}
+      {importing && <DbImportDialog onClose={() => setImporting(false)} onImported={() => reload(q)} />}
       {transferring && (
         <DbTransferDialog
           studyUid={transferring.study.studyInstanceUid}
@@ -694,7 +705,7 @@ function SplitSeriesForm({
   };
 
   return (
-    <div style={overlay} onClick={onClose}>
+    <div style={overlay} {...backdropClose(onClose)}>
       <div
         data-testid="dbadmin-split-form"
         style={{ ...editBox, width: 540, maxHeight: "86vh", display: "flex", flexDirection: "column" }}
@@ -794,7 +805,7 @@ function MergeSeriesForm({
   };
 
   return (
-    <div style={overlay} onClick={onClose}>
+    <div style={overlay} {...backdropClose(onClose)}>
       <div data-testid="dbadmin-merge-form" style={editBox} onClick={(e) => e.stopPropagation()}>
         <h3 style={{ margin: "0 0 6px" }}>{t("dbadmin.merge.title")}</h3>
         <p style={{ fontSize: 12, color: "#8a98a6", marginTop: 0 }}>
@@ -860,7 +871,7 @@ function PatientEditForm({
   };
 
   return (
-    <div style={overlay} onClick={onClose}>
+    <div style={overlay} {...backdropClose(onClose)}>
       <div style={editBox} onClick={(e) => e.stopPropagation()}>
         <h3 style={{ margin: "0 0 6px" }}>{t("dbadmin.edit.title")}</h3>
         <p style={{ fontSize: 12, color: "#8a98a6", marginTop: 0 }}>{t("dbadmin.edit.note")}</p>
@@ -912,7 +923,7 @@ function StudyPatientEditForm({
   };
 
   return (
-    <div style={overlay} onClick={onClose}>
+    <div style={overlay} {...backdropClose(onClose)}>
       <div data-testid="dbadmin-study-edit-form" style={editBox} onClick={(e) => e.stopPropagation()}>
         <h3 style={{ margin: "0 0 6px" }}>{t("dbadmin.edit.studyTitle")}</h3>
         <p style={{ fontSize: 12, color: "#8a98a6", marginTop: 0 }}>

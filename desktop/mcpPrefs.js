@@ -1,6 +1,7 @@
 // MCP サーバーの設定（userData/mcp.json）。設計: roadmap fw/mcp-server-design.md §4。electron に依存しない純モジュール。
 //
-// 🔴 6 つとも既定はオフ。`enabled` は外部 AI クライアントからの接続の受け付け、`includePhi` は患者情報を返すこと、
+// 🔴 7 つとも既定はオフ。`allowDbTransfer` は検査のコピー（この PC の別のフォルダへの書き出し）と荷物の取り込みを依頼できること（実行のたびに main が確認し、フォルダは利用者が選ぶ）。
+//    `enabled` は外部 AI クライアントからの接続の受け付け、`includePhi` は患者情報を返すこと、
 //    `allowAnalysis` は解析の実行（元データは壊さない）、`allowViewerControl` は 2D ビューアの表示操作（利用者が今見ている画面が動く。
 //    元に戻せる操作だけ）、`allowViewerEdit` は 2D ビューアの ROI の作成・計測の全削除（データを変える。実行のたびに main が確認）。
 //    `allowViewerCapture` は 2D ビューアの表示中の画像（画素）を返すこと（焼き込みの患者情報があり得る。実行のたびに main が画像を見せて確認。責任は利用者）。
@@ -10,7 +11,7 @@
 const fs = require("node:fs");
 const path = require("node:path");
 
-const KEYS = ["enabled", "includePhi", "allowAnalysis", "allowViewerControl", "allowViewerEdit", "allowViewerCapture"];
+const KEYS = ["enabled", "includePhi", "allowAnalysis", "allowViewerControl", "allowViewerEdit", "allowViewerCapture", "allowDbTransfer"];
 
 /** プラグイン ID の形（assistantPluginTools の NAME_RE の部品と同じ字種）と、公開できる件数の上限。 */
 const PLUGIN_ID_RE = /^[A-Za-z0-9_.-]{1,80}$/;
@@ -18,7 +19,7 @@ const MAX_PLUGINS = 64;
 const validPluginIds = (v) => Array.isArray(v) && v.length <= MAX_PLUGINS && v.every((x) => typeof x === "string" && PLUGIN_ID_RE.test(x)) && new Set(v).size === v.length;
 
 function defaults() {
-  return { enabled: false, includePhi: false, allowAnalysis: false, allowViewerControl: false, allowViewerEdit: false, allowViewerCapture: false, pluginTools: [] };
+  return { enabled: false, includePhi: false, allowAnalysis: false, allowViewerControl: false, allowViewerEdit: false, allowViewerCapture: false, allowDbTransfer: false, pluginTools: [] };
 }
 
 function createMcpPrefs({ file }) {

@@ -5,6 +5,7 @@
 import { useEffect, useState } from "react";
 import { useI18n } from "../i18n/i18n";
 import { SMALL_ROI_VOXELS_MAX, type SpecKind, type SpecQc, type SpecQcMode } from "./batchSpec";
+import { InfoMark } from "./InfoMark";
 import { CalibrationField, RoiFeatureSettingsFields, SettingsGroup } from "./RoiFeatureSettingsFields";
 import { UNITS_2D, type RoiFeatureForm } from "./roiFeatureSettings";
 
@@ -42,30 +43,30 @@ export function BatchSettingsPanel({
   const labelsAndQc = (
           <>
             <div style={row}>
-              <span style={label} title={t("roiFeat.tip.bLabels")}>{t("roiFeat.batch.labels")}</span>
-              <input data-testid="batch-labels" value={labelsText} placeholder="GTV, tumor" disabled={disabled}
+              <span style={label} title={t("roiFeat.tip.bLabels")}>{t("roiFeat.batch.labels")}<InfoMark tip={t("roiFeat.tip.bLabels")} /></span>
+              <input data-testid="batch-labels" value={labelsText} placeholder="GTV, tumor" disabled={disabled} title={t("roiFeat.tip.bLabels")}
                 style={{ ...input, width: 300 }} onChange={(e) => setLabelsText(e.target.value)} />
               <span style={hint}>{t("roiFeat.batch.labelsHelp")}</span>
             </div>
             <div style={row} data-testid="batch-qc">
-              <span style={label} title={t("roiFeat.tip.bQc")}>{t("roiFeat.batch.qc.title")}</span>
+              <span style={label} title={t("roiFeat.tip.bQc")}>{t("roiFeat.batch.qc.title")}<InfoMark tip={t("roiFeat.tip.bQc")} /></span>
               {/* 項目ごとのまとまりは折り返さない（幅が足りないときは、まとまりの間で折り返す） */}
               <span style={qcGroup}>
-                <span title={t("roiFeat.tip.bQcSmall")}>{t("roiFeat.batch.qc.smallRoi")}</span>
-                <QcRadios name="qc-small" value={qc.smallRoi} disabled={disabled} testId="batch-qc-small"
+                <span title={t("roiFeat.tip.bQcSmall")}>{t("roiFeat.batch.qc.smallRoi")}<InfoMark tip={t("roiFeat.tip.bQcSmall")} /></span>
+                <QcRadios name="qc-small" value={qc.smallRoi} disabled={disabled} testId="batch-qc-small" tip={t("roiFeat.tip.bQcSmall")}
                   onChange={(v) => setQc({ ...qc, smallRoi: v })} />
                 {/* 基準値は「小さい ROI」の値なので、その項目の隣に置く（非可逆圧縮より前） */}
-                <span style={{ marginLeft: 4 }}>{t("roiFeat.batch.qc.voxels")}</span>
+                <span style={{ marginLeft: 4 }} title={t("roiFeat.batch.qc.voxelsHelp")}>{t("roiFeat.batch.qc.voxels")}<InfoMark tip={t("roiFeat.batch.qc.voxelsHelp")} /></span>
                 <VoxelsField value={qc.smallRoiVoxels} disabled={disabled} onChange={(v) => setQc({ ...qc, smallRoiVoxels: v })} />
                 <span>{t("roiFeat.batch.qc.voxelsUnit")}</span>
-                <span style={{ marginLeft: 4 }} title={t("roiFeat.batch.qc.pixelsHelp")}>{t("roiFeat.batch.qc.pixels")}</span>
+                <span style={{ marginLeft: 4 }} title={t("roiFeat.batch.qc.pixelsHelp")}>{t("roiFeat.batch.qc.pixels")}<InfoMark tip={t("roiFeat.batch.qc.pixelsHelp")} /></span>
                 <VoxelsField value={qc.smallRoiPixels} disabled={disabled} testId="batch-qc-pixels" help={t("roiFeat.batch.qc.pixelsHelp")}
                   onChange={(v) => setQc({ ...qc, smallRoiPixels: v })} />
                 <span>{t("roiFeat.batch.qc.pixelsUnit")}</span>
               </span>
               <span style={qcGroup}>
-                <span title={t("roiFeat.tip.bQcLossy")}>{t("roiFeat.batch.qc.lossy")}</span>
-                <QcRadios name="qc-lossy" value={qc.lossy} disabled={disabled} testId="batch-qc-lossy"
+                <span title={t("roiFeat.tip.bQcLossy")}>{t("roiFeat.batch.qc.lossy")}<InfoMark tip={t("roiFeat.tip.bQcLossy")} /></span>
+                <QcRadios name="qc-lossy" value={qc.lossy} disabled={disabled} testId="batch-qc-lossy" tip={t("roiFeat.tip.bQcLossy")}
                   onChange={(v) => setQc({ ...qc, lossy: v })} />
               </span>
             </div>
@@ -75,9 +76,9 @@ export function BatchSettingsPanel({
   return (
     <div data-testid="batch-settings" style={{ fontSize: 12 }}>
       <div style={row} data-testid="batch-kind">
-        <span style={label} title={t("roiFeat.tip.bKind")}>{t("roiFeat.batch.kind.title")}</span>
+        <span style={label} title={t("roiFeat.tip.bKind")}>{t("roiFeat.batch.kind.title")}<InfoMark tip={t("roiFeat.tip.bKind")} /></span>
         {(["radiomics", "voiStats"] as const).map((k) => (
-          <label key={k}>
+          <label key={k} title={t("roiFeat.tip.bKind")}>
             <input type="radio" name="batch-kind" checked={kind === k} disabled={disabled} data-testid={`batch-kind-${k}`}
               onChange={() => setKind(k)} /> {t(`roiFeat.batch.kind.${k}`)}
           </label>
@@ -98,12 +99,12 @@ export function BatchSettingsPanel({
           contentSlot={(
             <>
               <div style={row} data-testid="batch-units">
-                <span style={label} title={t("roiFeat.tip.modes")}>{t("roiFeat.field.modes")}</span>
+                <span style={label} title={t("roiFeat.tip.modes")}>{t("roiFeat.field.modes")}<InfoMark tip={t("roiFeat.tip.modes")} /></span>
                 <label title={t("roiFeat.mode.alwaysOn")}>
                   <input type="checkbox" checked disabled /> {t("roiFeat.mode.whole")}
                 </label>
                 {UNITS_2D.map((u) => (
-                  <label key={u}>
+                  <label key={u} title={t("roiFeat.tip.modes")}>
                     <input type="checkbox" checked={form.units2d.includes(u)} disabled={disabled} data-testid={`batch-unit-${u}`}
                       onChange={(e) => setForm((f) => {
                         const next = UNITS_2D.filter((x) => (x === u ? e.target.checked : f.units2d.includes(x)));
@@ -115,10 +116,10 @@ export function BatchSettingsPanel({
               {form.units2d.length > 0 && (
                 <>
                   <div style={row} data-testid="batch-planes">
-                    <span style={label} title={t("roiFeat.tip.planes")}>{t("roiFeat.field.planes")}</span>
-                    <label><input type="radio" name="batch-planes" checked={!form.planesAll} disabled={disabled} data-testid="batch-planes-acquisition"
+                    <span style={label} title={t("roiFeat.tip.planes")}>{t("roiFeat.field.planes")}<InfoMark tip={t("roiFeat.tip.planes")} /></span>
+                    <label title={t("roiFeat.tip.planes")}><input type="radio" name="batch-planes" checked={!form.planesAll} disabled={disabled} data-testid="batch-planes-acquisition"
                       onChange={() => setForm((f) => ({ ...f, planesAll: false }))} /> {t("roiFeat.planes.acquisition")}</label>
-                    <label><input type="radio" name="batch-planes" checked={form.planesAll} disabled={disabled} data-testid="batch-planes-all"
+                    <label title={t("roiFeat.tip.planes")}><input type="radio" name="batch-planes" checked={form.planesAll} disabled={disabled} data-testid="batch-planes-all"
                       onChange={() => setForm((f) => ({ ...f, planesAll: true }))} /> {t("roiFeat.planes.all")}</label>
                   </div>
                   <div style={hint} data-testid="batch-units-help">{t("roiFeat.batch.units.help")}</div>
@@ -171,12 +172,12 @@ function VoxelsField({ value, disabled, onChange, testId = "batch-qc-voxels", he
   );
 }
 
-function QcRadios({ name, value, disabled, onChange, testId }: {
-  name: string; value: SpecQcMode; disabled: boolean; onChange: (v: SpecQcMode) => void; testId: string;
+function QcRadios({ name, value, disabled, onChange, testId, tip }: {
+  name: string; value: SpecQcMode; disabled: boolean; onChange: (v: SpecQcMode) => void; testId: string; tip: string;
 }) {
   const { t } = useI18n();
   return (
-    <span data-testid={testId} style={{ display: "inline-flex", gap: 8 }}>
+    <span data-testid={testId} title={tip} style={{ display: "inline-flex", gap: 8 }}>
       <label><input type="radio" name={name} checked={value === "FLAG"} disabled={disabled}
         onChange={() => onChange("FLAG")} /> {t("roiFeat.batch.qc.flag")}</label>
       <label><input type="radio" name={name} checked={value === "STOP"} disabled={disabled}

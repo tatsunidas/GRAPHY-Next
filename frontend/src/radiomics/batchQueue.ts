@@ -77,7 +77,7 @@ export interface QueueApi {
   results(jobId: string): Promise<BatchPairResult[]>;
   cancel(jobId: string): Promise<BatchStatus>;
   /** 書き出すファイルを保存する（ブラウザならダウンロード）。 */
-  save(files: readonly OutputFile[]): void;
+  save(files: readonly OutputFile[]): void | Promise<void>;
   sleep(ms: number): Promise<void>;
 }
 
@@ -139,7 +139,7 @@ async function runOne(
   }
   const out = buildDatasetOutput(job, results, chosen.map((c) => c.caseLabel), spec, spec.output.prefix, ctx.output);
   if (!out.ok) return { state: "failed", message: out.reason + (out.caseLabel ? `: ${out.caseLabel}` : ""), files: 0 };
-  api.save(out.files);
+  await api.save(out.files);
   return { state: "done", message: null, files: out.files.length };
 }
 

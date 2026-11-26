@@ -28,7 +28,9 @@ import type { Vec3 } from "../viewer/reslice";
 import type { PluginCurvedMprResult, PluginCurvedMprSpec } from "./pluginCurvedMprApi";
 import type { PluginViewer3dResult, PluginViewer3dSpec } from "./pluginViewer3dApi";
 import type { PluginSeriesPanelHandle, PluginSeriesPanelOptions } from "./pluginSeriesPanelApi";
-import type { ViewerDerivedSeriesRequest, ViewerDerivedSeriesResult, ViewerOverlay, ViewerPixelDataOptions, ViewerRoiMeasurements, ViewerTarget, ViewerAngioReportRequest, ViewerPresentationStateRequest, ViewerTilePixelData, ViewerTileSpatialCalibration, ViewerTileXaState, ViewerTileXaCine, ViewerTileXaGeometry, ViewerTileRoi, ViewerTileViewState, ViewerSrMeasurementGroup, ViewerSrRequest, ViewerSrResult, ViewerLabelVolume, ViewerLabelVolumeResult } from "../viewer/viewerCommands";
+import type { PluginSegmentMask } from "../viewer/segmentMask";
+export type { PluginSegment, PluginSegmentMask, PluginSegmentSlice } from "../viewer/segmentMask";
+import type { ViewerDerivedSeriesRequest, ViewerDerivedSeriesResult, ViewerOverlay, ViewerPixelDataOptions, ViewerRoiMeasurements, ViewerTarget, ViewerAngioReportRequest, ViewerPresentationStateRequest, ViewerTilePixelData, ViewerTileSpatialCalibration, ViewerTileXaState, ViewerTileXaCine, ViewerTileXaGeometry, ViewerTileRoi, ViewerTileSegment, ViewerTileViewState, ViewerSrMeasurementGroup, ViewerSrRequest, ViewerSrResult, ViewerLabelVolume, ViewerLabelVolumeResult } from "../viewer/viewerCommands";
 
 export type { PluginStoreDoc, PluginStoreSaveResult };
 
@@ -91,6 +93,7 @@ export type {
   ViewerTarget,
   ViewerTilePixelData,
   ViewerTileRoi,
+  ViewerTileSegment,
   ViewerTileViewState,
   ViewerSrMeasurementGroup,
   ViewerSrRequest,
@@ -988,6 +991,30 @@ export interface Viewer2DPluginHost extends PluginHostBase {
    * スナップショットを持ち回らないこと。
    */
   getRois: (tileId?: string) => ViewerTileRoi[];
+  /**
+   * **ラベルマップ（Wand・ブラシ等で作ったマスク）のセグメントの一覧**（H80）。`tileId` 省略時は対象タイル全部。
+   *
+   * <p>Wand・ブラシが書くのは**注釈ではなくセグメンテーション**なので、{@link getRois} には**出ない**。
+   * ROI マネージャには「マスク」として出ている。ここで返すのは、そのタイルが**今表示しているスタック**に
+   * 乗っているものだけ（別シリーズ・閉じたタイルのものは出ない）。`label`＝マスクの名前、`segmentLabel`＝
+   * セグメントの名前で、付いていなければ `null`（名前を作らない）。
+   *
+   * <p>**呼ぶたびに現在値を読む**。変更の通知は無いので、読み直すのはプラグインの仕事。
+   * 古い本体ではこのメンバが無い（`typeof host.listSegments === "function"` で調べること）。
+   */
+  listSegments: (tileId?: string) => ViewerTileSegment[];
+  /**
+   * **1 セグメントのマスクを読む**（H81）。`getRois` と `getPixelData(tileId, { sliceIndex })` と**同じ
+   * スタック順の `sliceIndex`** で、**前景のあるスライスだけ**（疎）を cols×rows の 0/1（行優先）で返す。
+   *
+   * <p>🔴 H10（`loadVolume`）の格子ではない。H10 は法線方向の昇順（NM は逆順・等間隔でないシリーズは読めない）で、
+   * マスクはタイルのスタック順のまま。値を測るなら `getPixelData(tileId, { sliceIndex })` の同じ画素を読む。
+   * 返すのは**コピー**（labelmap は書き換わらない）。
+   *
+   * <p>見つからない id・別スタック・登録に無い `segmentIndex`・前景が 1 つも無い場合は `null`（空の成功を
+   * 返さない）。返す大きさが 256 MiB（cols×rows×スライス数のバイト）を超えるときは**例外**（理由つき）。
+   */
+  loadSegmentMask: (tileId: string | undefined, segmentationId: string, segmentIndex: number) => Promise<PluginSegmentMask | null>;
   /**
    * ROI に紐付けた**このプラグインの属性**を読む（H5）。未設定なら空オブジェクト。
    * キーは自動で `plugin.<pluginId>.` 名前空間に置かれるので、他プラグインや本体の属性とは混ざらない。

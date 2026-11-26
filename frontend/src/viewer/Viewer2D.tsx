@@ -61,6 +61,7 @@ import { fmtValue, scaleBarColors, scaleBarLabels, SCALE_BAR_WIDTH } from "./val
 import { readImageInfo, sampleAtCanvas, computeSliceSpacing, calibratedUnit, type ImageInfo, type PixelSample } from "./imageInfo";
 import { dicomDateToIso, readColormapName, readInvert, resolveSliceIndex } from "./viewportRead";
 import { readModalitySlice, readModalitySliceSync } from "./pixelCalibration";
+import { flatSliceGuardRange, refineFlatSliceWindow, type VoiRange } from "./flatSliceWindow";
 import { defaultCalibratedWindow } from "./calibratedWindow";
 import type { SuvType } from "./suv";
 import { autoWindow, rasterizeOverlay, type OverlayWindow } from "./overlayRaster";
@@ -132,6 +133,8 @@ import { readXaCineSource } from "./xaCine";
 import { frameStartTimesMs, isUniformFrameTime, resolveXaFps } from "./xaCineTiming";
 import { worldSpacingOf, worldToImageCoords } from "./imageCoords";
 import { useDateFormat } from "../i18n/dateFormat";
+import { listSegmentsForStack, readSegmentMask, type PluginSegment, type PluginSegmentMask } from "./segmentMask";
+import { cornerstoneSegmentAccess } from "./segmentAccess";
 
 type ViewSnapshot = { transform: ViewTransform; voi: { lower: number; upper: number } | null };
 
@@ -1128,6 +1131,42 @@ export function Viewer2D({
               upper: inf.windowCenter + inf.windowWidth / 2,
             },
           });
+        } else if (!suvForImageId(curId)) {
+          // WL も SUV 校正も無く、開いたスライスの値が全部同じ（先頭が全画素 0 の PET など）だと、cornerstone の既定の窓が
+          // 幅 0 になり、vtk の色関数が壊れて画像が白（反転で黒・赤）になる。幅のある最小の窓を置き、
+          // シリーズの数枚の値域が取れ次第、それに置き換える（値に幅があるスライスでは何もしない）。flatSliceWindow.ts
+          const guard = flatSliceGuardRange(readModalitySliceSync(curId)?.values);
+          if (guard) {
+            // setStack の時点で、cornerstone は幅 0 の窓で色関数を作ってしまっている。範囲を変えても（setRange）NaN になるだけなので、
+            // 色関数を作り直させる（forceRecreateLUTFunction）。
+            const setRangeRecreating = (r: VoiRange): void => {
+              viewport.setProperties({ voiRange: { lower: r.lower, upper: r.upper } });
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              (viewport as any).setVOI?.({ lower: r.lower, upper: r.upper }, { forceRecreateLUTFunction: true, voiUpdatedWithSetProperties: true });
+            };
+            setRangeRecreating(guard);
+            const ids = [...imageIdsRef.current];
+            const currentRange = (): VoiRange | null => {
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              const r = (viewport.getProperties() as any)?.voiRange;
+              return r && Number.isFinite(r.lower) && Number.isFinite(r.upper) ? { lower: r.lower, upper: r.upper } : null;
+            };
+            void refineFlatSliceWindow(guard, {
+              imageIds: ids,
+              readValues: async (id) => (await readModalitySlice(id))?.values ?? null,
+              currentRange,
+              isStale: () => isDead() || viewportRef.current !== viewport,
+              apply: (r) => {
+                try {
+                  setRangeRecreating(r);
+                  viewport.render();
+                  setVoi({ ww: r.upper - r.lower, wc: (r.upper + r.lower) / 2 });
+                } catch {
+                  /* ignore */
+                }
+              },
+            });
+          }
         }
         // 現在フレームの imageData で確実にフィットさせる（parallelScale と focalPoint を再計算）。
         // マルチフレーム/MOSAIC（例: fMRI の frames/N）では setStack 内部のカメラ設定が
@@ -2240,6 +2279,11 @@ export function Viewer2D({
   // H5: このタイルが表示中のスタックに乗っている ROI（計測・幾何注釈）。
   // **幾何の算出は roiRead に委譲する**（長径・短径をプラグイン側に書かせると本体の計測値と
   // ずれたときどちらが正しいか言えなくなる＝計測の単一入口。CLAUDE.md のルール 3 と同趣旨）。
+  // H80 / H81: ラベルマップ（Wand・ブラシ）のセグメント。**このタイルが今表示しているスタック**に乗っているものだけ。
+  const listSegments = (): PluginSegment[] => listSegmentsForStack(cornerstoneSegmentAccess, imageIdsRef.current);
+  const loadSegmentMask = (segmentationId: string, segmentIndex: number): PluginSegmentMask | null =>
+    readSegmentMask(cornerstoneSegmentAccess, imageIdsRef.current, segmentationId, segmentIndex);
+
   const getRois = (): ViewerRoi[] => {
     const ctx = roiContextRef.current;
     const ids = imageIdsRef.current;
@@ -2852,7 +2896,7 @@ export function Viewer2D({
     validateDerivedSeries, saveDerivedSeries, saveStructuredReport, saveAngioReport, savePresentationState,
     publishAnalysisResult: publishPluginAnalysis,
     setActiveTool, setBrushSize, setWandTolerance,
-    getRois, getRoiMeta, setRoiMeta, clearAnnotations, selectRoi,
+    getRois, listSegments, loadSegmentMask, getRoiMeta, setRoiMeta, clearAnnotations, selectRoi,
     copyRoi, copyRois, ownsRoi, pasteRoi, duplicateRoi, convertMeasureToRoi: convertMeasureToRoiCmd, createRoi, removeCreatedRoi, removeLabelVolume,
     undo, redo,
   });
@@ -2866,7 +2910,7 @@ export function Viewer2D({
     validateDerivedSeries, saveDerivedSeries, saveStructuredReport, saveAngioReport, savePresentationState,
     publishAnalysisResult: publishPluginAnalysis,
     setActiveTool, setBrushSize, setWandTolerance,
-    getRois, getRoiMeta, setRoiMeta, clearAnnotations, selectRoi,
+    getRois, listSegments, loadSegmentMask, getRoiMeta, setRoiMeta, clearAnnotations, selectRoi,
     copyRoi, copyRois, ownsRoi, pasteRoi, duplicateRoi, convertMeasureToRoi: convertMeasureToRoiCmd, createRoi, removeCreatedRoi, removeLabelVolume,
     undo, redo,
   };
@@ -2909,6 +2953,8 @@ export function Viewer2D({
       selectRoi: (u, ex) => commandsRef.current.selectRoi(u, ex),
       setWandTolerance: (v) => commandsRef.current.setWandTolerance(v),
       getRois: () => commandsRef.current.getRois(),
+      listSegments: () => commandsRef.current.listSegments(),
+      loadSegmentMask: (id, idx) => commandsRef.current.loadSegmentMask(id, idx),
       getRoiMeta: (u, p) => commandsRef.current.getRoiMeta(u, p),
       setRoiMeta: (u, p, patch) => commandsRef.current.setRoiMeta(u, p, patch),
       clearAnnotations: (s) => commandsRef.current.clearAnnotations(s),

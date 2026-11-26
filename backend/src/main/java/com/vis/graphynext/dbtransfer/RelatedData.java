@@ -191,6 +191,11 @@ public class RelatedData {
             Map<String, String> all = settings.getAll();
             Map<String, String> put = new LinkedHashMap<>();
             for (var e : rel.calibrations().entrySet()) {
+                // この欄は設定として保存する。荷物の中身で校正以外の設定を書けないようにする
+                if (!e.getKey().startsWith(SettingsService.XA_CALIBRATION_PREFIX)) {
+                    errors.add("校正でない設定は取り込みません: " + e.getKey());
+                    continue;
+                }
                 if (!all.containsKey(e.getKey())) {
                     put.put(e.getKey(), e.getValue());
                     inserted++;

@@ -7,6 +7,7 @@ import type { TagDictEntry, TagPath, TagPathSegment } from "../api";
 import { useI18n } from "../i18n/i18n";
 import { ggggeeee, isPrivateGroup, isSQ, normHex, pathLabel } from "./tagPathUtil";
 
+import { backdropClose } from "../ui/backdropClose";
 type Seg = TagPathSegment & { keyword: string; vr: string };
 
 /**
@@ -109,7 +110,7 @@ export function NestedTagBuilder({
   };
 
   return (
-    <div style={overlay} onClick={onClose}>
+    <div style={overlay} {...backdropClose(onClose)}>
       <div style={dialog} onClick={(e) => e.stopPropagation()}>
         <div style={header}>
           <span style={{ fontWeight: 700 }}>{t("tagext.nested.title")}</span>

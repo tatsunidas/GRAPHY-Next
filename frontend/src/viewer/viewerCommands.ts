@@ -23,6 +23,7 @@ import type {
 import type { XaFpsSource } from "./xaCineTiming";
 import type { XaViewGeometry } from "./xaGeometry";
 import type { XaGeometryMissing } from "./xaViewGeometryProvider";
+import type { PluginSegment, PluginSegmentMask } from "./segmentMask";
 
 /**
  * タイル 1 枚が「いま何を表示しているか」（プラグイン host API の H1・fw/plugin-architecture.md §7）。
@@ -580,6 +581,11 @@ export interface ViewerTilePixelData extends ViewerPixelData {
   tileId: string;
 }
 
+/** 画面視点での H80。どのタイルのスタックに乗ったセグメントかが要るので tileId を持つ。 */
+export interface ViewerTileSegment extends PluginSegment {
+  tileId: string;
+}
+
 /** 画面視点での H5。どのタイルで読んだ ROI かが要るので tileId を持つ。 */
 export interface ViewerTileRoi extends ViewerRoi {
   tileId: string;
@@ -790,6 +796,13 @@ export interface ViewerCommands {
    * ROI が無ければ空配列。**呼ぶたびに現在値を読む**（ユーザーは編集を続けるため）。
    */
   getRois(): ViewerRoi[];
+  /**
+   * このタイルが表示中のスタックに乗っているセグメンテーション（Wand・ブラシ等のラベルマップ）のセグメント（H80）。
+   * 注釈ではないので {@link getRois} には出ない。
+   */
+  listSegments(): PluginSegment[];
+  /** 1 セグメントのマスクを、スタック順の疎なスライスで読む（H81）。見つからなければ null。上限超過は例外（理由つき）。 */
+  loadSegmentMask(segmentationId: string, segmentIndex: number): PluginSegmentMask | null;
   /**
    * ROI に紐付くプラグイン属性を読む（H5）。キーは `plugin.<pluginId>.` を剥がして返す。
    * 未登録なら空オブジェクト。

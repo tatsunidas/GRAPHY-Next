@@ -21,7 +21,8 @@ const ROOT = path.resolve(AUTOMATOR_ROOT, "..");
 export const DESKTOP_RUN_DATA_DIR = process.env.AUTOMATOR_DATA_DIR ?? path.join(AUTOMATOR_ROOT, ".results", "run-data", "desktop");
 const DESKTOP_DIR = path.join(ROOT, "desktop");
 const FRONTEND_DIR = path.join(ROOT, "frontend");
-const BACKEND_JAR = path.join(ROOT, "backend", "target", "graphy-next-backend.jar");
+// GRAPHY_AUTOMATOR_BACKEND_JAR: 別の版の jar（旧版で作ったデータを新版が扱えるかの検査など）で backend を起動する
+const BACKEND_JAR = process.env.GRAPHY_AUTOMATOR_BACKEND_JAR ?? path.join(ROOT, "backend", "target", "graphy-next-backend.jar");
 
 /** Electron の起動を、既定から変えたいスパイク向けの追加指定。 */
 export interface DesktopLaunchOptions {
