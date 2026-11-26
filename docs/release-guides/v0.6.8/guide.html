@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>GRAPHY-Next v0.6.8 操作ガイド — v0.6.7 からの変更</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;900&family=IBM+Plex+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="../guide.css">
+<style>
+  /* この版のための部品（共通の guide.css は変えない） */
+  .duo { display: grid; grid-template-columns: 1fr 1fr; gap: 56px; align-items: start; }
+  .tri { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 40px; align-items: start; }
+  .tall { display: grid; grid-template-columns: 560px 1fr; gap: 72px; align-items: start; }
+  .col { display: flex; flex-direction: column; gap: 18px; }
+  .col .explain { gap: 10px; }
+  .col .explain li p { font-size: 23px; line-height: 1.42; }
+  .col .explain li .num { margin-top: 2px; }
+  .tri .explain li p { font-size: 20px; line-height: 1.38; }
+  .duo .col .explain li p { font-size: 21px; }
+  .duo .shot { width: 92%; }
+  .note { font-size: 21px; }
+  .tri .shot, .duo .shot { width: 100%; }
+  .tall .explain li p { font-size: 25px; line-height: 1.45; }
+  .cover .steps li { padding: 14px 0; }
+  .others { display: grid; grid-template-columns: 1fr 1fr; gap: 20px 72px; list-style: none; }
+  .others li { font-size: 25px; line-height: 1.5; padding-left: 28px; position: relative; }
+  .others li::before { content: ""; position: absolute; left: 0; top: 14px; width: 10px; height: 10px; border-radius: 50%; background: var(--accent); }
+  .others b { color: var(--text); display: block; }
+  code { font-family: "IBM Plex Mono", monospace; font-size: 0.88em; color: var(--text); }
+  .others span { color: var(--sub); }
+</style>
+</head>
+<body>
+
+<section class="page cover">
+  <div class="left">
+    <p class="eyebrow">GRAPHY-NEXT v0.6.8 / 操作ガイド</p>
+    <h1>v0.6.7 からの<br>変更</h1>
+    <p class="lead">DICOM-SR の表示と書き出し、ROI 特徴量の一括抽出の画面を中心に、v0.6.8 の変更をまとめます。</p>
+    <div class="chips">
+      <span class="chip on">DICOM-SR</span>
+      <span class="chip">一括抽出</span>
+      <span class="chip">別の PC への移行</span>
+      <span class="chip">不具合の修正</span>
+    </div>
+  </div>
+  <div class="panel">
+    <h3>この版の内容</h3>
+    <ol class="steps">
+      <li><span class="n">01</span><p>DICOM-SR の表示<small>検査一覧と 2D ビューアで読む。計測は表で表示</small></p></li>
+      <li><span class="n">02</span><p>特徴量の一括抽出<small>項目の説明、注意の表示、表記の変更</small></p></li>
+      <li><span class="n">03</span><p>そのほかの変更<small>日本語の書き出し、別の PC への移行、不具合の修正</small></p></li>
+    </ol>
+  </div>
+  <div class="footer"><span>研究用です。診断には使わないでください。データ: TCIA HCC-TACE-Seg（Moawad et al., 2021）CC BY 4.0</span><span>1 / 4</span></div>
+</section>
+
+<section class="page">
+  <div>
+    <p class="eyebrow">01 / シリーズ一覧・2D ビューア ＞ SR</p>
+    <h2>SR を開くと、内容と計測の表が読める</h2>
+  </div>
+  <div class="tall" style="grid-template-columns: 980px 1fr">
+    <figure class="shot" data-shot="sr-preview"><img src="shots/sr-preview.png" alt="2D ビューアのタイルに出た SR。文書の内容と計測の表"></figure>
+    <ol class="explain">
+      <li><span class="num">1</span><p><b>SR を開く</b>: 検査一覧でシリーズを選ぶと下のプレビューに、2D ビューアではタイルに内容が出ます（この画面はタイル）。［HTML として保存］で書き出せます</p></li>
+      <li><span class="num">2</span><p><b>計測の表</b>: 本体が書き出す数値は、絶対値が 1 以上 100 万未満は小数第 2 位まで、それ以外は指数表記（例: 1.23E-4、4.39E11）です。丸める前の値も SR に残ります</p></li>
+    </ol>
+  </div>
+  <p class="note">この画面の SR の数値は、撮影のための例の値です（実測ではありません）。</p>
+  <div class="footer"><span>研究用です。診断には使わないでください。データ: TCIA HCC-TACE-Seg（Moawad et al., 2021）CC BY 4.0</span><span>2 / 4</span></div>
+</section>
+
+<section class="page">
+  <div>
+    <p class="eyebrow">02 / メイン画面 ＞ アルバム ＞ 特徴量を一括抽出…</p>
+    <h2>一括抽出の画面で、各項目の説明を確かめられる</h2>
+  </div>
+  <div class="duo">
+    <div class="col">
+      <figure class="shot" data-shot="batch-top"><img src="shots/batch-top.png" alt="ROI 特徴量の一括抽出。組の確認と、計算する内容"></figure>
+      <ol class="explain">
+        <li><span class="num">1</span><p><b>組の確認</b>: 見出しや列の ⓘ に、意味の説明があります</p></li>
+        <li><span class="num">2</span><p><b>計算する内容</b>: 「Whole tumour (3D)」の表記は「ボリューム（3D）」になりました。特徴量の族にも ⓘ があります</p></li>
+        <li><span class="num">3</span><p><b>定義を保存</b>: デスクトップ版では、CSV と設定の書き出しで、フォルダを 1 回選べば全ファイルを書きます。同じ名前があるときは上書きしません</p></li>
+      </ol>
+    </div>
+    <div class="col">
+      <figure class="shot" data-shot="batch-output"><img src="shots/batch-output.png" alt="一括抽出の出力。QC と絞り込み、患者 ID を表に含める、定義の一覧"></figure>
+      <ol class="explain">
+        <li><span class="num">1</span><p><b>QC と絞り込み</b>: 小さい ROI や非可逆圧縮の画像の扱いを選びます</p></li>
+        <li><span class="num">2</span><p><b>患者 ID を表に含める</b>: 既定でオンです。表を共有・公開するときは外してください</p></li>
+        <li><span class="num">3</span><p><b>定義の一覧</b>: 保存した定義を、上から順に実行します</p></li>
+      </ol>
+    </div>
+  </div>
+  <p class="note">PET が対象で固定ビン幅が初期値のままのときと、元画像のモダリティが混在するときは、実行の前に注意を出します。</p>
+  <div class="footer"><span>研究用です。診断には使わないでください。データ: TCIA HCC-TACE-Seg（Moawad et al., 2021）CC BY 4.0</span><span>3 / 4</span></div>
+</section>
+
+<section class="page">
+  <div>
+    <p class="eyebrow">03 / そのほか</p>
+    <h2>そのほかの変更</h2>
+  </div>
+  <ul class="others">
+    <li><b>日本語の書き出し</b><span>元画像が欧文の文字コードのとき、書き出した SR・派生シリーズ・RT Dose などの日本語が「?」になる不具合を直しました。以前の版で失われた文字は戻りません。</span></li>
+    <li><b>別の PC への移行</b><span>データベース管理に［荷物を取り込む…］を追加しました（デスクトップ版のみ）。MCP からも依頼できます。別の実機と、Windows・macOS での確認はこれからです。</span></li>
+    <li><b>プラグイン向け API</b><span>Wand・ブラシのマスクを読めるようにしました（読み出し専用）。対応するプラグインが必要です。</span></li>
+    <li><b>PET の表示</b><span>WL の無い PET で、先頭の画像が全部 0 のとき、白黒が反転したり赤くなったりする不具合を直しました。</span></li>
+    <li><b>小数の画素値</b><span>小数の画素値（float）を持つ画像が、整数に切り捨てて表示されることがある不具合を直しました。</span></li>
+    <li><b>ダイアログと ROI マネージャ</b><span>入力中にドラッグしてダイアログの外で離すと閉じる不具合と、属性で変えた名前が一覧に反映されない不具合を直しました。</span></li>
+  </ul>
+  <p class="callout">詳しい変更の一覧は、リリースノート（GitHub の Releases）を参照してください。</p>
+  <div class="footer"><span>研究用です。診断には使わないでください。© Visionary Imaging Services, Inc.</span><span>4 / 4</span></div>
+</section>
+
+<script src="shots/marks.js"></script>
+<script src="../guide.js"></script>
+</body>
+</html>
