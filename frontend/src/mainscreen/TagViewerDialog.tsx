@@ -11,6 +11,7 @@ import { useI18n } from "../i18n/i18n";
 import { applyTagEdit, previewTagEdit, TagEditInvalid, type TagEditPreview, type TagEditScope } from "./tagEditApi";
 import { addedKey, affectsRouting, buildEdits, rowKey, rowLock, type AddedRow, type Built, type Draft } from "./tagEditModel";
 
+import { backdropClose } from "../ui/backdropClose";
 /**
  * TagViewer: MainScreen で表示中の画像（＝選択中シリーズの代表インスタンス）の DICOM 属性ダンプを表示する。
  * GRAPHY の DicomTagsViewer を踏襲。
@@ -211,7 +212,7 @@ export function TagViewerDialog({
   };
 
   return (
-    <div style={overlay} onClick={onClose}>
+    <div style={overlay} {...backdropClose(onClose)}>
       <div data-testid="tag-viewer-dialog" style={tree && tree.length > 0 ? { ...dialog, width: 1120 } : dialog} onClick={(e) => e.stopPropagation()}>
         <div style={header}>
           <span style={{ fontWeight: 700 }}>{t("tagview.title")}</span>

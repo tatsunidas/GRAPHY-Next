@@ -6,6 +6,7 @@ import { useState } from "react";
 import { useI18n } from "../i18n/i18n";
 import { createAlbum, deleteAlbum, renameAlbum, type Album } from "./albumApi";
 
+import { backdropClose } from "../ui/backdropClose";
 /**
  * アルバムの作成・名前変更・削除。削除の確認はダイアログの中で行う（`window.confirm` は使わない）。
  * 重複する名前・不正な名前は backend のエラー文をそのまま出す。
@@ -42,7 +43,7 @@ export function AlbumManageDialog({
   };
 
   return (
-    <div style={overlay} data-testid="album-manage-dialog" onClick={onClose}>
+    <div style={overlay} data-testid="album-manage-dialog" {...backdropClose(onClose)}>
       <div style={dialog} onClick={(e) => e.stopPropagation()}>
         <div style={header}>
           <strong>{t("album.manage.title")}</strong>

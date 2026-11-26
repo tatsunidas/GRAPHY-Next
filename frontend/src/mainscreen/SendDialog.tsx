@@ -21,6 +21,7 @@ import { selectionHasCfm } from "./cfmNotice";
 import { TriCheckbox } from "./TriCheckbox";
 import { DicomDate } from "../i18n/dateFormat";
 
+import { backdropClose } from "../ui/backdropClose";
 /**
  * DICOM Send: MainScreen で選択中のスタディ<b>の患者</b>のスタディ/シリーズをツリー表示し、
  * 選択シリーズをリモート AE へ C-STORE（DICOM Send）する。
@@ -285,7 +286,7 @@ export function SendDialog({
   const canSend = !busy && selectedSeriesCount > 0 && destReady;
 
   return (
-    <div style={overlay} onClick={onClose}>
+    <div style={overlay} {...backdropClose(onClose)}>
       <div data-testid="send-dialog" style={dialog} onClick={(e) => e.stopPropagation()}>
         <div style={header}>
           <span style={{ fontWeight: 700 }}>{t("send.title")}</span>

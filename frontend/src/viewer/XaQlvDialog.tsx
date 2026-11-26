@@ -43,6 +43,7 @@ import { clearedBy, deriveQlvSteps, QLV_STEPS, type ManualInputKey } from "./xaT
 import { lockSliceNavigation } from "./sliceNavigationLock";
 import { viewerOverlayProps } from "./viewerOverlay";
 
+import { backdropClose } from "../ui/backdropClose";
 /** 輪郭として成立する最小点数（弁輪 2 点＋心尖側 2 点）。 */
 const MIN_POINTS = 4;
 /** これ以上の点が引かれていたら、フレーム変更で捨てる前に確認する。 */
@@ -460,7 +461,7 @@ export function XaQlvDialog({
   const voi = activeFrame != null ? readVoiWindowFor(imageIds[activeFrame] ?? "") : null;
 
   return (
-    <div style={backdrop} onClick={onClose}>
+    <div style={backdrop} {...backdropClose(onClose)}>
       <div style={panel} onClick={(e) => e.stopPropagation()} {...viewerOverlayProps}>
         <div style={title} data-testid="qlv-dialog">{t("qlv.title")}</div>
 

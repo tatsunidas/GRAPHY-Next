@@ -38,6 +38,7 @@ import { loadAnonRoiCandidates, type AnonRoiCandidate, type AnonRoiSkip } from "
 import { exportPercent, isExportFinished, runExportJob } from "./exportJob";
 import { buildJobRequest, groupRoiPolygons, jobNotes, jobOutcome, roiMasksForJob, stowBlockedByOptions } from "./anonWebJob";
 
+import { backdropClose } from "../ui/backdropClose";
 /**
  * その ROI の多角形が**いま登録されているか**。チェックの初期状態をここから起こす。
  *
@@ -486,7 +487,7 @@ export function AnonymizerDialog({
   const label = (h: string) => dmap.get(h)?.keyword ?? "";
 
   return (
-    <div style={overlay} onClick={onClose}>
+    <div style={overlay} {...backdropClose(onClose)}>
       <div data-testid="anonymizer-dialog" style={dialog} onClick={(e) => e.stopPropagation()}>
         <div style={header}>
           <span style={{ fontWeight: 700 }}>{t("anon.title")}</span>
