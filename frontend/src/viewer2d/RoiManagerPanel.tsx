@@ -43,6 +43,7 @@ import { importImageJDtos } from "../viewer/imagejImport";
 import { exportImageJRoiSet, importImageJRoiSet } from "../api";
 import { saveRoiNow, scheduleRoiSave, subscribeRoiSave } from "../viewer/roiSaveStore";
 import { RoiMetaEditDialog } from "./RoiMetaEditDialog";
+import { SyncedNameInput } from "./SyncedNameInput";
 import { RoiStatsDialog, type RoiStatsTarget } from "./RoiStatsDialog";
 import { useI18n } from "../i18n/i18n";
 import { useDateFormat, formatClockTime } from "../i18n/dateFormat";
@@ -739,11 +740,11 @@ export function RoiManagerPanel({
         {annotationBasics(r)}
         <input type="checkbox" checked={selUids.has(r.uid)} onClick={(e) => e.stopPropagation()} onChange={() => toggleRoiSelection(r.uid)} title={t("roiMgr.select")} data-testid="roi-row-select" />
         <span title={t("roiMgr.iconShape")} style={{ color: "#5a6672" }}>{r.kind === "area" ? "▭" : r.kind === "line" ? "╱" : "•"}</span>
-        <input
-          type="text" style={name} title={r.tool}
-          defaultValue={getRoiMaskMeta(r.uid)?.label ?? r.tool}
+        <SyncedNameInput
+          style={name} title={r.tool}
+          value={getRoiMaskMeta(r.uid)?.label ?? r.tool}
           onClick={(e) => e.stopPropagation()}
-          onChange={(e) => renameAnnotation(r.uid, e.target.value)}
+          onValueChange={(v) => renameAnnotation(r.uid, v)}
         />
         <input type="color" defaultValue="#ffff00" onClick={(e) => e.stopPropagation()} onChange={(e) => setRoiStyle(r.uid, { color: hexToRgb(e.target.value) })} title={t("roiMgr.color")} style={colorInput} />
         <input type="number" min={1} max={10} defaultValue={1} onClick={(e) => e.stopPropagation()} onChange={(e) => setRoiStyle(r.uid, { lineWidth: String(e.target.value) })} title={t("roiMgr.lineWidth")} style={numInput} />
@@ -863,10 +864,10 @@ export function RoiManagerPanel({
           </button>
           <input type="checkbox" checked={selected.has(r.key)} onChange={() => toggleSelect(r.key)} title={t("roiMgr.select")} data-testid="roi-row-select" />
           <span title={t("roiMgr.iconPainted")} style={{ color: col ?? "#5a6672" }}>▨</span>
-          <input
-            type="text" style={nameInRow} title={r.maskId}
-            defaultValue={r.name}
-            onChange={(e) => rename(e.target.value)}
+          <SyncedNameInput
+            style={nameInRow} title={r.maskId}
+            value={r.name}
+            onValueChange={rename}
           />
           <button onClick={() => deletePainted(r)} style={delBtn} title={t("common.delete")} data-testid="roi-row-delete">🗑</button>
         </div>

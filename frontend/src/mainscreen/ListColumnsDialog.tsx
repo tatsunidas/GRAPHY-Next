@@ -11,6 +11,7 @@ import {
 } from "./listColumns";
 import { dictMap, ggggeeee, pathDisplay, pathLabel } from "./tagPathUtil";
 
+import { backdropClose } from "../ui/backdropClose";
 const WHERES: ListColumnWhere[] = ["study", "series", "both"];
 
 /**
@@ -57,7 +58,7 @@ export function ListColumnsDialog({ open, onClose }: { open: boolean; onClose: (
   };
 
   return (
-    <div style={overlay} data-testid="list-columns-dialog" onClick={onClose}>
+    <div style={overlay} data-testid="list-columns-dialog" {...backdropClose(onClose)}>
       <div style={dialog} onClick={(e) => e.stopPropagation()}>
         <div style={header}>
           <strong>{t("listCol.title")}</strong>

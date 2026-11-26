@@ -14,6 +14,7 @@ import type { ViewerMode } from "../viewer/imageId";
 import { positionsMm, type ZRange } from "../viewer/virtualLayout";
 import { resolveOpenRange } from "./openRangeInput";
 
+import { backdropClose } from "../ui/backdropClose";
 export function OpenRangeDialog({
   mode, studyUid, seriesUid, title, initial, onOpen, onClose,
 }: {
@@ -68,7 +69,7 @@ export function OpenRangeDialog({
   const maxMm = pos ? Math.max(...pos) : 0;
 
   return (
-    <div style={backdrop} data-testid="open-range-dialog" onClick={onClose}>
+    <div style={backdrop} data-testid="open-range-dialog" {...backdropClose(onClose)}>
       <div style={box} onClick={(e) => e.stopPropagation()}>
         <div style={{ fontWeight: 600, marginBottom: 6 }}>{t("openRange.title")}</div>
         <div style={{ fontSize: 12, marginBottom: 8 }}>{title}</div>

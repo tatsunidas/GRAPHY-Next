@@ -14,6 +14,7 @@ import { formatBytes } from "./charts";
 import { transferStudies, type TransferMode, type TransferResult } from "./dbTransferApi";
 import { targetCandidates, transferReasonKey } from "./dbTransferView";
 
+import { backdropClose } from "../ui/backdropClose";
 export function DbTransferDialog({
   studyUid,
   studyLabel,
@@ -77,7 +78,7 @@ export function DbTransferDialog({
   };
 
   return (
-    <div style={overlay} onClick={busy ? undefined : onClose}>
+    <div style={overlay} {...(busy ? {} : backdropClose(onClose))}>
       <div data-testid="db-transfer-dialog" style={dialog} onClick={(e) => e.stopPropagation()}>
         <h3 style={{ margin: "0 0 8px", fontSize: 16 }}>{t("dbTransfer.title")}</h3>
         <div style={{ marginBottom: 8 }}>{studyLabel}</div>

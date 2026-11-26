@@ -10,6 +10,7 @@ import { useI18n } from "../i18n/i18n";
 import { DEFAULT_PRESETS, presetLabel, type WlPreset } from "./wlPresets";
 import { loadWlPresets, resetWlPresets, saveWlPresets } from "./wlPresetStore";
 
+import { backdropClose } from "../ui/backdropClose";
 interface EditRow {
   key: string;
   name: string;
@@ -104,7 +105,7 @@ export function WlPresetDialog({ open, onClose }: { open: boolean; onClose: () =
   };
 
   return (
-    <div style={backdrop} onClick={onClose}>
+    <div style={backdrop} {...backdropClose(onClose)}>
       <div style={card} onClick={(e) => e.stopPropagation()}>
         <div style={titleBar}>{t("wlPreset.title")}</div>
 

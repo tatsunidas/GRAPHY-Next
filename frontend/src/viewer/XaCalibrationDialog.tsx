@@ -23,6 +23,7 @@ import { calibrationForImageId, loaderSpacingFor } from "./xaCalibrationProvider
 import { persistXaUserCalibration } from "./xaCalibrationPersistence";
 import { viewerOverlayProps } from "./viewerOverlay";
 
+import { backdropClose } from "../ui/backdropClose";
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 /** 校正に使える線 1 本（直線のみ）。 */
@@ -227,7 +228,7 @@ export function XaCalibrationDialog({
   };
 
   return (
-    <div style={backdrop} onClick={onClose}>
+    <div style={backdrop} {...backdropClose(onClose)}>
       <div style={panel} onClick={(e) => e.stopPropagation()} {...viewerOverlayProps}>
         <div style={title} data-testid="xa-calibration-dialog">
           {t("xa.calib.dialogTitle")}

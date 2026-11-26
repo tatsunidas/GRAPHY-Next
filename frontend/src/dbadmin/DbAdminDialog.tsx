@@ -34,6 +34,7 @@ import { DbScopePicker } from "./DbScopePicker";
 import type { ScopeSpec } from "../mainscreen/seriesScopeUtil";
 import { formatDicomDate } from "../i18n/dateFormat";
 
+import { backdropClose } from "../ui/backdropClose";
 type Tab = "patients" | "series" | "stats";
 
 export function DbAdminDialog({
@@ -76,7 +77,7 @@ export function DbAdminDialog({
   };
 
   return (
-    <div style={overlay} onClick={onClose}>
+    <div style={overlay} {...backdropClose(onClose)}>
       <div data-testid="dbadmin-dialog" style={tab === "series" ? { ...dialog, ...seriesDialog } : dialog} onClick={(e) => e.stopPropagation()}>
         <div style={header}>
           <span style={{ fontWeight: 700 }}>{t("dbadmin.title")}</span>
@@ -694,7 +695,7 @@ function SplitSeriesForm({
   };
 
   return (
-    <div style={overlay} onClick={onClose}>
+    <div style={overlay} {...backdropClose(onClose)}>
       <div
         data-testid="dbadmin-split-form"
         style={{ ...editBox, width: 540, maxHeight: "86vh", display: "flex", flexDirection: "column" }}
@@ -794,7 +795,7 @@ function MergeSeriesForm({
   };
 
   return (
-    <div style={overlay} onClick={onClose}>
+    <div style={overlay} {...backdropClose(onClose)}>
       <div data-testid="dbadmin-merge-form" style={editBox} onClick={(e) => e.stopPropagation()}>
         <h3 style={{ margin: "0 0 6px" }}>{t("dbadmin.merge.title")}</h3>
         <p style={{ fontSize: 12, color: "#8a98a6", marginTop: 0 }}>
@@ -860,7 +861,7 @@ function PatientEditForm({
   };
 
   return (
-    <div style={overlay} onClick={onClose}>
+    <div style={overlay} {...backdropClose(onClose)}>
       <div style={editBox} onClick={(e) => e.stopPropagation()}>
         <h3 style={{ margin: "0 0 6px" }}>{t("dbadmin.edit.title")}</h3>
         <p style={{ fontSize: 12, color: "#8a98a6", marginTop: 0 }}>{t("dbadmin.edit.note")}</p>
@@ -912,7 +913,7 @@ function StudyPatientEditForm({
   };
 
   return (
-    <div style={overlay} onClick={onClose}>
+    <div style={overlay} {...backdropClose(onClose)}>
       <div data-testid="dbadmin-study-edit-form" style={editBox} onClick={(e) => e.stopPropagation()}>
         <h3 style={{ margin: "0 0 6px" }}>{t("dbadmin.edit.studyTitle")}</h3>
         <p style={{ fontSize: 12, color: "#8a98a6", marginTop: 0 }}>

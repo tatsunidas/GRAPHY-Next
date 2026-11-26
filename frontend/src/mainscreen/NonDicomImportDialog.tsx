@@ -20,6 +20,7 @@ import { RAW_TYPES, rawRequiredBytes, rawSizeStatus, type RawType } from "./rawS
 import { desktop } from "../desktopBridge";
 import { useI18n } from "../i18n/i18n";
 
+import { backdropClose } from "../ui/backdropClose";
 /** Electron はレンダラの File オブジェクトに絶対パス(`path`)を付与する（standalone のローカル取込用）。 */
 function filePath(f: File): string | undefined {
   const p = (f as File & { path?: string }).path;
@@ -410,7 +411,7 @@ export function NonDicomImportDialog({
   }
 
   return (
-    <div style={overlay} onClick={onClose}>
+    <div style={overlay} {...backdropClose(onClose)}>
       <div style={dialog} onClick={(e) => e.stopPropagation()}>
         <div style={header}>
           <span style={{ fontWeight: 700 }}>{t("nondicom.title")}</span>
