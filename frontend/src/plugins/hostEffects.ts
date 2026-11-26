@@ -39,6 +39,8 @@ export const HOST_EFFECTS: Record<HostKey, ToolEffect> = {
   listVesselModels: "read",
   getVesselModel: "read",
   getRois: "read",
+  listSegments: "read",
+  loadSegmentMask: "read",
   getRoiMeta: "read",
   loadVolume: "read",
   estimateVolume: "read",

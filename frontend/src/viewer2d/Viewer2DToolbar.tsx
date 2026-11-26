@@ -8,7 +8,8 @@ import { useWlPresets } from "./wlPresetStore";
 import { TOOL_IDS } from "../viewer/toolIds";
 import { type SortMode } from "../viewer/seriesSort";
 import type { SlabProjection } from "../viewer/slabPresets";
-import { type ViewerDerivedSeriesRequest, type ViewerDerivedSeriesResult, type ViewerOverlay, type ViewerPixelDataOptions, type ViewerSrRequest, type ViewerSrResult, type ViewerTarget, type ViewerAngioReportRequest, type ViewerPresentationStateRequest, type ViewerTilePixelData, type ViewerTileSpatialCalibration, type ViewerTileXaState, type ViewerTileXaCine, type ViewerTileXaGeometry, type ViewerTileRoi, type ViewerTileViewState, ViewerLabelVolume, ViewerLabelVolumeResult } from "../viewer/viewerCommands";
+import { type ViewerDerivedSeriesRequest, type ViewerDerivedSeriesResult, type ViewerOverlay, type ViewerPixelDataOptions, type ViewerSrRequest, type ViewerSrResult, type ViewerTarget, type ViewerAngioReportRequest, type ViewerPresentationStateRequest, type ViewerTilePixelData, type ViewerTileSpatialCalibration, type ViewerTileXaState, type ViewerTileXaCine, type ViewerTileXaGeometry, type ViewerTileRoi, type ViewerTileSegment, type ViewerTileViewState, ViewerLabelVolume, ViewerLabelVolumeResult } from "../viewer/viewerCommands";
+import type { PluginSegmentMask } from "../viewer/segmentMask";
 import type { PluginAnalysisInput } from "../report/analysisResults";
 import type {
   PluginRegistrationRequest,
@@ -83,6 +84,10 @@ export interface ViewerActions {
    * tileId 省略時は**対象タイル全部**（ベースラインと追跡を並べて開いている場合に両方読めるよう）。
    */
   getRois(tileId?: string): ViewerTileRoi[];
+  /** ラベルマップ（Wand・ブラシ）のセグメントの一覧（H80）。tileId 省略時は対象タイル全部。 */
+  listSegments(tileId?: string): ViewerTileSegment[];
+  /** 1 セグメントのマスク（H81）。見つからなければ null。 */
+  loadSegmentMask(tileId: string | undefined, segmentationId: string, segmentIndex: number): Promise<PluginSegmentMask | null>;
   /**
    * **シリーズ 1 本をボリュームとして読む**（H10）。校正済み値＋患者 LPS の幾何。
    * 開いていないシリーズも読める（`studyUid` 省略時は開いているタイルから解決）。
