@@ -76,6 +76,8 @@ async function main(): Promise<void> {
     const teff = liver.find((r) => r[0] === "Effective Half-Life");
     check(!!dose && dose[2] === "Gy" && dose[1] === fx.record.vois[0].doseGy.toFixed(2), `★ 表の吸収線量が、書いた値と一致する（${dose?.join(" ")} / 書いた ${fx.record.vois[0].doseGy}）`, dose);
     check(!!teff && teff[2] === "h" && teff[1] === fx.record.vois[0].effectiveHalfLifeH.toFixed(2), `★ 表の有効半減期が、書いた値と一致する（${teff?.join(" ")}）`, teff);
+    const tia = liver.find((r) => r[0] === "Time Integrated Activity");
+    check(!!tia && tia[1] === "6.12E13", `★ 100 万以上の値は指数表記で出る（${tia?.join(" ")}）`, tia);
     const bodyText = (await page.getByTestId("sr-viewer").first().textContent()) ?? "";
     check(bodyText.includes("cycle=2;voi=liver") && bodyText.includes("dosimetry-schema: 1") && bodyText.includes("Dosimetry cycle 2 (Lu-177, 7400 MBq)"), "追跡 ID・文書タイトル・所見（サイクルのメタ情報）が読める");
 
