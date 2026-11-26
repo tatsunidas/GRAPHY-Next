@@ -440,8 +440,9 @@ public class MeasurementReportService {
     }
 
     /**
-     * 表示用の DS（16 文字まで）の書式。絶対値が 1 以上（と 0）は小数第 2 位まで、1 未満は有効数字 3 桁の
-     * 指数表記（固定小数では小さな値の桁が落ちる）。丸める前の値は FloatingPointValue に入れる。
+     * 表示用の DS（16 文字まで）の書式。絶対値が 1 以上 100 万未満（と 0）は小数第 2 位まで、それ以外は
+     * 有効数字 3 桁の指数表記（固定小数では小さな値の桁が落ち、大きな値は長くなる）。丸める前の値は
+     * FloatingPointValue に入れる。
      */
     static String trimNumber(double v) {
         if (v == 0) {
@@ -449,7 +450,8 @@ public class MeasurementReportService {
         }
         if (Math.abs(v) >= 1) {
             String s = String.format(Locale.ROOT, "%.2f", v);
-            if (s.length() <= 16) {
+            // 丸めた後の値で見る（999999.996 を "1000000.00" と書かない）。
+            if (Math.abs(Double.parseDouble(s)) < 1_000_000) {
                 return s;
             }
         }
