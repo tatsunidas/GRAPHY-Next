@@ -4,6 +4,7 @@
  */
 package com.vis.graphynext.radiomics;
 
+import com.vis.graphynext.dicom.Utf8Output;
 import com.vis.graphynext.dicom.store.DicomStorageService;
 import com.vis.graphynext.microscopy.ConfocalMicroscopyWriter;
 import com.vis.graphynext.microscopy.InstallationIdentity;
@@ -480,6 +481,7 @@ public class TextureSeriesService {
         }
 
         a.setBytes(Tag.PixelData, VR.OW, px);
+        Utf8Output.apply(a); // 元からの写しがすべて終わった後で呼ぶ
         return a;
     }
 
