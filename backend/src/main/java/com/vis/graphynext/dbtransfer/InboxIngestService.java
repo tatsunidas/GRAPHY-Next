@@ -35,7 +35,7 @@ import java.util.stream.Stream;
  * <p>起動を待たせないよう、起動完了のあと別スレッドで処理する。
  * <ul>
  *   <li>この DB に同じ SOP があれば取り込まない（上書きしない）。</li>
- *   <li>sha256 が目録と違うファイルは取り込まず、荷物ごと残す。</li>
+ *   <li>sha256 か中身の SOP UID が目録と違うファイルは取り込まず、荷物ごと残す。</li>
  *   <li>付随データは {@link RelatedData#apply}。衝突は {@code inbox/conflicts/<id>/} に JSON で残す。</li>
  *   <li>終わったら {@code inbox/done/<id>/} に目録と結果を残す（取り込めなかったファイルがあれば DICOM も残す）。</li>
  *   <li>{@code .partial} は書きかけ（移し元が途中で止まった）なので取り込まず、報告だけする。</li>
@@ -163,6 +163,11 @@ public class InboxIngestService implements ActiveWork {
                 if (!p.startsWith(pkg) || !Files.isRegularFile(p) || Files.size(p) != f.size()
                         || !DbTransferService.sha256(p).equals(f.sha256())) {
                     errors.add("照合に失敗: " + f.path());
+                    continue;
+                }
+                // 重複の判定は目録の UID で行う。中身の UID が違うと、「無い」と判定した画像が既存の画像を置き換える
+                if (!f.sopUid().equals(DbTransferService.sopInstanceUid(p))) {
+                    errors.add("SOP UID が目録と違います: " + f.path());
                     continue;
                 }
                 storage.importFromFile(p);

@@ -305,6 +305,56 @@ class DbTransferTest {
     }
 
     @Test
+    void 目録と違うSOP_UIDの中身は取り込まず_既存の画像を置き換えない() throws Exception {
+        ingest("VI", "vi.victim.st", "vi.victim.se", "vi.victim.1");
+        String victimSha = DbTransferService.sha256(layout.resolveForRead(repo.findById("vi.victim.1").orElseThrow()));
+        ingest("SP1", "sp.st", "sp.se", "sp.1");
+        ingest("SP1", "sp.st", "sp.se", "sp.2");
+        transfer.transfer(List.of("sp.st"), target.toString(), DbTransferService.Mode.copy);
+        Path pkg = onlyPackage();
+        repo.deleteAll(repo.findByStudyInstanceUid("sp.st"));
+        // 目録の 1 件目は「sp.1」のまま、中身を「手元の別の画像と同じ SOP UID」のファイルにする（サイズと sha は合わせる）
+        var tree = (com.fasterxml.jackson.databind.node.ObjectNode) mapper.readTree(pkg.resolve("manifest.json").toFile());
+        var first = (com.fasterxml.jackson.databind.node.ObjectNode) tree.get("files").get(0);
+        Path f = pkg.resolve(first.get("path").asText());
+        Attributes ds = DicomPhantomFactory.scImage("ATTACK", "attack.st", "attack.se", "vi.victim.1");
+        DicomPhantomFactory.writeFile(f, ds, UID.ExplicitVRLittleEndian);
+        first.put("size", Files.size(f)).put("sha256", DbTransferService.sha256(f));
+        mapper.writeValue(pkg.resolve("manifest.json").toFile(), tree);
+
+        var res = targetInbox().ingestOne(pkg);
+        var victim = repo.findById("vi.victim.1").orElseThrow();
+        assertEquals("vi.victim.st", victim.getStudyInstanceUid(), "既存の画像が置き換わらない");
+        assertEquals(victimSha, DbTransferService.sha256(layout.resolveForRead(victim)));
+        assertEquals(1, res.failed(), res.errors().toString());
+        assertEquals(1, res.imported(), "ほかのファイルは取り込む");
+        assertTrue(Files.exists(target.resolve("inbox/done").resolve(pkg.getFileName()).resolve(first.get("path").asText())),
+                "取り込めなかったファイルは残す");
+    }
+
+    @Test
+    void 校正の欄で校正以外の設定は書けない_校正は入る() throws Exception {
+        ingest("CK1", "ck.st", "ck.se", "ck.1");
+        settings.putAll(Map.of(RelatedData.calibrationKey("ck.se"), "0.5"));
+        transfer.transfer(List.of("ck.st"), target.toString(), DbTransferService.Mode.copy);
+        Path pkg = onlyPackage();
+        tx.executeWithoutResult(s -> {
+            repo.deleteAll(repo.findByStudyInstanceUid("ck.st"));
+            settings.deleteKeys(List.of(RelatedData.calibrationKey("ck.se")));
+        });
+        var tree = (com.fasterxml.jackson.databind.node.ObjectNode) mapper.readTree(pkg.resolve("manifest.json").toFile());
+        ((com.fasterxml.jackson.databind.node.ObjectNode) tree.at("/related/calibrations"))
+                .put("ui.injected.by.package", "x");
+        mapper.writeValue(pkg.resolve("manifest.json").toFile(), tree);
+
+        var res = targetInbox().ingestOne(pkg);
+        assertFalse(settings.getAll().containsKey("ui.injected.by.package"), "校正以外の設定は書かない");
+        assertEquals("0.5", settings.getAll().get(RelatedData.calibrationKey("ck.se")), "校正は入る");
+        assertEquals(1, res.failed(), res.errors().toString());
+        assertEquals(1, res.imported());
+    }
+
+    @Test
     void この_PC_からの要求だけを受け_転送ヘッダの偽装は効かない() {
         MockHttpServletRequest lan = new MockHttpServletRequest();
         lan.setRemoteAddr("192.168.1.50");
