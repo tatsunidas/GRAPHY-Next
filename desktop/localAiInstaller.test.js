@@ -229,3 +229,17 @@ test("validateManifest: lora は任意。付けるなら url・sha256・size・f
   notObj.models[0].lora = "a.gguf";
   assert.ok(I.validateManifest(notObj).some((x) => x.includes("lora:not-an-object")));
 });
+
+test("Hugging Face の取得先は、版（40 桁のコミット ID）で固定する", () => {
+  // `resolve/main` は配布元がファイルを差し替えると中身が変わり、登録した大きさ・SHA-256 と合わず導入できなくなる
+  // （2026-11-21 に音声入力のモデル 4 ファイルで起きた）。
+  const real = JSON.parse(fs.readFileSync(path.join(__dirname, "localAiManifest.json"), "utf8"));
+  const urls = [];
+  (function walk(o) {
+    if (typeof o === "string") { if (o.startsWith("https://huggingface.co/")) urls.push(o); return; }
+    if (o && typeof o === "object") for (const [k, v] of Object.entries(o)) if (k !== "licenseUrl") walk(v);
+  })(real);
+  const downloads = urls.filter((u) => u.includes("/resolve/"));
+  assert.ok(downloads.length >= 6, `取得先が見つからない: ${downloads.length}`);
+  for (const u of downloads) assert.match(u, /\/resolve\/[0-9a-f]{40}\//, u);
+});
