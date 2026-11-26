@@ -133,6 +133,8 @@ import { readXaCineSource } from "./xaCine";
 import { frameStartTimesMs, isUniformFrameTime, resolveXaFps } from "./xaCineTiming";
 import { worldSpacingOf, worldToImageCoords } from "./imageCoords";
 import { useDateFormat } from "../i18n/dateFormat";
+import { listSegmentsForStack, readSegmentMask, type PluginSegment, type PluginSegmentMask } from "./segmentMask";
+import { cornerstoneSegmentAccess } from "./segmentAccess";
 
 type ViewSnapshot = { transform: ViewTransform; voi: { lower: number; upper: number } | null };
 
@@ -2277,6 +2279,11 @@ export function Viewer2D({
   // H5: このタイルが表示中のスタックに乗っている ROI（計測・幾何注釈）。
   // **幾何の算出は roiRead に委譲する**（長径・短径をプラグイン側に書かせると本体の計測値と
   // ずれたときどちらが正しいか言えなくなる＝計測の単一入口。CLAUDE.md のルール 3 と同趣旨）。
+  // H80 / H81: ラベルマップ（Wand・ブラシ）のセグメント。**このタイルが今表示しているスタック**に乗っているものだけ。
+  const listSegments = (): PluginSegment[] => listSegmentsForStack(cornerstoneSegmentAccess, imageIdsRef.current);
+  const loadSegmentMask = (segmentationId: string, segmentIndex: number): PluginSegmentMask | null =>
+    readSegmentMask(cornerstoneSegmentAccess, imageIdsRef.current, segmentationId, segmentIndex);
+
   const getRois = (): ViewerRoi[] => {
     const ctx = roiContextRef.current;
     const ids = imageIdsRef.current;
@@ -2889,7 +2896,7 @@ export function Viewer2D({
     validateDerivedSeries, saveDerivedSeries, saveStructuredReport, saveAngioReport, savePresentationState,
     publishAnalysisResult: publishPluginAnalysis,
     setActiveTool, setBrushSize, setWandTolerance,
-    getRois, getRoiMeta, setRoiMeta, clearAnnotations, selectRoi,
+    getRois, listSegments, loadSegmentMask, getRoiMeta, setRoiMeta, clearAnnotations, selectRoi,
     copyRoi, copyRois, ownsRoi, pasteRoi, duplicateRoi, convertMeasureToRoi: convertMeasureToRoiCmd, createRoi, removeCreatedRoi, removeLabelVolume,
     undo, redo,
   });
@@ -2903,7 +2910,7 @@ export function Viewer2D({
     validateDerivedSeries, saveDerivedSeries, saveStructuredReport, saveAngioReport, savePresentationState,
     publishAnalysisResult: publishPluginAnalysis,
     setActiveTool, setBrushSize, setWandTolerance,
-    getRois, getRoiMeta, setRoiMeta, clearAnnotations, selectRoi,
+    getRois, listSegments, loadSegmentMask, getRoiMeta, setRoiMeta, clearAnnotations, selectRoi,
     copyRoi, copyRois, ownsRoi, pasteRoi, duplicateRoi, convertMeasureToRoi: convertMeasureToRoiCmd, createRoi, removeCreatedRoi, removeLabelVolume,
     undo, redo,
   };
@@ -2946,6 +2953,8 @@ export function Viewer2D({
       selectRoi: (u, ex) => commandsRef.current.selectRoi(u, ex),
       setWandTolerance: (v) => commandsRef.current.setWandTolerance(v),
       getRois: () => commandsRef.current.getRois(),
+      listSegments: () => commandsRef.current.listSegments(),
+      loadSegmentMask: (id, idx) => commandsRef.current.loadSegmentMask(id, idx),
       getRoiMeta: (u, p) => commandsRef.current.getRoiMeta(u, p),
       setRoiMeta: (u, p, patch) => commandsRef.current.setRoiMeta(u, p, patch),
       clearAnnotations: (s) => commandsRef.current.clearAnnotations(s),

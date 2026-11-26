@@ -666,6 +666,39 @@ export interface ViewerRoiMeasurements {
 }
 
 /**
+ * ラベルマップ（Wand・ブラシ等で作ったマスク）のセグメント 1 件。`host.listSegments()` の要素。**H80・本体の次の版以降**。
+ * 注釈ではないので `getRois()` には出ない。
+ */
+export interface ViewerSegment {
+  tileId: string;
+  /** `loadSegmentMask` に渡す。 */
+  segmentationId: string;
+  /** セグメント番号（1 以上）。 */
+  segmentIndex: number;
+  /** ROI マネージャのマスクの名前。付いていなければ null。 */
+  label: string | null;
+  /** セグメントの名前。付いていなければ null。 */
+  segmentLabel: string | null;
+}
+
+/** `host.loadSegmentMask()` が返すマスクの 1 スライス。 */
+export interface ViewerSegmentSlice {
+  /** タイルのスタック上のスライス番号（`getRois` の `sliceIndex` と同じ）。 */
+  sliceIndex: number;
+  sopInstanceUid: string | null;
+  /** cols×rows の 0/1（行優先）。 */
+  data: Uint8Array;
+}
+
+/** 1 セグメントのマスク。前景のあるスライスだけ（疎）。 */
+export interface ViewerSegmentMask {
+  cols: number;
+  rows: number;
+  voxelCount: number;
+  slices: ViewerSegmentSlice[];
+}
+
+/**
  * ユーザーが描いた ROI（計測・幾何注釈）1 件。`host.getRois()` の要素。**0.1.9 以降**。
  *
  * <p>⚠ **`roiUid` はセッション内でのみ安定**（本体に ROI の永続化が無い）。時系列で同じ病変を
@@ -1186,6 +1219,18 @@ export interface Viewer2DPluginHost extends PluginHostBase {
    * スナップショットを持ち回らないこと。
    */
   getRois: (tileId?: string) => ViewerRoi[];
+  /**
+   * **ラベルマップ（Wand・ブラシ等で作ったマスク）のセグメントの一覧**（H80・本体の次の版以降）。`tileId` 省略時は対象タイル全部。
+   * 注釈ではないので `getRois()` には**出ない**。タイルが今表示しているスタックに乗っているものだけ。
+   * 古い本体ではこのメンバが無い（`typeof host.listSegments === "function"` で調べること）。
+   */
+  listSegments: (tileId?: string) => ViewerSegment[];
+  /**
+   * **1 セグメントのマスクを読む**（H81）。`getRois` と `getPixelData(tileId, { sliceIndex })` と同じスタック順の
+   * `sliceIndex` で、前景のあるスライスだけを返す。`loadVolume` の格子ではない。返すのはコピー。
+   * 見つからない・別スタック・前景が無い場合は `null`。256 MiB を超えるときは例外。
+   */
+  loadSegmentMask: (tileId: string | undefined, segmentationId: string, segmentIndex: number) => Promise<ViewerSegmentMask | null>;
   /**
    * **シリーズ 1 本をボリュームとして読む**。校正済みの値と**患者 LPS の幾何**が付く。
    * **0.2.0 以降**。
