@@ -932,6 +932,8 @@ export interface McpPrefs {
   allowViewerControl: boolean;
   allowViewerEdit: boolean;
   allowViewerCapture: boolean;
+  /** 検査のコピー（別の PC への書き出し）と荷物の取り込みの依頼を受けるか（実行のたびに main が確認する）。 */
+  allowDbTransfer: boolean;
   /** 外部 AI クライアントへツールを公開するプラグインの ID（アシスタントの toggle store とは別の一覧）。 */
   pluginTools: string[];
 }

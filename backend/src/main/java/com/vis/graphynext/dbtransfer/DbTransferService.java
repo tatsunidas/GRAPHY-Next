@@ -56,7 +56,9 @@ public class DbTransferService {
 
     public enum Mode { copy, move }
 
-    public record TransferResult(String id, String mode, int studies, int files, long bytes, boolean sourceDeleted) {
+    /** {@code pluginVersions} は荷物に記録を入れたプラグインの、この PC の版。 */
+    public record TransferResult(String id, String mode, int studies, int files, long bytes, boolean sourceDeleted,
+                                 List<TransferManifest.PluginVersion> pluginVersions) {
     }
 
     private final DicomInstanceRepository repo;
@@ -123,6 +125,7 @@ public class DbTransferService {
         Path done = inbox.resolve(id);
         StorageLayout pkgLayout = new StorageLayout(partial.resolve("dicom"));
         Files.createDirectories(partial);
+        List<TransferManifest.PluginVersion> sourcePlugins;
         try {
             List<FileEntry> files = new ArrayList<>();
             for (int i = 0; i < rows.size(); i++) {
@@ -141,10 +144,11 @@ public class DbTransferService {
                 patientKeys.add(RelatedData.patientKey(r));
             }
             TransferManifest.Related rel = related.collect(studies, series, patientKeys, partial);
+            sourcePlugins = PluginVersions.ofSource(rel, PluginVersions.installed(pluginRegistry));
             int version = rel.masks().isEmpty() ? TransferManifest.BASE_FORMAT_VERSION : TransferManifest.FORMAT_VERSION;
             TransferManifest manifest = new TransferManifest(version, id,
                     Instant.now().toString(), mode.name(), currentFolder.toString(), List.copyOf(studies), files, rel,
-                    PluginVersions.ofSource(rel, PluginVersions.installed(pluginRegistry)));
+                    sourcePlugins);
             mapper.writeValue(partial.resolve("manifest.json").toFile(), manifest);
 
             verify(partial, mapper.readValue(partial.resolve("manifest.json").toFile(), TransferManifest.class));
@@ -161,7 +165,7 @@ public class DbTransferService {
             deleteSource(studies, rows);
             deleted = true;
         }
-        return new TransferResult(id, mode.name(), studies.size(), rows.size(), bytes, deleted);
+        return new TransferResult(id, mode.name(), studies.size(), rows.size(), bytes, deleted, sourcePlugins);
     }
 
     /**

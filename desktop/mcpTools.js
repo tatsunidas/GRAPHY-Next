@@ -5,6 +5,9 @@
 //    クライアントから来た UID は `projector.resolve` で戻す。解決できなければ要求を作らない（任意のパスを組ませない）。
 // 🔴 `effect:"analysis"` は `allowAnalysis` がオンのときだけ一覧に出て、呼べる。
 const { UID_RE } = require("./mcpProjection");
+const { PLUGIN_ID_RE } = require("./mcpPrefs");
+/** 検査のコピー・取り込みのジョブ ID（mcpDbTransfer が作る形）。 */
+const JOB_ID_RE = /^dbj_[0-9a-f]{32}$/;
 
 /** backend に出してよい要求（許可リスト）。パスは固定の形だけ。 */
 const ALLOWED = [
@@ -74,7 +77,8 @@ const UNDO_ONLY_ACTIONS = ["removeAssistantRoi"];
 const DISPLAY_TOOLS = ["windowLevel", "pan", "zoom", "magnify", "length", "angle"];
 
 /**
- * effect: read | analysis | control | edit | capture。`phiOnly` の引数は includePhi=false では受けない。`via: "viewer"` は backend でなく 2D ビューア窓から読む／操作する。
+ * effect: read | analysis | control | edit | capture | transfer。`via: "main"` は backend の要求を作らず、main の処理（mcpDbTransfer）に渡す。
+ * `transfer` は allowDbTransfer がオンのときだけ（検査のコピーと荷物の取り込み。実行の許可とフォルダの選択は、利用者が main のダイアログで行う）。`phiOnly` の引数は includePhi=false では受けない。`via: "viewer"` は backend でなく 2D ビューア窓から読む／操作する。
  * `control` は allowViewerControl がオンのときだけ（利用者の画面が動く）。`edit` は allowViewerEdit がオンのときだけ（データを変える）。
  * `capture` は allowViewerCapture がオンのときだけ（画像を返す。実行のたびに利用者が確認する）。
  */
@@ -232,6 +236,27 @@ const TOOLS = [
     ),
   },
   { name: "radiomics_status", effect: "analysis", description: "投入した Radiomics ジョブの状態と結果。", inputSchema: obj({ jobId: str("ジョブ ID", 64) }, ["jobId"]) },
+  {
+    name: "db_copy_submit",
+    effect: "transfer",
+    via: "main",
+    description: `別の PC の GRAPHY-Next へ運ぶために、検査（画像・ROI・レポート・プラグインの記録）のコピーを依頼する。${HANDLE}書き出し先（外付けドライブの空のフォルダなど）は利用者がアプリの画面で選び、実行も利用者が許可する。移し元のデータは消さない（移動はできない）。すぐ jobId が返る。状況は db_transfer_status で確かめる。受け側の PC では db_import_submit か、アプリの「荷物を取り込む」で取り込む。`,
+    inputSchema: obj({ studies: { type: "array", description: "コピーする検査の札", minItems: 1, items: { type: "string", maxLength: 80 } } }, ["studies"]),
+  },
+  {
+    name: "db_import_submit",
+    effect: "transfer",
+    via: "main",
+    description: "外付けドライブなどの荷物（別の PC で書き出したもの）を、今の DB に取り込むことを依頼する。荷物のフォルダは利用者がアプリの画面で選び、中身を確認して許可する。今の DB のデータは上書きしない。すぐ jobId が返る。状況は db_transfer_status で確かめる。",
+    inputSchema: obj({}),
+  },
+  {
+    name: "db_transfer_status",
+    effect: "transfer",
+    via: "main",
+    description: "検査のコピー・荷物の取り込みの状況。state は awaiting-user（利用者の操作待ち）・running・done・declined（利用者が取り消した・答えなかった）・failed・timeout（60 分を超えた。処理は続いていることがある）。数秒以上の間をあけて聞く。",
+    inputSchema: obj({ jobId: str("ジョブ ID", 64) }, ["jobId"]),
+  },
 ];
 
 const BY_NAME = new Map(TOOLS.map((t) => [t.name, t]));
@@ -247,11 +272,13 @@ function allowedBy(t, p) {
       return p.allowViewerEdit === true;
     case "capture":
       return p.allowViewerCapture === true;
+    case "transfer":
+      return p.allowDbTransfer === true;
     default:
       return true;
   }
 }
-const DISABLED = { analysis: "analysis-disabled", control: "control-disabled", edit: "edit-disabled", capture: "capture-disabled" };
+const DISABLED = { analysis: "analysis-disabled", control: "control-disabled", edit: "edit-disabled", capture: "capture-disabled", transfer: "transfer-disabled" };
 
 /** この設定で見せるツール（解析・表示操作・データを変える操作は、それぞれの許可がオンのときだけ）。 */
 function listTools(prefs) {
@@ -314,6 +341,18 @@ function buildRequest(name, args, { projector, prefs }) {
     return { viewer: { kind: tool.viewerKind } };
   }
   const uid = (kind, v) => projector.resolve(kind, v);
+  if (tool.via === "main") {
+    if (name === "db_copy_submit") {
+      const uids = a.studies.map((h) => uid("study", h));
+      if (uids.some((u) => !u)) return { error: "unknown-handle:studies" };
+      return { main: { kind: "dbCopy", studyUids: [...new Set(uids)] } };
+    }
+    if (name === "db_import_submit") return { main: { kind: "dbImport" } };
+    if (name === "db_transfer_status") {
+      return JOB_ID_RE.test(a.jobId) ? { main: { kind: "dbStatus", jobId: a.jobId } } : { error: "bad-arg:jobId" };
+    }
+    return { error: "unknown-tool" };
+  }
   let req;
   switch (name) {
     case "get_status":
@@ -377,6 +416,33 @@ function buildRequest(name, args, { projector, prefs }) {
   return req;
 }
 
+/** 荷物の中から来るプラグインの ID と版は信用できない文字列。形の合うものだけを返す。 */
+const pluginId = (v) => (typeof v === "string" && PLUGIN_ID_RE.test(v) ? v : null);
+const pluginVersion = (v) => (typeof v === "string" && /^[0-9][0-9A-Za-z.+-]{0,31}$/.test(v) ? v : null);
+const count = (v) => (Number.isInteger(v) && v >= 0 ? v : 0);
+
+/** 検査のコピー・荷物の取り込みの状況は、項目を 1 つずつ組み直す（フォルダの場所・荷物の名前・エラーの本文は出さない）。 */
+function projectTransfer(d, P) {
+  const out = { jobId: d.jobId, kind: d.kind, state: d.state };
+  if (d.error) out.error = d.error;
+  if (Array.isArray(d.studyUids)) out.studies = d.studyUids.map((u) => P.ref("study", u)).filter(Boolean);
+  for (const k of ["files", "bytes"]) if (d[k] !== undefined) out[k] = count(d[k]);
+  if (Array.isArray(d.plugins)) out.plugins = d.plugins.slice(0, 64).map((x) => ({ id: pluginId(x.id), version: pluginVersion(x.version) }));
+  if (Array.isArray(d.packages)) {
+    out.packages = d.packages.slice(0, 200).map((x) => ({
+      outcome: x.outcome,
+      ...Object.fromEntries(["imported", "skippedExisting", "failed", "relatedInserted", "relatedSame", "conflicts"].map((k) => [k, count(x[k])])),
+      pluginNotes: (x.pluginNotes || []).slice(0, 64).map((n) => ({
+        id: pluginId(n.id),
+        kind: ["missing", "different", "unknown"].includes(n.kind) ? n.kind : "unknown",
+        sourceVersion: pluginVersion(n.sourceVersion),
+        localVersion: pluginVersion(n.localVersion),
+      })),
+    }));
+  }
+  return out;
+}
+
 /** backend の応答 → クライアントへ返す内容（射影）。患者情報なしでは最後に guard を通す。 */
 function projectResult(name, data, projector) {
   const P = projector;
@@ -402,6 +468,11 @@ function projectResult(name, data, projector) {
       break;
     case "get_tags":
       out = P.tags(data);
+      break;
+    case "db_copy_submit":
+    case "db_import_submit":
+    case "db_transfer_status":
+      out = projectTransfer(data, P);
       break;
     default:
       out = P.deep(data); // get_series_layout・list_compute_jobs・radiomics_*・get_viewer_state・get_measurements：形が一定でないので構造ごと射影

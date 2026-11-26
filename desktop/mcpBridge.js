@@ -50,11 +50,12 @@ function tokenEquals(a, b) {
  * @param {{append(r: object): void}} o.audit
  * @param {(method: string, path: string, opts: {query?: object, body?: object}) => Promise<{status:number, json:any}>} o.backend
  * @param {(clientName: string) => Promise<boolean>} o.confirmClient  最初の接続の同意（main が描く）
+ * @param {(kind: string, ctx: {client: string}, desc: object) => Promise<{ok: boolean, data?: object, error?: string}>} [o.mainOps]  main が行う処理（mcpDbTransfer）
  * @param {string} o.discoveryFile  userData/mcp-endpoint.json
  * @param {() => Promise<{name: string, pluginId: string, effect: string, description: string, parameters: object}[]>} [o.pluginTools]  プラグインが宣言した AI ツールの一覧（main が backend から組み直したもの。公開するかどうかはここで prefs.pluginTools と照らす）
  * @param {(kind: string, ctx: {client: string, includePhi: boolean, allowViewerEdit: boolean}, desc: {kind: string, id?: string, params?: object, name?: string}) => Promise<{ok: boolean, state?: any, measurements?: any, control?: any, plugin?: any, error?: string}>} [o.viewer]  2D ビューア窓から読む・操作する（main が viewerRelay で中継。kind は mcpTools.VIEWER_KINDS の固定リストだけ。action の id は VIEWER_ACTIONS だけ）
  */
-function createMcpBridge({ prefs, audit, backend, confirmClient, discoveryFile, viewer, pluginTools, newToken = () => crypto.randomBytes(32).toString("hex") }) {
+function createMcpBridge({ prefs, audit, backend, confirmClient, discoveryFile, viewer, pluginTools, mainOps, newToken = () => crypto.randomBytes(32).toString("hex") }) {
   let server = null;
   let token = null;
   let projector = null;
@@ -147,7 +148,18 @@ function createMcpBridge({ prefs, audit, backend, confirmClient, discoveryFile, 
     }
     if (req.error) return { ok: false, error: req.error };
     let data;
-    if (req.viewer) {
+    if (req.main) {
+      // main の処理（検査のコピー・荷物の取り込み）。backend の要求はここでは作らない。
+      if (typeof mainOps !== "function") return { ok: false, error: "main-unavailable" };
+      let m;
+      try {
+        m = await mainOps(req.main.kind, { client }, req.main);
+      } catch {
+        return { ok: false, error: "internal" };
+      }
+      if (!m || m.ok !== true) return { ok: false, error: m && /^[a-z0-9-]{1,40}$/.test(m.error) ? m.error : "internal" };
+      data = m.data;
+    } else if (req.viewer) {
       // 2D ビューア窓から読む（backend は呼ばない）。失敗は固定の符号だけ返す（窓の本文は返さない）。
       if (typeof viewer !== "function") return { ok: false, error: "viewer-unavailable" };
       let v;

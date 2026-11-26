@@ -37,6 +37,15 @@ test("選ぶ → 中身を見せて確かめる → 始める。戻り値にフ�
   assert.doesNotMatch(JSON.stringify(r), /SECRET-DRIVE/);
 });
 
+test("要約の言語は、呼ぶ側が指定できる（指定が無ければアプリの言語）", async () => {
+  const { flow, shown } = setup();
+  const seen = [];
+  await flow.start({ ja: false, confirm: async (d) => { seen.push(d); return false; } });
+  await flow.start();
+  assert.match(seen[0], /1 package\(s\)/);
+  assert.match(shown[0], /荷物 1 個/);
+});
+
 test("フォルダを選ばなければ backend を呼ばない・確認で断れば始めない", async () => {
   const none = setup({ folder: null });
   assert.deepEqual(await none.flow.start(), { ok: false, canceled: true });

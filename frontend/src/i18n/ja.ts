@@ -5135,6 +5135,8 @@ export const ja: Record<string, string> = {
   "settings.mcp.allowViewerEditHelp": "データ（ROI・計測）を変える操作です。実行のたびに、アプリが内容を示して確認します（答えなければ取り消し）。ROI の作成は、AI クライアントの「元に戻す」でその ROI だけ消せます。計測の全削除は元に戻せません。",
   "settings.mcp.allowViewerCapture": "2D ビューアの表示中の画像（画素）を返すことを許可する",
   "settings.mcp.allowViewerCaptureHelp": "画像に、患者の氏名・ID などの文字が焼き込まれていることがあります。アプリは、画像の中の患者情報を検出も除去もできません。実行のたびに、アプリが画像を示して確認します（答えなければ取り消し）。確認した上で返した画像の責任は、あなたにあります。",
+  "settings.mcp.allowDbTransfer": "検査のコピー（別の PC への書き出し）と荷物の取り込みの依頼を許可する",
+  "settings.mcp.allowDbTransferHelp": "別の PC の GRAPHY-Next へ移行するための操作です。依頼のたびにアプリが内容を示して確認し、書き出し先・取り込み元のフォルダはあなたが選びます。AI クライアントへフォルダの場所は伝えません。書き出す DICOM には患者情報が含まれ、書き出し先は暗号化されません。移し元のデータは消しません。",
   "settings.mcp.sec.plugins": "公開するプラグイン",
   "settings.mcp.plugins.help": "外部 AI クライアントへ、プラグインが宣言した AI ツールを公開します。公開するプラグインを選びます（アシスタントの設定とは別です）。プラグインのコードは 2D ビューアの中で動き、画素や患者に関わる値に触れ得ます。結果は、最初に返すとき、内容を示して確認します。",
   "settings.mcp.plugins.none": "AI ツールを宣言しているプラグインはありません。",
