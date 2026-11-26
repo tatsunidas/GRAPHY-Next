@@ -12,6 +12,7 @@
  *   [3] 結合できないデータ（重なり 0）では、次の区画（解析の種類）が無効になり、理由が出る。結合できるデータで有効になる（負例と正例）
  *   [4] 解析の種類を選ぶと、その解析の目的変数だけが、臨床 CSV のヘッダーから選べて、型の検査が出る
  *   [5]（RS_FEAT_2D があれば）2D の単位を含む表: ID の重複で止まらない。「解析に使う単位」の既定は WHOLE_3D。絞り込みと平均の注意
+ *   [4b]（RS_FEAT56・RS_CLIN56 があれば）P4（生存）を既定のまま実行する: 結果の型が生存と推定され、層化の欄が詳細設定の外にある
  *   [7]（RS_FEAT56・RS_CLIN56 があれば）前処理の区画: Skill ごとに出る手順が変わる。R2 で分散 0・相関の除外と正規性の報告、
  *       P4（2 値）で対応なしの p 値による除外（訓練側の内側）を実行し、結果・CSV・リーク検査（OK）を確かめる
  *   [6]（RS_FEAT_LEAK・RS_CLIN56 があれば）リーク検査: ID・記録の列（RowIndex）、目的変数の混入（LeakSep）を検出し、外せる。
@@ -215,6 +216,32 @@ async function main(): Promise<void> {
         const tgt2 = await page.getByTestId("rs-leak-target").isVisible().catch(() => false);
         check(cols2 === 0 && !tgt2, "リークの無い表では、警告が出ない（負例）", { cols2, tgt2 });
       }
+    }
+    if (FEAT_CLEAN56 && CLIN56 && fs.existsSync(FEAT_CLEAN56) && fs.existsSync(CLIN56)) {
+      console.log("\n[4b] P4（生存）を既定のまま実行する（設定には触れない）");
+      await clearFeatures(page);
+      await page.getByTestId("rs-file-features").setInputFiles([FEAT_CLEAN56]);
+      await page.getByTestId("rs-file-clinical").setInputFiles(CLIN56);
+      await page.waitForTimeout(3000);
+      await page.getByTestId("rs-skill").selectOption("p4-pipeline");
+      await page.waitForTimeout(800);
+      const v = (id: string) => page.getByTestId(id).inputValue().catch(() => "(無い)");
+      const shown = { kind: await v("rs-p4-kind"), strat: await v("rs-p4-strat"), lock: await v("rs-p4-lock"), outer: await v("rs-p4-outer"), inner: await v("rs-p4-inner"), repeats: await v("rs-p4-repeats"), k: await v("rs-p4-k") };
+      console.log(`  画面の値: ${JSON.stringify(shown)}`);
+      check(JSON.stringify(shown) === JSON.stringify({ kind: "survival", strat: "true", lock: "none", outer: "5", inner: "5", repeats: "1", k: "1, 2, 4, 8" }), "既定が入っている（結果の型は生存と推定）", shown);
+      check(await page.getByTestId("rs-p4-strat").isVisible(), "層化の欄が見えている（詳細設定を開かない）");
+      check(await page.getByTestId("rs-p4-strat").evaluate((e) => !e.closest("details")), "層化の欄は詳細設定の外");
+      await page.getByTestId("rs-p4-strat").scrollIntoViewIfNeeded();
+      await page.screenshot({ path: path.join(OUT, "17-p4-defaults-window.png") });
+      await page.getByTestId("rs-root").screenshot({ path: path.join(OUT, "18-p4-defaults.png") });
+      await page.getByTestId("rs-run").click();
+      const st9 = await Promise.race([
+        page.getByTestId("rs-p4-cv").waitFor({ state: "visible", timeout: 900_000 }).then(() => "ok"),
+        page.getByTestId("rs-errors").waitFor({ state: "visible", timeout: 900_000 }).then(() => "errors"),
+      ]);
+      check(st9 === "ok", "P4（生存）が既定のまま最後まで実行できる", await page.getByTestId("rs-errors").innerText().catch(() => ""));
+      console.log(`  交差検証: ${(await page.getByTestId("rs-p4-cv").innerText().catch(() => "")).replace(/\s+/g, " ").slice(0, 300)}`);
+      await page.getByTestId("rs-p4-cv").screenshot({ path: path.join(OUT, "19-p4-defaults-result.png") });
     }
     if (FEAT_CLEAN56 && CLIN56 && fs.existsSync(FEAT_CLEAN56) && fs.existsSync(CLIN56)) {
       console.log("\n[7] 前処理の区画");
