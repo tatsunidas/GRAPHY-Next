@@ -27,6 +27,7 @@ import { VBarChart, HBarChart, PieChart, formatBytes } from "./charts";
 import { useI18n } from "../i18n/i18n";
 import { desktop } from "../desktopBridge";
 import { DbTransferDialog } from "./DbTransferDialog";
+import { DbImportDialog } from "./DbImportDialog";
 import { deleteRelatedNote } from "./dbAdminApi";
 import { friendlyDbAdminError } from "./dbAdminErrors";
 import { SeriesExtractorPanel } from "../mainscreen/SeriesExtractorPanel";
@@ -193,6 +194,9 @@ function PatientsTab({
   // 別の DB フォルダへコピー・移動（デスクトップのみ。DB フォルダの一覧は Electron main が持つ）
   const [transferring, setTransferring] = useState<{ study: Study; patient: Patient } | null>(null);
   const canTransfer = !!desktop()?.dbFoldersList;
+  // 外付けなどの荷物を今の DB に取り込む
+  const [importing, setImporting] = useState(false);
+  const canImport = !!desktop()?.dbImportStart;
 
   const [onlyMissing, setOnlyMissing] = useState(false);
   const reload = (query: string, missing: boolean = onlyMissing) => {
@@ -359,6 +363,11 @@ function PatientsTab({
         <button data-testid="dbadmin-search-button" onClick={() => reload(q)} style={btn}>
           {t("common.search")}
         </button>
+        {canImport && (
+          <button data-testid="dbadmin-import-button" onClick={() => setImporting(true)} style={{ ...btn, whiteSpace: "nowrap" }}>
+            {t("dbImport.button")}
+          </button>
+        )}
         <label style={{ display: "flex", alignItems: "center", gap: 4, whiteSpace: "nowrap" }}>
           <input
             data-testid="dbadmin-only-missing"
@@ -586,6 +595,7 @@ function PatientsTab({
           }}
         />
       )}
+      {importing && <DbImportDialog onClose={() => setImporting(false)} onImported={() => reload(q)} />}
       {transferring && (
         <DbTransferDialog
           studyUid={transferring.study.studyInstanceUid}

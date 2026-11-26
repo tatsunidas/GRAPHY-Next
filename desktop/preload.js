@@ -87,6 +87,9 @@ contextBridge.exposeInMainWorld("graphyDesktop", {
   dbFoldersPick: (title) => ipcRenderer.invoke("graphy:db-folders-pick", { title }),
   dbFoldersSwitch: (folder) => ipcRenderer.invoke("graphy:db-folders-switch", { folder }),
   dbFoldersForget: (folder) => ipcRenderer.invoke("graphy:db-folders-forget", { folder }),
+  // 荷物の取り込み。引数にパスは無い（取り込み元は main のダイアログで利用者が選ぶ）
+  dbImportStart: () => ipcRenderer.invoke("graphy:db-import-start"),
+  dbImportStatus: (jobId) => ipcRenderer.invoke("graphy:db-import-status", { jobId }),
   // ネイティブダイアログ後にレンダラのキーボードフォーカスを復帰させる。
   refocus: () => ipcRenderer.send("graphy:refocus"),
   // Window メニュー: この窓のフルスクリーン・最大化・最小化・元に戻す、と今の状態。

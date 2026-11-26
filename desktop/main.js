@@ -77,6 +77,7 @@ const tlsPasswords = require("./tlsPasswords");
 const { waitPortFree } = require("./portWait");
 const { ensureDefaultEndpoint, resolveDefault, effectiveDefaultId, LOCAL_ID } = require("./computeDefault");
 const computeBridge = require("./computeBridge");
+const { createDbImportFlow } = require("./dbImportFlow");
 const computeConsent = require("./computeConsent");
 const computeKeepAwake = require("./computeKeepAwake").create(powerSaveBlocker);
 const { createColabAuth, REFRESH_KEY: COLAB_REFRESH_KEY } = require("./colabAuth");
@@ -1751,6 +1752,36 @@ ipcMain.handle("graphy:db-folders-switch", (e, payload) => {
   relaunchApp();
   return { ok: true };
 });
+
+// 外付けなどの荷物を今の DB に取り込む。フォルダの選択と内容の確認は main が出し、場所はレンダラに返さない（dbImportFlow.js）。
+const localeIsJa = () => String(app.getLocale() || "").startsWith("ja");
+const dbImportFlow = createDbImportFlow({
+  call: computeBridge.call,
+  ja: localeIsJa,
+  pickDirectory: async () => {
+    const result = await dialog.showOpenDialog(mainWin, {
+      title: localeIsJa() ? "荷物のあるフォルダを選ぶ（取り込み元）" : "Choose the folder with the transfer package (source)",
+      properties: ["openDirectory"],
+    });
+    return result.canceled || result.filePaths.length === 0 ? null : result.filePaths[0];
+  },
+  confirm: async (detail) => {
+    const ja = localeIsJa();
+    const r = await dialog.showMessageBox(mainWin, {
+      type: "question",
+      buttons: ja ? ["取り込む", "取り消す"] : ["Import", "Cancel"],
+      defaultId: 1,
+      cancelId: 1,
+      title: ja ? "荷物の取り込み" : "Import transfer package",
+      message: ja ? "この荷物を今の DB に取り込みますか？" : "Import into the current database?",
+      detail,
+    });
+    return r.response === 0;
+  },
+});
+ipcMain.handle("graphy:db-import-start", (e) => (isMainSender(e) ? dbImportFlow.start() : { ok: false, reason: "forbidden" }));
+ipcMain.handle("graphy:db-import-status", (e, payload) =>
+  (isMainSender(e) ? dbImportFlow.status(String((payload && payload.jobId) || "")) : { ok: false, reason: "forbidden" }));
 
 ipcMain.handle("graphy:db-folders-forget", (_e, payload) => dbFolders.forget(String((payload && payload.folder) || "")));
 
