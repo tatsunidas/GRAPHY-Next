@@ -7,6 +7,7 @@ import {
   classifySeriesDisplay,
   classifySeriesRenderability,
   isNonImageSeries,
+  isSrSopClass,
   isVideoInstance,
   isVideoSopClass,
   isVideoTransferSyntax,
@@ -53,9 +54,11 @@ describe("classifySeriesRenderability", () => {
     expect(classifySeriesRenderability({ modality: "CT" }).renderable).toBe(true);
   });
 
-  it("Encapsulated PDF / 構造化レポート / 表示状態も弾く", () => {
+  it("Encapsulated PDF / 表示状態 / Key Object Selection も弾く（SR は SrViewer で開く）", () => {
     expect(isNonImageSeries({ sopClassUid: "1.2.840.10008.5.1.4.1.1.104.1" })).toBe(true);
-    expect(isNonImageSeries({ sopClassUid: "1.2.840.10008.5.1.4.1.1.88.33" })).toBe(true);
+    // 構造化レポート（SR）は画素を持たないが、SrViewer で開ける（「開けない」表から外した）。SR の判定は下の SR_SOP_CLASSES。
+    expect(isNonImageSeries({ sopClassUid: "1.2.840.10008.5.1.4.1.1.88.33" })).toBe(false);
+    expect(isNonImageSeries({ sopClassUid: "1.2.840.10008.5.1.4.1.1.88.59" })).toBe(true); // Key Object Selection は SR ではない
     expect(isNonImageSeries({ sopClassUid: "1.2.840.10008.5.1.4.1.1.11.1" })).toBe(true);
   });
 
@@ -157,5 +160,32 @@ describe("転送構文で包まれた動画（H.264 の US Multi-frame）", () =
     expect(isVideoTransferSyntax(null)).toBe(false);
     // SOP クラス側の判定は転送構文を見ない（役割が違う）。
     expect(isVideoSopClass(US_MULTIFRAME)).toBe(false);
+  });
+});
+
+describe("構造化レポート（SR）の振り分け", () => {
+  const SR_CLASSES = [
+    "1.2.840.10008.5.1.4.1.1.88.11", "1.2.840.10008.5.1.4.1.1.88.22", "1.2.840.10008.5.1.4.1.1.88.33",
+    "1.2.840.10008.5.1.4.1.1.88.67", "1.2.840.10008.5.1.4.1.1.88.68",
+  ];
+  it("★ SR の SOP クラスは sr に振り分ける（standalone も web も）", () => {
+    for (const sop of SR_CLASSES) {
+      expect(classifySeriesDisplay([{ sopClassUid: sop }], "standalone")).toBe("sr");
+      expect(classifySeriesDisplay([{ sopClassUid: sop }], "web")).toBe("sr");
+      expect(isSrSopClass(sop)).toBe(true);
+    }
+  });
+  it("★ 負例: SR でないもの（CT・動画・Key Object Selection・表示状態・RT）は sr にしない", () => {
+    for (const sop of ["1.2.840.10008.5.1.4.1.1.2", "1.2.840.10008.5.1.4.1.1.88.59", "1.2.840.10008.5.1.4.1.1.11.1", "1.2.840.10008.5.1.4.1.1.481.3"]) {
+      expect(classifySeriesDisplay([{ sopClassUid: sop }], "standalone")).not.toBe("sr");
+      expect(isSrSopClass(sop)).toBe(false);
+    }
+    expect(classifySeriesDisplay([{ sopClassUid: "1.2.840.10008.5.1.4.1.1.77.1.4.1" }], "standalone")).toBe("video");
+    expect(isSrSopClass(null)).toBe(false);
+    expect(isSrSopClass(undefined)).toBe(false);
+  });
+  it("SR の SOP クラスが分かれば「画像として開けない」判定から外れる（一覧・タイルが断らない）。SOP クラスが無く Modality だけのときは、振り分けできないので従来どおり開けない扱い", () => {
+    expect(isNonImageSeries({ sopClassUid: "1.2.840.10008.5.1.4.1.1.88.11", modality: "SR" })).toBe(false);
+    expect(isNonImageSeries({ modality: "SR" })).toBe(true);
   });
 });
