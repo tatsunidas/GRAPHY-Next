@@ -21,7 +21,12 @@ public record TransferManifest(
         String sourceDbFolder,
         List<String> studyUids,
         List<FileEntry> files,
-        Related related) {
+        Related related,
+        /**
+         * 荷物に記録を入れたプラグインの、移し元の版。古い荷物では null。
+         * 欄を足しただけなので版番号は上げない（古い版のアプリは読み飛ばす）。
+         */
+        List<PluginVersion> pluginVersions) {
 
     /** 読める最大の版。2 は塗り ROI（{@code masks/}）を含む荷物。 */
     public static final int FORMAT_VERSION = 2;
@@ -67,6 +72,10 @@ public record TransferManifest(
     }
 
     public record PluginDocItem(String pluginId, String patientKey, String json) {
+    }
+
+    /** {@code version} は移し元に入っていなければ null（記録だけが残っていた）。 */
+    public record PluginVersion(String id, String version) {
     }
 
     /** 塗り ROI。フレーム（deflate 済みのバイト列）は荷物の {@code path}（{@code masks/<maskUid>.frames}）に置く。 */

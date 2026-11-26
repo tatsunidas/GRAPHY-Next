@@ -75,6 +75,11 @@ export function InboxNotice({ onImported }: { onImported: () => void }) {
           })}
         </div>
       ))}
+      {status.results.flatMap((r) => (r.pluginNotes ?? []).map((n) => (
+        <div key={`${r.id}-${n.id}`} data-testid="inbox-plugin-note" style={{ fontSize: 12, color: "#8a5a00" }}>
+          {t(`dbTransfer.plugin.${n.kind}`, { id: n.id, from: n.sourceVersion ?? "?", to: n.localVersion ?? "?" })}
+        </div>
+      )))}
       {status.results.some((r) => r.conflicts > 0 || r.failed > 0) && (
         <div style={{ fontSize: 12, color: "#8a5a00" }}>{t("dbTransfer.inbox.kept")}</div>
       )}

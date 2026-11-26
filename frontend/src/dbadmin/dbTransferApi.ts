@@ -31,6 +31,15 @@ export interface InboxPackageResult {
   relatedInserted: number;
   relatedSame: number;
   conflicts: number;
+  /** 古い backend には無い。 */
+  pluginNotes?: PluginNote[];
+}
+
+export interface PluginNote {
+  id: string;
+  sourceVersion: string | null;
+  localVersion: string | null;
+  kind: "missing" | "different" | "unknown";
 }
 
 export interface InboxStatus {
