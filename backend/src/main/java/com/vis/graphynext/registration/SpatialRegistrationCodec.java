@@ -4,6 +4,7 @@
  */
 package com.vis.graphynext.registration;
 
+import com.vis.graphynext.dicom.Utf8Output;
 import org.dcm4che3.data.Attributes;
 import org.dcm4che3.data.Sequence;
 import org.dcm4che3.data.Tag;
@@ -115,9 +116,6 @@ public final class SpatialRegistrationCodec {
                 a.setValue(tag, tmpl.getVR(tag), tmpl.getValue(tag));
             }
         }
-        if (a.getString(Tag.SpecificCharacterSet) == null) {
-            a.setSpecificCharacterSet("ISO_IR 192");
-        }
 
         boolean deformable = in.dvf() != null;
         String sopClass = deformable ? DEFORMABLE_SOP_CLASS : RIGID_SOP_CLASS;
@@ -147,6 +145,7 @@ public final class SpatialRegistrationCodec {
         } else {
             buildRigid(a, in);
         }
+        Utf8Output.apply(a); // 元からの写しがすべて終わった後で呼ぶ
         return a;
     }
 

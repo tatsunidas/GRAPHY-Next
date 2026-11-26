@@ -4,6 +4,7 @@
  */
 package com.vis.graphynext.dicom.sr;
 
+import com.vis.graphynext.dicom.Utf8Output;
 import com.vis.graphynext.dicom.store.DicomStorageService;
 import org.dcm4che3.data.Attributes;
 import org.dcm4che3.data.Sequence;
@@ -111,9 +112,6 @@ public class MeasurementReportService {
         for (int tag : inherit) {
             copyTag(tmpl, a, tag);
         }
-        if (a.getString(Tag.SpecificCharacterSet) == null) {
-            a.setSpecificCharacterSet("ISO_IR 192");
-        }
         if (a.getString(Tag.StudyInstanceUID) == null) {
             a.setString(Tag.StudyInstanceUID, VR.UI, req.studyInstanceUid());
         }
@@ -200,6 +198,7 @@ public class MeasurementReportService {
             content.add(findings);
         }
 
+        Utf8Output.apply(a); // 元からの写しがすべて終わった後で呼ぶ
         return a;
     }
 

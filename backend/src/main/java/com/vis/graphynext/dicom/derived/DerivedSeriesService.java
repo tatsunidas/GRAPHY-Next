@@ -4,6 +4,7 @@
  */
 package com.vis.graphynext.dicom.derived;
 
+import com.vis.graphynext.dicom.Utf8Output;
 import com.vis.graphynext.dicom.ParametricMapFrameExpander;
 import com.vis.graphynext.dicom.store.DicomInstance;
 import com.vis.graphynext.dicom.store.DicomStorageService;
@@ -296,9 +297,6 @@ public class DerivedSeriesService {
             }
             copyTag(tmpl, a, Tag.PositionReferenceIndicator);
         }
-        if (a.getString(Tag.SpecificCharacterSet) == null) {
-            a.setSpecificCharacterSet("ISO_IR 192");
-        }
         if (a.getString(Tag.StudyInstanceUID) == null) {
             // テンプレートに Study UID が無い異常系（想定外）はリクエストの値で補完。
             a.setString(Tag.StudyInstanceUID, VR.UI, req.studyInstanceUid());
@@ -403,6 +401,7 @@ public class DerivedSeriesService {
 
         // 画素データ（16bit → VR.OW, リトルエンディアン）。
         a.setBytes(Tag.PixelData, VR.OW, px);
+        Utf8Output.apply(a); // 元からの写しがすべて終わった後で呼ぶ
         return a;
     }
 

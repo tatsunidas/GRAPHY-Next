@@ -4,6 +4,7 @@
  */
 package com.vis.graphynext.plugin.video;
 
+import com.vis.graphynext.dicom.Utf8Output;
 import com.vis.graphynext.dicom.store.DicomInstance;
 import com.vis.graphynext.dicom.store.DicomStorageService;
 import com.vis.graphynext.nondicom.FfmpegLocator;
@@ -457,7 +458,7 @@ public class PluginVideoImportService {
             p.setString(Tag.PatientBirthDate, VR.DA, birth);
             p.setString(Tag.PatientSex, VR.CS, sex);
         }
-        if (p.getString(Tag.SpecificCharacterSet) == null) p.setSpecificCharacterSet("ISO_IR 192");
+        Utf8Output.apply(p);
         return p;
     }
 

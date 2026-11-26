@@ -4,6 +4,7 @@
  */
 package com.vis.graphynext.dicom.export;
 
+import com.vis.graphynext.dicom.Utf8Output;
 import com.vis.graphynext.dicom.store.DicomStorageService;
 import com.vis.graphynext.dicom.web.WebDicomDataService;
 import org.dcm4che3.data.Attributes;
@@ -121,9 +122,6 @@ public class RtDoseExportService {
         }) {
             copyTag(tmpl, a, tag);
         }
-        if (a.getString(Tag.SpecificCharacterSet) == null) {
-            a.setSpecificCharacterSet("ISO_IR 192");
-        }
         if (a.getString(Tag.StudyInstanceUID) == null) {
             a.setString(Tag.StudyInstanceUID, VR.UI, req.studyInstanceUid());
         }
@@ -231,6 +229,7 @@ public class RtDoseExportService {
             eq.setString(Tag.ContributionDescription, VR.ST, "RT Dose produced by plugin " + p.id());
             a.newSequence(Tag.ContributingEquipmentSequence, 1).add(eq);
         }
+        Utf8Output.apply(a); // 元からの写しがすべて終わった後で呼ぶ
         return a;
     }
 
