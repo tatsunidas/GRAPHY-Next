@@ -193,6 +193,15 @@ export interface VideoMetadata {
   transcodeAvailable: boolean;
 }
 
+/**
+ * SR の内容の木を取得する（backend `SrContentController`）。SR でない・読めないときは理由つきで例外になる
+ * （画面が理由を出す）。型は `viewer/srModel.ts`。
+ */
+export const fetchSrContent = (studyUid: string, seriesUid: string, sopUid: string) =>
+  httpGet<import("./viewer/srModel").SrDocument>(
+    `/api/studies/${encodeURIComponent(studyUid)}/series/${encodeURIComponent(seriesUid)}/instances/${encodeURIComponent(sopUid)}/sr`,
+  );
+
 /** 動画諸元を取得する（standalone）。 */
 export const fetchVideoMetadata = (sopUid: string) =>
   httpGet<VideoMetadata>(`/api/instances/${encodeURIComponent(sopUid)}/video-metadata`);

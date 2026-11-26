@@ -42,13 +42,7 @@ const NON_IMAGE_SOP_CLASSES: Readonly<Record<string, string>> = {
   // XA/XRF GSPS。画像としては開けないが、**参照画像に適用できる**（§14.1 / A10）。
   // シリーズビューアの「表示状態を適用」から当てる。
   "1.2.840.10008.5.1.4.1.1.11.5": "XA/XRF Grayscale Softcopy Presentation State",
-  "1.2.840.10008.5.1.4.1.1.88.11": "Basic Text SR",
-  "1.2.840.10008.5.1.4.1.1.88.22": "Enhanced SR",
-  "1.2.840.10008.5.1.4.1.1.88.33": "Comprehensive SR",
-  "1.2.840.10008.5.1.4.1.1.88.34": "Comprehensive 3D SR",
   "1.2.840.10008.5.1.4.1.1.88.59": "Key Object Selection",
-  "1.2.840.10008.5.1.4.1.1.88.65": "Chest CAD SR",
-  "1.2.840.10008.5.1.4.1.1.88.67": "X-Ray Radiation Dose SR",
   "1.2.840.10008.5.1.4.1.1.104.1": "Encapsulated PDF",
   "1.2.840.10008.5.1.4.1.1.104.2": "Encapsulated CDA",
   "1.2.840.10008.5.1.4.1.1.104.3": "Encapsulated STL",
@@ -57,11 +51,46 @@ const NON_IMAGE_SOP_CLASSES: Readonly<Record<string, string>> = {
   "1.2.840.10008.5.1.4.1.1.9.4.1": "Basic Voice Audio Waveform",
 };
 
+/**
+ * 構造化レポート（SR）の SOP クラス。**画像ではないが、SeriesViewer の SR 表示（`SrViewer`）で開ける。**
+ * 出典: DICOM PS3.6 の SOP Class UID 表（SR 系の Storage）。Key Object Selection（88.59）・Presentation State は SR ではないので含めない。
+ * Spectacle Prescription Report・Macular Grid Thickness and Volume Report は SR の文書として扱われる。
+ */
+export const SR_SOP_CLASSES: ReadonlySet<string> = new Set([
+  "1.2.840.10008.5.1.4.1.1.88.11", // Basic Text SR
+  "1.2.840.10008.5.1.4.1.1.88.22", // Enhanced SR
+  "1.2.840.10008.5.1.4.1.1.88.33", // Comprehensive SR
+  "1.2.840.10008.5.1.4.1.1.88.34", // Comprehensive 3D SR
+  "1.2.840.10008.5.1.4.1.1.88.35", // Extensible SR
+  "1.2.840.10008.5.1.4.1.1.88.40", // Procedure Log
+  "1.2.840.10008.5.1.4.1.1.88.50", // Mammography CAD SR
+  "1.2.840.10008.5.1.4.1.1.88.65", // Chest CAD SR
+  "1.2.840.10008.5.1.4.1.1.88.67", // X-Ray Radiation Dose SR
+  "1.2.840.10008.5.1.4.1.1.88.68", // Radiopharmaceutical Radiation Dose SR
+  "1.2.840.10008.5.1.4.1.1.88.69", // Colon CAD SR
+  "1.2.840.10008.5.1.4.1.1.88.70", // Implantation Plan SR
+  "1.2.840.10008.5.1.4.1.1.88.71", // Acquisition Context SR
+  "1.2.840.10008.5.1.4.1.1.88.72", // Simplified Adult Echo SR
+  "1.2.840.10008.5.1.4.1.1.88.73", // Patient Radiation Dose SR
+  "1.2.840.10008.5.1.4.1.1.88.74", // Planned Imaging Agent Administration SR
+  "1.2.840.10008.5.1.4.1.1.88.75", // Performed Imaging Agent Administration SR
+  "1.2.840.10008.5.1.4.1.1.88.76", // Enhanced X-Ray Radiation Dose SR
+  "1.2.840.10008.5.1.4.1.1.88.77", // Waveform Annotation SR
+  "1.2.840.10008.5.1.4.1.1.78.6", // Spectacle Prescription Report
+  "1.2.840.10008.5.1.4.1.1.79.1", // Macular Grid Thickness and Volume Report
+]);
+
+/** SOP クラスが SR か。 */
+export const isSrSopClass = (sopClassUid: string | null | undefined): boolean =>
+  !!sopClassUid && SR_SOP_CLASSES.has(sopClassUid.trim());
+
 /** SOP クラスが取れないとき用（web の QIDO 等）。Modality は defined term なので概ね信頼できる。 */
 const NON_IMAGE_MODALITIES: Readonly<Record<string, string>> = {
   RTSTRUCT: "RT Structure Set",
   RTPLAN: "RT Plan",
   RTRECORD: "RT Treatment Record",
+  // SOP クラスが分かれば SR は SrViewer で開ける（SR_SOP_CLASSES）。SOP クラスが取れず Modality しか無いときは、
+  // SrViewer へ振り分けられない（`classifySeriesDisplay` は SOP クラスで決める）ので、従来どおり「開けない」にしておく。
   SR: "Structured Report",
   KO: "Key Object Selection",
   PR: "Presentation State",
@@ -198,6 +227,7 @@ export const isVideoInstance = (instance: {
  * - `image` … 従来どおり Viewer2D（Cornerstone StackViewport）
  * - `video` … VideoViewer（`/rendered` の mp4 を VideoViewport / `<video>` で再生）
  * - `videoUnavailable` … 動画だが、この動作モードでは再生できない
+ * - `sr` … 構造化レポート（SOP クラスが SR）。SrViewer（内容の木を HTML で出す）
  *
  * <p>encapsulated 動画は画素を持たないため、wadouri を通す Viewer2D では
  * `The pixel data is missing` になる。再生器へ振り分ける必要がある。
@@ -208,13 +238,15 @@ export const isVideoInstance = (instance: {
  * <p>web(BFF) モードでは `/rendered` が索引のローカルファイルを前提にしていて使えないため
  * `videoUnavailable` を返す（`fw/video-viewer-design.md` §8）。
  */
-export type SeriesDisplay = "image" | "video" | "videoUnavailable";
+export type SeriesDisplay = "image" | "video" | "videoUnavailable" | "sr";
 
 export function classifySeriesDisplay(
   instances: readonly { sopClassUid?: string | null; transferSyntaxUid?: string | null }[],
   mode: "standalone" | "web",
 ): SeriesDisplay {
   if (instances.length === 0) return "image";
+  // 構造化レポート（SR）は画素を持たない。専用の SrViewer で出す（SOP クラスで判定。standalone・web のどちらも REST で読める）。
+  if (isSrSopClass(instances[0].sopClassUid)) return "sr";
   if (!isVideoInstance(instances[0])) return "image";
   return mode === "standalone" ? "video" : "videoUnavailable";
 }

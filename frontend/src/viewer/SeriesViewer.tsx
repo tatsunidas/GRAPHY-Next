@@ -14,6 +14,7 @@ import { nearestReal, nextRealLoop, realZs, stepReal } from "./realSlices";
 import { concatHasGap, describeKept, restrictLayout, type ConcatOpened, type ZRange } from "./virtualLayout";
 import CineControls from "./CineControls";
 import { VideoViewer } from "./VideoViewer";
+import { SrViewer } from "./SrViewer";
 import { XaCalibrationDialog } from "./XaCalibrationDialog";
 import { XaQlvDialog } from "./XaQlvDialog";
 import { XaIvusSyncDialog } from "./XaIvusSyncDialog";
@@ -1435,7 +1436,18 @@ export function SeriesViewer({
         data-testid="series-viewer-root"
         style={fillHeight ? { ...root, flex: 1, display: "flex", flexDirection: "column", minHeight: 0 } : root}
       >
-        {display === "video" ? (
+        {display === "sr" ? (
+          // 構造化レポート（SR）。画素を持たないので画像ビューアではなく SrViewer（内容の木を HTML で出す）。
+          // 複数インスタンスは「1 SOP = 1 文書」。順に並べる。
+          instances.map((inst, i) => (
+            <div key={inst.sopInstanceUid} style={{ marginTop: i === 0 ? 0 : 12 }}>
+              {instances.length > 1 && (
+                <div style={{ fontSize: 12, color: "#5b6773", padding: "0 14px" }}>{t("sr.multi", { index: String(i + 1), total: String(instances.length) })}</div>
+              )}
+              <SrViewer studyUid={studyUid} seriesUid={seriesUid} sopInstanceUid={inst.sopInstanceUid} />
+            </div>
+          ))
+        ) : display === "video" ? (
           // 複数インスタンスの動画シリーズは「1 SOP = 1 本」。一覧として順に並べる。
           videoInstances.map((inst) => (
             <div key={inst.sopInstanceUid} style={{ marginTop: 8 }}>
