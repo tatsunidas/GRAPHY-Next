@@ -12,8 +12,6 @@ import com.vis.graphynext.dicom.store.DicomInstanceRepository;
 import com.vis.graphynext.plugin.PluginRegistry;
 import com.vis.graphynext.settings.SettingsService;
 import jakarta.annotation.PreDestroy;
-import org.dcm4che3.data.Tag;
-import org.dcm4che3.io.DicomInputStream;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.annotation.Profile;
@@ -243,8 +241,8 @@ public class ExternalPackageImport {
             Path dest = staging.resolve(f.path()).normalize();
             copyOne(pkg, real, f.path(), dest, f.size(), f.sha256());
             String sop;
-            try (DicomInputStream in = new DicomInputStream(dest.toFile())) {
-                sop = in.readDatasetUntilPixelData().getString(Tag.SOPInstanceUID);
+            try {
+                sop = DbTransferService.sopInstanceUid(dest);
             } catch (IOException e) {
                 throw new Rejected("damaged", "DICOM として読めません: " + f.path());
             }

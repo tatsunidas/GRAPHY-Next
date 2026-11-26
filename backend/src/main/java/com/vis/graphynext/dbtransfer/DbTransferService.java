@@ -11,6 +11,8 @@ import com.vis.graphynext.dicom.store.DicomInstance;
 import com.vis.graphynext.dicom.store.DicomInstanceRepository;
 import com.vis.graphynext.dicom.store.StorageLayout;
 import com.vis.graphynext.plugin.PluginRegistry;
+import org.dcm4che3.data.Tag;
+import org.dcm4che3.io.DicomInputStream;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -260,6 +262,13 @@ public class DbTransferService {
             in.transferTo(out);
         }
         return HexFormat.of().formatHex(md.digest());
+    }
+
+    /** ファイルの中身の SOP Instance UID（画素は読まない）。 */
+    static String sopInstanceUid(Path p) throws IOException {
+        try (DicomInputStream in = new DicomInputStream(p.toFile())) {
+            return in.readDatasetUntilPixelData().getString(Tag.SOPInstanceUID);
+        }
     }
 
     static String sha256(Path p) throws IOException {
