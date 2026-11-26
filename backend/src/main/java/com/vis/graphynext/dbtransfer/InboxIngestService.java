@@ -11,6 +11,7 @@ import com.vis.graphynext.activity.ActiveWork;
 import com.vis.graphynext.dbtransfer.TransferManifest.FileEntry;
 import com.vis.graphynext.dicom.store.DicomInstanceRepository;
 import com.vis.graphynext.dicom.store.DicomStorageService;
+import com.vis.graphynext.plugin.PluginRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
@@ -48,7 +49,8 @@ public class InboxIngestService implements ActiveWork {
 
     public record PackageResult(String id, String mode, String sourceDbFolder, String processedAt,
                                 int imported, int skippedExisting, int failed, List<String> errors,
-                                int relatedInserted, int relatedSame, int conflicts) {
+                                int relatedInserted, int relatedSame, int conflicts,
+                                List<PluginVersions.Note> pluginNotes) {
     }
 
     public record Status(boolean running, List<PackageResult> results, List<String> stalePartials) {
@@ -57,6 +59,7 @@ public class InboxIngestService implements ActiveWork {
     private final DicomInstanceRepository repo;
     private final DicomStorageService storage;
     private final RelatedData related;
+    private final PluginRegistry pluginRegistry;
     private final Path inbox;
     private final ObjectMapper mapper = new ObjectMapper().enable(SerializationFeature.INDENT_OUTPUT)
             .disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES);
@@ -66,10 +69,11 @@ public class InboxIngestService implements ActiveWork {
     private final List<String> stale = new CopyOnWriteArrayList<>();
 
     public InboxIngestService(DicomInstanceRepository repo, DicomStorageService storage, RelatedData related,
-                              DbTransferService transfer) {
+                              DbTransferService transfer, PluginRegistry pluginRegistry) {
         this.repo = repo;
         this.storage = storage;
         this.related = related;
+        this.pluginRegistry = pluginRegistry;
         this.inbox = transfer.currentFolder().resolve("inbox");
     }
 
@@ -117,7 +121,7 @@ public class InboxIngestService implements ActiveWork {
             } catch (IOException | RuntimeException e) {
                 log.error("[db-inbox] 荷物を取り込めません: {}", p, e);
                 results.add(new PackageResult(name, null, null, Instant.now().toString(), 0, 0, 0,
-                        List.of(String.valueOf(e.getMessage())), 0, 0, 0));
+                        List.of(String.valueOf(e.getMessage())), 0, 0, 0, List.of()));
             }
         }
     }
@@ -151,7 +155,8 @@ public class InboxIngestService implements ActiveWork {
         RelatedData.ApplyResult rel = related.apply(m.related(), pkg);
         errors.addAll(rel.errors());
         if (!rel.conflicts().isEmpty()) {
-            Path dir = inbox.resolve("conflicts").resolve(m.id());
+            // 目録の id はパスに使わない（荷物の中身で書き出し先が決まらないようにする）
+            Path dir = inbox.resolve("conflicts").resolve(pkg.getFileName().toString());
             Files.createDirectories(dir);
             int n = 0;
             for (RelatedData.Conflict c : rel.conflicts()) {
@@ -161,7 +166,8 @@ public class InboxIngestService implements ActiveWork {
                     rel.conflicts().size(), dir);
         }
         PackageResult r = new PackageResult(m.id(), m.mode(), m.sourceDbFolder(), Instant.now().toString(), imported,
-                skipped, errors.size(), errors, rel.inserted(), rel.same(), rel.conflicts().size());
+                skipped, errors.size(), errors, rel.inserted(), rel.same(), rel.conflicts().size(),
+                PluginVersions.compare(m, PluginVersions.installed(pluginRegistry)));
         mapper.writeValue(pkg.resolve("result.json").toFile(), r);
         if (errors.isEmpty()) {
             DbTransferService.deleteTree(pkg.resolve("dicom"));

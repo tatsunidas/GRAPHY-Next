@@ -9,6 +9,10 @@ import com.vis.graphynext.dicom.DicomPhantomFactory;
 import com.vis.graphynext.dicom.store.DicomInstanceRepository;
 import com.vis.graphynext.dicom.store.DicomStorageService;
 import com.vis.graphynext.dicom.store.StorageLayout;
+import com.vis.graphynext.plugin.PluginRegistry;
+import com.vis.graphynext.plugin.store.PluginDocument;
+import com.vis.graphynext.plugin.store.PluginDocumentId;
+import com.vis.graphynext.plugin.store.PluginDocumentRepository;
 import com.vis.graphynext.radiomics.GlamAnalysisDocument;
 import com.vis.graphynext.radiomics.GlamAnalysisDocumentRepository;
 import com.vis.graphynext.report.ParticipationType;
@@ -103,6 +107,10 @@ class DbTransferTest {
     SettingsService settings;
     @Autowired
     TransactionTemplate tx;
+    @Autowired
+    PluginRegistry pluginRegistry;
+    @Autowired
+    PluginDocumentRepository pluginDocs;
 
     private final ObjectMapper mapper = new ObjectMapper();
     private Path target;
@@ -147,7 +155,7 @@ class DbTransferTest {
 
     private InboxIngestService targetInbox() {
         return new InboxIngestService(repo, storage, related,
-                new DbTransferService(repo, layout, related, target.toString()));
+                new DbTransferService(repo, layout, related, pluginRegistry, target.toString()), pluginRegistry);
     }
 
     @Test
@@ -468,6 +476,59 @@ class DbTransferTest {
         TransferManifest m = mapper.readValue(onlyPackage().resolve("manifest.json").toFile(), TransferManifest.class);
         assertEquals(1, m.formatVersion());
         assertTrue(m.related().masks().isEmpty());
+    }
+
+    private void installPlugin(String id, String version) throws IOException {
+        Path dir = tmp.resolve("plugins").resolve(id);
+        Files.createDirectories(dir);
+        Files.writeString(dir.resolve("plugin.json"), "{\"id\":\"" + id + "\",\"name\":\"" + id + "\",\"version\":\""
+                + version + "\",\"frontend\":{\"bundle\":\"ui.js\",\"contributes\":[\"viewer2d.menu\"]}}");
+        Files.writeString(dir.resolve("ui.js"), "export function activate(){}");
+    }
+
+    @Test
+    void プラグインの記録はそのまま運び_版の違いと未導入を知らせる() throws Exception {
+        installPlugin("demo-a", "1.2.0");
+        ingest("PL1", "pl.st", "pl.se", "pl.1");
+        String json = "{\"studies\":{\"pl.st\":{\"origin\":\"batch\",\"名前\":\"値\"}}}";
+        pluginDocs.save(new PluginDocument("demo-a", "PL1", json));
+        pluginDocs.save(new PluginDocument("demo-gone", "PL1", "{}")); // 移し元から外したあとに記録だけ残る
+
+        transfer.transfer(List.of("pl.st"), target.toString(), DbTransferService.Mode.copy);
+        Path pkg = onlyPackage();
+        TransferManifest m = mapper.readValue(pkg.resolve("manifest.json").toFile(), TransferManifest.class);
+        assertEquals(List.of(new TransferManifest.PluginVersion("demo-a", "1.2.0"),
+                new TransferManifest.PluginVersion("demo-gone", null)), m.pluginVersions());
+
+        tx.executeWithoutResult(s -> {
+            repo.deleteAll(repo.findByStudyInstanceUid("pl.st"));
+            pluginDocs.deleteById(new PluginDocumentId("demo-a", "PL1"));
+            pluginDocs.deleteById(new PluginDocumentId("demo-gone", "PL1"));
+        });
+        installPlugin("demo-a", "2.0.0"); // 移し先は版が違う
+
+        var res = targetInbox().ingestOne(pkg);
+        assertEquals(json, pluginDocs.findById(new PluginDocumentId("demo-a", "PL1")).orElseThrow().getJson());
+        assertEquals(List.of(new PluginVersions.Note("demo-a", "1.2.0", "2.0.0", "different"),
+                new PluginVersions.Note("demo-gone", null, null, "missing")), res.pluginNotes());
+    }
+
+    @Test
+    void 版の欄が無い古い荷物は版不明_同じ版は何も知らせない() throws Exception {
+        installPlugin("demo-b", "1.0.0");
+        ingest("PL2", "pl2.st", "pl2.se", "pl2.1");
+        pluginDocs.save(new PluginDocument("demo-b", "PL2", "{}"));
+        transfer.transfer(List.of("pl2.st"), target.toString(), DbTransferService.Mode.copy);
+        Path pkg = onlyPackage();
+        TransferManifest now = mapper.readValue(pkg.resolve("manifest.json").toFile(), TransferManifest.class);
+        assertEquals(List.of(), PluginVersions.compare(now, Map.of("demo-b", "1.0.0")));
+
+        var tree = (com.fasterxml.jackson.databind.node.ObjectNode) mapper.readTree(pkg.resolve("manifest.json").toFile());
+        assertTrue(tree.remove("pluginVersions") != null);
+        TransferManifest old = mapper.treeToValue(tree, TransferManifest.class);
+        assertNull(old.pluginVersions());
+        assertEquals(List.of(new PluginVersions.Note("demo-b", null, "1.0.0", "unknown")),
+                PluginVersions.compare(old, Map.of("demo-b", "1.0.0")));
     }
 
     private static Path copyTree(Path from, Path to) throws IOException {
