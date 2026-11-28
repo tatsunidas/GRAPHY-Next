@@ -52,6 +52,7 @@ if (app.isPackaged || process.env.GRAPHY_SINGLE_INSTANCE === "1") {
 const cfg = require("./config.json");
 const { createWindowStateKeeper } = require("./windowState");
 const windowControl = require("./windowControl");
+const { viewerMenuTemplate } = require("./viewerMenu");
 const { createQuitFlow } = require("./quitFlow");
 const { buildQuitDialog } = require("./quitMessages");
 const messages = require("./startupMessages");
@@ -1184,6 +1185,8 @@ function createViewerWindow(screen, keeper) {
       additionalArguments: [`--graphy-api-base=${API_BASE}`],
     },
   });
+  const menuTemplate = viewerMenuTemplate(process.platform);
+  if (menuTemplate) win.setMenu(Menu.buildFromTemplate(menuTemplate));
   windowControl.attachFullScreenShortcut(win);
   if (keeper) {
     keeper.track(win);
