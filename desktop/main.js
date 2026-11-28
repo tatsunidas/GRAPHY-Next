@@ -3485,7 +3485,7 @@ app.on("before-quit", (event) => {
 app.on("before-quit", (event) => {
   if (!quitGo()) return;
   const ai = localLlm.get();
-  if (releasedLocalAi || !ai || !ai.status().running) return;
+  if (releasedLocalAi || !ai || !ai.anyRunning()) return;
   event.preventDefault();
   releasedLocalAi = true;
   Promise.race([ai.stop().catch(() => undefined), new Promise((r) => setTimeout(r, 10000))]).finally(() => app.quit());

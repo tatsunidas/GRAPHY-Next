@@ -427,6 +427,26 @@ test("文字起こしの枠は会話の枠と独立に起動・停止する／�
   } finally { await ai.stop(); }
 });
 
+test("anyRunning: 音声入力の枠だけ動いていても true（終了時に止める判定。status().running は会話の枠だけ）", { skip: SKIP_WIN }, async () => {
+  const { ai, dataDir } = sttSetup();
+  await ai.install({ modelId: "asr1" });
+  assert.equal(ai.anyRunning(), false, "何も起動していない");
+  try {
+    assert.deepEqual(await ai.prepare({ id: "local-stt" }), { ok: true });
+    assert.equal(ai.status().running, false, "会話の枠は起動していない");
+    assert.equal(ai.anyRunning(), true);
+    await ai.stop();
+    assert.equal(ai.anyRunning(), false);
+    assert.equal(fs.existsSync(path.join(dataDir, "local-ai", "server-stt.json")), false);
+  } finally { await ai.stop(); }
+});
+
+test("main.js は終了時に anyRunning で止める要否を決める（会話の枠だけを見ると音声入力の llama-server が残る）", () => {
+  const src = fs.readFileSync(path.join(__dirname, "main.js"), "utf8");
+  assert.ok(src.includes("if (releasedLocalAi || !ai || !ai.anyRunning()) return;"));
+  assert.ok(!src.includes("!ai.status().running"));
+});
+
 test("removeStt: 音声入力だけ外す（会話のモデル・runtime・他の提供元は残る）", async () => {
   const { ai, dataDir } = sttSetup();
   await ai.install({ modelId: "m1" });
