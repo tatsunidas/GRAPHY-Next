@@ -92,6 +92,7 @@ export function Viewer2DMenuBar({
   gridRows,
   gridCols,
   isDemo,
+  hanging,
   onClose,
 }: {
   actions: ViewerActions;
@@ -105,6 +106,8 @@ export function Viewer2DMenuBar({
   gridCols: number;
   /** 公開デモ（backendが該当APIを403にする）。ImageJ/プラグイン実行/システムログ・メモリモニタを隠す。 */
   isDemo: boolean;
+  /** ハンギングプロトコル。タイルを置き換える操作なので、プラグインへ渡る {@link ViewerActions} には載せない。 */
+  hanging: { open: () => void; undo: () => void; canUndo: boolean };
   onClose: () => void;
 }) {
   const { t, locale } = useI18n();
@@ -327,6 +330,8 @@ export function Viewer2DMenuBar({
                 <LayoutCustomForm actions={actions} rows={gridRows} cols={gridCols} close={close} />
               ),
             },
+            { label: t("viewer2d.hanging.menu.apply"), onClick: hanging.open, separatorBefore: true, testId: "layout-hanging-apply" },
+            { label: t("viewer2d.hanging.menu.undo"), onClick: hanging.undo, disabled: !hanging.canUndo, testId: "layout-hanging-undo" },
           ],
         },
         {

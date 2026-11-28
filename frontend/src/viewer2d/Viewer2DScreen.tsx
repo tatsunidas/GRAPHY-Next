@@ -148,6 +148,8 @@ import {
 import { emitDbChanged } from "../dbEvents";
 import { PluginSaveConfirmDialog, type PluginSaveRequest } from "./PluginSaveConfirmDialog";
 import { Viewer2DMenuBar } from "./Viewer2DMenuBar";
+import { HangingProtocolApplyDialog, type HangingApplyChoice } from "./HangingProtocolApplyDialog";
+import { canApplyHanging, orderAfterApply, restoreSnapshot, takeSnapshot, type HangingSnapshot } from "./hangingApply";
 import { RoiManagerPanel } from "./RoiManagerPanel";
 import { GLAM_CTX_KEY } from "../radiomics/GlamAnalysisScreen";
 import { ROI_FEATURE_CTX_KEY } from "../radiomics/RoiFeatureScreen";
@@ -253,6 +255,15 @@ interface PatientSession {
   gridRows: number;   // 0 = 自動（列数から行が流れる）、>0 = 手動指定行数（Row×Col 固定レイアウト）
   /** ヘッダのダブルクリックで単独表示にしているタイルの ID。行×列・順序は書き換えない（soloTile.ts）。 */
   soloTileId?: string | null;
+}
+
+/** ハンギングプロトコルの操作。配置の写しはタブの切り替えをまたぐので、状態は画面側が持つ。 */
+interface HangingControls {
+  /** 適用できない状態（全患者の表示に複数の患者）。 */
+  blocked: boolean;
+  open: (study: Study) => void;
+  undo: () => void;
+  canUndo: boolean;
 }
 
 /** localStorage に保存するコンテキスト形式。MainScreen が書き込み、Viewer が読む。 */
@@ -908,6 +919,60 @@ export function Viewer2DScreen({ status }: { status: AppStatus | null }) {
   // 全患者モードでは TileGrid の操作を、タイルの持ち主の患者へ振り分ける。
   const patientsRef = useRef(patients);
   patientsRef.current = patients;
+
+  // ── ハンギングプロトコル ─────────────────────────────────
+
+  const [hangingDlg, setHangingDlg] = useState<{ study: Study; patientKey: string } | null>(null);
+  /** 適用の直前の配置。持つのは 1 世代だけ（次の適用で上書きし、戻したら捨てる）。 */
+  const [hangingSnapshot, setHangingSnapshot] = useState<HangingSnapshot<Tile> | null>(null);
+  const globalViewRef = useRef({ order: orderPref, grid: globalGrid });
+  globalViewRef.current = { order: orderedIds, grid: globalGrid };
+
+  const openHanging = (study: Study) => {
+    setHangingDlg({ study, patientKey: derivePatientKey(study) });
+  };
+
+  const applyHanging = async (patientKey: string, study: Study, choice: HangingApplyChoice) => {
+    const next: Tile[] = await Promise.all(choice.series.map(async (series) => {
+      let instances: Instance[] = [];
+      try {
+        instances = await fetchInstances(study.studyInstanceUid, series.seriesInstanceUid);
+      } catch { /* addTile と同じく、取得できなくても空で並べる */ }
+      return { id: tileIdFor(study.studyInstanceUid, series.seriesInstanceUid), study, series, instances, syncEnabled: false };
+    }));
+    // 取得を待つ間にタイルや患者が変わりうるので、写しと置き換えは待った後の状態に対して行う。
+    const patient = patientsRef.current.find((p) => p.patientKey === patientKey);
+    if (!patient) { emitToast(t("viewer2d.hanging.patientClosed")); return; }
+    const view = globalViewRef.current;
+    setHangingSnapshot(takeSnapshot(patient, view));
+    const nextIds = next.map((tl) => tl.id);
+    setPatients((prev) => prev.map((p) =>
+      p.patientKey === patientKey
+        ? { ...p, tiles: next, gridRows: choice.rows, gridCols: choice.cols, soloTileId: null }
+        : p));
+    setOrderPref(orderAfterApply(view.order, patient.tiles.map((tl) => tl.id), nextIds));
+    if (isGlobal) setGlobalGrid({ rows: choice.rows, cols: choice.cols, solo: null });
+  };
+
+  const undoHanging = () => {
+    const snap = hangingSnapshot;
+    if (!snap) return;
+    setHangingSnapshot(null);
+    if (!patientsRef.current.some((p) => p.patientKey === snap.patientKey)) {
+      emitToast(t("viewer2d.hanging.patientClosed"));
+      return;
+    }
+    setPatients((prev) => prev.map((p) => (p.patientKey === snap.patientKey ? restoreSnapshot(p, snap) : p)));
+    setOrderPref(snap.global.order);
+    setGlobalGrid(snap.global.grid);
+  };
+
+  const hangingControls: HangingControls = {
+    blocked: !canApplyHanging(isGlobal, patients.length),
+    open: openHanging,
+    undo: undoHanging,
+    canUndo: !!hangingSnapshot && (isGlobal || hangingSnapshot.patientKey === activeKey),
+  };
   const ownerOf = (tileId: string) => patientsRef.current.find((p) => p.tiles.some((tl) => tl.id === tileId))?.patientKey;
   const globalOps = {
     onRemoveTile: (_pk: string, tileId: string) => { const o = ownerOf(tileId); if (o) removeTile(o, tileId); },
@@ -1031,6 +1096,7 @@ export function Viewer2DScreen({ status }: { status: AppStatus | null }) {
                   colors={colorMap}
                   onRemovePatient={removePatient}
                   onAddTransientTile={addTransientTile}
+                  hanging={hangingControls}
                   mode={mode}
                   isDemo={isDemo}
                   {...(isGlobal ? globalOps : tabOps)}
@@ -1041,6 +1107,21 @@ export function Viewer2DScreen({ status }: { status: AppStatus | null }) {
         </div>
       </div>
       <CopyImageAskHost />
+      {hangingDlg && (
+        <HangingProtocolApplyDialog
+          study={hangingDlg.study}
+          loadSeries={fetchSeries}
+          closingCount={patients.find((p) => p.patientKey === hangingDlg.patientKey)?.tiles.length ?? 0}
+          transientCount={patients.find((p) => p.patientKey === hangingDlg.patientKey)?.tiles.filter((tl) => tl.transient).length ?? 0}
+          portrait={window.innerHeight > window.innerWidth}
+          onClose={() => setHangingDlg(null)}
+          onApply={(choice) => {
+            const d = hangingDlg;
+            setHangingDlg(null);
+            void applyHanging(d.patientKey, d.study, choice);
+          }}
+        />
+      )}
       {concatDlg && (
         <OpenConcatDialog
           mode={mode}
@@ -1198,6 +1279,7 @@ function TileGrid({
   onTileRangeEdit,
   onTileRangeClear,
   onAddTransientTile,
+  hanging,
 }: {
   /** 患者タブでは表示中の患者。全患者モードでは全タイルを並べた仮の患者（GLOBAL_KEY）。 */
   patient: PatientSession;
@@ -1219,6 +1301,7 @@ function TileGrid({
   onTileRangeClear: (patientKey: string, tileId: string) => void;
   /** プラグインが開いた一時タイルを患者のタイル列へ足す。 */
   onAddTransientTile: (tile: TransientTileInit) => void;
+  hanging: HangingControls;
 }) {
   const { t } = useI18n();
   const n = patient.tiles.length;
@@ -2694,6 +2777,17 @@ function TileGrid({
         gridRows={patient.gridRows}
         gridCols={patient.gridCols}
         isDemo={isDemo}
+        hanging={{
+          open: () => {
+            if (hanging.blocked) { emitToast(t("viewer2d.hanging.multiPatient")); return; }
+            // 対象（選択→無ければ先頭）タイルの検査に適用する。
+            const target = resolveTargets()[0];
+            const tile = patient.tiles.find((tl) => tl.id === target) ?? patient.tiles[0];
+            if (tile) hanging.open(tile.study);
+          },
+          undo: hanging.undo,
+          canUndo: hanging.canUndo,
+        }}
         onClose={() => window.close()}
       />
       <Viewer2DToolbar
