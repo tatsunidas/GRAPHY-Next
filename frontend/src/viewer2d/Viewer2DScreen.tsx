@@ -123,7 +123,7 @@ import { layerWindow, singleColorLut } from "../viewer/filterLayers";
 import { layerProbeKey } from "../viewer/fusionProbe";
 import { WwWlAdjustDialog, type WlTarget } from "./WwWlAdjustDialog";
 import { WlPresetDialog } from "./WlPresetDialog";
-import { fetchSettings } from "../settings/settingsApi";
+import { fetchSettings, saveSettings } from "../settings/settingsApi";
 import { applyGlobalLabelmapStyle, applyGlobalAnnotationStyle } from "../viewer/cornerstoneSetup";
 import { parseRoiStatsDisplay, setRoiStatsDisplay } from "../viewer/roiStatsDisplay";
 import { installRoiStatsWatcher, invalidateAllRoiStats } from "../viewer/roiStatsStore";
@@ -149,6 +149,9 @@ import { emitDbChanged } from "../dbEvents";
 import { PluginSaveConfirmDialog, type PluginSaveRequest } from "./PluginSaveConfirmDialog";
 import { Viewer2DMenuBar } from "./Viewer2DMenuBar";
 import { HangingProtocolApplyDialog, type HangingApplyChoice } from "./HangingProtocolApplyDialog";
+import { HangingProtocolManageDialog } from "./HangingProtocolManageDialog";
+import { autoApplyDecision, chooseAutoProtocol, extractProtocols, isAutoApplyOn } from "./hangingProtocolStore";
+import { downloadText } from "../radiomics/downloadText";
 import { canApplyHanging, orderAfterApply, restoreSnapshot, takeSnapshot, type HangingSnapshot } from "./hangingApply";
 import { RoiManagerPanel } from "./RoiManagerPanel";
 import { GLAM_CTX_KEY } from "../radiomics/GlamAnalysisScreen";
@@ -263,6 +266,7 @@ interface HangingControls {
   blocked: boolean;
   open: (study: Study) => void;
   undo: () => void;
+  manage: () => void;
   canUndo: boolean;
 }
 
@@ -817,6 +821,9 @@ export function Viewer2DScreen({ status }: { status: AppStatus | null }) {
    * localStorage から ViewerContext を読み取って適用する。
    * patients に依存するため useCallback で再生成しつつ、ref 経由で常に最新版を呼ぶ。
    */
+  /** 自動適用の本体は後ろ（ハンギングプロトコルの節）にある。描画のたびに最新のものを入れる。 */
+  const autoApplyRef = useRef<(study: Study, ts: number) => Promise<void>>(async () => {});
+
   const applyCtx = useCallback(async () => {
     const raw = localStorage.getItem("graphy-viewer-ctx");
     if (!raw) return;
@@ -828,6 +835,7 @@ export function Viewer2DScreen({ status }: { status: AppStatus | null }) {
     }
     if (ctx.ts <= processedCtxTs.current) return; // 処理済み
     processedCtxTs.current = ctx.ts;
+    setHangingNotice(""); // 前に開いた検査の知らせは残さない
 
     const { study, series } = ctx;
     const pKey = derivePatientKey(study);
@@ -844,6 +852,8 @@ export function Viewer2DScreen({ status }: { status: AppStatus | null }) {
       if (patients.some((p) => p.patientKey === pKey)) {
         setActiveKey(pKey);
       }
+      // 自動適用（設定が入のときだけ。既定は切）。
+      await autoApplyRef.current(study, ctx.ts);
       return;
     }
 
@@ -932,14 +942,63 @@ export function Viewer2DScreen({ status }: { status: AppStatus | null }) {
     setHangingDlg({ study, patientKey: derivePatientKey(study) });
   };
 
+  const buildHangingTiles = (study: Study, list: Series[]): Promise<Tile[]> => Promise.all(list.map(async (series) => {
+    let instances: Instance[] = [];
+    try {
+      instances = await fetchInstances(study.studyInstanceUid, series.seriesInstanceUid);
+    } catch { /* addTile と同じく、取得できなくても空で並べる */ }
+    return { id: tileIdFor(study.studyInstanceUid, series.seriesInstanceUid), study, series, instances, syncEnabled: false };
+  }));
+
+  const [hangingManageOpen, setHangingManageOpen] = useState(false);
+  /** 自動適用の知らせ。トーストはタイル領域の中で受けるので、タイルが無いときや出た直後は届かない。画面側で出す。 */
+  const [hangingNotice, setHangingNotice] = useState("");
+  const viewModeRef = useRef(viewMode);
+  viewModeRef.current = viewMode;
+
+  /** 検査だけを開いたときの自動適用。何も失わないときだけ行う（{@link autoApplyDecision}）。 */
+  const autoApplyHanging = async (study: Study, ts: number) => {
+    setHangingNotice("");
+    const patientKey = derivePatientKey(study);
+    // 待っている間に別の検査が開かれたら、何もしない。
+    const stale = () => processedCtxTs.current !== ts;
+    const decide = () => autoApplyDecision(
+      patientsRef.current.map((p) => p.patientKey), patientKey, viewModeRef.current === "global",
+    );
+    try {
+      const settings = await fetchSettings();
+      if (!isAutoApplyOn(settings)) return;
+      const protocols = extractProtocols(settings).items;
+      if (protocols.length === 0) return;
+      const list = await fetchSeries(study.studyInstanceUid);
+      const choice = chooseAutoProtocol(protocols, study, list, { portrait: window.innerHeight > window.innerWidth });
+      if (!choice || stale()) return;
+      const skip = (d: "has-tiles" | "other-patients") => setHangingNotice(
+        t(d === "has-tiles" ? "viewer2d.hanging.auto.hasTiles" : "viewer2d.hanging.auto.otherPatients", { name: choice.protocol.name }),
+      );
+      const first = decide();
+      if (first !== "apply") { skip(first); return; }
+      const tiles = await buildHangingTiles(study, choice.plan.series);
+      if (stale()) return;
+      const again = decide();
+      if (again !== "apply") { skip(again); return; }
+      const { rows, cols } = choice.plan;
+      setPatients((prev) => (prev.some((p) => p.patientKey === patientKey) ? prev : [
+        ...prev,
+        { patientKey, patientId: study.patientId, patientName: study.patientName ?? "", tiles, gridRows: rows, gridCols: cols },
+      ]));
+      setOrderPref(tiles.map((tl) => tl.id));
+      if (viewModeRef.current === "global") setGlobalGrid({ rows, cols, solo: null });
+      setActiveKey(patientKey);
+      setHangingNotice(t("viewer2d.hanging.auto.applied", { name: choice.protocol.name }));
+    } catch (e) {
+      setHangingNotice(t("viewer2d.hanging.auto.failed", { detail: e instanceof Error ? e.message : String(e) }));
+    }
+  };
+  autoApplyRef.current = autoApplyHanging;
+
   const applyHanging = async (patientKey: string, study: Study, choice: HangingApplyChoice) => {
-    const next: Tile[] = await Promise.all(choice.series.map(async (series) => {
-      let instances: Instance[] = [];
-      try {
-        instances = await fetchInstances(study.studyInstanceUid, series.seriesInstanceUid);
-      } catch { /* addTile と同じく、取得できなくても空で並べる */ }
-      return { id: tileIdFor(study.studyInstanceUid, series.seriesInstanceUid), study, series, instances, syncEnabled: false };
-    }));
+    const next = await buildHangingTiles(study, choice.series);
     // 取得を待つ間にタイルや患者が変わりうるので、写しと置き換えは待った後の状態に対して行う。
     const patient = patientsRef.current.find((p) => p.patientKey === patientKey);
     if (!patient) { emitToast(t("viewer2d.hanging.patientClosed")); return; }
@@ -971,6 +1030,7 @@ export function Viewer2DScreen({ status }: { status: AppStatus | null }) {
     blocked: !canApplyHanging(isGlobal, patients.length),
     open: openHanging,
     undo: undoHanging,
+    manage: () => setHangingManageOpen(true),
     canUndo: !!hangingSnapshot && (isGlobal || hangingSnapshot.patientKey === activeKey),
   };
   const ownerOf = (tileId: string) => patientsRef.current.find((p) => p.tiles.some((tl) => tl.id === tileId))?.patientKey;
@@ -1075,6 +1135,12 @@ export function Viewer2DScreen({ status }: { status: AppStatus | null }) {
         />
 
         <div style={rightArea}>
+          {hangingNotice && (
+            <div style={hangingNoticeBar} data-testid="hanging-notice" role="status">
+              <span>{hangingNotice}</span>
+              <button type="button" style={hbtn} onClick={() => setHangingNotice("")} aria-label={t("common.close")}>×</button>
+            </div>
+          )}
           {patients.length === 0 ? (
             <div style={emptyMsg}>{t("viewer2d.empty")}</div>
           ) : (
@@ -1107,10 +1173,19 @@ export function Viewer2DScreen({ status }: { status: AppStatus | null }) {
         </div>
       </div>
       <CopyImageAskHost />
+      {hangingManageOpen && (
+        <HangingProtocolManageDialog
+          load={fetchSettings}
+          save={saveSettings}
+          download={downloadText}
+          onClose={() => setHangingManageOpen(false)}
+        />
+      )}
       {hangingDlg && (
         <HangingProtocolApplyDialog
           study={hangingDlg.study}
           loadSeries={fetchSeries}
+          loadSettings={fetchSettings}
           closingCount={patients.find((p) => p.patientKey === hangingDlg.patientKey)?.tiles.length ?? 0}
           transientCount={patients.find((p) => p.patientKey === hangingDlg.patientKey)?.tiles.filter((tl) => tl.transient).length ?? 0}
           portrait={window.innerHeight > window.innerWidth}
@@ -2787,6 +2862,7 @@ function TileGrid({
           },
           undo: hanging.undo,
           canUndo: hanging.canUndo,
+          manage: hanging.manage,
         }}
         onClose={() => window.close()}
       />
@@ -4789,6 +4865,11 @@ function StudyNode({
 }
 
 // ── スタイル ──────────────────────────────────────────────────
+
+const hangingNoticeBar: React.CSSProperties = {
+  display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8,
+  padding: "4px 10px", fontSize: 12, background: "#fff6d9", color: "#4a3b00", borderBottom: "1px solid #e8d48a",
+};
 
 const shell: React.CSSProperties = {
   position: "fixed",

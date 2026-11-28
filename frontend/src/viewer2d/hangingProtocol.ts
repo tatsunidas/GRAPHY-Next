@@ -272,19 +272,28 @@ function conditionCount(p: HangingProtocol): number {
   return (p.match.modality ? 1 : 0) + (p.match.studyDescriptionContains !== undefined ? 1 : 0);
 }
 
+/** `match` の指定された条件が、検査についてすべて成り立つか（スロットが埋まるかは見ない）。 */
+export function studyMeetsMatch(protocol: HangingProtocol, study: StudyLike): boolean {
+  const { modality, studyDescriptionContains } = protocol.match;
+  if (modality) {
+    const mods = studyModalities(study);
+    if (!modality.some((m) => mods.includes(normalizeText(m)))) return false;
+  }
+  if (studyDescriptionContains !== undefined) {
+    if (study.studyDescription == null) return false;
+    if (!normalizeText(study.studyDescription).includes(normalizeText(studyDescriptionContains))) return false;
+  }
+  return true;
+}
+
 /**
  * 検査に合うプロトコルを 1 つ選ぶ。`match` の指定された条件がすべて成り立ち、かつ**少なくとも 1 つのスロットが埋まる**ものが候補。
  * 順位: 指定された条件の数が多い → 埋まるスロットが多い → name → id（入力の順に依存しない）。合うものが無ければ null。
  */
 export function matchProtocol(protocols: readonly HangingProtocol[], study: StudyLike, seriesList: readonly SeriesLike[]): HangingProtocol | null {
-  const mods = studyModalities(study);
-  const desc = study.studyDescription == null ? null : normalizeText(study.studyDescription);
   const scored: { p: HangingProtocol; conds: number; filled: number }[] = [];
   for (const p of protocols) {
-    if (p.match.modality && !p.match.modality.some((m) => mods.includes(normalizeText(m)))) continue;
-    if (p.match.studyDescriptionContains !== undefined) {
-      if (desc === null || !desc.includes(normalizeText(p.match.studyDescriptionContains))) continue;
-    }
+    if (!studyMeetsMatch(p, study)) continue;
     const a = arrange(p, seriesList, { portrait: false });
     const filled = p.slots.length - a.unfilledSlots.length;
     if (filled < 1) continue;

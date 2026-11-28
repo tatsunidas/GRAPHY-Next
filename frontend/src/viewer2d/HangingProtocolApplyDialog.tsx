@@ -3,17 +3,20 @@
  * Author: Tatsuaki Kobayashi
  */
 /**
- * ハンギングプロトコルの JSON を貼り付けて 1 回だけ適用するダイアログ。
+ * ハンギングプロトコル（保存済みを選ぶか、JSON を貼り付ける）を適用するダイアログ。
  *
  * <p>「確認」で、画面を変える前に**並ぶ順・行×列・埋まらないスロット・閉じるタイルの枚数**を出し、「適用」で初めて置き換える。
  * `window.confirm` は使わない（Electron のネイティブダイアログはレンダラのキーボードフォーカスを奪い、自動検証からも操作できない）。
  */
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { Series, Study } from "../api";
 import { useI18n } from "../i18n/i18n";
 import { viewerOverlayProps } from "../viewer/viewerOverlay";
 import { planHanging, type HangingPlan } from "./hangingApply";
+import type { SettingsMap } from "../settings/settingsApi";
+import { prettyProtocol } from "./HangingProtocolManageDialog";
+import { extractProtocols, sortForStudy } from "./hangingProtocolStore";
 import { parseHangingProtocol, type HangingProtocol } from "./hangingProtocol";
 
 const PLACEHOLDER = `{
@@ -43,6 +46,7 @@ type Checked =
 export function HangingProtocolApplyDialog({
   study,
   loadSeries,
+  loadSettings,
   closingCount,
   transientCount,
   portrait,
@@ -51,6 +55,8 @@ export function HangingProtocolApplyDialog({
 }: {
   study: Study;
   loadSeries: (studyUid: string) => Promise<Series[]>;
+  /** 保存済みのプロトコルを読むための設定の取得。 */
+  loadSettings: () => Promise<SettingsMap>;
   /** 置き換えで閉じる、今のタイルの枚数。 */
   closingCount: number;
   /** そのうちプラグインの一時タイル（元に戻せない）。 */
@@ -63,10 +69,22 @@ export function HangingProtocolApplyDialog({
   const [text, setText] = useState("");
   const [checked, setChecked] = useState<Checked | null>(null);
 
-  const check = async () => {
+  const [saved, setSaved] = useState<HangingProtocol[]>([]);
+  const [savedError, setSavedError] = useState("");
+  useEffect(() => {
+    loadSettings()
+      .then((m) => setSaved(sortForStudy(extractProtocols(m).items, study)))
+      .catch((e: unknown) => setSavedError(e instanceof Error ? e.message : String(e)));
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /** 確認の通し番号。後から始めた確認や書き換えがあれば、古い読み込みの結果は捨てる。 */
+  const request = useRef(0);
+
+  const check = async (source: string) => {
+    const mine = ++request.current;
     let raw: unknown;
     try {
-      raw = JSON.parse(text);
+      raw = JSON.parse(source);
     } catch (e) {
       setChecked({ kind: "errors", errors: [t("viewer2d.hanging.jsonError", { detail: e instanceof Error ? e.message : String(e) })] });
       return;
@@ -80,10 +98,9 @@ export function HangingProtocolApplyDialog({
     try {
       const list = await loadSeries(study.studyInstanceUid);
       const plan = planHanging(parsed.protocol, study, list, { portrait });
-      // 読み込みの間に貼り付け欄が書き換えられたら、古い内容の結果は出さない。
-      setChecked((cur) => (cur?.kind === "loading" ? { kind: "plan", protocol: parsed.protocol, plan } : cur));
+      if (request.current === mine) setChecked({ kind: "plan", protocol: parsed.protocol, plan });
     } catch (e) {
-      setChecked((cur) => (cur?.kind === "loading" ? { kind: "load-failed", detail: e instanceof Error ? e.message : String(e) } : cur));
+      if (request.current === mine) setChecked({ kind: "load-failed", detail: e instanceof Error ? e.message : String(e) });
     }
   };
 
@@ -95,6 +112,24 @@ export function HangingProtocolApplyDialog({
         <div style={title}>{t("viewer2d.hanging.title")}</div>
         <div style={body}>
           <p style={lead}>{t("viewer2d.hanging.lead", { study: study.studyDescription || study.studyInstanceUid })}</p>
+          {saved.length > 0 && (
+            <select
+              data-testid="hanging-saved"
+              style={select}
+              value=""
+              onChange={(e) => {
+                const p = saved.find((x) => x.id === e.target.value);
+                if (!p) return;
+                const next = prettyProtocol(p);
+                setText(next);
+                void check(next);
+              }}
+            >
+              <option value="">{t("viewer2d.hanging.saved")}</option>
+              {saved.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+            </select>
+          )}
+          {savedError && <p style={errorText} data-testid="hanging-saved-error">{t("viewer2d.hanging.manage.failed", { detail: savedError })}</p>}
           <textarea
             data-testid="hanging-json"
             style={area}
@@ -103,6 +138,7 @@ export function HangingProtocolApplyDialog({
             spellCheck={false}
             onChange={(e) => {
               setText(e.target.value);
+              request.current++;
               setChecked(null);
             }}
           />
@@ -156,7 +192,7 @@ export function HangingProtocolApplyDialog({
           <button style={btn} onClick={onClose} data-testid="hanging-cancel">{t("common.cancel")}</button>
           <button
             style={btn}
-            onClick={() => void check()}
+            onClick={() => void check(text)}
             disabled={text.trim() === "" || checked?.kind === "loading"}
             data-testid="hanging-check"
           >{t("viewer2d.hanging.check")}</button>
@@ -185,6 +221,7 @@ const panel: React.CSSProperties = {
 const title: React.CSSProperties = { padding: "10px 16px", background: "#0b5cad", color: "#fff", fontSize: 13, fontWeight: 600 };
 const body: React.CSSProperties = { padding: "14px 16px", fontSize: 12, color: "#22303d", overflowY: "auto" };
 const lead: React.CSSProperties = { margin: "0 0 8px" };
+const select: React.CSSProperties = { width: "100%", marginBottom: 8, fontSize: 12 };
 const area: React.CSSProperties = {
   width: "100%", boxSizing: "border-box", height: 180, fontFamily: "monospace", fontSize: 12, resize: "vertical",
 };

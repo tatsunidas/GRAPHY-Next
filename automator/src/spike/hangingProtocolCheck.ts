@@ -1,5 +1,5 @@
 /*
- * ハンギングプロトコルの「適用」「元に戻す」を実アプリで測るスパイク。
+ * ハンギングプロトコルの「適用」「元に戻す」・保存と管理・書き出し／取り込み・自動適用を実アプリで測るスパイク。
  *
  * 実行（本番の設定には触れない専用ポート。表示の無い環境では xvfb-run を付ける）:
  *   cd automator
@@ -20,7 +20,7 @@ import type { Locator, Page } from "@playwright/test";
 import { DesktopDriver } from "../driver/desktopDriver.js";
 import { resetDb } from "../backend/dbReset.js";
 import { importPaths } from "../fixtures/importFixtures.js";
-import { openFirstSeriesInViewer } from "../checklist/items/shared/helpers.js";
+import { openFirstSeriesInViewer, selectFirstStudy } from "../checklist/items/shared/helpers.js";
 import { createStepRecorder } from "../checklist/types.js";
 import { AUTOMATOR_ROOT } from "../fixtures/manifest.js";
 
@@ -138,6 +138,45 @@ async function litRatio(page: Page, i: number): Promise<number> {
   return (await page.evaluate(expr)) as number;
 }
 
+async function openViewerWindow(driver: DesktopDriver, trigger: () => Promise<unknown>): Promise<Page> {
+  const page = await driver.waitForNewPage(async () => { await trigger(); }, (url) => url.includes("2dviewer"));
+  page.on("console", (m) => {
+    if (m.type() === "error") console.log(`  [viewer error] ${m.text()}`);
+  });
+  await page.waitForTimeout(1500);
+  await driver.app.evaluate(({ BrowserWindow }) => {
+    for (const w of BrowserWindow.getAllWindows()) {
+      if (w.webContents.getURL().includes("2dviewer")) w.setBounds({ x: 0, y: 0, width: 1700, height: 1000 });
+    }
+  });
+  await page.waitForTimeout(4000);
+  return page;
+}
+
+async function closeViewerWindow(driver: DesktopDriver, page: Page): Promise<void> {
+  const closed = page.waitForEvent("close");
+  await driver.app.evaluate(({ BrowserWindow }) => {
+    for (const w of BrowserWindow.getAllWindows()) if (w.webContents.getURL().includes("2dviewer")) w.close();
+  });
+  await closed;
+}
+
+/** メイン画面で検査（シリーズなし）または検査とシリーズを書いて、2D ビューアを開く。MainScreen と同じ受け渡し。 */
+async function openWithContext(driver: DesktopDriver, mainPage: Page, ctx: object): Promise<Page> {
+  await mainPage.evaluate((c) => localStorage.setItem("graphy-viewer-ctx", JSON.stringify(c)), { ...ctx, ts: Date.now() });
+  return openViewerWindow(driver, () => mainPage.evaluate("window.graphyDesktop.openViewer('2dviewer')"));
+}
+
+async function openManage(page: Page): Promise<void> {
+  await openLayoutMenu(page);
+  await page.getByTestId("layout-hanging-manage").click();
+  await page.getByTestId("hanging-manage-dialog").waitFor({ state: "visible", timeout: 10_000 });
+  await page.waitForTimeout(800);
+}
+
+const manageIds = (page: Page): Promise<(string | null)[]> =>
+  page.getByTestId("hanging-manage-row").evaluateAll((els) => els.map((e) => e.getAttribute("data-protocol-id")));
+
 async function run(): Promise<void> {
   fs.rmSync(OUT_DIR, { recursive: true, force: true });
   fs.mkdirSync(OUT_DIR, { recursive: true });
@@ -160,10 +199,20 @@ async function run(): Promise<void> {
       return r.json();
     };
 
-    const mainPage = driver.page;
+    // 前の実行の保存と設定を消し、既定（保存なし・自動適用は未設定と同じ）から始める。
+    const putSettings = async (u: Record<string, string>): Promise<void> => {
+      const r = await fetch(`http://localhost:${driver.ports.http}/api/settings`, {
+        method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(u),
+      });
+      if (!r.ok) throw new Error(`PUT /api/settings: ${r.status}`);
+    };
+    const left = Object.keys(await api("/api/settings")).filter((k) => k.startsWith("hanging.protocol."));
+    await putSettings({ ...Object.fromEntries(left.map((k) => [k, ""])), "viewer.hangingAutoApply": "" });
+
+    let mainPage = driver.page;
     await mainPage.getByTestId("search-patientid-input").waitFor({ state: "visible", timeout: 30_000 });
     await openFirstSeriesInViewer(mainPage, recorder);
-    const page = await driver.waitForNewPage(
+    let page = await driver.waitForNewPage(
       () => mainPage.getByTestId("viewer2d-toolbar-button").click(),
       (url) => url.includes("2dviewer"),
     );
@@ -268,6 +317,144 @@ async function run(): Promise<void> {
     await page.waitForTimeout(2000);
     const afterTab = await tileSeries(page);
     check(afterTab.includes(uid(1)) && afterTab.includes(series2.seriesInstanceUid) && afterTab.length === 2, "他の患者のタイルは消えない", afterTab);
+
+    const settingsOf = async (): Promise<Record<string, string>> => api("/api/settings");
+    const study1 = (await api("/api/studies")).find((s: any) => s.patientId === "TILESOLO");
+    const series1 = list.find((s) => s.seriesDescription === "synthetic 1")!;
+
+    console.log("\n[6] 保存・書き出し・削除・取り込み");
+    await closeViewerWindow(driver, page);
+    page = await openWithContext(driver, mainPage, { study: study1, series: series1 });
+    check((await tiles(page).count()) === 1, "シリーズを指定して開くと 1 枚", await tiles(page).count());
+    await openManage(page);
+    check((await manageIds(page)).length === 0, "保存は 0 件から始まる（この検査の前提）", await manageIds(page));
+    check(!(await page.getByTestId("hanging-auto").isChecked()), "自動適用は既定で切");
+    await page.getByTestId("hanging-new").click();
+    await page.getByTestId("hanging-editor").fill(protocol([3, 1], 1, 2, { note: "keep-me" }));
+    await page.getByTestId("hanging-save").click();
+    await page.waitForTimeout(1500);
+    check(JSON.stringify(await manageIds(page)) === JSON.stringify(["spike"]), "新規で保存すると一覧に出る", await manageIds(page));
+    const savedValue = (await settingsOf())["hanging.protocol.spike"];
+    check(!!savedValue && JSON.parse(savedValue).note === "keep-me", "設定に 1 件 1 キーで入り、知らないキーも残る", savedValue);
+    await page.screenshot({ path: path.join(OUT_DIR, "6-manage.png") });
+    // 書き出し: ダウンロードされる中身を、押す直前に横取りして読む。
+    await page.evaluate(`(() => {
+      window.__exported = null;
+      HTMLAnchorElement.prototype.click = function () { const href = this.href, name = this.download;
+        window.__exported = fetch(href).then((r) => r.text()).then((text) => ({ name, text })); };
+    })()`);
+    await page.getByTestId("hanging-export").click();
+    await page.waitForTimeout(1500);
+    const exported = (await page.evaluate("window.__exported")) as { name: string; text: string } | null;
+    check(!!exported && exported.name === "hanging-protocols.json", "書き出しのファイル名", exported?.name);
+    await page.getByTestId("hanging-delete").click();
+    await page.getByTestId("hanging-delete-yes").click();
+    await page.waitForTimeout(1500);
+    check((await manageIds(page)).length === 0 && (await settingsOf())["hanging.protocol.spike"] === "", "削除で一覧から消え、値は空になる");
+    const file = path.join(OUT_DIR, "exported.json");
+    fs.writeFileSync(file, exported?.text ?? "");
+    await page.getByTestId("hanging-import-file").setInputFiles(file);
+    await page.getByTestId("hanging-import-preview").waitFor({ state: "visible", timeout: 10_000 });
+    check((await settingsOf())["hanging.protocol.spike"] === "", "取り込みは確認するまで保存しない");
+    const importText = await page.getByTestId("hanging-manage-dialog").innerText();
+    check(/追加 1 件・上書き 0 件・不正 0 件|New: 1 \/ overwrite: 0 \/ invalid: 0/.test(importText), "取り込みの件数の表示", importText);
+    await page.screenshot({ path: path.join(OUT_DIR, "6-import.png") });
+    await page.getByTestId("hanging-import-commit").click();
+    await page.waitForTimeout(1500);
+    const restored = (await settingsOf())["hanging.protocol.spike"];
+    check(!!restored && JSON.stringify(JSON.parse(restored)) === JSON.stringify(JSON.parse(savedValue)), "取り込むと書き出す前と同じ内容", restored);
+    await page.getByTestId("hanging-manage-close").click();
+
+    console.log("\n[7] 別の窓・アプリの再起動でも同じ一覧。保存済みを選んで適用できる");
+    await closeViewerWindow(driver, page);
+    await driver.stop();
+    await driver.start();
+    mainPage = driver.page;
+    await mainPage.getByTestId("search-patientid-input").waitFor({ state: "visible", timeout: 30_000 });
+    page = await openWithContext(driver, mainPage, { study: study1, series: series1 });
+    await openManage(page);
+    check(JSON.stringify(await manageIds(page)) === JSON.stringify(["spike"]), "再起動後の新しい窓に同じ一覧が出る", await manageIds(page));
+    await page.getByTestId("hanging-manage-close").click();
+    await openLayoutMenu(page);
+    await page.getByTestId("layout-hanging-apply").click();
+    await page.getByTestId("hanging-saved").selectOption("spike");
+    await page.getByTestId("hanging-preview").waitFor({ state: "visible", timeout: 10_000 });
+    await page.getByTestId("hanging-apply").click();
+    await page.waitForTimeout(3000);
+    check(JSON.stringify(await tileSeries(page)) === JSON.stringify([uid(3), uid(1)]), "保存済みを選んで適用できる", await tileSeries(page));
+    await closeViewerWindow(driver, page);
+
+    /** メイン画面で検査の行だけを選んで 2D ビューアを開く（実際の画面操作）。 */
+    const openStudyOnly = async (): Promise<Page> => {
+      // 前の受け渡しが残っていると、何も渡らなくても開けてしまう。
+      await mainPage.evaluate("localStorage.removeItem('graphy-viewer-ctx')");
+      await selectFirstStudy(mainPage, recorder);
+      await mainPage.waitForTimeout(1000);
+      // 行はもう一度押すと選択が外れるので、シリーズ一覧の中身で「TILESOLO が選ばれている」ことを見て、違えば押し直す。
+      const chosen = async () => (await mainPage.getByTestId("series-panel").count()) === 1
+        && (await mainPage.getByTestId("series-panel").innerText()).includes("synthetic 4");
+      if (!(await chosen())) {
+        await mainPage.locator('[data-testid^="study-row-"]').filter({ hasText: "TILESOLO" }).first().click();
+        await mainPage.waitForTimeout(1500);
+      }
+      check(await chosen(), "検査 TILESOLO が選ばれている（この検査の前提）");
+      const opened = await openViewerWindow(driver, () => mainPage.getByTestId("viewer2d-toolbar-button").click());
+      const ctx = JSON.parse(((await mainPage.evaluate("localStorage.getItem('graphy-viewer-ctx')")) as string | null) ?? "{\"study\":{}}");
+      check(ctx.study.patientId === "TILESOLO" && !ctx.series, "渡ったのは検査だけ（この検査の前提）", ctx);
+      return opened;
+    };
+
+    console.log("\n[8] 自動適用が切（既定）: 合う保存があっても、検査だけを開くと 0 枚のまま");
+    check((await settingsOf())["viewer.hangingAutoApply"] === "", "設定は未設定のまま（この検査の前提）", (await settingsOf())["viewer.hangingAutoApply"]);
+    page = await openStudyOnly();
+    check((await tiles(page).count()) === 0, "タイルは 0 枚", await tiles(page).count());
+    check((await page.getByTestId("hanging-notice").count()) === 0, "知らせも出ない");
+    await closeViewerWindow(driver, page);
+
+    console.log("\n[9] 自動適用を入れる");
+    page = await openWithContext(driver, mainPage, { study: study1, series: series1 });
+    await openManage(page);
+    // 表示は保存が終わってから変わる（check() は直後の変化を求めるので使わない）。
+    await page.getByTestId("hanging-auto").click();
+    await page.waitForTimeout(1500);
+    check((await settingsOf())["viewer.hangingAutoApply"] === "true", "チェックで設定が保存される", (await settingsOf())["viewer.hangingAutoApply"]);
+    check(await page.getByTestId("hanging-auto").isChecked(), "保存の後はチェックが入っている");
+    await page.getByTestId("hanging-manage-close").click();
+    await closeViewerWindow(driver, page);
+    page = await openStudyOnly();
+    check(JSON.stringify(await tileSeries(page)) === JSON.stringify([uid(3), uid(1)]), "検査だけを開くと規則の順で並ぶ", await tileSeries(page));
+    check((await gridShape(page)) === "1x2", "行×列は規則どおり", await gridShape(page));
+    check((await page.getByTestId("hanging-notice").innerText()).includes("spike protocol"), "適用した規則の名前を知らせる");
+    const autoLit = [await litRatio(page, 0), await litRatio(page, 1)];
+    check(autoLit.every((r) => r > 0.02), "両方のタイルに画像が写っている", autoLit);
+    await page.screenshot({ path: path.join(OUT_DIR, "9-auto-applied.png") });
+    check(await undoDisabled(page), "自動適用の後に「元に戻す」は出ない");
+
+    console.log("\n[10] タイルがある患者は変えない。シリーズを指定して開けば従来どおり");
+    await tiles(page).nth(1).locator("div[draggable='true'] button").last().click();
+    await page.waitForTimeout(800);
+    const kept = await tileSeries(page);
+    check(kept.length === 1, "1 枚に減らした（この検査の前提）", kept);
+    await mainPage.evaluate((c) => localStorage.setItem("graphy-viewer-ctx", JSON.stringify(c)), { study: study1, ts: Date.now() });
+    await page.waitForTimeout(4000);
+    check(JSON.stringify(await tileSeries(page)) === JSON.stringify(kept), "タイルがあるときは適用しない", await tileSeries(page));
+    const hasTiles = await page.getByTestId("hanging-notice").innerText();
+    check(hasTiles.includes("spike protocol") && /自動では適用していません|Not applied automatically/.test(hasTiles), "手動で適用できると知らせる", hasTiles);
+    await closeViewerWindow(driver, page);
+    page = await openWithContext(driver, mainPage, { study: study1, series: list.find((s) => s.seriesDescription === "synthetic 2") });
+    check(JSON.stringify(await tileSeries(page)) === JSON.stringify([uid(2)]), "自動適用が入でも、シリーズ指定はその 1 枚", await tileSeries(page));
+    console.log("\n[11] 環境設定の画面にも同じ項目が出る");
+    await mainPage.bringToFront();
+    await mainPage.getByTestId("mainscreen-menu-system").click();
+    await mainPage.getByTestId("menu-item-settings").click();
+    const dlg = mainPage.getByTestId("settings-dialog");
+    await dlg.waitFor({ state: "visible", timeout: 10_000 });
+    await dlg.getByTestId("settings-cat-viewer").click();
+    const row = dlg.getByText(/ハンギングプロトコルを自動で適用する|Apply a hanging protocol automatically/);
+    await row.first().scrollIntoViewIfNeeded();
+    check((await row.count()) === 1, "ビューアの設定に自動適用の項目がある", await row.count());
+    await mainPage.screenshot({ path: path.join(OUT_DIR, "11-settings.png") });
+    await putSettings({ "viewer.hangingAutoApply": "", "hanging.protocol.spike": "" });
   } finally {
     await driver.stop();
   }
