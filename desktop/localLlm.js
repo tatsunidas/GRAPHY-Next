@@ -230,6 +230,11 @@ function createLocalAi(deps) {
     return fs.existsSync(model) && fs.existsSync(mmproj) ? { model, mmproj } : null;
   }
 
+  /** どれかの枠が動いている・起動中か（終了時に止める要否の判定。status().running は会話の枠だけ）。 */
+  function anyRunning() {
+    return slots.some((slot) => !!slot.starting || !!(slot.current && !slot.current.exited));
+  }
+
   function status() {
     const s = readState();
     const cfg = ai.get();
@@ -670,7 +675,7 @@ function createLocalAi(deps) {
     return r.ok ? { ok: true } : { ok: false, error: r.problems[0] || "save-failed" };
   }
 
-  return { status, install, cancelInstall, importFile, ensure, check, prepare, stop, sweepStale, remove, removeStt, setRole };
+  return { status, anyRunning, install, cancelInstall, importFile, ensure, check, prepare, stop, sweepStale, remove, removeStt, setRole };
 }
 
 let instance = null;
