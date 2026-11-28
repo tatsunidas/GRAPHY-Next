@@ -384,6 +384,13 @@ export const SETTINGS_REGISTRY: CategoryDef[] = [
           },
           { key: "viewer.defaultZoom", labelKey: "settings.field.defaultZoom", type: "number", default: 100, min: 10, max: 800 },
           { key: "viewer.cineFps", labelKey: "settings.field.cineFps", type: "number", default: 10, min: 1, max: 60 },
+          {
+            key: "viewer.hangingAutoApply",
+            labelKey: "viewer2d.hanging.manage.auto",
+            type: "toggle",
+            default: false,
+            helpKey: "viewer2d.hanging.manage.autoHelp",
+          },
         ],
       },
       {
